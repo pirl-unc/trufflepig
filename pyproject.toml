@@ -1,0 +1,56 @@
+[project]
+name = "trufflepig"
+requires-python = ">=3.9"
+authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
+description = "Step-by-step RNA tumor analysis driven by pirlygenes gene sets. Subsumes pirlygenes.analyze as many composable sub-commands with serializable intermediate state for incremental website-style runs."
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    "pirlygenes>=4.9.0",
+    "numpy>=2.0.0",
+    "pandas>=2.0",
+    "argh",
+    "matplotlib>=3.5.0",
+    "tqdm",
+    "pyyaml",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "trufflepig.version.__version__"}
+
+[tool.setuptools]
+packages = ["trufflepig", "trufflepig.stages"]
+
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-xdist",
+]
+
+[project.scripts]
+trufflepig = "trufflepig.cli:main"
+
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
