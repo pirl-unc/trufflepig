@@ -22,9 +22,10 @@ Endpoint summary:
 from __future__ import annotations
 
 import dataclasses
+import html
 import os
+import re
 import shutil
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -35,28 +36,93 @@ from fastapi.staticfiles import StaticFiles
 from .runs import RUN_KIND_ANALYZE, RUN_KIND_COMPARE, RunStore, WebRun, iter_log_events
 
 
+# Maximum upload size in bytes (default 200 MB — typical TPM file is
+# 5–50 MB; an upper bound protects against accidental directory uploads
+# or hostile clients). Override with TRUFFLEPIG_WEB_MAX_UPLOAD_BYTES.
+DEFAULT_MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+# Filename safety: keep alphanumerics, dot, dash, underscore. Anything
+# else is replaced with `_`. Path components are stripped via
+# Path(name).name before this runs.
+_SAFE_FILENAME_RE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _sanitize_filename(raw: str) -> str:
+    """Reduce a user-supplied filename to its safe leaf form.
+
+    Strips path components (so ``../../etc/passwd`` becomes ``passwd``),
+    replaces shell-unfriendly characters, and caps the length. Empty
+    or all-dot inputs fall back to ``upload.bin``.
+    """
+    leaf = Path(raw).name or ""
+    cleaned = _SAFE_FILENAME_RE.sub("_", leaf).strip(".")
+    if not cleaned:
+        cleaned = "upload.bin"
+    return cleaned[:128]
+
+
+def _reject_flag_value(name: str, value: Optional[str]) -> None:
+    """Refuse form values that argparse would re-interpret as a flag.
+
+    Anything starting with ``-`` (or with leading whitespace then ``-``)
+    could pollute the analyze subprocess's argument parser. We reject
+    such values upfront rather than relying on the child to ignore them.
+    """
+    if value is None:
+        return
+    stripped = value.lstrip()
+    if stripped.startswith("-"):
+        raise HTTPException(
+            400, f"{name!r} must not start with '-' (looks like a CLI flag)"
+        )
+
+
 @dataclasses.dataclass
 class WebSettings:
     runs_root: Path
     uploads_root: Path
+    max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
 
     @classmethod
     def from_env(cls) -> "WebSettings":
         default_root = Path.home() / "trufflepig-web-runs"
         root = Path(os.environ.get("TRUFFLEPIG_WEB_ROOT", str(default_root)))
+        max_bytes_env = os.environ.get("TRUFFLEPIG_WEB_MAX_UPLOAD_BYTES")
+        try:
+            max_bytes = int(max_bytes_env) if max_bytes_env else DEFAULT_MAX_UPLOAD_BYTES
+        except ValueError:
+            max_bytes = DEFAULT_MAX_UPLOAD_BYTES
         return cls(
             runs_root=root / "runs",
             uploads_root=root / "uploads",
+            max_upload_bytes=max_bytes,
         )
 
 
 def _markdown_to_html(text: str) -> str:
+    """Render Markdown to safe HTML.
+
+    ``markdown.markdown`` passes raw HTML in the source through as-is by
+    default — that's stored XSS waiting to happen when the source is
+    derived from user-supplied form fields or filenames. We turn off
+    HTML passthrough with ``safe_mode="escape"`` so any literal ``<`` is
+    rendered as ``&lt;`` and any ``<script>`` tag becomes inert text.
+    """
     import markdown as _md
 
-    return _md.markdown(
-        text,
-        extensions=["tables", "fenced_code", "toc"],
-    )
+    md = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
+    md.preprocessors.register(_HtmlStripPreprocessor(md), "_trufflepig_strip_html", 30)
+    return md.convert(text)
+
+
+class _HtmlStripPreprocessor:
+    """Escape raw HTML in markdown source before any extension sees it."""
+
+    def __init__(self, md):
+        self.md = md
+
+    def run(self, lines):
+        return [html.escape(line, quote=False) for line in lines]
 
 
 def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
@@ -64,6 +130,9 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
     settings.runs_root.mkdir(parents=True, exist_ok=True)
     settings.uploads_root.mkdir(parents=True, exist_ok=True)
     store = RunStore(settings.runs_root)
+    # If a previous server died mid-run, the subprocess thread that
+    # would have flipped status.json is gone — relabel those once.
+    store.reconcile_orphaned_runs()
 
     app = FastAPI(
         title="trufflepig",
@@ -110,9 +179,38 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
     ):
         if not sample.filename:
             raise HTTPException(400, "Sample file is required")
-        dest = settings.uploads_root / f"{os.urandom(6).hex()}_{sample.filename}"
+
+        # Form values that would parse as CLI flags inside the analyze
+        # subprocess get rejected before we shell them out.
+        for name, value in (
+            ("cancer_type", cancer_type),
+            ("hla_types", hla_types),
+            ("sample_id_value", sample_id_value),
+        ):
+            _reject_flag_value(name, value)
+
+        safe_name = _sanitize_filename(sample.filename)
+        dest = settings.uploads_root / f"{os.urandom(6).hex()}_{safe_name}"
+
+        # Cap upload size: we stream into the file but abort once we
+        # cross the limit so a 10 GB sample doesn't fill the disk.
+        written = 0
+        chunk_size = 1024 * 1024
         with dest.open("wb") as f:
-            shutil.copyfileobj(sample.file, f)
+            while True:
+                chunk = sample.file.read(chunk_size)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > settings.max_upload_bytes:
+                    f.close()
+                    dest.unlink(missing_ok=True)
+                    raise HTTPException(
+                        413,
+                        f"Upload exceeds {settings.max_upload_bytes} bytes; "
+                        f"raise TRUFFLEPIG_WEB_MAX_UPLOAD_BYTES if intentional.",
+                    )
+                f.write(chunk)
 
         extra: list[str] = []
         if hla_types:
@@ -123,7 +221,7 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         run = store.submit_analyze(
             sample_path=dest,
             cancer_type=cancer_type,
-            title=title or sample.filename,
+            title=title or safe_name,
             extra_flags=extra,
         )
         return run.to_dict()
@@ -154,16 +252,27 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         if run is None:
             raise HTTPException(404, "Unknown run id")
 
+        # Cap per-event payload so a single misbehaving log line can't
+        # OOM the server (or the client). 4 KB is plenty for stage
+        # banners and progress messages.
+        _MAX_EVENT_BYTES = 4096
+
         def gen():
             for line in iter_log_events(run):
-                # Server-sent events format: each event is a `data:` line.
-                # Avoid blank lines inside the payload — they'd terminate
-                # an SSE event prematurely.
                 safe = line.replace("\n", " ").replace("\r", " ")
+                if len(safe) > _MAX_EVENT_BYTES:
+                    safe = safe[:_MAX_EVENT_BYTES] + " …[truncated]"
                 yield f"data: {safe}\n\n"
-            # Final status push so the client can stop listening.
+            # Final status push so the client can stop listening. The
+            # status comes from disk so the previous "iter_log_events
+            # returned" can be due either to the run finishing or to
+            # an idle-timeout — surface both explicitly.
             status = run.status()
-            yield f"event: status\ndata: {status.get('state', 'unknown')}\n\n"
+            state = status.get("state", "unknown")
+            if state == "running":
+                yield "event: status\ndata: timeout\n\n"
+            else:
+                yield f"event: status\ndata: {state}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
@@ -207,19 +316,27 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
 
 def _render_report_page(name: str, run: WebRun, body_md: str) -> str:
     body = _markdown_to_html(body_md)
-    return f"""<!doctype html>
-<html><head>
-<meta charset="utf-8">
-<title>trufflepig {run.title or run.run_id} — {name}</title>
-<link rel="stylesheet" href="/static/style.css">
-</head><body>
-<header class="report-header">
-  <a href="/">&larr; trufflepig</a>
-  <strong>{run.title or run.run_id}</strong>
-  <code>{run.run_id}</code>
-  <span class="badge">{name}</span>
-</header>
-<main class="markdown-body">
-{body}
-</main>
-</body></html>"""
+    # Every piece of user-controlled or arbitrary text that lands in the
+    # HTML wrapper gets HTML-escaped — title, name, and run_id all flow
+    # through this template and could otherwise carry markup.
+    title = html.escape(run.title or run.run_id)
+    run_id = html.escape(run.run_id)
+    name_safe = html.escape(name)
+    return (
+        "<!doctype html>\n"
+        "<html><head>\n"
+        '<meta charset="utf-8">\n'
+        f"<title>trufflepig {title} — {name_safe}</title>\n"
+        '<link rel="stylesheet" href="/static/style.css">\n'
+        "</head><body>\n"
+        '<header class="report-header">\n'
+        '  <a href="/">&larr; trufflepig</a>\n'
+        f"  <strong>{title}</strong>\n"
+        f"  <code>{run_id}</code>\n"
+        f'  <span class="badge">{name_safe}</span>\n'
+        "</header>\n"
+        '<main class="markdown-body">\n'
+        f"{body}\n"
+        "</main>\n"
+        "</body></html>\n"
+    )

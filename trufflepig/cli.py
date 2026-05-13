@@ -281,15 +281,23 @@ def cmd_list_stages(args) -> int:
 
 def cmd_serve(args) -> int:
     """Run the web UI locally (dev convenience)."""
+    # Guard every web-extra import behind one try block so a partial
+    # install (uvicorn present but fastapi missing, or vice versa)
+    # still surfaces the "install the extra" message instead of an
+    # opaque ModuleNotFoundError on the next line.
     try:
-        import uvicorn
-    except ImportError:
+        import uvicorn  # noqa: F401  (probed for presence)
+        from .web import create_app  # noqa: F401  (probes fastapi + markdown)
+    except ImportError as exc:
         print(
-            "[trufflepig] `trufflepig serve` needs the web extras — "
-            "install with `pip install 'trufflepig[web]'`.",
+            "[trufflepig] `trufflepig serve` needs the web extras "
+            f"(missing dependency: {exc.name or exc}). "
+            "Install with `pip install 'trufflepig[web]'`.",
             file=sys.stderr,
         )
         return 2
+
+    import uvicorn
     from .web import create_app
 
     uvicorn.run(
