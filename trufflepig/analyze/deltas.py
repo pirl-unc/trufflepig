@@ -356,14 +356,28 @@ def _direction_from_signed(value: float | None, threshold: float = 0.1) -> str:
     return "unchanged"
 
 
+def _is_finite(x: object) -> bool:
+    """True only for a finite numeric value — rejects NaN, +inf, -inf."""
+    import math
+
+    try:
+        return math.isfinite(float(x))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+
+
 def _safe_diff(a: float | None, b: float | None) -> float | None:
     if a is None or b is None:
+        return None
+    if not (_is_finite(a) and _is_finite(b)):
         return None
     return b - a
 
 
 def _safe_ratio(a: float | None, b: float | None) -> float | None:
     if a is None or b is None or a == 0:
+        return None
+    if not (_is_finite(a) and _is_finite(b)):
         return None
     return b / a
 
@@ -685,12 +699,29 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
     )
 
 
+DELTAS_JSON_SCHEMA_VERSION = 1
+
+
 def write_deltas_json(path: Path, sets: list[LongitudinalDeltaSet]) -> None:
+    """Atomically write ``deltas.json`` with a versioned envelope.
+
+    The envelope shape ``{"schema_version": N, "deltas": [...]}``
+    gives consumers a forward-compat gate. We deliberately reject NaN
+    (``allow_nan=False``) so downstream JSON-strict parsers don't break
+    on stray NaNs from upstream parsing — :func:`_safe_ratio` and
+    :func:`_safe_diff` already filter non-finite inputs, this is the
+    backstop. ``default=str`` is omitted on purpose: any unexpected
+    object type should raise loudly rather than silently stringify.
+    """
     import json
 
-    path.write_text(
-        json.dumps([s.to_dict() for s in sets], indent=2, default=str)
-    )
+    payload = {
+        "schema_version": DELTAS_JSON_SCHEMA_VERSION,
+        "deltas": [s.to_dict() for s in sets],
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, allow_nan=False))
+    tmp.replace(path)
 
 
 # ---------- Markdown sections for the comparison report ----------

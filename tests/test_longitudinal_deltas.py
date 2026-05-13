@@ -248,11 +248,42 @@ def test_write_deltas_json_round_trips(tmp_path):
     out = tmp_path / "deltas.json"
     write_deltas_json(out, delta_sets)
     payload = json.loads(out.read_text())
-    assert isinstance(payload, list)
-    assert payload[0]["before_sample"] == "sample_A"
-    assert payload[0]["after_sample"] == "sample_B"
-    kinds = {d["kind"] for d in payload[0]["deltas"]}
+    # Versioned envelope so future consumers can gate on schema_version.
+    assert isinstance(payload, dict)
+    assert payload["schema_version"] == 1
+    sets = payload["deltas"]
+    assert isinstance(sets, list)
+    assert sets[0]["before_sample"] == "sample_A"
+    assert sets[0]["after_sample"] == "sample_B"
+    kinds = {d["kind"] for d in sets[0]["deltas"]}
     assert {"purity", "response_axis", "target", "assay_comparability"} <= kinds
+
+
+def test_write_deltas_json_rejects_nan(tmp_path):
+    """``allow_nan=False`` keeps stray NaN from upstream parsing out of
+    deltas.json. ``_safe_ratio`` / ``_safe_diff`` filter non-finite
+    values upstream; this is the JSON-serializer-level backstop."""
+    import math
+
+    from trufflepig.analyze.deltas import LongitudinalDelta, LongitudinalDeltaSet
+
+    bad = LongitudinalDeltaSet(
+        before_sample="A",
+        after_sample="B",
+        deltas=[
+            LongitudinalDelta(
+                kind="purity",
+                metric="purity_pct",
+                magnitude=math.nan,
+                direction="unchanged",
+                before={"value": math.nan},
+                after={"value": math.nan},
+            )
+        ],
+    )
+    out = tmp_path / "deltas.json"
+    with pytest.raises(ValueError, match=r"NaN"):
+        write_deltas_json(out, [bad])
 
 
 def test_cli_compare_emits_deltas_json(tmp_path):
@@ -276,8 +307,10 @@ def test_cli_compare_emits_deltas_json(tmp_path):
     assert meta["deltas_output"].endswith("deltas.json")
 
     payload = json.loads((out_ws / "deltas.json").read_text())
-    assert len(payload) == 1
-    kinds = {d["kind"] for d in payload[0]["deltas"]}
+    assert payload["schema_version"] == 1
+    sets = payload["deltas"]
+    assert len(sets) == 1
+    kinds = {d["kind"] for d in sets[0]["deltas"]}
     assert "purity" in kinds
 
 
@@ -491,7 +524,9 @@ def test_longitudinal_delta_has_unit_field_for_each_kind(tmp_path):
             assert d.unit, f"{d.kind} delta has magnitude but no unit"
 
 
-def test_cli_compare_reports_skipped_deltas_when_summary_missing(tmp_path, capsys):
+def test_cli_compare_reports_skipped_deltas_when_summary_missing(
+    tmp_path, capsys, monkeypatch
+):
     """Missing summary.md prints a notice instead of silently dropping deltas.json."""
     from trufflepig import cli
 
@@ -506,23 +541,22 @@ def test_cli_compare_reports_skipped_deltas_when_summary_missing(tmp_path, capsy
     out_ws = tmp_path / "cmp"
 
     # Stub the inner renderer so compare_analyze doesn't itself raise.
+    # monkeypatch.setattr auto-restores after the test; the previous
+    # manual try/finally with an empty restore leaked the stub into any
+    # subsequent test in the module that imported trufflepig.main.
     import trufflepig.main as main_mod
 
     def _fake_compare(output_dirs, output_path, title):
         with open(output_path, "w") as f:
             f.write(f"# {title}\nstub\n")
 
-    main_mod.compare_analyze = _fake_compare  # monkeypatch for test
-    try:
-        rc = cli.main([
-            "compare",
-            "--workspace", str(out_ws),
-            "--inputs", f"{dir_a},{dir_b}",
-            "--title", "missing-summary",
-        ])
-    finally:
-        # Restore the real attribute to whatever it was originally (best effort).
-        pass
+    monkeypatch.setattr(main_mod, "compare_analyze", _fake_compare)
+    rc = cli.main([
+        "compare",
+        "--workspace", str(out_ws),
+        "--inputs", f"{dir_a},{dir_b}",
+        "--title", "missing-summary",
+    ])
     assert rc == 0
     assert (out_ws / "comparison.md").is_file()
     assert not (out_ws / "deltas.json").exists()
