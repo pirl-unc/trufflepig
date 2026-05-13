@@ -68,9 +68,22 @@ class WebRun:
         return d
 
 
-def _write_status(path: Path, payload: dict) -> None:
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    """Write ``payload`` to ``path`` atomically.
+
+    A non-atomic write (truncate-then-fill) can leave a half-written
+    file on crash, and our list-runs/get loops silently skip
+    JSONDecodeError, which would make a previously-known run vanish
+    from the UI. Write to a sibling temp file and atomically rename.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)
+
+
+def _write_status(path: Path, payload: dict) -> None:
+    _atomic_write_json(path, payload)
 
 
 def _spawn(
@@ -198,7 +211,7 @@ class RunStore:
             "created_at": time.time(),
             "command": cmd,
         }
-        (run_root / "run.json").write_text(json.dumps(descriptor, indent=2))
+        _atomic_write_json(run_root / "run.json", descriptor)
 
         (runner or _spawn)(cmd, log_path, status_path)
         return self.get(run_id)
@@ -235,10 +248,35 @@ class RunStore:
             "command": cmd,
             "inputs": [str(p) for p in workspaces],
         }
-        (run_root / "run.json").write_text(json.dumps(descriptor, indent=2))
+        _atomic_write_json(run_root / "run.json", descriptor)
 
         (runner or _spawn)(cmd, log_path, status_path)
         return self.get(run_id)
+
+    def reconcile_orphaned_runs(self) -> int:
+        """Rewrite stale ``state: "running"`` markers from prior server runs.
+
+        When the server is killed mid-run, the subprocess thread that
+        would have flipped ``status.json`` to ok/failed is gone, but
+        the file still says "running". On startup we scan once and
+        relabel anything still marked as running.
+        Returns the number of runs relabelled.
+        """
+        relabelled = 0
+        for run in self.list_runs():
+            status = run.status()
+            if status.get("state") != "running":
+                continue
+            _write_status(
+                run.status_path,
+                {
+                    "state": "orphaned",
+                    "note": "server restart interrupted the subprocess",
+                    "finished_at": time.time(),
+                },
+            )
+            relabelled += 1
+        return relabelled
 
 
 def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
@@ -247,20 +285,39 @@ def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
     Yields raw lines (without trailing newline). Terminates when the run
     status moves out of ``running`` OR after ``max_seconds`` of idle wait.
     """
+    # Cap per-poll read so a runaway subprocess that prints a 1 GB
+    # line between polls can't blow up the server's memory or block
+    # the stream worker. 256 KB per poll is plenty for typical analyze
+    # output (a few kB per stage).
+    _MAX_CHUNK_BYTES = 256 * 1024
+    _MAX_LINE_BYTES = 8 * 1024
+
     start = time.time()
     offset = 0
+    pending = b""
     while True:
         if run.log_path.exists():
             with run.log_path.open("rb") as f:
                 f.seek(offset)
-                chunk = f.read()
+                chunk = f.read(_MAX_CHUNK_BYTES)
                 if chunk:
-                    text = chunk.decode("utf-8", errors="replace")
                     offset += len(chunk)
-                    for line in text.splitlines():
-                        yield line
+                    pending += chunk
+                    # Split into complete lines; keep any trailing
+                    # partial line in `pending` for the next poll.
+                    *full_lines, pending = pending.split(b"\n")
+                    for raw in full_lines:
+                        if len(raw) > _MAX_LINE_BYTES:
+                            raw = raw[:_MAX_LINE_BYTES] + b"...[truncated]"
+                        yield raw.decode("utf-8", errors="replace")
         status = run.status()
-        if status.get("state") in {"ok", "failed", "unknown"}:
+        if status.get("state") in {"ok", "failed", "orphaned", "unknown"}:
+            # Drain any partial line buffered when the run finishes.
+            if pending:
+                tail = pending
+                if len(tail) > _MAX_LINE_BYTES:
+                    tail = tail[:_MAX_LINE_BYTES] + b"...[truncated]"
+                yield tail.decode("utf-8", errors="replace")
             return
         if time.time() - start > max_seconds:
             return

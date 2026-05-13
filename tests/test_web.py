@@ -224,6 +224,180 @@ def test_unknown_run_id_returns_404(tmp_path):
     assert client.get("/api/runs/notarealid/log").status_code == 404
 
 
+# Regression coverage for the security fixes.
+
+
+def test_upload_filename_traversal_is_neutralized(tmp_path, monkeypatch):
+    """`../../etc/passwd` as a filename must not escape uploads_root."""
+    settings = _make_settings(tmp_path)
+    captured = {}
+
+    def _capture_spawn(cmd, log_path, status_path):
+        # Record the --sample arg so we can assert where the upload landed.
+        try:
+            captured["sample"] = cmd[cmd.index("--sample") + 1]
+        except (ValueError, IndexError):
+            captured["sample"] = None
+        _write_status(status_path, {"state": "ok", "returncode": 0})
+        log_path.write_text("ok\n")
+
+    monkeypatch.setattr("trufflepig.web.runs._spawn", _capture_spawn)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    sample = tmp_path / "src"
+    sample.write_text("x\n")
+    res = client.post(
+        "/api/run",
+        files={"sample": ("../../etc/passwd", sample.open("rb"), "text/plain")},
+    )
+    assert res.status_code == 200, res.text
+
+    # The file landed under uploads_root, with no path components from
+    # the malicious name preserved.
+    sample_path = Path(captured["sample"])
+    sample_path.relative_to(settings.uploads_root.resolve())  # raises if escaped
+    assert "etc" not in sample_path.parts
+    assert "passwd" in sample_path.name
+
+
+def test_upload_size_limit_aborts_oversized_payload(tmp_path, monkeypatch):
+    """Uploads above the configured cap return 413 and don't keep the partial file."""
+    settings = _make_settings(tmp_path)
+    settings.max_upload_bytes = 16  # tiny cap for the test
+    monkeypatch.setattr("trufflepig.web.runs._spawn", lambda *a, **k: None)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    big = tmp_path / "big.tsv"
+    big.write_bytes(b"A" * 1024)
+    res = client.post(
+        "/api/run",
+        files={"sample": ("big.tsv", big.open("rb"), "text/plain")},
+    )
+    assert res.status_code == 413
+    # No file left behind under uploads_root.
+    leftovers = list(settings.uploads_root.glob("*"))
+    assert leftovers == []
+
+
+def test_flag_injection_in_cancer_type_is_rejected(tmp_path, monkeypatch):
+    """A form value starting with `-` is rejected as a likely flag injection."""
+    settings = _make_settings(tmp_path)
+    monkeypatch.setattr("trufflepig.web.runs._spawn", lambda *a, **k: None)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    sample = tmp_path / "x.tsv"
+    sample.write_text("x\n")
+    res = client.post(
+        "/api/run",
+        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
+        data={"cancer_type": "--force"},
+    )
+    assert res.status_code == 400
+    assert "flag" in res.text.lower()
+
+
+def test_markdown_html_in_source_is_escaped(tmp_path, monkeypatch):
+    """A `<script>` tag in the rendered markdown must not survive into the page."""
+    settings = _make_settings(tmp_path)
+
+    def _xss_workspace(workspace, cmd):
+        analyze = workspace / "analyze"
+        analyze.mkdir(parents=True, exist_ok=True)
+        (analyze / "x-summary.md").write_text(
+            "# Summary: x\n\n"
+            "Normal text. <script>window.__pwned=1</script>"
+            ' <img src=x onerror="alert(1)">\n'
+        )
+
+    monkeypatch.setattr(
+        "trufflepig.web.runs._spawn",
+        _stub_runner_factory(_xss_workspace),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+    sample = tmp_path / "x.tsv"
+    sample.write_text("x\n")
+    rid = client.post(
+        "/api/run",
+        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
+    ).json()["run_id"]
+
+    page = client.get(f"/api/runs/{rid}/report/summary").text
+    assert "<script>" not in page
+    assert "&lt;script&gt;" in page
+    # The literal substring "onerror=" survives inside the escaped img
+    # tag (`&lt;img src=x onerror="alert(1)"&gt;`), but no live HTML
+    # tag with an executable attribute is emitted.
+    assert "<img " not in page  # raw img tag with attribute would be live
+    assert "&lt;img " in page
+
+
+def test_run_title_is_html_escaped_in_report_page(tmp_path, monkeypatch):
+    """User-supplied `title` is interpolated safely into the wrapper HTML."""
+    settings = _make_settings(tmp_path)
+    monkeypatch.setattr(
+        "trufflepig.web.runs._spawn",
+        _stub_runner_factory(_write_analyze_workspace),
+    )
+    app = create_app(settings)
+    client = TestClient(app)
+
+    sample = tmp_path / "x.tsv"
+    sample.write_text("x\n")
+    res = client.post(
+        "/api/run",
+        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
+        data={"title": "<script>alert('xss')</script>"},
+    )
+    rid = res.json()["run_id"]
+    page = client.get(f"/api/runs/{rid}/report/summary").text
+    assert "<script>alert" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_atomic_run_json_write_survives_partial_failure(tmp_path):
+    """A crash mid-write must not leave run.json corrupt."""
+    from trufflepig.web.runs import _atomic_write_json
+
+    target = tmp_path / "run.json"
+    _atomic_write_json(target, {"run_id": "abc", "kind": "analyze"})
+    assert json.loads(target.read_text())["run_id"] == "abc"
+    # The temp file is gone after rename.
+    assert not (target.with_suffix(".json.tmp")).exists()
+
+
+def test_reconcile_orphaned_runs_relabels_stuck_running(tmp_path):
+    """Stuck `running` status from a prior server gets relabelled on startup."""
+    from trufflepig.web.runs import RunStore, _atomic_write_json
+
+    runs_root = tmp_path / "runs"
+    runs_root.mkdir()
+    rid = "stuckrun123"
+    rdir = runs_root / rid
+    rdir.mkdir()
+    _atomic_write_json(
+        rdir / "run.json",
+        {
+            "run_id": rid,
+            "kind": "analyze",
+            "workspace": str(rdir / "workspace"),
+            "log_path": str(rdir / "run.log"),
+            "status_path": str(rdir / "status.json"),
+            "title": "stuck",
+            "created_at": 0.0,
+        },
+    )
+    _atomic_write_json(rdir / "status.json", {"state": "running"})
+
+    store = RunStore(runs_root)
+    relabelled = store.reconcile_orphaned_runs()
+    assert relabelled == 1
+    assert store.get(rid).status()["state"] == "orphaned"
+
+
 def test_stream_endpoint_emits_events(tmp_path, monkeypatch):
     settings = _make_settings(tmp_path)
     monkeypatch.setattr(
