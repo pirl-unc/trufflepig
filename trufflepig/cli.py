@@ -1,9 +1,8 @@
 """Command-line entry point.
 
 After the migration from pirlygenes (trufflepig#1), every subcommand
-calls into :mod:`trufflepig.main` natively — no bridge to
-``pirlygenes.cli`` remains. ``pirlygenes`` provides gene-set and
-reference data only.
+calls into :mod:`trufflepig.main` natively. ``pirlygenes`` ships
+gene-set and reference data only.
 
 Shape:
 

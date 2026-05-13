@@ -6,7 +6,7 @@
 
 """Non-TCGA cohort deconvolution / summarisation (#23 companion, v4.0 era).
 
-Where :mod:`pirlygenes.tcga_decompose` is hard-wired to the Xena TOIL
+Where :mod:`trufflepig.tcga_decompose` is hard-wired to the Xena TOIL
 TCGA TPM matrix + barcode-to-project pickle, this module handles the
 rest of the world — cBioPortal datahub cohorts, GEO series matrices,
 ICGC exports — anything that arrives as a (gene_index, sample_column)
@@ -27,7 +27,7 @@ Shape:
 4. Aggregate per (cohort_code, subtype, symbol) to median + IQR + N,
    output in the same schema as ``tcga-deconvolved-expression.csv.gz``.
 
-Not imported at runtime; invoked via ``python -m pirlygenes.cohort_deconvolve``.
+Not imported at runtime; invoked via ``python -m trufflepig.cohort_deconvolve``.
 """
 
 from __future__ import annotations

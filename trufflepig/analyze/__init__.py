@@ -1,10 +1,10 @@
-"""Structured API boundary for the ``pirlygenes analyze`` pipeline.
+"""Structured API boundary for the trufflepig analyze pipeline.
 
-The command-line implementation still lives in :mod:`pirlygenes.cli`, but
-the data contracts in this package are intentionally free of plotting and
-heavy reference imports. They define the handoff surface that can move to
-the future ``trufflepig`` repository without dragging the whole gene-set
-package with it.
+The data contracts in this package are intentionally free of plotting
+and heavy reference imports — they define the handoff surface between
+the migrated pipeline body in :mod:`trufflepig.main` and downstream
+tooling (longitudinal deltas, web UI, LLM consumers, and the future
+per-stage extraction in trufflepig#2..#14).
 """
 
 from .flow import (

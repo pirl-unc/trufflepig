@@ -39,10 +39,17 @@ Output layout:
 ```
 out/patient_X_baseline/
   meta.json            # trufflepig run metadata (versions + args)
-  analyze/             # full analyze output (figures + markdown)
-  records/             # per-stage records (filled as stages migrate)
-  figures/             # rendered figures
+  analyze/             # full analyze output: figures, markdown reports, TSVs
+  records/             # (created, currently empty) — reserved for per-stage
+                       #   records once Phase 2 extraction lands
+  figures/             # (created, currently empty) — reserved for the
+                       #   stage-level figure layout
 ```
+
+Today, every analyze artifact (markdown, figures, TSVs, the bundled
+PDF) lives under `analyze/`. The empty sibling directories are the
+seam for per-stage extraction (trufflepig#2–#14); once stages start
+writing their own records, `analyze/` shrinks.
 
 Common pass-through flags: `--hla-types`, `--fusions`, `--alterations`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,

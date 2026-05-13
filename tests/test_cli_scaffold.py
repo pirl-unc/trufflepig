@@ -56,7 +56,7 @@ def test_pipeline_dependencies_are_sound():
         seen.add(stage)
 
 
-def test_run_bridges_to_pirlygenes_analyze(tmp_path, monkeypatch):
+def test_run_dispatches_to_native_analyze(tmp_path, monkeypatch):
     from trufflepig import cli
 
     captured = {}
@@ -129,7 +129,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
     assert captured["force"] is True
 
 
-def test_compare_bridges_to_pirlygenes_compare(tmp_path, monkeypatch):
+def test_compare_dispatches_to_native_compare(tmp_path, monkeypatch):
     from trufflepig import cli
 
     captured = {}

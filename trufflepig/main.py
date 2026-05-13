@@ -10,7 +10,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from argh import named, dispatch_commands
+# The migrated CLI body retains argh-style @named(...) decorators on
+# `analyze`, `compare_analyze`, `data`, `cancers`, `plot-expression`,
+# `plot-cancer-cohorts` for documentation. They were the argh CLI's
+# command-name overrides; nothing dispatches off them now (the
+# trufflepig CLI in :mod:`trufflepig.cli` calls these functions
+# directly by Python name). Provide a no-op so argh isn't a runtime
+# dependency.
+def named(_name):  # noqa: D401 - argh-style decorator shim
+    """No-op decorator preserved from the pre-migration argh CLI."""
+
+    def _wrap(fn):
+        return fn
+
+    return _wrap
 from pathlib import Path
 import re
 from typing import Optional, Set
@@ -1369,7 +1382,7 @@ def _default_output_dir() -> str:
     from datetime import datetime
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"pirlygenes-{ts}"
+    return f"trufflepig-{ts}"
 
 
 # ── Output-directory lock (#82) ─────────────────────────────────────────
@@ -1389,7 +1402,7 @@ def _default_output_dir() -> str:
 # stale-lock unlink and the new write — but the common accidental
 # double-launch case is caught and diagnosed instead of silently
 # corrupting the output.
-_LOCKFILE_NAME = ".pirlygenes.lock"
+_LOCKFILE_NAME = ".trufflepig.lock"
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -1592,7 +1605,7 @@ def _sniff_input_level(path: str) -> str:
 @named("analyze")
 def analyze(
     input_path: str,
-    output_dir: str = "pirlygenes-output",
+    output_dir: str = "trufflepig-output",
     output_image_prefix: Optional[str] = None,
     aggregate_gene_expression: bool = False,
     genes: Optional[str] = None,
@@ -1630,9 +1643,9 @@ def analyze(
     automatically. Use --genes / --transcripts for explicit control
     or to supply both simultaneously::
 
-        pirlygenes analyze quant.sf                    # auto-detect: transcript → aggregate
-        pirlygenes analyze gene_tpm.csv                # auto-detect: gene-level
-        pirlygenes analyze --genes g.csv --transcripts quant.sf  # explicit both
+        trufflepig run --sample quant.sf --workspace out                  # auto-detect: transcript → aggregate
+        trufflepig run --sample gene_tpm.csv --workspace out               # auto-detect: gene-level
+        trufflepig run --genes g.csv --transcripts quant.sf --workspace out  # explicit both
     """
     config = AnalyzeConfig(
         input_path=input_path,
@@ -7815,28 +7828,25 @@ def plot_cancer_cohorts(
         print(f"Saved {pdf_path} ({len(images)} pages)")
 
 
-def main():
+def main():  # pragma: no cover - intentional redirect to the canonical CLI
+    """Redirect to :mod:`trufflepig.cli`.
+
+    This module is the migrated body of the old pirlygenes CLI; it
+    still defines :func:`analyze`, :func:`compare_analyze`, and the
+    per-stage helpers as a Python API. The user-facing entry point is
+    :mod:`trufflepig.cli`. Without this redirect, running
+    ``python -m trufflepig.main`` would silently bypass the workspace
+    metadata, ``analyze/`` output layout, and lock filename that the
+    rest of the tool expects.
+    """
     import sys
 
-    # Handle --version / -V before dispatching to subcommands.  argh's
-    # dispatch_commands uses argparse under the hood and rejects unknown
-    # top-level flags, so without this, `pirlygenes --version` would print
-    # the banner and then error with "unrecognized arguments: --version".
-    if len(sys.argv) >= 2 and sys.argv[1] in ("--version", "-V"):
-        print_name_and_version()
-        return
-    print_name_and_version()
-    print("---")
-    dispatch_commands(
-        [
-            print_dataset_info,
-            print_cancer_registry,
-            analyze,
-            compare_analyze,
-            plot_expression,
-            plot_cancer_cohorts,
-        ]
+    sys.stderr.write(
+        "trufflepig.main is the migrated analysis Python API; the CLI "
+        "lives in trufflepig.cli. Use `trufflepig run ...` or "
+        "`python -m trufflepig.cli run ...` instead.\n"
     )
+    sys.exit(2)
 
 
 if __name__ == "__main__":

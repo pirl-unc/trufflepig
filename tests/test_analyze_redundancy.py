@@ -199,5 +199,5 @@ def test_default_output_dir_has_timestamp():
     import re
 
     d = _default_output_dir()
-    assert d.startswith("pirlygenes-")
-    assert re.match(r"pirlygenes-\d{8}-\d{6}", d)
+    assert d.startswith("trufflepig-")
+    assert re.match(r"trufflepig-\d{8}-\d{6}", d)

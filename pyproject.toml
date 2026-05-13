@@ -2,7 +2,7 @@
 name = "trufflepig"
 requires-python = ">=3.9"
 authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
-description = "Step-by-step RNA tumor analysis driven by pirlygenes gene sets. Subsumes pirlygenes.analyze as many composable sub-commands with serializable intermediate state for incremental website-style runs."
+description = "RNA tumor analysis driven by pirlygenes gene sets. Migrates the pirlygenes analyze pipeline into composable sub-commands with serializable intermediate state for incremental website-style runs."
 classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Environment :: Console",
@@ -17,7 +17,6 @@ dependencies = [
     "pirlygenes>=5.0.0",
     "numpy>=2.0.0",
     "pandas>=2.0",
-    "argh",
     "matplotlib>=3.5.0",
     "tqdm",
     "pyyaml",

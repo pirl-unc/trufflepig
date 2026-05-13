@@ -375,11 +375,15 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert "*-decomposition-composition.png" in readme
     assert "*-decomposition.png" not in readme
 
-    printed = []
-    monkeypatch.setattr(cli_mod, "print_name_and_version", lambda: printed.append("v"))
-    monkeypatch.setattr(cli_mod, "dispatch_commands", lambda cmds: printed.append(cmds))
-    cli_mod.main()
-    assert printed and printed[0] == "v"
+    # After the migration, `python -m trufflepig.main` no longer ships
+    # a CLI — it's a redirect-only entry point that prints a
+    # "use trufflepig.cli" message and exits 2. The real CLI lives in
+    # :mod:`trufflepig.cli`.
+    import pytest
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli_mod.main()
+    assert excinfo.value.code == 2
 
 
 def test_generate_text_reports_uses_family_and_background_language(tmp_path):

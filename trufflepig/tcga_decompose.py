@@ -23,14 +23,19 @@ Usage
 
 .. code-block:: shell
 
-    python -m pirlygenes.tcga_decompose \\
+    python -m trufflepig.tcga_decompose \\
         --tpm-gz eval/tcga_RSEM_gene_tpm.gz \\
         --barcode-project-pkl eval/barcode_to_project.pkl \\
-        --output-csv pirlygenes/data/tcga-deconvolved-expression.csv
+        --output-csv tcga-deconvolved-expression.csv
+
+The output CSV is committed back to the `pirlygenes` data package
+(``pirlygenes/data/tcga-deconvolved-expression.csv.gz``) — the
+recomputation lives in trufflepig but the curated artifact ships
+with the data package.
 
 Smoke-test with a handful of samples::
 
-    python -m pirlygenes.tcga_decompose ... --max-samples-per-type 5
+    python -m trufflepig.tcga_decompose ... --max-samples-per-type 5
 """
 
 from __future__ import annotations
