@@ -69,7 +69,42 @@ def _norm_axis(text: str) -> str:
 _AXIS_HEADER_RE = re.compile(r"^\*\*([^*]+?)\*\*\s+[—–-]\s+(.+)$")
 _AXIS_FOLD_RE = re.compile(r"up-panel\s+(?:geomean\s+)?([0-9.]+)\s*[x×]")
 _AXIS_DOWN_FOLD_RE = re.compile(r"down-panel\s+(?:geomean\s+)?([0-9.]+)\s*[x×]")
-_FIRST_SENTENCE_RE = re.compile(r"^\s*([^.]+?)\s*(?:\.|$)")
+_FIRST_SENTENCE_RE = re.compile(r"^\s*([^.;]+?)\s*(?:[.;]|$)")
+
+# Controlled vocabulary for ResponseAxisState.state. The renderer
+# emits state text in free form ("active", "Active signaling", "mixed
+# signal; partial agreement", "suppressed", ...); we normalize to one
+# of these tokens so cross-sample equality is stable. Anything that
+# doesn't match falls through as the raw lowercased prefix.
+_STATE_KEYWORDS = (
+    ("suppressed", "suppressed"),
+    ("active", "active"),
+    ("elevated", "active"),
+    ("mixed", "mixed"),
+    ("partial", "mixed"),
+    ("inconclusive", "inconclusive"),
+    ("indeterminate", "inconclusive"),
+    ("unknown", "inconclusive"),
+)
+
+
+def _normalize_axis_state(text: str | None) -> str:
+    """Map a free-form axis-state phrase to a controlled token.
+
+    Returns one of ``active``, ``suppressed``, ``mixed``, ``inconclusive``,
+    or the first lowercased word of ``text`` when no keyword matches —
+    so unanticipated renderer output is preserved but downstream
+    equality checks aren't tripped by punctuation/qualifier drift.
+    """
+    if not text:
+        return ""
+    lowered = text.strip().lower()
+    for needle, token in _STATE_KEYWORDS:
+        if needle in lowered:
+            return token
+    # Fall back to the first word for anything unexpected.
+    head = re.split(r"[\s.;]+", lowered, maxsplit=1)[0]
+    return head or ""
 
 
 def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxisState]:
@@ -99,7 +134,7 @@ def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxis
         if cur_axis and cur_state is not None:
             out[cur_axis] = ResponseAxisState(
                 axis=cur_axis,
-                state=cur_state.strip().lower(),
+                state=_normalize_axis_state(cur_state),
                 up_fold=cur_up,
                 down_fold=cur_down,
                 note=cur_note.strip(),
@@ -119,11 +154,14 @@ def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxis
 
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("### "):
+        # Any new heading (h1/h2/h3/h4/...) or horizontal rule ends the
+        # therapy-state section, except when the heading itself names
+        # the section we want to enter.
+        if stripped.startswith("#") or stripped.startswith("---"):
             if in_section:
                 _flush()
                 in_section = False
-            if "therapy-state context" in stripped.lower():
+            if stripped.startswith("#") and "therapy-state context" in stripped.lower():
                 in_section = True
             continue
         if not in_section:
@@ -152,9 +190,23 @@ def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxis
 
 
 _TARGET_LINE_RE = re.compile(
-    r"^\*\*([A-Z0-9][A-Z0-9_/-]*)\*\*\s+—\s+(.+?)\s+\(([^)]+)\)\."
+    r"^\*\*([A-Z0-9][A-Z0-9_/-]*)\*\*\s+[—–-]\s+(.+?)\s+"
+    # scope group: allow one level of nested parens (e.g. "Approved (subset)")
+    r"\(((?:[^()]|\([^()]*\))+)\)\s*\."
 )
 _TARGET_TPM_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s+tumor-source bulk TPM", re.I)
+# Cancer-call prefixes: leading TCGA-style code (≥2 chars of upper-case
+# letters, digits, underscores, hyphens). The all-caps requirement
+# rejects "Cancer-type unclear" → "" (would otherwise greedy-match just
+# the leading "C") and accepts "BLCA", "SARC_DDLPS", "PFO017"-style codes.
+_CANCER_CALL_PREFIX_RE = re.compile(r"^([A-Z][A-Z0-9_-]+)(?=\s|$|[—–-])")
+
+
+def _cancer_call_prefix(call: str | None) -> str:
+    if not call:
+        return ""
+    m = _CANCER_CALL_PREFIX_RE.match(call.strip())
+    return m.group(1) if m else ""
 
 
 def parse_target_shortlist(summary_lines: Iterable[str]) -> list[TargetShortlistEntry]:
@@ -206,10 +258,30 @@ def parse_target_shortlist(summary_lines: Iterable[str]) -> list[TargetShortlist
 class LongitudinalDelta:
     """One typed observation between two sequential samples.
 
-    ``kind`` identifies the comparison axis; ``before`` / ``after`` are
-    JSON-safe snapshots. ``magnitude`` is a unitless effect size where
-    meaningful; ``direction`` is one of ``up``, ``down``, ``unchanged``,
-    ``gained``, ``lost``, ``shifted``, ``new``, ``cleared``.
+    ``kind`` is the comparison axis (``cancer_call``, ``purity``,
+    ``stroma``, ``immune``, ``mhc_i``, ``response_axis``, ``target``,
+    ``target_tpm``, ``assay_comparability``). ``before`` / ``after`` are
+    JSON-safe snapshots whose schema depends on ``kind``:
+
+    =================== =====================================================
+    kind                ``before`` / ``after`` schema
+    =================== =====================================================
+    cancer_call         string (e.g. ``"BLCA — moderate confidence"``)
+    purity              float (percentage)
+    stroma, immune      float (cohort-relative fold)
+    mhc_i               float (TPM)
+    response_axis       ``{axis, state, up_fold, down_fold, note}``
+    target              ``{gene, drug, indication, tpm, tier, raw}``
+    target_tpm          ``{gene, tpm, tier}``
+    assay_comparability ``{library, preservation}``
+    =================== =====================================================
+
+    ``magnitude`` is a unitless effect size where meaningful: absolute
+    delta for ``purity`` / ``mhc_i``, log-relative ``(after/before)-1``
+    for fold metrics and TPMs. ``direction`` is one of ``up``, ``down``,
+    ``unchanged``, ``gained``, ``lost``, ``shifted``, ``new``, ``cleared``,
+    or ``unknown``. ``unit`` describes the magnitude scale so downstream
+    tooling doesn't have to look it up from ``kind``.
     """
 
     kind: str
@@ -217,6 +289,7 @@ class LongitudinalDelta:
     after_sample: str
     direction: str
     magnitude: float | None = None
+    unit: str = ""
     before: Any = None
     after: Any = None
     note: str = ""
@@ -304,8 +377,8 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
     """
     deltas: list[LongitudinalDelta] = []
 
-    before_call = (before.cancer_call or "").split(" ", 1)[0]
-    after_call = (after.cancer_call or "").split(" ", 1)[0]
+    before_call = _cancer_call_prefix(before.cancer_call)
+    after_call = _cancer_call_prefix(after.cancer_call)
     if before_call and after_call and before_call != after_call:
         deltas.append(
             LongitudinalDelta(
@@ -332,15 +405,16 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction=_direction_from_signed(purity_delta, threshold=5.0),
                 magnitude=purity_delta,
+                unit="percentage_points",
                 before=before.purity_pct,
                 after=after.purity_pct,
                 note="Absolute purity-percentage delta.",
             )
         )
 
-    stromal_log = None
-    if before.stromal_fold and after.stromal_fold:
-        stromal_log = (after.stromal_fold / before.stromal_fold) - 1.0
+    stromal_ratio = _safe_ratio(before.stromal_fold, after.stromal_fold)
+    if stromal_ratio is not None:
+        stromal_log = stromal_ratio - 1.0
         deltas.append(
             LongitudinalDelta(
                 kind="stroma",
@@ -348,15 +422,30 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction=_direction_from_signed(stromal_log, threshold=0.2),
                 magnitude=stromal_log,
+                unit="log_relative",
                 before=before.stromal_fold,
                 after=after.stromal_fold,
                 note="Stromal-enrichment fold change relative to cohort.",
             )
         )
+    elif (before.stromal_fold == 0 and after.stromal_fold) or (
+        after.stromal_fold == 0 and before.stromal_fold
+    ):
+        deltas.append(
+            LongitudinalDelta(
+                kind="stroma",
+                before_sample=before.sample_id,
+                after_sample=after.sample_id,
+                direction="new" if before.stromal_fold == 0 else "cleared",
+                before=before.stromal_fold,
+                after=after.stromal_fold,
+                note="Stromal signal appeared/cleared (zero baseline).",
+            )
+        )
 
-    immune_log = None
-    if before.immune_fold and after.immune_fold:
-        immune_log = (after.immune_fold / before.immune_fold) - 1.0
+    immune_ratio = _safe_ratio(before.immune_fold, after.immune_fold)
+    if immune_ratio is not None:
+        immune_log = immune_ratio - 1.0
         deltas.append(
             LongitudinalDelta(
                 kind="immune",
@@ -364,9 +453,24 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction=_direction_from_signed(immune_log, threshold=0.2),
                 magnitude=immune_log,
+                unit="log_relative",
                 before=before.immune_fold,
                 after=after.immune_fold,
                 note="Immune-enrichment fold change relative to cohort.",
+            )
+        )
+    elif (before.immune_fold == 0 and after.immune_fold) or (
+        after.immune_fold == 0 and before.immune_fold
+    ):
+        deltas.append(
+            LongitudinalDelta(
+                kind="immune",
+                before_sample=before.sample_id,
+                after_sample=after.sample_id,
+                direction="new" if before.immune_fold == 0 else "cleared",
+                before=before.immune_fold,
+                after=after.immune_fold,
+                note="Immune signal appeared/cleared (zero baseline).",
             )
         )
 
@@ -379,6 +483,7 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction=_direction_from_signed(hla_delta, threshold=50),
                 magnitude=hla_delta,
+                unit="tpm",
                 before=before.hla_mean_tpm,
                 after=after.hla_mean_tpm,
                 note="Mean HLA-A/B/C TPM delta — MHC-I antigen-presentation context.",
@@ -419,13 +524,16 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 )
             )
             continue
+        # State is normalized to a controlled vocabulary by parse_response_axes,
+        # so equality is meaningful. When the state changes, suppress the
+        # magnitude — up_fold semantics depend on the activation direction,
+        # so a "magnitude" comparing active→suppressed is misleading (the
+        # axis went down clinically, even if up_fold dropped numerically).
         magnitude = _safe_ratio(b.up_fold, a.up_fold)
-        if magnitude is not None:
-            log_delta = magnitude - 1.0
-        else:
-            log_delta = None
+        log_delta = (magnitude - 1.0) if magnitude is not None else None
         if b.state != a.state:
             direction = "shifted"
+            log_delta = None  # suppress magnitude — semantics depend on state
         elif log_delta is not None:
             direction = _direction_from_signed(log_delta, threshold=0.3)
         else:
@@ -437,6 +545,7 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction=direction,
                 magnitude=log_delta,
+                unit="log_relative" if log_delta is not None else "",
                 before=asdict(b),
                 after=asdict(a),
                 note=f"Axis {axis}: {b.state} ({b.up_fold}x) -> {a.state} ({a.up_fold}x).",
@@ -455,6 +564,7 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction="gained",
                 magnitude=t.tpm,
+                unit="tpm" if t.tpm is not None else "",
                 before=None,
                 after=asdict(t),
                 note=f"{gene} entered the top-target shortlist (TPM={t.tpm}).",
@@ -469,40 +579,73 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                 after_sample=after.sample_id,
                 direction="lost",
                 magnitude=t.tpm,
+                unit="tpm" if t.tpm is not None else "",
                 before=asdict(t),
                 after=None,
                 note=f"{gene} dropped from the top-target shortlist (was TPM={t.tpm}).",
             )
         )
+    # Target TPM movement: gate on both an absolute floor (max(before,after)
+    # must be at least _TARGET_TPM_FLOOR so noise near the detection limit
+    # doesn't masquerade as biology) and a 50% relative threshold, matching
+    # the analyze-side fold-change conventions.
+    _TARGET_TPM_FLOOR = 5.0
+    _TARGET_TPM_REL_THRESHOLD = 0.5
     for gene in sorted(set(before_targets) & set(after_targets)):
         bt = before_targets[gene]
         at = after_targets[gene]
-        tpm_delta = _safe_diff(bt.tpm, at.tpm)
-        if tpm_delta is None:
+        if bt.tpm is None or at.tpm is None:
+            continue
+        if max(bt.tpm, at.tpm) < _TARGET_TPM_FLOOR:
             continue
         relative = _safe_ratio(bt.tpm, at.tpm)
         rel_delta = (relative - 1.0) if relative is not None else None
-        if relative is not None and abs(rel_delta or 0) < 0.2:
+        if rel_delta is None or abs(rel_delta) < _TARGET_TPM_REL_THRESHOLD:
             continue
         deltas.append(
             LongitudinalDelta(
                 kind="target_tpm",
                 before_sample=before.sample_id,
                 after_sample=after.sample_id,
-                direction=_direction_from_signed(rel_delta, threshold=0.2),
+                direction=_direction_from_signed(rel_delta, threshold=_TARGET_TPM_REL_THRESHOLD),
                 magnitude=rel_delta,
+                unit="log_relative",
                 before={"gene": gene, "tpm": bt.tpm, "tier": bt.tier},
                 after={"gene": gene, "tpm": at.tpm, "tier": at.tier},
                 note=f"{gene} target TPM moved {bt.tpm} -> {at.tpm}.",
             )
         )
 
-    # Assay-comparability advisory.
+    # Assay-comparability advisory. Only fire when both buckets are known
+    # AND they differ — emitting "shifted" because one side is "unknown"
+    # would be misleading (the side just didn't report a library prep).
     before_lib = _bucket_library(before.sample_context)
     after_lib = _bucket_library(after.sample_context)
     before_preserve = _preservation_bucket(before.sample_context)
     after_preserve = _preservation_bucket(after.sample_context)
-    if before_lib != after_lib or before_preserve != after_preserve:
+    _UNKNOWN = {"unknown", "other"}
+    lib_known_and_differs = (
+        before_lib not in _UNKNOWN
+        and after_lib not in _UNKNOWN
+        and before_lib != after_lib
+    )
+    preserve_known_and_differs = (
+        before_preserve not in _UNKNOWN
+        and after_preserve not in _UNKNOWN
+        and before_preserve != after_preserve
+    )
+    # Asymmetric unknown — one side has the info, the other doesn't.
+    # That's a comparability gap (the unknown side could be anything,
+    # so absolute TPM deltas should be widened by an assay-uncertainty
+    # allowance). Symmetric unknown (both sides lack info) emits nothing
+    # — the two samples are in the same boat.
+    lib_asymmetric_unknown = (
+        (before_lib in _UNKNOWN) != (after_lib in _UNKNOWN)
+    )
+    preserve_asymmetric_unknown = (
+        (before_preserve in _UNKNOWN) != (after_preserve in _UNKNOWN)
+    )
+    if lib_known_and_differs or preserve_known_and_differs:
         deltas.append(
             LongitudinalDelta(
                 kind="assay_comparability",
@@ -515,6 +658,22 @@ def compute_pairwise_deltas(before, after) -> LongitudinalDeltaSet:
                     "Library prep and/or preservation differ across samples; "
                     "interpret absolute TPM deltas via source-attributed and "
                     "context TPM fields rather than raw values."
+                ),
+            )
+        )
+    elif lib_asymmetric_unknown or preserve_asymmetric_unknown:
+        deltas.append(
+            LongitudinalDelta(
+                kind="assay_comparability",
+                before_sample=before.sample_id,
+                after_sample=after.sample_id,
+                direction="unknown",
+                before={"library": before_lib, "preservation": before_preserve},
+                after={"library": after_lib, "preservation": after_preserve},
+                note=(
+                    "Library prep or preservation is missing for one of the "
+                    "samples — direct TPM deltas should be widened by an "
+                    "assay-uncertainty allowance."
                 ),
             )
         )
