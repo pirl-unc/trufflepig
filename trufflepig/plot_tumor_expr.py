@@ -18,12 +18,10 @@ import matplotlib.pyplot as plt
 from .common import _guess_gene_cols
 from .plot_data_helpers import _strip_ensembl_version
 from pirlygenes.gene_sets_cancer import (
+    housekeeping_gene_ids, is_extended_housekeeping_symbol, CTA_gene_id_to_name, therapy_target_gene_id_to_name, cancer_surfaceome_gene_id_to_name,
+)
+from trufflepig.reference import (
     pan_cancer_expression,
-    housekeeping_gene_ids,
-    is_extended_housekeeping_symbol,
-    CTA_gene_id_to_name,
-    therapy_target_gene_id_to_name,
-    cancer_surfaceome_gene_id_to_name,
 )
 from .plot_scatter import resolve_cancer_type
 from .plot_therapy import (

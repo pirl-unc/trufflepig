@@ -15,7 +15,7 @@ from trufflepig.plot import (
     MET_SITE_TISSUE_AUGMENTATION,
     estimate_tumor_expression_ranges,
 )
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 
 
 # ── #32: qualitative score language ────────────────────────────────────

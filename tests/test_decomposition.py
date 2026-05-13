@@ -5,7 +5,7 @@ import pytest
 from trufflepig.decomposition import decompose_sample, infer_sample_mode
 from trufflepig.decomposition.signature import _load_hpa_cell_types
 from trufflepig.decomposition.templates import get_template_components
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import estimate_tumor_purity, rank_cancer_type_candidates
 
 

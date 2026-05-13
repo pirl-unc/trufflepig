@@ -346,7 +346,8 @@ def test_ranges_skips_shrinkage_when_cohort_prior_is_near_zero():
     median is uninformative for sparsely-expressed genes.
     """
     from trufflepig.plot import estimate_tumor_expression_ranges
-    from pirlygenes.gene_sets_cancer import CTA_gene_id_to_name, pan_cancer_expression
+    from pirlygenes.gene_sets_cancer import CTA_gene_id_to_name
+    from trufflepig.reference import pan_cancer_expression
     import pandas as pd
 
     # Pick 3 CTAs with cohort_prior near zero in PRAD.
@@ -501,7 +502,7 @@ def test_source_attribution_invariants_on_low_purity_prad_stroma_mix():
     and keep low/median/high intervals ordered.
     """
     from trufflepig.decomposition import decompose_sample
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot import estimate_tumor_expression_ranges
     import pandas as pd
 
@@ -579,7 +580,8 @@ def test_ranges_empty_input():
 def test_ranges_pct_cancer_median_steap1_near_one():
     """STEAP1 at ~TCGA PRAD levels should have pct_cancer_median near 1.0."""
     from trufflepig.plot import estimate_tumor_expression_ranges
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression, housekeeping_gene_ids
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+    from trufflepig.reference import pan_cancer_expression
     import pandas as pd
 
     # Construct a fake sample where STEAP1 is at roughly the same
@@ -716,7 +718,7 @@ def test_ranges_fn1_therapy_requires_high_edb_transcripts():
 def test_tme_tissues_are_valid():
     """All curated TME tissues should exist in the reference data."""
     from trufflepig.plot import _TME_TISSUES
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression()
     ntpm_cols = {c.replace("nTPM_", "") for c in ref.columns if c.startswith("nTPM_")}

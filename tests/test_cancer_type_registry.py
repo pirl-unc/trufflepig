@@ -11,8 +11,9 @@ from pirlygenes.gene_sets_cancer import (
     cancer_types_in_family,
     cancer_types_by_tissue,
     cancer_type_subtypes_of,
-    subtype_deconvolved_expression,
 )
+
+from trufflepig.reference import subtype_deconvolved_expression
 
 
 def test_registry_has_required_columns():

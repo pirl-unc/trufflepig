@@ -200,7 +200,7 @@ def test_detection_signature_path_survives_through_engine_api():
     """Smoke test — the detection hook doesn't blow up when called
     on a real sample through the decomposition engine."""
     import pandas as pd
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     sample_tpm = dict(

@@ -25,13 +25,13 @@ from pirlygenes.gene_names import display_name, short_gene_name
 
 import re
 
-from pirlygenes.expression_qc import (
+from trufflepig.expression_qc import (
     classify_gene_qc,
     dominant_class_phrase,
     is_rescue_feature,
-    normalize_expression,
     summarize_qc_class_shares,
 )
+from trufflepig.expression_normalize import normalize_expression
 
 # Patterns for fuzzy column guessing (tried in order, first match wins).
 # Each is matched case-insensitively against the full column name.
@@ -815,8 +815,7 @@ def _consolidate_gene_ids(df, verbose=True):
         return df
 
     from .plot_data_helpers import _strip_ensembl_version
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     df = df.copy()
     df["_id_stripped"] = df["ensembl_gene_id"].astype(str).map(_strip_ensembl_version)
 

@@ -28,8 +28,9 @@ from .templates import (
     matched_normal_component,
 )
 from pirlygenes.gene_sets_cancer import (
-    housekeeping_gene_ids,
-    is_extended_housekeeping_symbol,
+    housekeeping_gene_ids, is_extended_housekeeping_symbol,
+)
+from trufflepig.reference import (
     pan_cancer_expression,
 )
 from ..tumor_purity import rank_cancer_type_candidates, _score_host_tissues

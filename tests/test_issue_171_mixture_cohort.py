@@ -16,6 +16,8 @@ import pytest
 from pirlygenes.gene_sets_cancer import (
     is_mixture_cohort,
     mixture_cohort_codes,
+)
+from trufflepig.reference import (
     pan_cancer_expression,
     subtype_deconvolved_expression,
 )

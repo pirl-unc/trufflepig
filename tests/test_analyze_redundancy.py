@@ -201,3 +201,40 @@ def test_default_output_dir_has_timestamp():
     d = _default_output_dir()
     assert d.startswith("trufflepig-")
     assert re.match(r"trufflepig-\d{8}-\d{6}", d)
+
+
+def test_build_analyze_paths_falls_back_for_canonical_sentinel():
+    """The canonical default-output sentinel ``trufflepig-output`` (and
+    the legacy ``pirlygenes-output`` from before the rename) must
+    trigger fallback to the timestamped default — otherwise Python-API
+    callers using the function default land in a literal directory
+    named ``trufflepig-output/``."""
+    import dataclasses
+
+    from trufflepig.analyze.flow import build_analyze_paths
+    from trufflepig.analyze.models import AnalyzeConfig, InputResolution
+
+    fallback_count = {"calls": 0}
+
+    def _fallback():
+        fallback_count["calls"] += 1
+        return "/tmp/synthetic-fallback"
+
+    res = InputResolution(
+        gene_input="x.tsv",
+        transcript_input=None,
+        aggregate_gene_expression=True,
+        input_level="gene",
+        notes=(),
+    )
+    base = AnalyzeConfig(input_path=res.gene_input)
+    for sentinel in (None, "", "pirlygenes-output", "trufflepig-output"):
+        cfg = dataclasses.replace(base, output_dir=sentinel or "")
+        build_analyze_paths(
+            cfg,
+            res,
+            default_output_dir=_fallback,
+            derive_sample_display_id=lambda *a, **k: "x",
+            sanitize_output_basename=lambda v: v or "x",
+        )
+    assert fallback_count["calls"] == 4

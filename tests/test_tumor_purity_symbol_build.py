@@ -27,9 +27,10 @@ def test_build_sample_tpm_by_symbol_does_not_deepcopy_attrs(monkeypatch):
             "Symbol": ["GENE1", "GENE2"],
         }
     )
-    # Patch at the source module — common.py lazy-imports from gene_sets_cancer
+    # Patch at the source module — common.py lazy-imports from trufflepig.reference
+    # (expression accessors moved off pirlygenes in trufflepig#23).
     monkeypatch.setattr(
-        "pirlygenes.gene_sets_cancer.pan_cancer_expression", lambda: ref
+        "trufflepig.reference.pan_cancer_expression", lambda: ref
     )
 
     out = build_sample_tpm_by_symbol(df)

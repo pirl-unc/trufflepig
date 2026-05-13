@@ -7,7 +7,7 @@ from trufflepig.sample_quality import (
     _CULTURE_STRESS_UP,
     _TME_MARKERS,
 )
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.decomposition.signature import _load_hpa_cell_types
 
 

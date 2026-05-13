@@ -1,6 +1,7 @@
 import pandas as pd
 
-from pirlygenes.gene_sets_cancer import pan_cancer_expression, degradation_gene_pairs
+from pirlygenes.gene_sets_cancer import degradation_gene_pairs
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.sample_context import (
     SampleContext,
     infer_sample_context,

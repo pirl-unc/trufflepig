@@ -43,9 +43,8 @@ def _registry_records() -> dict[str, dict[str, Any]]:
 def _exact_expression_sources() -> dict[str, frozenset[str]]:
     sources_by_code: dict[str, set[str]] = {}
     try:
-        from pirlygenes.gene_sets_cancer import (
-            subtype_deconvolved_expression,
-            tcga_deconvolved_expression,
+        from trufflepig.reference import (
+            subtype_deconvolved_expression, tcga_deconvolved_expression,
         )
 
         tcga = tcga_deconvolved_expression()

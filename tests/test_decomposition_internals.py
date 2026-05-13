@@ -250,7 +250,7 @@ def test_low_purity_candidate_is_penalised():
     """A decomposition candidate with purity < min_tumor_fraction should
     have a lower score than one at normal purity, all else equal."""
     import pandas as pd
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
     from trufflepig.decomposition import decompose_sample
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")

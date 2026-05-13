@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.healthy_vs_tumor import (
     TissueCompositionSignal,
     HealthyVsTumorResult,  # back-compat alias

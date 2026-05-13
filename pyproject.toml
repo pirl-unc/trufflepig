@@ -34,7 +34,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-trufflepig = ["py.typed"]
+trufflepig = ["py.typed", "data/*"]
 
 
 [project.optional-dependencies]

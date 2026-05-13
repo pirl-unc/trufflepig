@@ -37,7 +37,9 @@ import re
 import numpy as np
 import pandas as pd
 
-from pirlygenes.gene_sets_cancer import lineage_gene_symbols, pan_cancer_expression
+from pirlygenes.gene_sets_cancer import lineage_gene_symbols
+
+from trufflepig.reference import pan_cancer_expression
 from ..tumor_purity import TCGA_MEDIAN_PURITY
 from .signature import _load_hpa_cell_types, COMPONENT_TO_HPA
 from .templates import EPITHELIAL_MATCHED_NORMAL_TISSUE

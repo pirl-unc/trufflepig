@@ -32,7 +32,8 @@ from trufflepig.decomposition.signature import (
     _load_hpa_cell_types,
 )
 from trufflepig.decomposition.templates import get_template_components
-from pirlygenes.gene_sets_cancer import housekeeping_gene_ids, pan_cancer_expression
+from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import estimate_tumor_purity
 
 

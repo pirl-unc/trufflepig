@@ -231,11 +231,14 @@ def test_expression_scale_qc_flags_extreme_tpm_concentration():
 
 
 def test_gene_qc_classifier_red_flag_categories():
-    from pirlygenes.expression_qc import classify_gene_qc
+    from trufflepig.expression_qc import classify_gene_qc
 
+    # Groups are the load-bearing classification; labels are
+    # informational and intentionally coarser now that the family
+    # tables in pirlygenes are the source of truth.
     assert classify_gene_qc("MT-CO1").group == "mt_dna"
     assert classify_gene_qc("MTCO1P12").group == "mt_like_pseudogene"
-    assert classify_gene_qc("RNA5SP389").label == "5S rRNA pseudogene"
+    assert classify_gene_qc("RNA5SP389").group == "rrna_like"
     assert classify_gene_qc("RPL13AP5").group == "ribosomal_protein_pseudogene"
     assert classify_gene_qc("SNORD3A").group == "small_ncrna"
     assert classify_gene_qc("H2AC1").group == "histone"
@@ -244,7 +247,7 @@ def test_gene_qc_classifier_red_flag_categories():
 
 
 def test_normalize_expression_removes_technical_rna_and_preserves_nan():
-    from pirlygenes.expression_qc import normalize_expression
+    from trufflepig.expression_normalize import normalize_expression
 
     df = pd.DataFrame(
         {
@@ -264,7 +267,7 @@ def test_normalize_expression_removes_technical_rna_and_preserves_nan():
 
 
 def test_normalize_expression_optional_noncoding_gate_keeps_ig_tcr():
-    from pirlygenes.expression_qc import normalize_expression
+    from trufflepig.expression_normalize import normalize_expression
 
     df = pd.DataFrame(
         {
@@ -289,7 +292,7 @@ def test_normalize_expression_optional_noncoding_gate_keeps_ig_tcr():
 
 
 def test_normalize_expression_optional_noncoding_gate_keeps_unmatched_joined_biotypes():
-    from pirlygenes.expression_qc import normalize_expression
+    from trufflepig.expression_normalize import normalize_expression
 
     expression = pd.DataFrame(
         {
@@ -319,7 +322,7 @@ def test_normalize_expression_optional_noncoding_gate_keeps_unmatched_joined_bio
 
 
 def test_normalize_expression_zeroes_all_technical_input():
-    from pirlygenes.expression_qc import normalize_expression
+    from trufflepig.expression_normalize import normalize_expression
 
     df = pd.DataFrame(
         {
@@ -347,10 +350,16 @@ def test_expression_qc_rescue_removes_rrna_like_dominator():
 
     assert record["applied"] is True
     assert record["removed_fraction"] == pytest.approx(0.55)
-    assert record["top_removed_genes"][0]["qc_class"] == "5S rRNA pseudogene"
-    assert record["qc_class_shares"]["rrna_pseudogene_fraction"] == pytest.approx(
-        0.52
-    )
+    # Group is load-bearing; label is informational and now family-level
+    # (rrna_and_pseudogene) rather than the regex's fine-grained
+    # "5S rRNA pseudogene" — the QC group still drives the drop.
+    top = record["top_removed_genes"][0]
+    assert top["gene"] == "RNA5SP389"
+    assert top["qc_group"] == "rrna_like"
+    # The combined rRNA-pseudogene + nuclear-rRNA-like fraction must still
+    # be reported. With the family-based labelling, both land in the
+    # ``rrna_like`` group, so we check the group-level fraction instead.
+    assert record["qc_class_shares"]["rrna_like_fraction"] == pytest.approx(0.52)
     assert rescued.loc[rescued["gene"] == "RNA5SP389", "TPM"].item() == 0.0
     assert rescued["TPM"].sum() == pytest.approx(1_000_000.0)
     assert rescued.loc[rescued["gene"] == "KLK3", "TPM"].item() == pytest.approx(
@@ -417,7 +426,7 @@ def test_expression_qc_rescue_auto_normalizes_low_technical_burden():
 
 
 def test_expression_qc_rescue_summary_omits_negligible_top_feature():
-    from pirlygenes.expression_qc import expression_qc_rescue_summary_line
+    from trufflepig.expression_qc import expression_qc_rescue_summary_line
 
     line = expression_qc_rescue_summary_line(
         {
@@ -439,7 +448,7 @@ def test_expression_qc_rescue_summary_omits_negligible_top_feature():
 
 
 def test_expression_qc_rescue_summary_keeps_material_top_feature():
-    from pirlygenes.expression_qc import expression_qc_rescue_summary_line
+    from trufflepig.expression_qc import expression_qc_rescue_summary_line
 
     line = expression_qc_rescue_summary_line(
         {

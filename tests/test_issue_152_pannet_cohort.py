@@ -14,9 +14,9 @@ import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
     cancer_type_registry,
-    subtype_deconvolved_expression,
     lineage_genes_by_cancer_type,
 )
+from trufflepig.reference import subtype_deconvolved_expression
 from trufflepig.tumor_purity import LINEAGE_GENES
 
 

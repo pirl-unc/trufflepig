@@ -72,7 +72,10 @@ def build_analyze_paths(
     sanitize_output_basename: Callable[[str | None], str],
 ) -> AnalyzePaths:
     output_dir = config.output_dir
-    if not output_dir or output_dir == "pirlygenes-output":
+    # Accept the legacy "pirlygenes-output" sentinel for one release so
+    # in-flight callers don't break; the canonical sentinel is now
+    # "trufflepig-output".
+    if not output_dir or output_dir in {"pirlygenes-output", "trufflepig-output"}:
         output_dir = default_output_dir()
     out_dir = Path(output_dir)
 

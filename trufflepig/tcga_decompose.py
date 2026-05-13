@@ -9,9 +9,9 @@
 Runs the pirlygenes decomposition engine on every TCGA sample in the
 Xena TOIL RSEM TPM matrix, extracts the tumor-only TPM per gene, then
 aggregates per TCGA cancer code to median + IQR + N. The resulting
-CSV (``data/tcga-deconvolved-expression.csv``) feeds #22 — the
-decon-derived tumor-only columns that replace the current HPA/FPKM
-references in :func:`pirlygenes.gene_sets_cancer.pan_cancer_expression`.
+CSV (``trufflepig/data/tcga-deconvolved-expression.csv``) feeds the
+decon-derived tumor-only columns that augment the HPA/FPKM references
+in :func:`trufflepig.reference.pan_cancer_expression`.
 
 This module is NOT imported by the package at runtime. It exists as
 an offline batch script that the maintainer runs once per TCGA update.
@@ -182,8 +182,7 @@ def _observed_as_tumor(
     for a primary-tumor reference is that the observed TPM *is* the
     tumor TPM.
     """
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     ref = pan_cancer_expression()[["Ensembl_Gene_ID", "Symbol"]].drop_duplicates(
         subset="Ensembl_Gene_ID"
     )

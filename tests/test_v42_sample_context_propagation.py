@@ -36,7 +36,7 @@ from trufflepig.sample_context import (
     infer_sample_context,
     plot_degradation_index,
 )
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 
 
 # ── #60: extended housekeeping exclusion ───────────────────────────────

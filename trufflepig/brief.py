@@ -65,7 +65,7 @@ from .reporting import (
 from .confidence import concise_confidence_reasons
 from .analyze import cancer_type_context_from_analysis, cancer_type_context_label
 from .rna_qc import rna_quant_qc_summary_line
-from pirlygenes.expression_qc import expression_qc_rescue_summary_line
+from trufflepig.expression_qc import expression_qc_rescue_summary_line
 from .sample_context import (
     heuristic_support_label,
     library_prep_clause,

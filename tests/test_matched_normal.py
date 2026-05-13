@@ -31,7 +31,7 @@ from trufflepig.decomposition import (
     summarize_panels,
 )
 from trufflepig.decomposition.templates import get_template_components
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.plot import estimate_tumor_expression_ranges
 from trufflepig.tumor_purity import estimate_tumor_purity
 

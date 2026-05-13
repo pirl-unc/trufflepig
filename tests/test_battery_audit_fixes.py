@@ -168,7 +168,7 @@ def _tcga_sample_with_mt_override(cancer_code, mt_tpm):
     the filtered / renamed case (no MT rows reach the estimator). Any
     small positive value simulates "present but contribute minimal TPM".
     """
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     df = pd.DataFrame(

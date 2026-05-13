@@ -19,9 +19,10 @@ from adjustText import adjust_text
 from .common import _guess_gene_cols
 from .plot_data_helpers import _strip_ensembl_version
 from pirlygenes.gene_sets_cancer import (
+    housekeeping_gene_ids, therapy_target_gene_id_to_name,
+)
+from trufflepig.reference import (
     pan_cancer_expression,
-    housekeeping_gene_ids,
-    therapy_target_gene_id_to_name,
 )
 from pirlygenes.load_dataset import get_data
 from .plot_scatter import CANCER_TYPE_NAMES
@@ -1188,8 +1189,10 @@ def _subtype_expression_values_for_ref(
 
     try:
         from pirlygenes.gene_sets_cancer import (
-            subtype_deconvolved_expression,
             housekeeping_gene_names,
+        )
+        from trufflepig.reference import (
+            subtype_deconvolved_expression,
         )
 
         subtype_df = subtype_deconvolved_expression(technical_rna_normalize=True)
@@ -2269,9 +2272,7 @@ def plot_cohort_heatmap(
 ):
     """Heatmap of curated cancer-type genes × cancer types."""
     import numpy as np
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression, cancer_types
-
-    # Load curated cancer-type genes
+    from trufflepig.reference import pan_cancer_expression, cancer_types
     ct_df = get_data("cancer-type-genes")
     gene_symbols = sorted(ct_df["Symbol"].unique())
 
@@ -2336,8 +2337,7 @@ def plot_cohort_disjoint_counts(
 ):
     """Bar chart of disjoint signature gene counts per cancer type (no sample)."""
     import numpy as np
-    from pirlygenes.gene_sets_cancer import top_enriched_per_cancer_type
-
+    from trufflepig.reference import top_enriched_per_cancer_type
     sig = top_enriched_per_cancer_type(n=n_genes, disjoint=True, min_fold=2.0)
     stats = [(code, len(genes)) for code, genes in sig.items()]
     stats.sort(key=lambda x: -x[1])
@@ -2374,8 +2374,7 @@ def plot_cohort_pca(
 ):
     """PCA of 33 TCGA cancer type centroids (no sample)."""
     import numpy as np
-    from pirlygenes.gene_sets_cancer import top_enriched_per_cancer_type, pan_cancer_expression
-
+    from trufflepig.reference import top_enriched_per_cancer_type, pan_cancer_expression
     sig = top_enriched_per_cancer_type(n=n_genes, disjoint=True)
     all_symbols = set()
     for genes in sig.values():
@@ -2445,9 +2444,8 @@ def plot_cohort_therapy_targets(
     TCR-T registries), columns are cancer types.
     """
     import numpy as np
-    from pirlygenes.gene_sets_cancer import (
-        pan_cancer_expression,
-        cancer_types,
+    from trufflepig.reference import (
+        pan_cancer_expression, cancer_types,
     )
 
     # Collect all therapy targets
@@ -2519,8 +2517,7 @@ def _plot_geneset_by_cancer_heatmap(
 ):
     """Shared helper: heatmap of gene set × cancer types."""
     import numpy as np
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression, cancer_types
-
+    from trufflepig.reference import pan_cancer_expression, cancer_types
     ref = pan_cancer_expression(
         genes=gene_symbols,
         normalize="housekeeping",
@@ -2618,8 +2615,9 @@ def plot_cohort_ctas(
 ):
     """Heatmap of CTA genes × cancer types."""
     import numpy as np
-    from pirlygenes.gene_sets_cancer import CTA_gene_names, pan_cancer_expression, cancer_types
+    from pirlygenes.gene_sets_cancer import CTA_gene_names
 
+    from trufflepig.reference import pan_cancer_expression, cancer_types
     genes = sorted(CTA_gene_names())
     ref = pan_cancer_expression(
         genes=genes,

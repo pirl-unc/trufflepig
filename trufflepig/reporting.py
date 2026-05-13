@@ -629,8 +629,7 @@ _ESSENTIAL_TISSUE_COLS = {
 @lru_cache(maxsize=1)
 def _pan_cancer_normal_expression_index():
     try:
-        from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+        from trufflepig.reference import pan_cancer_expression
         df = pan_cancer_expression(technical_rna_normalize=True).copy()
         if "Ensembl_Gene_ID" not in df.columns:
             return None
@@ -1648,8 +1647,7 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
 
     try:
         from pirlygenes.gene_sets_cancer import (
-            cancer_key_genes_cancer_types,
-            cancer_type_registry,
+            cancer_key_genes_cancer_types, cancer_type_registry,
         )
 
         curated_codes = {_clean_text(code) for code in cancer_key_genes_cancer_types()}

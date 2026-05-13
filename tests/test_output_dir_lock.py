@@ -55,15 +55,25 @@ def test_acquire_lock_refuses_live_holder(tmp_path):
     assert str(os.getpid()) in str(exc.value)
 
 
-def test_acquire_lock_force_overrides_live_holder(tmp_path):
-    """``force=True`` claims the lock even when a live pid holds it."""
+def test_acquire_lock_force_overrides_live_holder(tmp_path, capsys):
+    """``force=True`` claims the lock even when a live pid holds it.
+
+    Also pins the user-facing notice: regression for a missing ``f``
+    prefix that printed ``{holder_started}`` literally.
+    """
     lock_path = tmp_path / _LOCKFILE_NAME
-    lock_path.write_text(json.dumps({"pid": os.getpid(), "started_at": "test"}))
+    lock_path.write_text(json.dumps({"pid": os.getpid(), "started_at": "2026-05-13T01:23:45"}))
 
     new_lock = _acquire_output_dir_lock(tmp_path, force=True)
     # Should have re-written the lock with this process's pid.
     payload = json.loads(new_lock.read_text())
     assert payload["pid"] == os.getpid()
+
+    out = capsys.readouterr().out
+    # Both interpolations must have rendered — no literal "{holder_started}".
+    assert "2026-05-13T01:23:45" in out
+    assert "{holder_started}" not in out
+    assert "{holder_pid}" not in out
 
 
 def test_acquire_lock_reclaims_stale_lockfile(tmp_path):

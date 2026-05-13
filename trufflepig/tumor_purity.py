@@ -25,17 +25,19 @@ import numpy as np
 import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
-    cancer_family_panels,
-    cancer_type_subtypes_of,
-    housekeeping_gene_ids,
-    is_mixture_cohort,
-    lineage_genes_by_cancer_type,
-    pan_cancer_expression,
-    subtype_deconvolved_expression,
+
+    cancer_family_panels, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type,
+
+)
+
+from trufflepig.reference import (
+
+    pan_cancer_expression, subtype_deconvolved_expression,
+
 )
 from .common import _build_sample_tpm_by_symbol as _common_build_sample_tpm
 from .format import render_fold
-from pirlygenes.load_dataset import get_data
+from .reference import estimate_signatures
 
 
 # -------------------- cancer type → normal tissue mapping --------------------
@@ -1402,7 +1404,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
 
     # ---- Component 2: ESTIMATE stromal genes ----
     try:
-        est_df = get_data("estimate-signatures")
+        est_df = estimate_signatures()
         stromal_genes = est_df[est_df["Category"] == "Stromal"]["Symbol"].tolist()
         immune_genes = est_df[est_df["Category"] == "Immune"]["Symbol"].tolist()
     except Exception:

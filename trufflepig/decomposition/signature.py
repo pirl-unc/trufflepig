@@ -10,8 +10,7 @@ or alpha-beta vs gamma-delta in a way that is stable for bulk decomposition.
 """
 
 from .templates import TISSUE_CATEGORIES, COMPONENT_TO_CATEGORY
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
-from pirlygenes.load_dataset import get_data
+from trufflepig.reference import hpa_cell_type_expression, pan_cancer_expression
 
 
 # Map from decomposition component name → HPA cell type(s) to average
@@ -287,7 +286,7 @@ COMPONENT_MARKERS = {
 
 def _load_hpa_cell_types():
     """Load the HPA single-cell type nTPM matrix (gene × cell type)."""
-    return get_data("hpa-cell-type-expression")
+    return hpa_cell_type_expression()
 
 
 def _load_normal_tissue_expression():

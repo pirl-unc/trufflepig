@@ -22,7 +22,7 @@ class AnalyzeConfig:
     """
 
     input_path: str
-    output_dir: str = "pirlygenes-output"
+    output_dir: str = "trufflepig-output"
     output_image_prefix: str | None = None
     aggregate_gene_expression: bool = False
     genes: str | None = None

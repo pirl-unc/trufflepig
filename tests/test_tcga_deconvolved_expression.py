@@ -9,7 +9,7 @@ requiring the real ~2 MB reference CSV to be in the repo.
 import pandas as pd
 import pytest
 
-import pirlygenes.gene_sets_cancer as gsc
+import trufflepig.reference as gsc
 
 
 @pytest.fixture(autouse=True)
@@ -131,7 +131,7 @@ def test_technical_rna_reference_normalization_is_opt_in_and_preserves_nans(monk
         ]
     )
 
-    monkeypatch.setattr(gsc, "get_data", lambda name: base.copy())
+    monkeypatch.setattr(gsc, "get_reference_data", lambda name: base.copy())
     monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: deconv)
 
     raw = gsc.pan_cancer_expression()
@@ -170,7 +170,7 @@ def test_subtype_deconvolved_technical_rna_normalization_is_opt_in(monkeypatch):
         ]
     )
 
-    monkeypatch.setattr(gsc, "get_data", lambda name: synthetic.copy())
+    monkeypatch.setattr(gsc, "get_reference_data", lambda name: synthetic.copy())
 
     raw = gsc.subtype_deconvolved_expression()
     assert raw.loc[raw["symbol"] == "RNA5SP389", "tumor_tpm_median"].iloc[0] == 20.0
@@ -226,5 +226,5 @@ def test_tcga_deconvolved_expression_returns_none_when_missing(monkeypatch):
     def _missing(_name):
         raise ValueError("Dataset tcga-deconvolved-expression not found")
 
-    monkeypatch.setattr(gsc, "get_data", _missing)
+    monkeypatch.setattr(gsc, "get_reference_data", _missing)
     assert gsc.tcga_deconvolved_expression() is None

@@ -1200,7 +1200,7 @@ def test_generate_target_report_filters_unreliable_rows_from_headlines(tmp_path)
 
 
 def _tcga_sample(cancer_code):
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(
@@ -1213,7 +1213,7 @@ def _tcga_sample(cancer_code):
 
 
 def _normal_tissue_reference_sample(tissue):
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(

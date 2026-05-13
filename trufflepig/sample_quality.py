@@ -32,10 +32,9 @@ import numpy as np
 # is the source of truth.
 
 from pirlygenes.gene_sets_cancer import (
-    culture_stress_gene_names,
-    degradation_gene_pairs,
-    mitochondrial_gene_names,
-    tme_marker_gene_names,
+
+    culture_stress_gene_names, degradation_gene_pairs, mitochondrial_gene_names, tme_marker_gene_names,
+
 )
 from .sample_context import library_prep_display_label
 
@@ -102,8 +101,7 @@ def _compute_tissue_baselines():
 
     Returns dict of {tissue_name: {"mt_fraction": float, "rp_fraction": float}}.
     """
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     symbols = ref["Symbol"].tolist()
     mt_set = set(_MT_GENES)

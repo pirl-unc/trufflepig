@@ -111,7 +111,7 @@ def test_matched_normal_over_predicted_wins_over_sm_leakage():
 def test_ranges_df_emits_smooth_muscle_stromal_leakage_column(tmp_path):
     """Pin the new column surface area on the real estimator."""
     import pandas as pd
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot import estimate_tumor_expression_ranges
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")

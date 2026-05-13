@@ -32,8 +32,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from pirlygenes.gene_sets_cancer import (
-    pan_cancer_expression,
+
     CTA_gene_id_to_name,
+
+)
+
+from trufflepig.reference import (
+
+    pan_cancer_expression,
+
 )
 from .plot_scatter import resolve_cancer_type
 from .reporting import (

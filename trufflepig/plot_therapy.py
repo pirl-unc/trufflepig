@@ -19,9 +19,10 @@ import numpy as np
 from .common import _guess_gene_cols
 from .plot_data_helpers import _strip_ensembl_version
 from pirlygenes.gene_sets_cancer import (
+    therapy_target_gene_id_to_name, CTA_gene_id_to_name,
+)
+from trufflepig.reference import (
     pan_cancer_expression,
-    therapy_target_gene_id_to_name,
-    CTA_gene_id_to_name,
 )
 from pirlygenes.load_dataset import get_data
 from .plot_scatter import resolve_cancer_type

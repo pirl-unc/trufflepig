@@ -52,18 +52,15 @@ from .tumor_purity import (
     plot_mhc_expression,
 )
 from pirlygenes.gene_sets_cancer import (
-    therapy_target_gene_id_to_name,
-    pMHC_TCE_target_gene_id_to_name,
-    surface_TCE_target_gene_id_to_name,
-    cancer_biomarker_genes,
-    cancer_therapy_targets,
+    cancer_biomarker_genes, cancer_therapy_targets, therapy_target_gene_id_to_name, pMHC_TCE_target_gene_id_to_name, surface_TCE_target_gene_id_to_name, cancer_type_gene_sets,
+)
+from trufflepig.reference import (
     cancer_types,
-    cancer_type_gene_sets,
 )
 from PIL import Image
 from .load_expression import load_expression_data
 from .load_expression import apply_expression_qc_rescue
-from pirlygenes.expression_qc import (
+from trufflepig.expression_qc import (
     expression_qc_rescue_summary_line,
     technical_rna_component_phrase,
 )
@@ -261,11 +258,15 @@ def print_cancer_registry(
     from collections import defaultdict
 
     from pirlygenes.gene_sets_cancer import (
-        cancer_type_registry,
-        cancer_biomarker_genes,
-        cancer_therapy_targets,
-        tcga_deconvolved_expression,
-        subtype_deconvolved_expression,
+
+        cancer_type_registry, cancer_biomarker_genes, cancer_therapy_targets,
+
+    )
+
+    from trufflepig.reference import (
+
+        tcga_deconvolved_expression, subtype_deconvolved_expression,
+
     )
     from pirlygenes.load_dataset import get_data
 
@@ -1393,7 +1394,7 @@ def _default_output_dir() -> str:
 # runs race to write to the same filenames. The result is a silently
 # inconsistent report (figures from one run, markdowns from the other).
 #
-# Cheap fix: write an advisory ``.pirlygenes.lock`` with the runner's
+# Cheap fix: write an advisory ``.trufflepig.lock`` with the runner's
 # pid + start time. A second invocation into the same directory while
 # the lock-owner is still alive bails out with a clear error directing
 # the user to ``--force`` or a different ``--output-dir``.
@@ -1434,7 +1435,7 @@ def _acquire_output_dir_lock(out_dir, force: bool = False):
     so the caller can unlink on exit.
 
     Raises :class:`RuntimeError` with a clear message when another
-    pirlygenes process is already writing there and ``force`` is
+    trufflepig process is already writing there and ``force`` is
     False. Stale locks (pid no longer alive) are reclaimed with a
     console note.
     """
@@ -1454,7 +1455,7 @@ def _acquire_output_dir_lock(out_dir, force: bool = False):
         if holder_pid and _pid_is_alive(holder_pid):
             if not force:
                 raise RuntimeError(
-                    f"Another pirlygenes analyze process (pid={holder_pid}, "
+                    f"Another trufflepig analyze process (pid={holder_pid}, "
                     f"started {holder_started}) is writing to {out_dir}. "
                     "Use a different --output-dir, wait for it to finish, "
                     "or pass --force to override (only do this if you're "
@@ -1462,7 +1463,7 @@ def _acquire_output_dir_lock(out_dir, force: bool = False):
                 )
             print(
                 f"[output] --force: ignoring live lock held by pid={holder_pid} "
-                "(started {holder_started})"
+                f"(started {holder_started})"
             )
         else:
             print(
@@ -6866,9 +6867,7 @@ def _build_target_report(
     # a fallback to the general tables.
     try:
         from pirlygenes.gene_sets_cancer import (
-            cancer_biomarker_genes,
-            cancer_therapy_targets,
-            cancer_key_genes_cancer_types,
+            cancer_biomarker_genes, cancer_therapy_targets, cancer_key_genes_cancer_types,
         )
 
         panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(

@@ -507,8 +507,7 @@ def score_therapy_signatures(
     """
     import numpy as np
 
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     all_sigs = load_therapy_signatures()
     applicable = _sigs_for_cancer(all_sigs, cancer_type)
     if not applicable:

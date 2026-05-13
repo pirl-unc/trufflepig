@@ -35,12 +35,15 @@ import numpy as np
 import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
-    pan_cancer_expression,
-    CTA_gene_names,
-    proliferation_panel_gene_names,
-    oncofetal_strict_gene_names,
-    tumor_up_vs_matched_normal,
-    heme_tumor_up_vs_matched_normal,
+
+    CTA_gene_names, proliferation_panel_gene_names, oncofetal_strict_gene_names,
+
+)
+
+from trufflepig.reference import (
+
+    pan_cancer_expression, tumor_up_vs_matched_normal, heme_tumor_up_vs_matched_normal,
+
 )
 from .tumor_evidence import (
     TumorEvidenceScore,

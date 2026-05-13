@@ -713,7 +713,7 @@ def test_attribution_cell_no_tag_on_tissue_restricted():
 
 
 def test_epithelial_context_caps_caf_marker_to_non_tumor_fraction():
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot_tumor_expr import estimate_tumor_expression_ranges
     from trufflepig.reporting import tumor_attribution_context
 

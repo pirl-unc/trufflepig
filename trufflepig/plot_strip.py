@@ -19,9 +19,7 @@ from .common import _guess_gene_cols
 from .plot_data_helpers import prepare_gene_expr_df
 from pirlygenes.gene_ids import find_canonical_gene_ids_and_names
 from pirlygenes.gene_sets_cancer import (
-    CTA_gene_id_to_name,
-    housekeeping_gene_ids,
-    cancer_surfaceome_gene_id_to_name,
+    housekeeping_gene_ids, CTA_gene_id_to_name, cancer_surfaceome_gene_id_to_name,
 )
 from pirlygenes.load_dataset import get_data
 

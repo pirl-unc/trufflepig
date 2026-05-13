@@ -18,7 +18,7 @@ an anchor.
 import pandas as pd
 import pytest
 
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import (
     LINEAGE_GENES,
     _cancer_specific_lineage_genes,

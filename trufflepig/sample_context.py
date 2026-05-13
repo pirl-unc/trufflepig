@@ -53,7 +53,7 @@ import math
 from dataclasses import dataclass, field
 
 from .common import without_dataframe_attrs
-from pirlygenes.expression_qc import classify_gene_qc, summarize_qc_class_shares
+from trufflepig.expression_qc import classify_gene_qc, summarize_qc_class_shares
 from typing import Optional
 
 
@@ -1411,8 +1411,7 @@ def _reference_qc_fraction_rows():
     therefore reference-column distributions, used as a visual QC context.
     """
 
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
     rows = []
     symbol_values = ref["Symbol"].fillna("").astype(str).tolist()

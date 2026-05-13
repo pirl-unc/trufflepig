@@ -4,7 +4,7 @@
 
 import pandas as pd
 
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.plot_target_deep_dive import (
     actionable_surface_targets,
     plot_actionable_targets,

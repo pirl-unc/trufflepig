@@ -16,7 +16,8 @@ import matplotlib.pyplot as plt
 from adjustText import adjust_text
 
 from .common import _guess_gene_cols
-from pirlygenes.gene_sets_cancer import pan_cancer_expression, housekeeping_gene_ids
+from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+from trufflepig.reference import pan_cancer_expression
 from .plot_data_helpers import _strip_ensembl_version
 from .plot_strip import default_gene_sets
 
@@ -26,10 +27,9 @@ from .plot_strip import default_gene_sets
 # Canonical cancer-type name/alias maps and the resolver moved to
 # pirlygenes (data-only). Re-exported here for backwards compatibility
 # with trufflepig modules that imported them from plot_scatter.
-from pirlygenes.gene_sets_cancer import (  # noqa: E402
+from pirlygenes.gene_sets_cancer import (
+    CANCER_TYPE_NAMES, resolve_cancer_type, # noqa: E402
     CANCER_TYPE_ALIASES,
-    CANCER_TYPE_NAMES,
-    resolve_cancer_type,
 )
 
 

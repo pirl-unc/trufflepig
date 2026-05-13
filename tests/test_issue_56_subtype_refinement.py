@@ -176,7 +176,7 @@ def test_estimate_tumor_expression_ranges_emits_subtype_refinement_columns(tmp_p
     three new provenance columns in the output frame and mark the
     expected marker genes as refined."""
     import pandas as pd
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot import estimate_tumor_expression_ranges
 
     # Build a synthetic sample that's mostly a colon reference with a

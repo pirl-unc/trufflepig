@@ -66,7 +66,7 @@ def test_score_ar_signaling_suppressed_when_ar_targets_are_low_in_prad_context()
     # Synthetic sample where every AR-transactivated gene reads at
     # roughly 10% of its PRAD cohort median and FOLH1 reads at 4× —
     # the canonical post-ADT pattern.
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
 
@@ -106,7 +106,7 @@ def test_score_returns_empty_when_cancer_has_no_applicable_axes():
 
 
 def test_her2_signaling_active_when_erbb2_elevated_in_brca():
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
     col = "FPKM_BRCA"
@@ -130,7 +130,7 @@ def test_her2_signaling_active_when_erbb2_elevated_in_brca():
 
 
 def test_mapk_activity_score_is_pan_cancer_mpas_like():
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
     col = "FPKM_SARC"

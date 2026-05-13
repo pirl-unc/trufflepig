@@ -101,8 +101,7 @@ def build_sample_tpm_by_symbol(df_gene_expr):
     reference, then groups by symbol keeping the maximum TPM per gene.
     """
     from .plot_data_helpers import _strip_ensembl_version
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
-
+    from trufflepig.reference import pan_cancer_expression
     with without_dataframe_attrs(df_gene_expr):
         gene_id_col, _gene_name_col = guess_gene_cols(df_gene_expr)
         gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)

@@ -17,7 +17,7 @@ otherwise prefer a broad-family competitor.
 import pandas as pd
 import pytest
 
-from pirlygenes.gene_sets_cancer import pan_cancer_expression
+from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import (
     TUMOR_PURITY_PARAMETERS,
     CANCER_TO_TISSUE,
@@ -92,7 +92,7 @@ def test_override_rejects_orphan_with_tme_driven_raw_signal():
     but DLBC's purity is ~0.33 and signature is ~0.60, below the
     override's signature + purity gates. Classifier should keep COAD
     (or READ) on top, not DLBC."""
-    from pirlygenes.gene_sets_cancer import pan_cancer_expression
+    from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     coad = pd.Series(

@@ -167,7 +167,7 @@ def test_subtype_deconvolved_expression_loads_shipped_data():
     """Smoke test against the shipped subtype-deconvolved CSV. Picks
     a BRCA-subtype → ERBB2 anchor that will fail loudly if the
     PAM50 re-partition broke."""
-    from pirlygenes.gene_sets_cancer import subtype_deconvolved_expression
+    from trufflepig.reference import subtype_deconvolved_expression
 
     d = subtype_deconvolved_expression()
     if d is None:
