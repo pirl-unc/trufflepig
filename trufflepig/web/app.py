@@ -33,7 +33,14 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from .runs import RUN_KIND_ANALYZE, RUN_KIND_COMPARE, RunStore, WebRun, iter_log_events
+from .runs import (
+    RUN_KIND_ANALYZE,
+    RUN_KIND_COMPARE,
+    RunStore,
+    WebRun,
+    aiter_log_events,
+    iter_log_events,
+)
 
 
 # Maximum upload size in bytes (default 200 MB — typical TPM file is
@@ -99,20 +106,68 @@ class WebSettings:
         )
 
 
+# Allowed URL schemes for markdown links / autolinks. Anything else
+# (``javascript:``, ``data:``, ``vbscript:``, ``file:`` …) gets the
+# href rewritten to ``#`` so the rendered page can't carry an active
+# payload back to the browser.
+_SAFE_URL_SCHEMES = ("http://", "https://", "mailto:", "#", "/", "./", "../")
+
+# Report-name URL whitelist. ``name`` is glob-interpolated against the
+# workspace's analyze dir; without this allowlist, ``?`` and ``[``
+# would match unintended files. Keep in sync with the names
+# trufflepig.main actually emits.
+_ALLOWED_REPORT_NAMES = frozenset(
+    {"summary", "analysis", "brief", "actionable", "evidence", "comparison"}
+)
+
+# File suffixes safe to serve inline. Anything else gets
+# ``Content-Disposition: attachment`` so a workspace ``.html``,
+# ``.svg``, or ``.xml`` can't render with active content.
+_INLINE_SAFE_SUFFIXES = frozenset(
+    {"png", "jpg", "jpeg", "gif", "webp", "pdf", "json", "tsv", "csv", "md", "txt"}
+)
+
+
 def _markdown_to_html(text: str) -> str:
     """Render Markdown to safe HTML.
 
-    ``markdown.markdown`` passes raw HTML in the source through as-is by
-    default — that's stored XSS waiting to happen when the source is
-    derived from user-supplied form fields or filenames. We turn off
-    HTML passthrough with ``safe_mode="escape"`` so any literal ``<`` is
-    rendered as ``&lt;`` and any ``<script>`` tag becomes inert text.
+    ``markdown.markdown`` passes raw HTML in the source through as-is
+    by default — that's stored XSS waiting to happen when the source
+    is derived from user-supplied form fields or filenames. We turn
+    off raw-HTML passthrough with ``_HtmlStripPreprocessor`` so any
+    literal ``<`` is rendered as ``&lt;``, and we post-render to
+    neutralize ``[click](javascript:...)`` / ``<javascript:...>``
+    autolinks by replacing any non-allowlisted ``href=`` value.
     """
     import markdown as _md
 
     md = _md.Markdown(extensions=["tables", "fenced_code", "toc"])
     md.preprocessors.register(_HtmlStripPreprocessor(md), "_trufflepig_strip_html", 30)
-    return md.convert(text)
+    return _strip_unsafe_hrefs(md.convert(text))
+
+
+def _strip_unsafe_hrefs(html_text: str) -> str:
+    """Rewrite ``href="javascript:..."`` (and other unsafe schemes) to ``#``.
+
+    Catches the ``[text](javascript:alert(1))`` markdown form that the
+    HTML-block strip preprocessor doesn't see — inline links go
+    through the link tree-processor at a later stage. Conservative
+    allowlist: only ``http``, ``https``, ``mailto:``, anchor (``#``),
+    and same-origin relative paths survive.
+    """
+    import re
+
+    def _sub(match):
+        quote = match.group(1)
+        value = match.group(2)
+        value_stripped = value.strip()
+        lowered = value_stripped.lower()
+        if lowered.startswith(_SAFE_URL_SCHEMES):
+            return match.group(0)
+        # Non-allowlisted scheme — neutralize.
+        return f'href={quote}#{quote}'
+
+    return re.sub(r'href=([\'"])([^\'"]*)\1', _sub, html_text, flags=re.IGNORECASE)
 
 
 class _HtmlStripPreprocessor:
@@ -247,7 +302,7 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         return run.to_dict()
 
     @app.get("/api/runs/{run_id}/stream")
-    def api_stream(run_id: str):
+    async def api_stream(run_id: str):
         run = store.get(run_id)
         if run is None:
             raise HTTPException(404, "Unknown run id")
@@ -257,14 +312,14 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         # banners and progress messages.
         _MAX_EVENT_BYTES = 4096
 
-        def gen():
-            for line in iter_log_events(run):
+        async def gen():
+            async for line in aiter_log_events(run):
                 safe = line.replace("\n", " ").replace("\r", " ")
                 if len(safe) > _MAX_EVENT_BYTES:
                     safe = safe[:_MAX_EVENT_BYTES] + " …[truncated]"
                 yield f"data: {safe}\n\n"
             # Final status push so the client can stop listening. The
-            # status comes from disk so the previous "iter_log_events
+            # status comes from disk so the previous "aiter_log_events
             # returned" can be due either to the run finishing or to
             # an idle-timeout — surface both explicitly.
             status = run.status()
@@ -281,6 +336,12 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         run = store.get(run_id)
         if run is None:
             raise HTTPException(404, "Unknown run id")
+        # Whitelist the report names trufflepig actually emits — the
+        # URL value is glob-interpolated below, and ``?``/``[`` in
+        # ``name`` would otherwise match unintended files in the
+        # workspace.
+        if name not in _ALLOWED_REPORT_NAMES:
+            raise HTTPException(400, f"Unknown report name {name!r}")
         # For analyze runs, reports live under workspace/analyze/<prefix>-<name>.md
         # For compare runs, comparison.md is at workspace/comparison.md.
         candidates: list[Path] = []
@@ -309,7 +370,19 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
             raise HTTPException(400, "Path escapes workspace") from None
         if not target.is_file():
             raise HTTPException(404, "Artifact not found")
-        return FileResponse(str(target))
+        # Force ``Content-Disposition: attachment`` for anything that
+        # isn't an inline-safe image/PDF/JSON/TSV/CSV/MD/TXT. Without
+        # this, a workspace ``.html`` or ``.svg`` artifact would render
+        # with active content when fetched in the browser.
+        suffix = target.suffix.lower().lstrip(".")
+        if suffix in _INLINE_SAFE_SUFFIXES:
+            return FileResponse(str(target))
+        return FileResponse(
+            str(target),
+            headers={
+                "Content-Disposition": f'attachment; filename="{target.name}"'
+            },
+        )
 
     return app
 
