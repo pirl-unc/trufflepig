@@ -19,7 +19,18 @@ from .flow import (
 from .comparison import (
     AnalyzeSummaryRecord,
     build_analyze_comparison_markdown,
+    compute_longitudinal_delta_sets,
     load_analyze_summary_record,
+)
+from .deltas import (
+    LongitudinalDelta,
+    LongitudinalDeltaSet,
+    ResponseAxisState,
+    TargetShortlistEntry,
+    compute_pairwise_deltas,
+    parse_response_axes,
+    parse_target_shortlist,
+    write_deltas_json,
 )
 from .models import (
     AnalyzeArtifact,
@@ -47,7 +58,11 @@ __all__ = [
     "AnalyzeSummaryRecord",
     "CancerTypeContext",
     "InputResolution",
+    "LongitudinalDelta",
+    "LongitudinalDeltaSet",
+    "ResponseAxisState",
     "StepRecord",
+    "TargetShortlistEntry",
     "apply_sample_context_to_purity",
     "build_analysis_parameters",
     "build_analyze_comparison_markdown",
@@ -55,12 +70,17 @@ __all__ = [
     "cancer_type_context_code",
     "cancer_type_context_from_analysis",
     "cancer_type_context_label",
+    "compute_longitudinal_delta_sets",
+    "compute_pairwise_deltas",
     "discover_output_artifacts",
     "expression_reference_sources",
     "has_expression_reference",
     "load_analyze_summary_record",
+    "parse_response_axes",
+    "parse_target_shortlist",
     "registry_parent_code",
     "resolve_analyze_inputs",
     "should_adopt_decomposition_purity",
+    "write_deltas_json",
     "write_json",
 ]
