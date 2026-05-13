@@ -279,6 +279,29 @@ def cmd_list_stages(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    """Run the web UI locally (dev convenience)."""
+    try:
+        import uvicorn
+    except ImportError:
+        print(
+            "[trufflepig] `trufflepig serve` needs the web extras — "
+            "install with `pip install 'trufflepig[web]'`.",
+            file=sys.stderr,
+        )
+        return 2
+    from .web import create_app
+
+    uvicorn.run(
+        create_app(),
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        access_log=False,
+    )
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="trufflepig")
     parser.add_argument("--version", action="version", version=f"trufflepig {__version__}")
@@ -317,6 +340,10 @@ def main(argv=None):
 
     sub.add_parser("list-stages", help="List pipeline stages and their dependencies.")
 
+    serve_p = sub.add_parser("serve", help="Run the web UI locally.")
+    serve_p.add_argument("--host", default="127.0.0.1")
+    serve_p.add_argument("--port", type=int, default=8000)
+
     args = parser.parse_args(argv)
 
     dispatch = {
@@ -327,6 +354,7 @@ def main(argv=None):
         "plot-cancer-cohorts": cmd_plot_cancer_cohorts,
         "stage": cmd_stage,
         "list-stages": cmd_list_stages,
+        "serve": cmd_serve,
     }
     fn = dispatch.get(args.cmd)
     if fn is None:

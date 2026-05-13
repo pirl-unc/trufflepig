@@ -81,6 +81,20 @@ trufflepig cancers --family sarcoma --details
 trufflepig plot-cancer-cohorts --output-prefix /tmp/cohort
 ```
 
+### Web UI
+
+```
+pip install 'trufflepig[web]'
+trufflepig serve --port 8000
+# open http://127.0.0.1:8000
+```
+
+Upload a TPM file or salmon quant in the browser, watch each pipeline
+stage stream back, and read the rendered `summary.md` / `analysis.md` /
+`brief.md` inline. Comparison runs work the same way — pick prior runs
+by ID. Each run writes a self-contained workspace under
+`$TRUFFLEPIG_WEB_ROOT` (default `$HOME/trufflepig-web-runs`).
+
 ### Pipeline DAG
 
 ```
@@ -163,9 +177,12 @@ can run and stream single stages:
 A single-page web frontend so a user can drop in a TPM or salmon quant,
 watch each stage stream back, and download the rendered markdown / PDF.
 
-- [ ] Architecture: serverless analysis endpoint + browser client
+- [x] FastAPI app + browser UI (`trufflepig serve`) with file upload,
+      background analyze, server-sent-events progress stream, inline
+      rendered reports, and longitudinal comparison launcher
       ([#16](https://github.com/pirl-unc/trufflepig/issues/16))
-- [ ] Streaming progress + per-stage output hooks
+- [x] Streaming progress + per-stage output hooks (SSE stream of
+      analyze stdout)
       ([#15](https://github.com/pirl-unc/trufflepig/issues/15))
 - [ ] Reference-data layout for lazy-load from R2/S3 with browser cache
       ([#18](https://github.com/pirl-unc/trufflepig/issues/18))
@@ -173,6 +190,8 @@ watch each stage stream back, and download the rendered markdown / PDF.
       cold-start in serverless / browser contexts
       ([#17](https://github.com/pirl-unc/trufflepig/issues/17))
 - [ ] Auth + workspace persistence so a user can return to a prior run
+- [ ] Production deploy target (serverless) replacing the local
+      subprocess runner with a remote-job submission
 
 ## Non-goals
 

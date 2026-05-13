@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>trufflepig</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>trufflepig</h1>
+    <p>RNA tumor analysis, in the browser.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Analyze a sample</h2>
+      <p>Upload a gene-level TPM TSV/CSV or a salmon <code>quant.sf</code>.</p>
+      <form id="run-form">
+        <label>Sample file
+          <input type="file" name="sample" required>
+        </label>
+        <label>Cancer type (optional, e.g. <code>BLCA</code>)
+          <input type="text" name="cancer_type" placeholder="auto">
+        </label>
+        <label>HLA types (optional, comma-separated)
+          <input type="text" name="hla_types" placeholder="A*02:01,B*07:02">
+        </label>
+        <label>Sample label
+          <input type="text" name="sample_id_value" placeholder="patient_X_baseline">
+        </label>
+        <label>Title
+          <input type="text" name="title" placeholder="Optional run title">
+        </label>
+        <button type="submit">Run analysis</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Compare runs (longitudinal)</h2>
+      <p>Select two or more completed analyze runs; their reports are
+      diffed into a comparison and a <code>deltas.json</code>.</p>
+      <form id="compare-form">
+        <label>Run IDs (comma-separated)
+          <input type="text" name="run_ids" required>
+        </label>
+        <label>Comparison title
+          <input type="text" name="title">
+        </label>
+        <button type="submit">Run comparison</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Recent runs</h2>
+      <table id="runs-table">
+        <thead>
+          <tr><th>ID</th><th>Kind</th><th>Title</th><th>Status</th><th>Reports</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card" id="live">
+      <h2>Live run progress</h2>
+      <p>Open a run from the table or submit one above; the stream
+      shows each stage as it completes.</p>
+      <pre id="stream-log" aria-live="polite"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
