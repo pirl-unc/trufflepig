@@ -19,7 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import AsyncIterator, Iterator
 
 
 RUN_KIND_ANALYZE = "analyze"
@@ -229,6 +229,16 @@ class RunStore:
         log_path = run_root / "run.log"
         status_path = run_root / "status.json"
 
+        # The CLI's --inputs takes a single comma-separated string, so
+        # reject any workspace path that contains a comma (it would
+        # silently truncate). The web layer is the boundary where that
+        # contract is enforced.
+        for p in workspaces:
+            if "," in str(p):
+                raise ValueError(
+                    f"Workspace path contains comma which would corrupt "
+                    f"--inputs splitting: {p!r}"
+                )
         cmd = [
             sys.executable, "-m", "trufflepig.cli", "compare",
             "--workspace", str(workspace),
@@ -279,16 +289,59 @@ class RunStore:
         return relabelled
 
 
-def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
-    """Stream new stdout lines from a run's log as they arrive.
+async def aiter_log_events(
+    run: WebRun, max_seconds: float = 600.0
+) -> "AsyncIterator[str]":
+    """Async variant of :func:`iter_log_events`.
 
-    Yields raw lines (without trailing newline). Terminates when the run
-    status moves out of ``running`` OR after ``max_seconds`` of idle wait.
+    The route's ``StreamingResponse`` ran the sync generator in a
+    threadpool worker — each open SSE connection held a worker for up
+    to ``max_seconds``, so ~40 watchers (Starlette's default threadpool
+    size) would DOS the server. The async version uses
+    ``asyncio.sleep`` between polls so any number of concurrent
+    streamers can share the event loop without consuming a thread.
     """
-    # Cap per-poll read so a runaway subprocess that prints a 1 GB
-    # line between polls can't blow up the server's memory or block
-    # the stream worker. 256 KB per poll is plenty for typical analyze
-    # output (a few kB per stage).
+    import asyncio
+
+    _MAX_CHUNK_BYTES = 256 * 1024
+    _MAX_LINE_BYTES = 8 * 1024
+    start = time.time()
+    offset = 0
+    pending = b""
+    while True:
+        if run.log_path.exists():
+            with run.log_path.open("rb") as f:
+                f.seek(offset)
+                chunk = f.read(_MAX_CHUNK_BYTES)
+                if chunk:
+                    offset += len(chunk)
+                    pending += chunk
+                    *full_lines, pending = pending.split(b"\n")
+                    for raw in full_lines:
+                        if len(raw) > _MAX_LINE_BYTES:
+                            raw = raw[:_MAX_LINE_BYTES] + b"...[truncated]"
+                        yield raw.decode("utf-8", errors="replace")
+        status = run.status()
+        if status.get("state") in {"ok", "failed", "orphaned", "unknown"}:
+            if pending:
+                tail = pending
+                if len(tail) > _MAX_LINE_BYTES:
+                    tail = tail[:_MAX_LINE_BYTES] + b"...[truncated]"
+                yield tail.decode("utf-8", errors="replace")
+            return
+        if time.time() - start > max_seconds:
+            return
+        await asyncio.sleep(0.4)
+
+
+def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
+    """Sync variant of :func:`aiter_log_events` for non-FastAPI callers.
+
+    Yields raw lines (without trailing newline). Terminates when the
+    run status moves out of ``running`` OR after ``max_seconds``. The
+    web-app SSE route uses :func:`aiter_log_events` to avoid pinning a
+    threadpool worker per active stream.
+    """
     _MAX_CHUNK_BYTES = 256 * 1024
     _MAX_LINE_BYTES = 8 * 1024
 
@@ -303,8 +356,6 @@ def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
                 if chunk:
                     offset += len(chunk)
                     pending += chunk
-                    # Split into complete lines; keep any trailing
-                    # partial line in `pending` for the next poll.
                     *full_lines, pending = pending.split(b"\n")
                     for raw in full_lines:
                         if len(raw) > _MAX_LINE_BYTES:
@@ -312,7 +363,6 @@ def iter_log_events(run: WebRun, max_seconds: float = 600.0) -> Iterator[str]:
                         yield raw.decode("utf-8", errors="replace")
         status = run.status()
         if status.get("state") in {"ok", "failed", "orphaned", "unknown"}:
-            # Drain any partial line buffered when the run finishes.
             if pending:
                 tail = pending
                 if len(tail) > _MAX_LINE_BYTES:
