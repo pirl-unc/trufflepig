@@ -212,12 +212,16 @@ def cmd_compare(args) -> int:
     )
 
     # Companion machine-readable record: typed longitudinal observations.
-    # Only emit when every input has a parseable summary — skip silently
-    # so callers passing stub dirs (tests / probes) still get the
-    # compare_analyze rendering without an error here.
+    # Only emit when every input has a parseable summary — print a
+    # one-line notice if we have to skip so the user knows deltas.json
+    # is missing and why.
     try:
         records = [load_analyze_summary_record(p) for p in resolved_inputs]
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        print(
+            f"[deltas] skipped: {exc} — comparison.md was still written.",
+            file=sys.stderr,
+        )
         return 0
     delta_sets = compute_longitudinal_delta_sets(records)
     write_deltas_json(deltas_path, delta_sets)

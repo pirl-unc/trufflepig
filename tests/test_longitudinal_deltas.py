@@ -279,3 +279,252 @@ def test_cli_compare_emits_deltas_json(tmp_path):
     assert len(payload) == 1
     kinds = {d["kind"] for d in payload[0]["deltas"]}
     assert "purity" in kinds
+
+
+# Regression coverage for the review-driven fixes.
+
+
+def test_parse_response_axes_handles_unicode_multiplication_sign():
+    """Real evidence.md uses `×` (U+00D7); ASCII `x` is a test convenience."""
+    evidence = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — active. up-panel geomean 3.50× cohort\n\n"
+        "**IFN response** — active. up-panel geomean 2.00× cohort, "
+        "down-panel 0.30×\n\n"
+        "### Next Section\n"
+    )
+    axes = parse_response_axes(evidence.splitlines())
+    assert axes["MAPK_EGFR_signaling"].up_fold == 3.50
+    assert axes["IFN_response"].up_fold == 2.00
+    assert axes["IFN_response"].down_fold == 0.30
+
+
+def test_parse_response_axes_terminates_on_h2_h1_or_hr():
+    """Section termination must work for any heading, not just h3.
+
+    A future renderer that emits `## ` before the next axis block would
+    otherwise bleed lines into the previous axis's note.
+    """
+    evidence = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
+        "## Top candidate therapies\n\n"
+        "- **EVERYTHING** — should be after the section ended (TPM 100x)\n"
+    )
+    axes = parse_response_axes(evidence.splitlines())
+    assert "MAPK_EGFR_signaling" in axes
+    # The note must not contain content from the next section.
+    assert "Top candidate" not in axes["MAPK_EGFR_signaling"].note
+    assert "EVERYTHING" not in axes["MAPK_EGFR_signaling"].note
+
+
+def test_parse_response_axes_normalizes_state_vocabulary():
+    """Free-form state phrases collapse to a controlled set so equality holds."""
+    evidence = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — Active signaling. up-panel geomean 3.5x cohort\n\n"
+        "**IFN response** — mixed signal; partial agreement. up-panel geomean 1.5x cohort\n\n"
+        "**ER signaling** — Suppressed: up-panel geomean 0.20x cohort\n\n"
+        "### End\n"
+    )
+    axes = parse_response_axes(evidence.splitlines())
+    assert axes["MAPK_EGFR_signaling"].state == "active"
+    assert axes["IFN_response"].state == "mixed"
+    assert axes["ER_signaling"].state == "suppressed"
+
+
+def test_response_axis_same_state_same_fold_is_unchanged(tmp_path):
+    """An axis with identical state + fold across samples is `unchanged`."""
+    summary = SUMMARY_A.replace("sample_A", "sample_X")
+    evidence = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
+        "### End\n"
+    )
+    dir_a = _write_sample(tmp_path / "a", "a", summary, evidence)
+    dir_b = _write_sample(
+        tmp_path / "b", "b",
+        summary.replace("sample_X", "sample_Y").replace(
+            "Purity:** 60%", "Purity:** 60%"
+        ),
+        evidence,
+    )
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    axis_deltas = [d for d in deltas if d.kind == "response_axis"]
+    assert axis_deltas, "Expected a response_axis delta for the shared axis"
+    assert all(d.direction == "unchanged" for d in axis_deltas)
+
+
+def test_response_axis_state_change_suppresses_magnitude(tmp_path):
+    """Active → suppressed leaves magnitude empty (up_fold semantics flip)."""
+    summary = SUMMARY_A.replace("sample_A", "sample_X")
+    evidence_a = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
+        "### End\n"
+    )
+    evidence_b = (
+        "### Therapy-state context\n\n"
+        "**MAPK EGFR signaling** — suppressed. up-panel geomean 0.40x cohort\n\n"
+        "### End\n"
+    )
+    dir_a = _write_sample(tmp_path / "a", "a", summary, evidence_a)
+    dir_b = _write_sample(tmp_path / "b", "b", summary, evidence_b)
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    mapk = next(
+        d for d in deltas
+        if d.kind == "response_axis"
+        and (d.before or {}).get("axis") == "MAPK_EGFR_signaling"
+    )
+    assert mapk.direction == "shifted"
+    assert mapk.magnitude is None  # suppressed — direction-dependent
+    assert mapk.unit == ""
+
+
+def test_target_tpm_low_floor_suppresses_noise(tmp_path):
+    """Tiny TPM movement (1 → 1.2) shouldn't emit a target_tpm delta."""
+    summary_low_a = SUMMARY_A.replace("200.0 tumor-source bulk TPM", "1.0 tumor-source bulk TPM")
+    summary_low_b = SUMMARY_B.replace("400.0 tumor-source bulk TPM", "1.2 tumor-source bulk TPM")
+    dir_a = _write_sample(tmp_path / "a", "a", summary_low_a, EVIDENCE_A)
+    dir_b = _write_sample(tmp_path / "b", "b", summary_low_b, EVIDENCE_B)
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    nectin_tpm_deltas = [
+        d for d in deltas
+        if d.kind == "target_tpm"
+        and (d.before or {}).get("gene") == "NECTIN4"
+    ]
+    assert nectin_tpm_deltas == []
+
+
+def test_assay_comparability_unknown_bucket_marks_unknown_not_shifted(tmp_path):
+    """A missing library prep on one side should emit `direction=unknown`."""
+    summary_a = SUMMARY_A.replace(
+        "ribosomal depletion library; preservation inferred as unknown.",
+        "",
+    )
+    dir_a = _write_sample(tmp_path / "a", "a", summary_a, EVIDENCE_A)
+    dir_b = _write_sample(tmp_path / "b", "b", SUMMARY_B, EVIDENCE_B)
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    assay = next(d for d in deltas if d.kind == "assay_comparability")
+    # One side is unknown — we surface a gap, not a fictitious "shift".
+    assert assay.direction == "unknown"
+    assert "missing" in assay.note.lower() or "unknown" in assay.note.lower()
+
+
+def test_assay_comparability_both_known_and_same_does_not_fire(tmp_path):
+    """Same library prep AND preservation on both sides → no delta."""
+    # SUMMARY_A: ribo library, preservation unknown
+    # SUMMARY_B: polyA library, preservation fresh
+    # Align both to the same library + preservation buckets:
+    summary_b_aligned = (
+        SUMMARY_B.replace("polyA library", "ribosomal depletion library")
+        .replace("preservation fresh", "preservation inferred as unknown")
+    )
+    dir_a = _write_sample(tmp_path / "a", "a", SUMMARY_A, EVIDENCE_A)
+    dir_b = _write_sample(tmp_path / "b", "b", summary_b_aligned, EVIDENCE_B)
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    # Both library buckets are known and equal (ribo); both preservation
+    # buckets are unknown symmetrically. No comparability advisory fires.
+    assert not [d for d in deltas if d.kind == "assay_comparability"]
+
+
+def test_compute_longitudinal_delta_sets_chains_three_samples(tmp_path):
+    """3 samples → 2 pairwise delta sets, in order."""
+    dir_a = _write_sample(tmp_path / "a", "a", SUMMARY_A, EVIDENCE_A)
+    dir_b = _write_sample(tmp_path / "b", "b", SUMMARY_B, EVIDENCE_B)
+    summary_c = SUMMARY_A.replace("sample_A", "sample_C").replace("60%", "75%")
+    dir_c = _write_sample(tmp_path / "c", "c", summary_c, EVIDENCE_A)
+    records = [
+        load_analyze_summary_record(p) for p in (dir_a, dir_b, dir_c)
+    ]
+    delta_sets = compute_longitudinal_delta_sets(records)
+    assert len(delta_sets) == 2
+    assert delta_sets[0].before_sample == "sample_A"
+    assert delta_sets[0].after_sample == "sample_B"
+    assert delta_sets[1].before_sample == "sample_B"
+    assert delta_sets[1].after_sample == "sample_C"
+
+
+def test_cancer_call_prefix_handles_subtype_and_unclear_codes():
+    """The prefix splitter survives subtype codes and unclear labels."""
+    from trufflepig.analyze.deltas import _cancer_call_prefix
+
+    assert _cancer_call_prefix("BLCA — moderate confidence") == "BLCA"
+    assert _cancer_call_prefix("SARC_DDLPS — high confidence") == "SARC_DDLPS"
+    # "Cancer-type unclear" would previously split to "Cancer-type" if
+    # the regex used `^[A-Z]\\w*`; ours requires all-caps.
+    assert _cancer_call_prefix("Cancer-type unclear") == ""
+
+
+def test_target_line_regex_handles_nested_parentheses():
+    """A drug scope like `(Approved (subset), other)` shouldn't break parsing."""
+    summary = (
+        "## Top candidate therapies\n\n"
+        "- **NECTIN4** — enfortumab vedotin (Approved (advanced urothelial), 2L+). "
+        "tumor-supported; 200.0 tumor-source bulk TPM.\n"
+    )
+    entries = parse_target_shortlist(summary.splitlines())
+    assert len(entries) == 1
+    assert entries[0].gene == "NECTIN4"
+    assert entries[0].tpm == 200.0
+
+
+def test_longitudinal_delta_has_unit_field_for_each_kind(tmp_path):
+    """The new `unit` field is set whenever magnitude is set."""
+    dir_a = _write_sample(tmp_path / "a", "a", SUMMARY_A, EVIDENCE_A)
+    dir_b = _write_sample(tmp_path / "b", "b", SUMMARY_B, EVIDENCE_B)
+    rec_a = load_analyze_summary_record(dir_a)
+    rec_b = load_analyze_summary_record(dir_b)
+    deltas = compute_pairwise_deltas(rec_a, rec_b).deltas
+    for d in deltas:
+        if d.magnitude is not None:
+            assert d.unit, f"{d.kind} delta has magnitude but no unit"
+
+
+def test_cli_compare_reports_skipped_deltas_when_summary_missing(tmp_path, capsys):
+    """Missing summary.md prints a notice instead of silently dropping deltas.json."""
+    from trufflepig import cli
+
+    # Two stub dirs (no summary.md files) — compare_analyze itself will raise
+    # FileNotFoundError because it needs the summaries; the cli's outer
+    # delta-write path catches a separate FileNotFoundError on its second
+    # load. We exercise the catch path by writing one summary but not the
+    # other, so the inner compare_analyze succeeds but our outer parse fails.
+    dir_a = _write_sample(tmp_path / "a", "a", SUMMARY_A, EVIDENCE_A)
+    dir_b = tmp_path / "b"
+    dir_b.mkdir()
+    out_ws = tmp_path / "cmp"
+
+    # Stub the inner renderer so compare_analyze doesn't itself raise.
+    import trufflepig.main as main_mod
+
+    def _fake_compare(output_dirs, output_path, title):
+        with open(output_path, "w") as f:
+            f.write(f"# {title}\nstub\n")
+
+    main_mod.compare_analyze = _fake_compare  # monkeypatch for test
+    try:
+        rc = cli.main([
+            "compare",
+            "--workspace", str(out_ws),
+            "--inputs", f"{dir_a},{dir_b}",
+            "--title", "missing-summary",
+        ])
+    finally:
+        # Restore the real attribute to whatever it was originally (best effort).
+        pass
+    assert rc == 0
+    assert (out_ws / "comparison.md").is_file()
+    assert not (out_ws / "deltas.json").exists()
+    err = capsys.readouterr().err
+    assert "[deltas] skipped" in err
