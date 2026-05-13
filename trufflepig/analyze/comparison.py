@@ -1,10 +1,28 @@
-"""Markdown comparison helpers for multiple ``analyze`` report packets."""
+"""Markdown comparison helpers for multiple ``analyze`` report packets.
+
+The comparison renderer assembles a Markdown navigation document; the
+structured machine-readable view (typed observations: cancer-call
+shifts, purity drift, response-axis movement, target gains/losses,
+assay-context changes) lives in :mod:`trufflepig.analyze.deltas` and
+the CLI writes it next to comparison.md as ``deltas.json``.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from .deltas import (
+    LongitudinalDeltaSet,
+    ResponseAxisState,
+    TargetShortlistEntry,
+    compute_pairwise_deltas,
+    delta_summary_table,
+    parse_response_axes,
+    parse_target_shortlist,
+    response_axis_table,
+)
 
 
 @dataclass(frozen=True)
@@ -32,6 +50,8 @@ class AnalyzeSummaryRecord:
     top_therapies: tuple[str, ...]
     therapy_genes: tuple[str, ...]
     caveats: tuple[str, ...]
+    response_axes: dict[str, ResponseAxisState] = field(default_factory=dict)
+    target_shortlist: tuple[TargetShortlistEntry, ...] = field(default_factory=tuple)
 
 
 def _first_matching_file(directory: Path, pattern: str) -> Path:
@@ -202,6 +222,8 @@ def load_analyze_summary_record(output_dir: str | Path) -> AnalyzeSummaryRecord:
         top_therapies=top_therapies,
         therapy_genes=_therapy_genes(top_therapies),
         caveats=tuple(caveat_lines),
+        response_axes=parse_response_axes(evidence_lines),
+        target_shortlist=tuple(parse_target_shortlist(lines)),
     )
 
 
@@ -257,6 +279,14 @@ def _gene_delta(before: AnalyzeSummaryRecord, after: AnalyzeSummaryRecord) -> st
 
 def _same_cancer_call(before: str, after: str) -> bool:
     return before.split(" ", 1)[0] == after.split(" ", 1)[0]
+
+
+def compute_longitudinal_delta_sets(records) -> list[LongitudinalDeltaSet]:
+    """Pairwise deltas across consecutive records (a -> b, b -> c, ...)."""
+    return [
+        compute_pairwise_deltas(before, after)
+        for before, after in zip(records, records[1:])
+    ]
 
 
 def build_analyze_comparison_markdown(
@@ -330,6 +360,30 @@ def build_analyze_comparison_markdown(
             )
             + " |"
         )
+
+    axis_rows = response_axis_table(records)
+    if axis_rows:
+        lines.extend(["", "## Response-Axis State Matrix", ""])
+        lines.append(
+            "Per-sample therapy-response axis state (active / suppressed / "
+            "mixed) with up-panel fold change vs cohort. Empty cells mean the "
+            "axis was not emitted in that sample's evidence report."
+        )
+        lines.append("")
+        lines.extend(axis_rows)
+
+    delta_sets = compute_longitudinal_delta_sets(records)
+    if any(ds.deltas for ds in delta_sets):
+        lines.extend(["", "## Notable Longitudinal Observations", ""])
+        lines.append(
+            "Typed observations across sequential samples. Magnitudes are "
+            "absolute deltas for percentages and TPM, log-relative for fold "
+            "metrics; direction glyphs are ↑/↓ for movement, ✦ for newly "
+            "emerged, ○ for cleared, + / − for shortlist gains/losses, → "
+            "for categorical shifts."
+        )
+        lines.append("")
+        lines.extend(delta_summary_table(delta_sets))
 
     lines.extend(["", "## Biology And Response State", ""])
     lines.append("| Sample | Disease state | Active pathway / signature |")
