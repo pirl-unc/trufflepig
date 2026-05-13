@@ -14,7 +14,7 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "pirlygenes>=4.9.0",
+    "pirlygenes>=5.0.0",
     "numpy>=2.0.0",
     "pandas>=2.0",
     "argh",
@@ -27,7 +27,15 @@ dependencies = [
 version = {attr = "trufflepig.version.__version__"}
 
 [tool.setuptools]
-packages = ["trufflepig", "trufflepig.stages"]
+packages = [
+    "trufflepig",
+    "trufflepig.analyze",
+    "trufflepig.decomposition",
+    "trufflepig.stages",
+]
+
+[tool.setuptools.package-data]
+trufflepig = ["py.typed"]
 
 
 [project.optional-dependencies]
@@ -54,3 +62,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-n auto"
+markers = [
+    "perf: performance-regression fences",
+]
