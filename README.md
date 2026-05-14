@@ -84,7 +84,7 @@ trufflepig plot-cancer-cohorts --output-prefix /tmp/cohort
 ### Web UI
 
 ```
-pip install 'trufflepig[web]'
+pip install 'pirl-trufflepig[web]'
 trufflepig serve --port 8000
 # open http://127.0.0.1:8000
 ```

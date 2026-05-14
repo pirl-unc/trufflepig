@@ -1,5 +1,5 @@
 [project]
-name = "trufflepig"
+name = "pirl-trufflepig"
 requires-python = ">=3.9"
 authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
 description = "RNA tumor analysis driven by pirlygenes gene sets. Migrates the pirlygenes analyze pipeline into composable sub-commands with serializable intermediate state for incremental website-style runs."
