@@ -2402,7 +2402,20 @@ _PRAD_CONTEXT_MARKERS = (
 # discriminates from broad-squamous samples.
 _BASAL_MAMMARY_KERATINS = ("KRT5", "KRT6A", "KRT6B", "KRT14")
 _LUMINAL_MAMMARY_MARKERS = ("ESR1", "PGR", "FOXA1")
+# Mammary-positive markers — distinctly elevated in BRCA cohort medians
+# (basal-enriched) vs broad squamous and bladder cohort medians:
+#   gene    BRCA  BLCA  ESCA  HNSC  LUSC  CESC
+#   MIA     4.2   0.4    -    0.7   0.3   0.6
+#   GABRP   4.4   0.0    -    1.0   0.8   0.4
+# These rule IN basal-mammary identity rather than just ruling OUT
+# squamous, and they're stable across the cell-line / FFPE / fresh-tissue
+# preservation modes we see in production (HCC1395 hits MIA=181 GABRP=7).
+_BASAL_MAMMARY_POSITIVE = ("MIA", "GABRP")
 _SQUAMOUS_PROGRAM_MARKERS = ("TP63", "SOX2")
+# Urothelial differentiation panel — high in basal/luminal MIBC (BLCA),
+# near zero in BRCA and broad squamous medians. Defense-in-depth gate
+# against a basal-MIBC sample that somehow lands on a squamous top code.
+_UROTHELIAL_MARKERS = ("UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B")
 _SQUAMOUS_TOP_CODES = {"ESCA", "LUSC", "HNSC", "CESC"}
 
 
@@ -2413,24 +2426,77 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
     expected to inject / promote BRCA in the candidate list and surface
     the hint in reporting.
 
-    Discriminators (all must pass):
-      1. Top picked code is in the squamous family (ESCA/LUSC/HNSC/CESC).
-      2. At least 2 of {KRT5, KRT6A, KRT6B, KRT14} >= 100 TPM
-         (basal cytokeratin program is dominant).
-      3. ESR1 < 5 TPM AND PGR < 1 TPM (luminal program off).
-      4. FOXC1 >= 10 TPM (basal-mammary TF; TCGA-HNSC/LUSC/CESC medians
-         are all <= 3 TPM, so this cleanly separates basal-BRCA from
-         broad squamous).
-      5. Squamous program absent — TP63 < 30 TPM OR SOX2 < 5 TPM. TCGA
-         squamous medians carry TP63 >= 50 AND SOX2 >= 10, so true
-         squamous cohorts fail this gate even when the keratin pattern
-         alone looks basal.
+    Background:
+    Basal-like BRCA (PAM50 Basal; ~10–15% of BRCA, dominant in TNBC)
+    shares its transcriptional program with squamous-keratin lineages
+    (HNSC, LUSC, ESCA-SCC, CESC) and with basal-subtype bladder cancer.
+    The shared axis is the keratin-5/6/14 / EGFR / p63-low pattern.
+    See:
+      - Hoadley et al. 2014 Cell — basal BRCA clusters with HNSC/LUSC in
+        the pan-cancer 12-type analysis.
+      - Lehmann et al. 2011 JCI — TNBC has BL1/BL2/M/MSL molecular
+        subtypes; the BL1/BL2 ones look squamous-like.
+      - Park et al. 2011 Histopathology — basal-like phenotype is a
+        cross-tissue axis (breast, salivary, bladder, prostate, ovary).
+      - Damrauer et al. 2014 PNAS / Choi et al. 2014 Cancer Cell — BLCA
+        basal subtype directly mirrors BRCA basal.
+
+    Discriminator stack (all gates must pass — order chosen so cheap
+    rejections run first):
+
+      1. Top picked code is in {ESCA, LUSC, HNSC, CESC}. If the
+         classifier already lands on BRCA, BLCA, SARC, or anything else,
+         the rescue stays quiet — promoting BRCA over a non-squamous
+         call would mask other diagnoses.
+      2. At least 2 of {KRT5, KRT6A, KRT6B, KRT14} ≥ 100 TPM. This is
+         the basal cytokeratin program. TCGA squamous medians also fire
+         here — the remaining gates discriminate among them.
+      3. Luminal program is OFF: ESR1 < 5 AND PGR < 1. Luminal BRCA
+         samples never reach this point because their luminal markers
+         are up.
+      4. FOXC1 ≥ 10 TPM. This is the load-bearing positive marker —
+         FOXC1 is the canonical basal-mammary TF (Ray et al. 2010
+         Cancer Res); TCGA-HNSC/LUSC/CESC cohort medians sit at 0–3
+         TPM, basal-BRCA at 20–30. Without this gate the rescue false-
+         fires on every squamous cohort median.
+      5. At least one of {MIA ≥ 2, GABRP ≥ 2}. Mammary-positive
+         confirmation — both genes are ~5 TPM in BRCA cohort medians and
+         < 1 in HNSC/LUSC/CESC/BLCA. Rules basal-mammary identity IN
+         rather than only ruling squamous OUT, which makes the detector
+         robust against a hypothetical FOXC1-high squamous variant we
+         haven't seen but can't rule out from cohort medians alone.
+      6. Squamous program not fully active — NOT (TP63 ≥ 30 AND
+         SOX2 ≥ 5). True squamous cohorts carry both up (TP63 ≥ 50,
+         SOX2 ≥ 10 at cohort median); basal-BRCA has at most one mildly
+         elevated. Two-of-two squamous-TF gate is more specific than
+         either alone.
+      7. Urothelial program absent — sum of {UPK1A/1B/2/3A/3B} < 10 TPM.
+         Defense-in-depth against basal-MIBC; TCGA-BLCA carries the UPK
+         panel at 28–92 TPM each, BRCA at < 1.
+
+    Known limitations / follow-up work:
+      - This heuristic is calibrated against cohort medians, not the
+        full spectrum of within-cohort variation. A rare HNSC sample
+        with FOXC1 + MIA elevated would false-positive (not seen in
+        TCGA, but possible). The more principled fix is to score the
+        sample directly against the curated BRCA_Basal subtype reference
+        (already present in subtype-deconvolved-expression.csv.gz) and
+        use that as BRCA's candidate signature when basal markers fire.
+        That's a deeper change in rank_cancer_type_candidates and is
+        tracked as a follow-up.
+      - HER2-enriched BRCA (ERBB2-amplified, ESR1-low) does NOT trigger
+        this rescue because gates 2 (basal keratin) and 4 (FOXC1) fail.
+        HER2-BRCA already classifies as BRCA in the broad classifier.
+      - Salivary basal-squamous and adenoid cystic carcinoma are
+        classified by TCGA as HNSC; their basal-keratin programs could
+        in principle reach gate 2 but they lack FOXC1 / MIA / GABRP.
     """
     if not rows:
         return None
     top_code = str(rows[0].get("code") or "")
     if top_code not in _SQUAMOUS_TOP_CODES:
         return None
+
     keratin_tpm = {
         sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
         for sym in _BASAL_MAMMARY_KERATINS
@@ -2438,6 +2504,7 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
     high_keratins = [sym for sym, tpm in keratin_tpm.items() if tpm >= 100.0]
     if len(high_keratins) < 2:
         return None
+
     luminal_tpm = {
         sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
         for sym in _LUMINAL_MAMMARY_MARKERS
@@ -2446,17 +2513,32 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
         return None
     if luminal_tpm.get("PGR", 0.0) >= 1.0:
         return None
+
     foxc1 = float(sample_tpm_by_symbol.get("FOXC1", 0.0) or 0.0)
     if foxc1 < 10.0:
         return None
+
+    positive_tpm = {
+        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+        for sym in _BASAL_MAMMARY_POSITIVE
+    }
+    if positive_tpm.get("MIA", 0.0) < 2.0 and positive_tpm.get("GABRP", 0.0) < 2.0:
+        return None
+
     squamous_tpm = {
         sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
         for sym in _SQUAMOUS_PROGRAM_MARKERS
     }
-    # True squamous cohorts carry both TP63 and SOX2 high. Basal-BRCA
-    # has at most one of them up. If both are firing, treat as squamous.
     if squamous_tpm.get("TP63", 0.0) >= 30.0 and squamous_tpm.get("SOX2", 0.0) >= 5.0:
         return None
+
+    urothelial_sum = sum(
+        float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+        for sym in _UROTHELIAL_MARKERS
+    )
+    if urothelial_sum >= 10.0:
+        return None
+
     return {
         "kind": "tnbc_basal_brca_misclassification",
         "recommended_code": "BRCA",
@@ -2466,15 +2548,20 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
         "keratin_tpm": {sym: round(val, 2) for sym, val in keratin_tpm.items()},
         "luminal_marker_tpm": {sym: round(val, 2) for sym, val in luminal_tpm.items()},
         "foxc1_tpm": round(foxc1, 2),
+        "basal_positive_tpm": {sym: round(val, 2) for sym, val in positive_tpm.items()},
         "squamous_program_tpm": {sym: round(val, 2) for sym, val in squamous_tpm.items()},
+        "urothelial_panel_sum_tpm": round(urothelial_sum, 2),
         "message": (
             f"Basal mammary cytokeratin program is dominant "
             f"({', '.join(f'{k}={keratin_tpm[k]:.0f}' for k in high_keratins)} TPM); "
-            f"FOXC1 {foxc1:.0f} TPM, luminal program off "
+            f"FOXC1 {foxc1:.0f} TPM, mammary-positive markers up "
+            f"(MIA={positive_tpm.get('MIA', 0):.1f}, "
+            f"GABRP={positive_tpm.get('GABRP', 0):.1f}); luminal program off "
             f"(ESR1={luminal_tpm.get('ESR1', 0):.2f}, "
             f"PGR={luminal_tpm.get('PGR', 0):.2f}), squamous program absent "
             f"(TP63={squamous_tpm.get('TP63', 0):.1f}, "
-            f"SOX2={squamous_tpm.get('SOX2', 0):.1f}); the broad "
+            f"SOX2={squamous_tpm.get('SOX2', 0):.1f}), urothelial panel off "
+            f"(UPK sum={urothelial_sum:.1f}); the broad "
             f"{top_code} call is the standard misclassification of basal-like "
             "BRCA against a luminal-dominated TCGA-BRCA reference. Treat as "
             "TNBC / basal-BRCA."
