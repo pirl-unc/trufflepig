@@ -50,6 +50,7 @@ class AnalyzeConfig:
     therapy_target_top_k: int = 10
     therapy_target_tpm_threshold: float = 30.0
     deprecated_figures: bool = False
+    no_figures: bool = False
     force: bool = False
 
     def template_overrides(self) -> list[str]:

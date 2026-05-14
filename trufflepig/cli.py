@@ -78,6 +78,14 @@ def _add_run_parser(sub):
     p.add_argument("--plot-height", type=float, default=14.0)
     p.add_argument("--plot-aspect", type=float, default=1.4)
     p.add_argument("--deprecated-figures", action="store_true")
+    p.add_argument(
+        "--no-figures",
+        action="store_true",
+        help=(
+            "Skip PNG/PDF generation; produce only markdown + TSV. "
+            "Useful for fast iteration on report text."
+        ),
+    )
     p.add_argument("--force", action="store_true", help="Ignore advisory output-dir lock.")
     return p
 
@@ -147,6 +155,7 @@ def cmd_run(args) -> int:
         "plot_height": args.plot_height,
         "plot_aspect": args.plot_aspect,
         "deprecated_figures": bool(args.deprecated_figures),
+        "no_figures": bool(args.no_figures),
         "force": bool(args.force),
     }
 

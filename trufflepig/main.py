@@ -1635,6 +1635,7 @@ def analyze(
     therapy_target_top_k: int = 10,
     therapy_target_tpm_threshold: float = 30.0,
     deprecated_figures: bool = False,
+    no_figures: bool = False,
     force: bool = False,
 ):
     """Analyze gene expression from a quantification file.
@@ -1679,6 +1680,7 @@ def analyze(
         therapy_target_top_k=therapy_target_top_k,
         therapy_target_tpm_threshold=therapy_target_tpm_threshold,
         deprecated_figures=deprecated_figures,
+        no_figures=no_figures,
         force=force,
     )
 
@@ -1760,6 +1762,22 @@ def _analyze_body(run: AnalyzeRun):
     output_dpi = config.output_dpi
     plot_height = config.plot_height
     plot_aspect = config.plot_aspect
+    # Single bundled context for plotting. During the per-module migration
+    # (trufflepig figure-context series), each plot_* function will accept
+    # `ctx` and early-out when ctx.enabled is False; for now the existing
+    # positional kwargs stay live and ctx is constructed only so callers
+    # adopting it can begin to use it.
+    from .plot_context import PlottingContext as _PlottingContext
+
+    plot_ctx = _PlottingContext(
+        enabled=not bool(config.no_figures),
+        output_dir=out_dir,
+        prefix=output_image_prefix,
+        dpi=output_dpi,
+        height=plot_height,
+        aspect=plot_aspect,
+        deprecated_figures=bool(config.deprecated_figures),
+    )
     cancer_type = config.cancer_type
     sample_mode = config.sample_mode
     tumor_context = config.tumor_context
