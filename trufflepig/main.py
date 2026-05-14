@@ -62,6 +62,7 @@ from .load_expression import load_expression_data
 from .load_expression import apply_expression_qc_rescue
 from trufflepig.expression_qc import (
     expression_qc_rescue_summary_line,
+    qc_category_levels_lines,
     technical_rna_component_phrase,
 )
 from .plot import (
@@ -5744,6 +5745,7 @@ def _generate_text_reports(
                         "rRNA-pseudogene or rDNA/repeat-mapping denominator artifacts; "
                         "interpret both QC axes together."
                     )
+            lines.extend(qc_category_levels_lines(raw_scale_qc))
         if scale_qc and analysis.get("expression_qc_rescue", {}).get("applied"):
             lines.append(
                 f"- **Expression scale QC (analysis TPM)**: sum {scale_qc.get('sum_tpm', 0.0):.0f}; "
