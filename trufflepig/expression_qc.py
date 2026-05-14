@@ -88,10 +88,66 @@ _FAMILY_TO_QC = {
 }
 
 
-def _family_to_qc_class(family: str) -> GeneQcClass:
-    """Map a pirlygenes gene-family name to its QC class."""
+def _family_to_qc_class(family: str, symbol: str | None = None) -> GeneQcClass:
+    """Map a pirlygenes gene-family name to its QC class.
+
+    When a symbol is supplied, refine the family-level label with a
+    symbol-specific sub-classifier so reports keep the fine-grained
+    distinctions (``mitochondrial rRNA`` for MT-RNR1/2, ``mitochondrial
+    tRNA`` for MT-T*, ``5S rRNA pseudogene`` for RNA5SP*, ...). The QC
+    *group* always comes from the family — the sub-classification only
+    affects the user-facing label.
+    """
     label, group = _FAMILY_TO_QC.get(family, ("protein-coding/other", "other"))
+    if symbol:
+        refined = _refine_family_label(family, str(symbol).strip().upper())
+        if refined is not None:
+            label = refined
     return GeneQcClass(label, group)
+
+
+def _refine_family_label(family: str, upper: str) -> str | None:
+    """Return a more specific human label for ``(family, symbol)`` if one
+    is available, else ``None``. Family-level fallback is the default."""
+    if family == "mitochondrial":
+        if upper in {"MT-RNR1", "MT-RNR2"}:
+            return "mitochondrial rRNA"
+        # mt-tRNAs are MT-TA, MT-TC, MT-TD, ... MT-TY (22 of them; all
+        # match MT-T<single letter> optionally followed by a digit).
+        if re.fullmatch(r"MT-T[A-Z]\d?", upper):
+            return "mitochondrial tRNA"
+        return "mitochondrial transcript"
+    if family == "rrna_and_pseudogene":
+        if re.fullmatch(r"RNA5SP\d+", upper):
+            return "5S rRNA pseudogene"
+        if re.fullmatch(r"RNA5-8SP\d+", upper):
+            return "5.8S rRNA pseudogene"
+        for stem, label in (
+            ("RNA18S", "18S rRNA-like"),
+            ("RNA28S", "28S rRNA-like"),
+            ("RNA45S", "45S pre-rRNA-like"),
+            ("RNA5S", "5S rRNA-like"),
+        ):
+            if upper.startswith(stem):
+                return label
+    if family == "ribosomal_protein_pseudogene":
+        return "ribosomal protein pseudogene"
+    if family == "small_noncoding_rna":
+        if upper.startswith("SNORD"):
+            return "small nucleolar RNA (C/D box)"
+        if upper.startswith("SNORA"):
+            return "small nucleolar RNA (H/ACA box)"
+        if upper.startswith("RNU"):
+            return "spliceosomal snRNA"
+        if upper.startswith("MIR"):
+            return "microRNA"
+        if "Y_RNA" in upper or upper.startswith("YR"):
+            return "Y RNA"
+        if upper.startswith("VTRNA"):
+            return "vault RNA"
+        if upper.startswith("RN7SK") or upper.startswith("RN7SL"):
+            return "signal recognition particle RNA"
+    return None
 
 
 def classify_gene_qc(
@@ -151,11 +207,12 @@ def classify_gene_qc(
     if family is None and symbol and gene_family_for_symbol is not None:
         family = gene_family_for_symbol(symbol)
 
-    if family is not None:
-        return _family_to_qc_class(family)
-
     raw = str(symbol or "").strip()
     upper = raw.upper()
+
+    if family is not None:
+        return _family_to_qc_class(family, symbol=upper or None)
+
     if upper in _GENE_NA:
         return GeneQcClass("unlabeled feature", "other")
 
