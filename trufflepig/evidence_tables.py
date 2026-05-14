@@ -24,6 +24,7 @@ tables alone, without re-running the pipeline.
 
 from __future__ import annotations
 
+import math
 from typing import Any, Iterable
 
 # Per-cohort cohort-median sources to use for "comparison column" in
@@ -64,15 +65,6 @@ def _format_tpm(value: float | None) -> str:
     return "0"
 
 
-def _format_percentile(value: float | None) -> str:
-    if value is None:
-        return "—"
-    try:
-        return f"{float(value) * 100:.0f}%"
-    except (TypeError, ValueError):
-        return "—"
-
-
 def _per_subtype_evidence_table(
     cancer_code: str,
     subtype: str | None,
@@ -101,7 +93,6 @@ def _per_subtype_evidence_table(
     else:
         lines.append(f"| Gene | Sample TPM | {label} median |")
         lines.append("|---|---:|---:|")
-    import math
 
     for gene in genes:
         sample_v = float(sample_tpm_by_symbol.get(gene, 0.0) or 0.0)
@@ -227,6 +218,32 @@ def _tiebreaker_evidence_table(rows: list[dict]) -> list[str]:
     return lines
 
 
+def _subtype_medians_lookup() -> dict[tuple[str, str], dict[str, float]]:
+    """``{(cancer_code, subtype) -> {symbol -> tumor_tpm_median}}``.
+
+    Pulled from :func:`trufflepig.reference.subtype_deconvolved_expression`
+    on the same TPM-normalized footing used for subtype panel selection.
+    Cached implicitly via the reference loader's own cache.
+    """
+    from .reference import subtype_deconvolved_expression
+
+    sub_df = subtype_deconvolved_expression(
+        technical_rna_normalize=True,
+        renormalize_to_million=True,
+    )
+    if sub_df is None or sub_df.empty:
+        return {}
+    out: dict[tuple[str, str], dict[str, float]] = {}
+    for (code, subtype), group in sub_df.groupby(["cancer_code", "subtype"], sort=False):
+        out[(str(code), str(subtype))] = dict(
+            zip(
+                group["symbol"].astype(str),
+                group["tumor_tpm_median"].astype(float),
+            )
+        )
+    return out
+
+
 def build_candidate_evidence_block(
     candidate_trace: list[dict] | None,
     sample_tpm_by_symbol: dict[str, float],
@@ -244,6 +261,17 @@ def build_candidate_evidence_block(
       - ``sample_tpm_by_symbol`` — sample TPM keyed by gene symbol.
 
     Returns a list of markdown lines to extend ``analysis.md`` with.
+
+    Median lookup rules:
+      - When a candidate has a ``winning_subtype`` (e.g. BRCA_Basal),
+        the "median" column shows the **subtype-deconvolved** tumor
+        median for that subtype, not the broad cohort median. This
+        matters because the broad-BRCA median is luminal-dominated;
+        labeling its values "BRCA_Basal median" would be misleading.
+      - Without a subtype, fall back to the broad cohort median from
+        ``pan_cancer_expression``.
+      - The competitor column always uses the broad cohort median of
+        the competing cohort (no subtype available for most of them).
     """
     if not candidate_trace:
         return []
@@ -255,15 +283,30 @@ def build_candidate_evidence_block(
 
     panels = _get_cancer_type_signature_panels(n_signature_genes=12)
     sub_panels = subtype_signature_panels(top_n=12)
+    subtype_medians = _subtype_medians_lookup()
     pan = pan_cancer_expression(technical_rna_normalize=True)
     pan = pan.drop_duplicates(subset="Symbol").set_index("Symbol")
+    pan_dict_cache: dict[str, dict[str, float]] = {}
 
-    def _cohort_medians(code: str) -> dict[str, float]:
+    def _broad_cohort_medians(code: str) -> dict[str, float]:
+        cached = pan_dict_cache.get(code)
+        if cached is not None:
+            return cached
         col = f"FPKM_{code}"
         if col not in pan.columns:
+            pan_dict_cache[code] = {}
             return {}
         series = pan[col].astype(float).dropna()
-        return series.to_dict()
+        as_dict = series.to_dict()
+        pan_dict_cache[code] = as_dict
+        return as_dict
+
+    def _candidate_medians(code: str, subtype: str | None) -> dict[str, float]:
+        if subtype:
+            sub = subtype_medians.get((code, subtype))
+            if sub:
+                return sub
+        return _broad_cohort_medians(code)
 
     lines: list[str] = [
         "### Cancer Type Inference — Per-Candidate Evidence\n",
@@ -283,7 +326,7 @@ def build_candidate_evidence_block(
     if rescue_row:
         lines.extend(_rescue_evidence_table(rescue_row.get("support_override")))
 
-    # Normal-tissue tiebreaker (only fires post-rescue, so render second).
+    # Normal-tissue tiebreaker (runs after rescues, so render second).
     lines.extend(_tiebreaker_evidence_table(candidate_trace))
 
     # Per-candidate signature evidence for top-K.
@@ -301,9 +344,14 @@ def build_candidate_evidence_block(
             title_hint = f"Signature evidence for **{code}**"
         if not panel_genes:
             continue
-        cohort = _cohort_medians(code)
+        cohort = _candidate_medians(code, subtype)
         competitor_code = _COMPETING_COHORT_FOR_TABLE.get(code)
-        competitor = _cohort_medians(competitor_code) if competitor_code else None
+        # Competitor always uses the broad cohort median — most cohorts
+        # don't have subtype data, and the contrast we want is "this
+        # candidate vs its natural alternative" at the cohort level.
+        competitor = (
+            _broad_cohort_medians(competitor_code) if competitor_code else None
+        )
         lines.extend(
             _per_subtype_evidence_table(
                 code,

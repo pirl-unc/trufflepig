@@ -114,9 +114,8 @@ def test_tiebreaker_does_nothing_when_candidates_share_tissue(monkeypatch):
     assert info.get("applied") is False
 
 
-def test_tiebreaker_handles_missing_tissue_mapping(monkeypatch):
+def test_tiebreaker_handles_missing_tissue_mapping():
     """Codes without a CANCER_TO_TISSUE entry are skipped gracefully."""
-    monkeypatch.setitem(tp_module.CANCER_TO_TISSUE, "BLCA", "urinary_bladder")
     rows = [
         _row("UNKNOWN_CODE", 1.00, signature_score=0.40),
         _row("BRCA", 0.96, signature_score=0.59),
