@@ -2623,6 +2623,131 @@ def _apply_tnbc_basal_brca_rescue(rows, sample_tpm_by_symbol):
     return rows
 
 
+def _apply_normal_tissue_tiebreaker(
+    rows,
+    sample_tpm_by_symbol,
+    *,
+    close_window: float = 0.93,
+    boost_factor: float = 1.02,
+):
+    """Break close cohort-call ties with a normal-tissue parity check.
+
+    User-suggested in pirl-unc/trufflepig#28: *"if a few cancer types are
+    close and one of them has a parental normal tissue that's present in
+    the sample, isn't that enough to figure out what's going on?"*
+
+    Mechanism: when two or more candidates sit within ``close_window`` of
+    the top support_score, look up each candidate's primary tissue via
+    :data:`CANCER_TO_TISSUE`, and score the sample's match against that
+    tissue's HPA nTPM column (already done by
+    :func:`_score_host_tissue_details`). The candidate whose primary
+    tissue scores best — and beats the current top candidate's tissue
+    score — gets a small ``boost_factor`` (default 2%) applied to its
+    ``support_score``, which is enough to flip rankings within the
+    close window but won't override a clear winner.
+
+    Caveats:
+      - Cell lines lose normal-tissue differentiation, so their tissue
+        scores tend to be uniformly weak; tiebreaker becomes near-neutral
+        — that's fine, the subtype-aware signature path is already
+        handling them.
+      - Candidates sharing a primary tissue (LUAD + LUSC → lung) can't
+        be discriminated by this signal; no boost is applied.
+      - Tiebreaker metadata is attached to every close candidate as
+        ``primary_tissue`` / ``primary_tissue_match_score`` for report
+        transparency, regardless of whether a boost fired.
+    """
+    if not rows or len(rows) < 2:
+        return rows
+    top_support = float(rows[0].get("support_score") or 0.0)
+    if top_support <= 0:
+        return rows
+    threshold = top_support * float(close_window)
+    close_idx = [
+        i
+        for i, row in enumerate(rows)
+        if float(row.get("support_score") or 0.0) >= threshold
+    ]
+    if len(close_idx) < 2:
+        return rows
+
+    tissue_details = _score_host_tissue_details(sample_tpm_by_symbol, top_n=25)
+    tissue_to_score = {
+        str(t.get("tissue") or ""): float(t.get("score") or 0.0)
+        for t in tissue_details or []
+    }
+
+    annotated: list[tuple[int, dict, str, float]] = []
+    for i in close_idx:
+        row = rows[i]
+        code = str(row.get("code") or "")
+        tissue = CANCER_TO_TISSUE.get(code)
+        if not tissue:
+            continue
+        tissue_score = tissue_to_score.get(tissue, 0.0)
+        row["primary_tissue"] = tissue
+        row["primary_tissue_match_score"] = tissue_score
+        annotated.append((i, row, tissue, tissue_score))
+
+    if len(annotated) < 2:
+        return rows
+
+    best_i, best_row, best_tissue, best_score = max(annotated, key=lambda t: t[3])
+    if best_score <= 0:
+        return rows
+    if best_i == 0:
+        # Top candidate already has the best tissue match — nothing to do.
+        rows[0]["normal_tissue_tiebreaker"] = {
+            "applied": False,
+            "reason": "top already best on primary-tissue match",
+            "tissue": best_tissue,
+            "tissue_score": best_score,
+        }
+        return rows
+    top_tissue = rows[0].get("primary_tissue")
+    top_tissue_score = float(rows[0].get("primary_tissue_match_score") or 0.0)
+    if best_tissue == top_tissue:
+        # Candidates share their primary tissue (e.g. LUAD + LUSC = lung) —
+        # nothing to discriminate.
+        return rows
+    if best_score <= top_tissue_score:
+        return rows
+
+    boosted = max(float(best_row.get("support_score") or 0.0), top_support * boost_factor)
+    best_row["pre_tiebreaker_support_score"] = best_row.get("support_score")
+    best_row["pre_tiebreaker_support_geomean"] = best_row.get("support_geomean")
+    best_row["support_score"] = boosted
+    best_row["support_geomean"] = (
+        float(boosted ** 0.2) if boosted > 0 else 0.0
+    )
+    best_row["normal_tissue_tiebreaker"] = {
+        "applied": True,
+        "tissue": best_tissue,
+        "tissue_score": best_score,
+        "competing_top_code": str(rows[0].get("code") or ""),
+        "competing_top_tissue": top_tissue,
+        "competing_top_tissue_score": top_tissue_score,
+        "boost_factor": float(boost_factor),
+        "close_window": float(close_window),
+        "all_close_tissues": {
+            str(r.get("code") or ""): {
+                "tissue": t,
+                "tissue_score": s,
+            }
+            for _, r, t, s in annotated
+        },
+    }
+
+    rows.sort(
+        key=lambda row: (
+            -row["support_score"],
+            -row["signature_score"],
+            row["code"],
+        )
+    )
+    return rows
+
+
 def _detect_low_purity_prad_stromal_pitfall(
     rows,
     sample_tpm_by_symbol,
@@ -3245,6 +3370,7 @@ def rank_cancer_type_candidates(
         )
         rows = _apply_prad_stromal_rescue(rows, sample_tpm)
         rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm)
+        rows = _apply_normal_tissue_tiebreaker(rows, sample_tpm)
     rows = _promote_same_family_alternatives(rows)
 
     max_support = max((row["support_score"] for row in rows), default=0.0)
