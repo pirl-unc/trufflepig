@@ -2380,6 +2380,162 @@ _PRAD_CONTEXT_MARKERS = (
 )
 
 
+# --- TNBC / basal-BRCA misclassification rescue --------------------------
+#
+# HCC1395-like TNBC samples express the basal cytokeratin program
+# (KRT5/KRT6A/KRT6B/KRT14) at very high TPM and lack luminal/ER markers.
+# Their broad RNA signature overlaps strongly with HNSC/LUSC/ESCA — the
+# squamous family — because the TCGA-BRCA reference cohort is luminal-
+# dominated. Without explicit `--cancer-type BRCA` the broad classifier
+# misclassifies them as ESCA/LUSC/HNSC and silently disables the
+# BRCA-specific downstream biology (ER-axis suppression check, etc.).
+#
+# This rescue is intentionally conservative — it fires only when:
+#   (1) the top candidate sits in a squamous family,
+#   (2) at least two basal mammary cytokeratins exceed 100 TPM,
+#   (3) ESR1 and PGR are deeply suppressed (luminal program off),
+#   (4) at least one basal-mammary TF or marker is present
+#       (FOXC1 ≥ 5 TPM or EGFR ≥ 20 TPM).
+#
+# KRT14 in particular is a strong basal-mammary marker (TCGA HNSC/LUSC
+# don't typically express it). Combined with absent ESR1 / PGR it
+# discriminates from broad-squamous samples.
+_BASAL_MAMMARY_KERATINS = ("KRT5", "KRT6A", "KRT6B", "KRT14")
+_LUMINAL_MAMMARY_MARKERS = ("ESR1", "PGR", "FOXA1")
+_SQUAMOUS_PROGRAM_MARKERS = ("TP63", "SOX2")
+_SQUAMOUS_TOP_CODES = {"ESCA", "LUSC", "HNSC", "CESC"}
+
+
+def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
+    """Detect basal-mammary samples misclassified into the squamous family.
+
+    Returns a hint dict when the pattern fires, else None. Caller is
+    expected to inject / promote BRCA in the candidate list and surface
+    the hint in reporting.
+
+    Discriminators (all must pass):
+      1. Top picked code is in the squamous family (ESCA/LUSC/HNSC/CESC).
+      2. At least 2 of {KRT5, KRT6A, KRT6B, KRT14} >= 100 TPM
+         (basal cytokeratin program is dominant).
+      3. ESR1 < 5 TPM AND PGR < 1 TPM (luminal program off).
+      4. FOXC1 >= 10 TPM (basal-mammary TF; TCGA-HNSC/LUSC/CESC medians
+         are all <= 3 TPM, so this cleanly separates basal-BRCA from
+         broad squamous).
+      5. Squamous program absent — TP63 < 30 TPM OR SOX2 < 5 TPM. TCGA
+         squamous medians carry TP63 >= 50 AND SOX2 >= 10, so true
+         squamous cohorts fail this gate even when the keratin pattern
+         alone looks basal.
+    """
+    if not rows:
+        return None
+    top_code = str(rows[0].get("code") or "")
+    if top_code not in _SQUAMOUS_TOP_CODES:
+        return None
+    keratin_tpm = {
+        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+        for sym in _BASAL_MAMMARY_KERATINS
+    }
+    high_keratins = [sym for sym, tpm in keratin_tpm.items() if tpm >= 100.0]
+    if len(high_keratins) < 2:
+        return None
+    luminal_tpm = {
+        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+        for sym in _LUMINAL_MAMMARY_MARKERS
+    }
+    if luminal_tpm.get("ESR1", 0.0) >= 5.0:
+        return None
+    if luminal_tpm.get("PGR", 0.0) >= 1.0:
+        return None
+    foxc1 = float(sample_tpm_by_symbol.get("FOXC1", 0.0) or 0.0)
+    if foxc1 < 10.0:
+        return None
+    squamous_tpm = {
+        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+        for sym in _SQUAMOUS_PROGRAM_MARKERS
+    }
+    # True squamous cohorts carry both TP63 and SOX2 high. Basal-BRCA
+    # has at most one of them up. If both are firing, treat as squamous.
+    if squamous_tpm.get("TP63", 0.0) >= 30.0 and squamous_tpm.get("SOX2", 0.0) >= 5.0:
+        return None
+    return {
+        "kind": "tnbc_basal_brca_misclassification",
+        "recommended_code": "BRCA",
+        "recommended_subtype": "BRCA_Basal",
+        "competing_top_code": top_code,
+        "high_basal_keratins": high_keratins,
+        "keratin_tpm": {sym: round(val, 2) for sym, val in keratin_tpm.items()},
+        "luminal_marker_tpm": {sym: round(val, 2) for sym, val in luminal_tpm.items()},
+        "foxc1_tpm": round(foxc1, 2),
+        "squamous_program_tpm": {sym: round(val, 2) for sym, val in squamous_tpm.items()},
+        "message": (
+            f"Basal mammary cytokeratin program is dominant "
+            f"({', '.join(f'{k}={keratin_tpm[k]:.0f}' for k in high_keratins)} TPM); "
+            f"FOXC1 {foxc1:.0f} TPM, luminal program off "
+            f"(ESR1={luminal_tpm.get('ESR1', 0):.2f}, "
+            f"PGR={luminal_tpm.get('PGR', 0):.2f}), squamous program absent "
+            f"(TP63={squamous_tpm.get('TP63', 0):.1f}, "
+            f"SOX2={squamous_tpm.get('SOX2', 0):.1f}); the broad "
+            f"{top_code} call is the standard misclassification of basal-like "
+            "BRCA against a luminal-dominated TCGA-BRCA reference. Treat as "
+            "TNBC / basal-BRCA."
+        ),
+    }
+
+
+def _apply_tnbc_basal_brca_rescue(rows, sample_tpm_by_symbol):
+    """Promote BRCA over the squamous family on basal-mammary samples.
+
+    HCC1395-style TNBC samples: see :func:`_detect_tnbc_basal_brca_pattern`.
+    Mirrors the PRAD-stromal rescue pattern — when the pattern fires AND
+    BRCA is already a scored candidate, promote it above the current top
+    and tag its subtype as ``BRCA_Basal`` so downstream reporting knows
+    why. We do NOT synthesize a BRCA row from nothing — if BRCA isn't in
+    candidates the broad signature score is too far below the squamous
+    top to be honest about; instead surface the hint via ``support_override``
+    on the existing top row so reporting can still warn the reader.
+    """
+
+    if not rows:
+        return rows
+    pattern = _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol)
+    if not pattern:
+        return rows
+
+    max_support = max((float(row.get("support_score") or 0.0) for row in rows), default=0.0)
+    if max_support <= 0:
+        return rows
+
+    for idx, row in enumerate(rows, start=1):
+        row.setdefault("pre_rescue_rank", idx)
+        row.setdefault("pre_rescue_support_score", row.get("support_score"))
+        row.setdefault("pre_rescue_support_geomean", row.get("support_geomean"))
+
+    brca = next((r for r in rows if str(r.get("code") or "") == "BRCA"), None)
+    if brca is None:
+        # BRCA wasn't in the scored candidate pool — surface the hint on
+        # the current top row so the report can still warn, but don't
+        # change the call. Reporting code reads `support_override` from
+        # whichever row is at rank 1.
+        rows[0]["support_override"] = {**pattern, "promoted": False}
+        return rows
+
+    brca["support_override"] = {**pattern, "promoted": True}
+    brca["winning_subtype"] = "BRCA_Basal"
+    brca["support_score"] = max(float(brca.get("support_score") or 0.0), max_support * 1.05)
+    brca["support_geomean"] = (
+        float(brca["support_score"] ** 0.2) if brca["support_score"] > 0 else 0.0
+    )
+
+    rows.sort(
+        key=lambda row: (
+            -row["support_score"],
+            -row["signature_score"],
+            row["code"],
+        )
+    )
+    return rows
+
+
 def _detect_low_purity_prad_stromal_pitfall(
     rows,
     sample_tpm_by_symbol,
@@ -2751,6 +2907,15 @@ def rank_cancer_type_candidates(
                 if family_label == family
             ]
             candidate_codes.extend(family_codes)
+        # When the early signature top is squamous and the sample shows
+        # the basal-mammary cytokeratin program, force BRCA into the
+        # scored pool so the TNBC rescue further down has something to
+        # promote.
+        if candidate_codes and candidate_codes[0] in _SQUAMOUS_TOP_CODES:
+            preview_top = [{"code": c} for c in candidate_codes[:1]]
+            if _detect_tnbc_basal_brca_pattern(preview_top, sample_tpm):
+                if "BRCA" not in candidate_codes:
+                    candidate_codes.append("BRCA")
     else:
         candidate_codes = [resolve_cancer_type(code) for code in candidate_codes]
 
@@ -2944,6 +3109,7 @@ def rank_cancer_type_candidates(
             tissue_signal=tissue_signal,
         )
         rows = _apply_prad_stromal_rescue(rows, sample_tpm)
+        rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm)
     rows = _promote_same_family_alternatives(rows)
 
     max_support = max((row["support_score"] for row in rows), default=0.0)
