@@ -3040,6 +3040,7 @@ def _analyze_body(run: AnalyzeRun):
         prefix,
         decomp_results=decomp_results,
         input_path=input_path,
+        df_expr=df_expr,
     )
 
     # Cancer-type-specific gene set plot (only when --cancer-type specified
@@ -3393,6 +3394,7 @@ def _analyze_body(run: AnalyzeRun):
                 input_path=input_path,
                 ranges_df=ranges_df,
                 sample_id=sample_id,
+                df_expr=df_expr,
             )
             summary_md = build_summary(
                 analysis,
@@ -5576,6 +5578,7 @@ def _generate_text_reports(
     input_path=None,
     ranges_df=None,
     sample_id=None,
+    df_expr=None,
 ):
     """Write the detailed ``*-analysis.md`` report."""
     cancer_code = analysis["cancer_type"]
@@ -6163,6 +6166,40 @@ def _generate_text_reports(
                     "confirms the label."
                 )
         lines.append("")
+
+        # Per-candidate evidence tables (pirl-unc/trufflepig#29) — let an
+        # LLM consumer re-derive the cancer-biology rationale from
+        # tabulated TPMs without re-running the pipeline.
+        try:
+            from .evidence_tables import build_candidate_evidence_block
+
+            sample_tpm_by_symbol = {}
+            if df_expr is not None and "TPM" in df_expr.columns:
+                sym_col = (
+                    "gene_symbol"
+                    if "gene_symbol" in df_expr.columns
+                    else (
+                        "canonical_gene_name"
+                        if "canonical_gene_name" in df_expr.columns
+                        else None
+                    )
+                )
+                if sym_col is not None:
+                    grouped = df_expr.groupby(sym_col)["TPM"].max()
+                    sample_tpm_by_symbol = {
+                        str(k): float(v) for k, v in grouped.items()
+                    }
+            evidence_lines = build_candidate_evidence_block(
+                candidate_trace,
+                sample_tpm_by_symbol,
+                top_k=3,
+            )
+            if evidence_lines:
+                lines.extend(evidence_lines)
+        except Exception as exc:  # noqa: BLE001 — never let evidence tables break the report
+            lines.append(
+                f"*Per-candidate evidence tables unavailable: {type(exc).__name__}*"
+            )
 
     # Embedding features
     lines.append("## Embedding Features\n")
