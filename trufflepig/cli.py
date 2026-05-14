@@ -167,6 +167,11 @@ def cmd_run(args) -> int:
 
 
 def cmd_compare(args) -> int:
+    from .analyze import (
+        compute_longitudinal_delta_sets,
+        load_analyze_summary_record,
+        write_deltas_json,
+    )
     from .main import compare_analyze
 
     ws = Workspace.open(args.workspace)
@@ -181,6 +186,7 @@ def cmd_compare(args) -> int:
 
     resolved_inputs = [str(_resolve_analyze_dir(s)) for s in raw_inputs]
     output_path = ws.root / "comparison.md"
+    deltas_path = ws.root / "deltas.json"
 
     meta = {
         "tool": "trufflepig",
@@ -195,6 +201,7 @@ def cmd_compare(args) -> int:
         },
         "resolved_inputs": resolved_inputs,
         "comparison_output": str(output_path),
+        "deltas_output": str(deltas_path),
     }
     ws.write_meta(meta)
 
@@ -203,6 +210,23 @@ def cmd_compare(args) -> int:
         output_path=str(output_path),
         title=args.title,
     )
+
+    # Companion machine-readable record: typed longitudinal observations.
+    # Only emit when every input has a parseable summary — print a
+    # one-line notice if we have to skip so the user knows deltas.json
+    # is missing and why.
+    try:
+        records = [load_analyze_summary_record(p) for p in resolved_inputs]
+    except FileNotFoundError as exc:
+        print(
+            f"[deltas] skipped: {exc} — comparison.md was still written.",
+            file=sys.stderr,
+        )
+        return 0
+    delta_sets = compute_longitudinal_delta_sets(records)
+    write_deltas_json(deltas_path, delta_sets)
+    total = sum(len(ds.deltas) for ds in delta_sets)
+    print(f"[deltas] Wrote {deltas_path} ({total} typed observations)")
     return 0
 
 
