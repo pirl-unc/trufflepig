@@ -2940,9 +2940,18 @@ def rank_cancer_type_candidates(
     downweighting types whose purity model does not fit the sample.
     """
     from .plot import _compute_cancer_type_signature_stats, resolve_cancer_type
+    from .subtype_signature import compute_subtype_signature_stats
 
     stats = _compute_cancer_type_signature_stats(df_gene_expr)
     signature_score_map = {row["code"]: float(row["score"]) for row in stats}
+    # Subtype-aware signature scoring: for cohorts with subtype data
+    # (BRCA Basal/LumA/B/Her2/Normal; HNSC HPV+/-; LUAD by driver), score
+    # against each subtype's data-derived signature panel. The candidate
+    # loop below uses the best subtype score when it exceeds the broad
+    # cohort score, and tags the candidate with the winning_subtype.
+    # This is the principled answer to the basal-BRCA / squamous overlap
+    # problem (see :mod:`trufflepig.subtype_signature`).
+    subtype_stats = compute_subtype_signature_stats(df_gene_expr)
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
     unconstrained = candidate_codes is None
     family_scores = _score_cancer_family_panels(sample_tpm)
@@ -2994,10 +3003,28 @@ def rank_cancer_type_candidates(
                 if family_label == family
             ]
             candidate_codes.extend(family_codes)
+        # Always include cohorts with subtype data, even if their broad
+        # signature doesn't crack the top-8. The whole point of the
+        # subtype-aware scoring path is that a basal-BRCA sample fails
+        # the broad-BRCA signature (TCGA-BRCA is luminal-dominated) but
+        # succeeds against BRCA_Basal — so BRCA must reach the per-
+        # candidate loop where the subtype score is consulted. Same
+        # logic for HNSC (HPV+/-) and LUAD (driver mutations).
+        # Restrict to codes that are valid TCGA pan-cancer cohorts —
+        # BEATAML / TARGET_NBL appear in subtype data but aren't TCGA
+        # cohorts and don't have FPKM_* columns to score against.
+        valid_tcga_codes = {row["code"] for row in stats}
+        subtype_aware_codes = sorted(
+            code for code in subtype_stats.keys() if code in valid_tcga_codes
+        ) if subtype_stats else []
+        for code in subtype_aware_codes:
+            if code not in candidate_codes:
+                candidate_codes.append(code)
         # When the early signature top is squamous and the sample shows
         # the basal-mammary cytokeratin program, force BRCA into the
         # scored pool so the TNBC rescue further down has something to
-        # promote.
+        # promote. (Kept as defense-in-depth even with subtype scoring —
+        # if subtype data is ever missing, the heuristic still anchors.)
         if candidate_codes and candidate_codes[0] in _SQUAMOUS_TOP_CODES:
             preview_top = [{"code": c} for c in candidate_codes[:1]]
             if _detect_tnbc_basal_brca_pattern(preview_top, sample_tpm):
@@ -3019,7 +3046,21 @@ def rank_cancer_type_candidates(
     for code in ordered_codes:
         purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
-        signature_score = float(signature_score_map.get(code, 0.0))
+        broad_signature_score = float(signature_score_map.get(code, 0.0))
+        signature_score = broad_signature_score
+        signature_subtype_promoted = None
+        # If this cohort has subtype-specific signatures (BRCA Basal/LumA/
+        # LumB/Her2/Normal; HNSC HPV+/-; LUAD by driver) and the best
+        # subtype score beats the broad cohort score, promote the subtype
+        # score. This fixes the basal-BRCA-vs-squamous misclassification
+        # in a data-driven way — see :mod:`trufflepig.subtype_signature`.
+        subtype_candidates = subtype_stats.get(code) if subtype_stats else None
+        if subtype_candidates:
+            best_subtype_row = subtype_candidates[0]
+            best_subtype_score = float(best_subtype_row.get("score") or 0.0)
+            if best_subtype_score > signature_score:
+                signature_score = best_subtype_score
+                signature_subtype_promoted = str(best_subtype_row.get("subtype") or "")
         signature_stability = float(
             purity_result.get("components", {}).get("signature", {}).get("stability")
             or 1.0
@@ -3029,6 +3070,11 @@ def rank_cancer_type_candidates(
         lineage_concordance = lineage.get("concordance")
         lineage_detection_fraction = lineage.get("detection_fraction")
         winning_subtype = lineage.get("winning_subtype")
+        # If the subtype signature promoted a specific subtype, surface
+        # it as the candidate's winning subtype (lineage-side mixture
+        # cohort detection is the legacy path and still wins when set).
+        if winning_subtype is None and signature_subtype_promoted:
+            winning_subtype = signature_subtype_promoted
         family_label = _CANCER_FAMILY_BY_CODE.get(code)
         if family_label is not None:
             if family_label in non_penalizing_families:
@@ -3088,6 +3134,8 @@ def rank_cancer_type_candidates(
             {
                 "code": code,
                 "signature_score": signature_score,
+                "broad_signature_score": broad_signature_score,
+                "signature_subtype_promoted": signature_subtype_promoted,
                 "signature_stability": signature_stability,
                 "purity_estimate": purity_estimate,
                 "lineage_purity": lineage.get("purity"),
