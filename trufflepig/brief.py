@@ -1056,22 +1056,41 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
 
 
 def _disease_state_summary_lines(disease_state_display):
-    """Return summary lines without packing unrelated state clauses together."""
+    """Return summary lines without packing unrelated state clauses together.
+
+    Handles every on-the-wire form of the IFN marker we've seen:
+    ``**Active IFN response**``, ``** Active IFN response**`` (stray
+    space from upstream composition, which used to strand the leading
+    ``**`` on the disease-state line), and the unbolded ``Active IFN
+    response``.  Strips dangling bold / punctuation from the boundary
+    between the two halves so neither line ends up with unbalanced
+    bold markers or a doubled em-dash.  Emits only the immune line
+    when there's no real disease-state content before the marker.
+    """
     text = str(disease_state_display or "").strip()
     if not text:
         return []
-    for marker in ("**Active IFN response**", "Active IFN response"):
-        if marker in text and not text.startswith(marker):
-            before, after = text.split(marker, 1)
-            lines = []
-            before = before.strip()
-            if before:
-                lines.append(f"**Disease state:** {before}")
-            after = f"{marker}{after}".strip()
-            if after:
-                lines.append(f"**Immune/IFN state:** {after}")
-            return lines
-    return [f"**Disease state:** {text}"]
+    import re as _re
+
+    pattern = _re.compile(r"\*{0,2}\s*Active IFN response\*{0,2}")
+    match = pattern.search(text)
+    if match is None:
+        return [f"**Disease state:** {text}"]
+
+    before = text[: match.start()]
+    after = text[match.end():]
+    before = _re.sub(r"[\s;,.\*]+$", "", before).strip()
+    after = _re.sub(r"^[\s\*]+", "", after)
+    after = _re.sub(r"^[—–-]\s*", "", after).strip()
+
+    lines: list[str] = []
+    if before:
+        lines.append(f"**Disease state:** {before}")
+    ifn = "Active IFN response"
+    if after:
+        ifn = f"{ifn} — {after}"
+    lines.append(f"**Immune/IFN state:** {ifn}")
+    return lines
 
 
 def _panel_display_label(panel_code, panel_subtype=None):
