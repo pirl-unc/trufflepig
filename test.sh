@@ -27,6 +27,27 @@ TEST_SH_MAX="${TEST_SH_MAX:-0}"
 
 log() { printf '[test.sh] %s\n' "$*" >&2; }
 
+# Pin BLAS / OpenMP threading to 1 per pytest-xdist worker. Without
+# this, every worker silently parallelises numpy/sklearn ops across
+# ALL cores — and with N xdist workers each using K BLAS threads we
+# get N×K concurrent compute threads on N cores. On a 10-core Mac
+# (Apple Accelerate BLAS) that's 80–100 threads competing for 10
+# cores, which manifests as a frozen machine even though it isn't
+# technically a fork bomb. xdist already provides the test-level
+# parallelism we want; intra-test BLAS parallelism on top is pure
+# oversubscription.
+#
+# Override at the call site if a specific test legitimately needs
+# numpy/sklearn multi-threading (rare):
+#   OMP_NUM_THREADS=4 ./test.sh tests/test_perf_regression.py
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"  # macOS Accelerate
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+# sklearn / joblib spawns its own loky pool per estimator; cap it.
+export LOKY_MAX_CPU_COUNT="${LOKY_MAX_CPU_COUNT:-1}"
+
 case "$(uname -s)" in
     Darwin) OS=macos ;;
     Linux)  OS=linux ;;
