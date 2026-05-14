@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # Bundled reference data lives next to this module.
@@ -66,6 +67,7 @@ def _pan_cancer_cache_key(
     log_transform,
     technical_rna_normalize,
     remove_noncoding,
+    renormalize_to_million=True,
 ):
     genes_key = None if genes is None else frozenset(str(g).upper() for g in genes)
     return (
@@ -74,6 +76,7 @@ def _pan_cancer_cache_key(
         bool(log_transform),
         bool(technical_rna_normalize),
         bool(remove_noncoding),
+        bool(renormalize_to_million),
     )
 
 
@@ -118,6 +121,7 @@ def _tcga_deconv_wide(cache={}):
 def subtype_deconvolved_expression(
     technical_rna_normalize=False,
     remove_noncoding=False,
+    renormalize_to_million=False,
 ):
     """Per-(cancer_code, subtype, symbol) tumor-only TPM from multi-cohort deconv.
 
@@ -126,13 +130,39 @@ def subtype_deconvolved_expression(
     when the CSV isn't bundled. ``technical_rna_normalize`` zeros
     mtDNA / rRNA-like rows per subtype group; ``remove_noncoding`` adds
     a biotype gate when a biotype column is present.
+
+    ``renormalize_to_million`` (opt-in, default False) rescales each
+    (cancer_code, subtype) group's ``tumor_tpm_median`` so its sum
+    equals 1e6 — the standard TPM convention. The bundled reference
+    has per-subtype sums anywhere from 138K (BRCA_Basal) to 1.14M
+    (BEATAML), which biases scale-sensitive comparisons toward
+    higher-mass subtypes. Signature panel selection in
+    :mod:`trufflepig.subtype_signature` opts in. Decomposition and
+    other paths calibrated against the native scale leave it off.
     """
+    import pandas as pd
     from .expression_normalize import normalize_expression, normalize_technical_rna_long_table
 
     try:
         df = get_reference_data("subtype-deconvolved-expression")
     except ValueError:
         return None
+
+    if renormalize_to_million:
+        df = df.copy()
+        for value_col in ("tumor_tpm_median", "tumor_tpm_q1", "tumor_tpm_q3"):
+            if value_col not in df.columns:
+                continue
+            vals = pd.to_numeric(df[value_col], errors="coerce")
+            group_sums = vals.groupby(
+                [df["cancer_code"], df["subtype"]]
+            ).transform("sum")
+            scale = pd.Series(
+                np.where(group_sums > 0, 1e6 / group_sums, 1.0),
+                index=df.index,
+            )
+            df[value_col] = vals * scale
+
     if not technical_rna_normalize and not remove_noncoding:
         return df
     if remove_noncoding:
@@ -155,6 +185,7 @@ def pan_cancer_expression(
     log_transform=False,
     technical_rna_normalize=False,
     remove_noncoding=False,
+    renormalize_to_million=False,
 ):
     """Expression across 50 normal tissues (nTPM) and 33 TCGA cancer types.
 
@@ -166,13 +197,26 @@ def pan_cancer_expression(
     present, tumor-only columns prefixed ``tcga_`` are merged in
     alongside the FPKM_ columns.
 
+    ``renormalize_to_million`` (opt-in, default False) rescales every
+    value column to sum=1e6 — the standard TPM convention — so user
+    sample TPM and TCGA cohort columns sit on the same per-million
+    footing. The native bundled values have per-column sums anywhere
+    from ~200K (FPKM_BRCA) to ~700K (FPKM_ESCA) to ~970K (nTPM_breast),
+    which biases scale-sensitive comparisons. Signature panel selection
+    in :mod:`trufflepig.subtype_signature` opts in. Decomposition,
+    tumor-purity, and other paths that were calibrated against the
+    native bundled scale leave it off (changing the scale silently
+    re-calibrates them, e.g. shifts solid_primary → met_bone template
+    preference on stromal-heavy mixes).
+
     Parameters mirror the pre-#23 pirlygenes signature so the rewrite
     is a pure import path change for analysis callers.
     """
-    import numpy as np
-
     from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
     from .expression_normalize import normalize_expression
+    from .expression_normalize import (
+        renormalize_to_million as _renormalize_to_million,
+    )
 
     cache_key = _pan_cancer_cache_key(
         genes,
@@ -180,6 +224,7 @@ def pan_cancer_expression(
         log_transform,
         technical_rna_normalize,
         remove_noncoding,
+        renormalize_to_million,
     )
     cached = _PAN_CANCER_CACHE.get(cache_key)
     if cached is not None:
@@ -194,6 +239,9 @@ def pan_cancer_expression(
         for c in df.columns
         if c.startswith("nTPM_") or c.startswith("FPKM_") or c.startswith("tcga_")
     ]
+    if renormalize_to_million:
+        df, _renorm_record = _renormalize_to_million(df, value_cols=value_cols)
+        df.attrs["renormalize_to_million"] = _renorm_record
     if technical_rna_normalize or remove_noncoding:
         df, normalization_record = normalize_expression(
             df,
