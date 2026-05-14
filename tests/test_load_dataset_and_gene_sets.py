@@ -200,14 +200,18 @@ def test_cta_partition():
 
 def test_mitochondrial_gene_loaders():
     df = gsc.mitochondrial_genes_df()
-    # 13 protein-coding OXPHOS subunits + 2 rRNAs = 15
-    assert len(df) == 15
-    assert set(df["Role"]) == {"protein_coding", "rRNA"}
+    # 13 protein-coding OXPHOS subunits + 2 rRNAs + 22 tRNAs = 37
+    assert len(df) == 37
+    assert set(df["Role"]) == {"protein_coding", "rRNA", "tRNA"}
     assert df["Ensembl_Gene_ID"].notna().all()
     assert "MT-CO1" in gsc.mitochondrial_gene_names()
     assert "MT-RNR1" in gsc.mitochondrial_gene_names(role="rRNA")
     assert "MT-CO1" not in gsc.mitochondrial_gene_names(role="rRNA")
-    assert len(gsc.mitochondrial_gene_ids()) == 15
+    assert "MT-TA" in gsc.mitochondrial_gene_names(role="tRNA")
+    assert len(gsc.mitochondrial_gene_names(role="protein_coding")) == 13
+    assert len(gsc.mitochondrial_gene_names(role="rRNA")) == 2
+    assert len(gsc.mitochondrial_gene_names(role="tRNA")) == 22
+    assert len(gsc.mitochondrial_gene_ids()) == 37
 
 
 def test_culture_stress_gene_loaders():

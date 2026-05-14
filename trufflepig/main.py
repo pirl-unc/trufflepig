@@ -1112,6 +1112,7 @@ def _select_actionable_plot_genes(
 
     reliability_rank = {"supported": 0, "provisional": 1, "unsupported": 2}
     extras = []
+    therapy_supported_set: set[str] = set()
     for _, row in ranges_df.iterrows():
         sym = str(row.get("symbol") or "").strip()
         if not sym or sym.lower() == "nan":
@@ -1145,10 +1146,19 @@ def _select_actionable_plot_genes(
                 sym,
             )
         )
+        if therapy_supported:
+            therapy_supported_set.add(sym)
 
     ranked_extras = [sym for *_unused, sym in sorted(extras)]
-    genes = []
-    for sym in list(curated) + ranked_extras:
+    # Sample-specific therapy_supported hits are the strongest signal we
+    # have for a target, so they ride ahead of the curated cohort panel —
+    # otherwise a 5-slot figure full of cohort defaults starves the one
+    # genuinely actionable sample finding (e.g. FAP in a bone-rich
+    # sarcoma).  Other sample hits stay after the curated panel.
+    priority_extras = [sym for sym in ranked_extras if sym in therapy_supported_set]
+    other_extras = [sym for sym in ranked_extras if sym not in therapy_supported_set]
+    genes: list[str] = []
+    for sym in priority_extras + list(curated) + other_extras:
         if sym not in genes:
             genes.append(sym)
     return genes[:max_genes]
@@ -4510,23 +4520,59 @@ def _registry_parent_analysis_scope(report_scope):
 def _analysis_input_cancer_type(cancer_type):
     """Return (composition_scope, report_scope) for an analyze label.
 
-    TCGA-backed labels can constrain the classifier directly. Registry labels
-    with a TCGA parent, such as SARC_SYN, constrain analysis to the parent
-    cohort while keeping the child label as report scope. Labels without a
-    TCGA parent, such as NUTM, remain report-only while the RNA classifier
-    still runs unconstrained for cross-checking.
+    Three kinds of labels are distinguished:
+
+    1. Plain expression-cohort code (TCGA / TARGET-backed cohort, e.g.
+       COAD, SARC, OS) — constrains analysis directly.
+       Returns ``(code, None)``.
+    2. Registry child of an expression cohort (e.g. SARC_SYN → SARC) —
+       analysis runs against the parent cohort, the child stays as the
+       report label.  Returns ``(parent_code, child_code)``.
+    3. Registry-only label without an expression cohort (e.g. NUTM,
+       which is ``LITERATURE_CURATED``) — stays report-only while the
+       RNA classifier runs unconstrained for cross-checking.
+       Returns ``(None, code)``.
     """
     if not cancer_type:
         return None, None
     from .plot import resolve_cancer_type
 
     try:
-        return resolve_cancer_type(cancer_type), None
+        resolved = resolve_cancer_type(cancer_type)
     except ValueError:
         report_scope = _report_scope_cancer_type(cancer_type)
         if report_scope:
             return _registry_parent_analysis_scope(report_scope), report_scope
         raise
+
+    parent = _registry_parent_analysis_scope(resolved)
+    if parent:
+        return parent, resolved
+    if _is_registry_only_label(resolved):
+        return None, resolved
+    return resolved, None
+
+
+def _is_registry_only_label(code):
+    """True when the code has a registry row but no expression cohort.
+
+    Used to distinguish curated-only labels (NUT carcinoma, ...) from
+    full expression-cohort codes (COAD, SARC, OS, ...). Registry-only
+    labels carry ``source_cohort = LITERATURE_CURATED`` (or empty).
+    """
+    if not code:
+        return False
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        reg = cancer_type_registry()
+        match = reg[reg["code"].astype(str) == str(code)]
+        if match.empty:
+            return False
+        source = str(match.iloc[0].get("source_cohort") or "").strip().upper()
+        return source in {"LITERATURE_CURATED", ""}
+    except Exception:
+        return False
 
 
 def _infer_registry_report_scope_from_rna(df_expr, analysis):
