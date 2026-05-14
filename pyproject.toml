@@ -2,7 +2,7 @@
 name = "trufflepig"
 requires-python = ">=3.9"
 authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
-description = "Step-by-step RNA tumor analysis driven by pirlygenes gene sets. Subsumes pirlygenes.analyze as many composable sub-commands with serializable intermediate state for incremental website-style runs."
+description = "RNA tumor analysis driven by pirlygenes gene sets. Migrates the pirlygenes analyze pipeline into composable sub-commands with serializable intermediate state for incremental website-style runs."
 classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Environment :: Console",
@@ -14,10 +14,9 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "pirlygenes>=4.9.0",
+    "pirlygenes>=5.0.0",
     "numpy>=2.0.0",
     "pandas>=2.0",
-    "argh",
     "matplotlib>=3.5.0",
     "tqdm",
     "pyyaml",
@@ -27,7 +26,15 @@ dependencies = [
 version = {attr = "trufflepig.version.__version__"}
 
 [tool.setuptools]
-packages = ["trufflepig", "trufflepig.stages"]
+packages = [
+    "trufflepig",
+    "trufflepig.analyze",
+    "trufflepig.decomposition",
+    "trufflepig.stages",
+]
+
+[tool.setuptools.package-data]
+trufflepig = ["py.typed", "data/*"]
 
 
 [project.optional-dependencies]
@@ -54,3 +61,7 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-n auto"
+markers = [
+    "perf: performance-regression fences",
+]
