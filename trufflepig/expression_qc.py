@@ -136,7 +136,12 @@ def classify_gene_qc(
             gene_family_for_ensembl_id,
             gene_family_for_symbol,
         )
-    except Exception:
+    except ImportError:
+        # Only swallow ImportError — a missing pirlygenes is the
+        # legitimate "fall back to regex" case. A runtime exception
+        # inside pirlygenes (broken data file, schema drift, ...)
+        # should propagate so the classifier doesn't silently degrade
+        # to ``"other"`` for ENSG-only inputs.
         gene_family_for_ensembl_id = None  # type: ignore[assignment]
         gene_family_for_symbol = None  # type: ignore[assignment]
 

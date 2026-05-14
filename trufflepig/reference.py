@@ -42,10 +42,15 @@ def get_reference_data(name: str) -> pd.DataFrame:
     """
     plain = DATA_DIR / f"{name}.csv"
     gz = DATA_DIR / f"{name}.csv.gz"
+    # ``low_memory=False`` is required for ``subtype-deconvolved-
+    # expression.csv.gz`` — pandas otherwise reads the file in chunks
+    # and emits a ``DtypeWarning`` on the ``subtype`` column (mixed
+    # types across releases). Loading the whole frame at once yields a
+    # consistent dtype and is fine for these reference matrices.
     if plain.is_file():
-        return pd.read_csv(plain)
+        return pd.read_csv(plain, low_memory=False)
     if gz.is_file():
-        return pd.read_csv(gz)
+        return pd.read_csv(gz, low_memory=False)
     raise ValueError(f"No reference dataset named {name!r} in {DATA_DIR}")
 
 
