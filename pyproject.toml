@@ -31,17 +31,28 @@ packages = [
     "trufflepig.analyze",
     "trufflepig.decomposition",
     "trufflepig.stages",
+    "trufflepig.web",
 ]
 
 [tool.setuptools.package-data]
-trufflepig = ["py.typed", "data/*"]
+trufflepig = ["py.typed", "data/*", "web/static/*", "web/templates/*"]
 
 
 [project.optional-dependencies]
+web = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "python-multipart>=0.0.6",
+    "markdown>=3.4",
+]
 test = [
     "pytest",
     "pytest-cov",
     "pytest-xdist",
+    "httpx",
+    "fastapi>=0.100",
+    "python-multipart>=0.0.6",
+    "markdown>=3.4",
 ]
 
 [project.scripts]
