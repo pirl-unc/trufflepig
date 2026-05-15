@@ -14,7 +14,7 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "pirlygenes>=5.0.0",
+    "pirlygenes>=5.1.0",
     "numpy>=2.0.0",
     "pandas>=2.0",
     "matplotlib>=3.5.0",
@@ -35,7 +35,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-trufflepig = ["py.typed", "data/*", "web/static/*", "web/templates/*"]
+trufflepig = ["py.typed", "web/static/*", "web/templates/*"]
 
 
 [project.optional-dependencies]

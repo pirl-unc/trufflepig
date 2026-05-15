@@ -1,58 +1,42 @@
 """Expression-backed reference data for the analysis engine.
 
-This module owns the expression matrices (pan-cancer + 50 normal tissues,
-TCGA deconvolved tumor-only TPM, subtype-deconvolved cohorts, HPA cell-type
-expression, matched-normal tumor-up panels, stromal/immune signature panels)
-and the typed Python accessors that the rest of the trufflepig pipeline
-calls into.
+Thin wrapper around the canonical pirlygenes 5.1 accessors. The CSVs
+and the rescaling primitives now live in pirlygenes — trufflepig
+preserves the legacy wide kwarg surface (``technical_rna_normalize``,
+``remove_noncoding``, ``renormalize_to_million``) and the
+``_PAN_CANCER_CACHE`` / ``_tcga_deconv_wide`` monkey-patch points so
+existing analysis callers and tests continue to bind here.
 
-Boundary (trufflepig#23):
+Boundary (post-pirlygenes#246/#247/#248):
 
-    pirlygenes ─ curated gene knowledge: gene lists, panels, registry,
-                 rule tables, gene-id/name helpers
-    trufflepig ─ analysis engine + expression-backed reference models;
-                 this module is the canonical entry point for the latter
-
-External consumers should import from here, not from
-``trufflepig/data/`` directly — the in-process cache, the deconv-wide
-join into pan-cancer-expression, and the technical-RNA normalization
-all live in the typed accessors.
+    pirlygenes ─ CSVs + accessors + rescaling primitives
+                 (``pan_cancer_expression``, ``normalize_expression``,
+                  ``renormalize_to_million``, …)
+    trufflepig ─ analysis composition: this module orchestrates the
+                 wide-form merge, the technical-RNA scrub, and the
+                 renormalize/housekeeping passes on top of pirlygenes
+                 data, and serves as the in-process cache for them.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-# Bundled reference data lives next to this module.
-DATA_DIR: Path = Path(__file__).resolve().parent / "data"
+from pirlygenes.load_dataset import get_data as _pirlygenes_get_data
 
 
 # ---------- generic loader ----------
 
 
 def get_reference_data(name: str) -> pd.DataFrame:
-    """Load ``trufflepig/data/<name>.csv`` (or ``.csv.gz``).
+    """Load a bundled expression CSV from pirlygenes by short name.
 
-    Mirrors :func:`pirlygenes.load_dataset.get_data` but scoped to the
-    expression references that trufflepig now owns. Raises ``ValueError``
-    if no matching file is bundled, so callers can route around
-    optional cohort references that haven't been generated yet.
+    Thin pass-through to :func:`pirlygenes.load_dataset.get_data` so
+    tests can still monkey-patch this attribute. Raises ``ValueError``
+    when the dataset isn't bundled.
     """
-    plain = DATA_DIR / f"{name}.csv"
-    gz = DATA_DIR / f"{name}.csv.gz"
-    # ``low_memory=False`` is required for ``subtype-deconvolved-
-    # expression.csv.gz`` — pandas otherwise reads the file in chunks
-    # and emits a ``DtypeWarning`` on the ``subtype`` column (mixed
-    # types across releases). Loading the whole frame at once yields a
-    # consistent dtype and is fine for these reference matrices.
-    if plain.is_file():
-        return pd.read_csv(plain, low_memory=False)
-    if gz.is_file():
-        return pd.read_csv(gz, low_memory=False)
-    raise ValueError(f"No reference dataset named {name!r} in {DATA_DIR}")
+    return _pirlygenes_get_data(name)
 
 
 # ---------- pan-cancer / TCGA-deconvolved expression ----------
@@ -85,8 +69,9 @@ def tcga_deconvolved_expression():
 
     Long-form frame with columns ``symbol``, ``cancer_code``,
     ``tumor_tpm_median``, ``tumor_tpm_q1``, ``tumor_tpm_q3``, ``n_samples``.
-    Returns ``None`` if the CSV is not bundled (fresh checkouts where
-    the offline batch hasn't been run yet). Callers must handle ``None``.
+    Returns ``None`` if the CSV is not bundled (the bundled-with-pirlygenes
+    case never fires this branch but it preserves the legacy contract
+    for tests that monkey-patch ``get_reference_data`` to raise).
     """
     try:
         return get_reference_data("tcga-deconvolved-expression")
@@ -125,23 +110,16 @@ def subtype_deconvolved_expression(
 ):
     """Per-(cancer_code, subtype, symbol) tumor-only TPM from multi-cohort deconv.
 
-    See :func:`pirlygenes.gene_sets_cancer.subtype_deconvolved_expression`
-    (now removed) for the full cohort list. Long-form frame; ``None``
-    when the CSV isn't bundled. ``technical_rna_normalize`` zeros
-    mtDNA / rRNA-like rows per subtype group; ``remove_noncoding`` adds
-    a biotype gate when a biotype column is present.
-
-    ``renormalize_to_million`` (opt-in, default False) rescales each
-    (cancer_code, subtype) group's ``tumor_tpm_median`` so its sum
-    equals 1e6 — the standard TPM convention. The bundled reference
-    has per-subtype sums anywhere from 138K (BRCA_Basal) to 1.14M
-    (BEATAML), which biases scale-sensitive comparisons toward
-    higher-mass subtypes. Signature panel selection in
-    :mod:`trufflepig.subtype_signature` opts in. Decomposition and
-    other paths calibrated against the native scale leave it off.
+    Long-form frame; ``None`` when the CSV isn't bundled.
+    ``technical_rna_normalize`` zeros mtDNA / rRNA-like rows per subtype
+    group; ``remove_noncoding`` adds a biotype gate when a biotype
+    column is present. ``renormalize_to_million`` rescales each
+    (cancer_code, subtype) group's value columns to sum=1e6.
     """
-    import pandas as pd
-    from .expression_normalize import normalize_expression, normalize_technical_rna_long_table
+    from .expression_normalize import (
+        normalize_expression,
+        normalize_technical_rna_long_table,
+    )
 
     try:
         df = get_reference_data("subtype-deconvolved-expression")
@@ -189,30 +167,19 @@ def pan_cancer_expression(
 ):
     """Expression across 50 normal tissues (nTPM) and 33 TCGA cancer types.
 
-    Normal tissues from HPA v23 consensus nTPM. Cancer types from HPA
-    (21 types, median FPKM) and GDC/STAR reprocessing (12 additional types,
-    median TPM). Column names prefixed ``nTPM_`` or ``FPKM_``.
+    Wraps :func:`pirlygenes.pan_cancer_expression`'s narrower API with
+    the legacy trufflepig kwarg surface — ``technical_rna_normalize``,
+    ``remove_noncoding``, and ``renormalize_to_million`` compose
+    pirlygenes' :func:`normalize_expression` and
+    :func:`renormalize_to_million` primitives on top of the underlying
+    pan-cancer + tcga-deconvolved-merged matrix.
 
-    When ``trufflepig/data/tcga-deconvolved-expression.csv.gz`` is
-    present, tumor-only columns prefixed ``tcga_`` are merged in
-    alongside the FPKM_ columns.
-
-    ``renormalize_to_million`` (opt-in, default False) rescales every
-    value column to sum=1e6 — the standard TPM convention — so user
-    sample TPM and TCGA cohort columns sit on the same per-million
-    footing. The native bundled values have per-column sums anywhere
-    from ~200K (FPKM_BRCA) to ~700K (FPKM_ESCA) to ~970K (nTPM_breast),
-    which biases scale-sensitive comparisons. Signature panel selection
-    in :mod:`trufflepig.subtype_signature` opts in. Decomposition,
-    tumor-purity, and other paths that were calibrated against the
-    native bundled scale leave it off (changing the scale silently
-    re-calibrates them, e.g. shifts solid_primary → met_bone template
-    preference on stromal-heavy mixes).
-
-    Parameters mirror the pre-#23 pirlygenes signature so the rewrite
-    is a pure import path change for analysis callers.
+    Result is cached in :data:`_PAN_CANCER_CACHE` keyed on every
+    combination of arguments. Tests that need a clean slate clear the
+    dict directly.
     """
     from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+
     from .expression_normalize import normalize_expression
     from .expression_normalize import (
         renormalize_to_million as _renormalize_to_million,
@@ -319,12 +286,7 @@ def cancer_expression(cancer_type, genes=None):
 
 
 def cancer_enriched_genes(cancer_type, min_fold=3.0, min_expression=0.01):
-    """Genes enriched in one cancer type vs the median of all others.
-
-    Wraps :func:`pan_cancer_expression(normalize="housekeeping")` and
-    returns the symbols above ``min_fold`` × the cross-cancer median
-    with the cancer-type expression itself above ``min_expression``.
-    """
+    """Genes enriched in one cancer type vs the median of all others."""
     from pirlygenes.gene_sets_cancer import resolve_cancer_type
 
     code = resolve_cancer_type(cancer_type)
@@ -344,11 +306,7 @@ def cancer_enriched_genes(cancer_type, min_fold=3.0, min_expression=0.01):
 
 
 def top_enriched_per_cancer_type(top_n=20, min_fold=3.0, min_expression=0.01):
-    """Top-N enriched genes per TCGA code (dict keyed by code).
-
-    Convenience wrapper: runs :func:`cancer_enriched_genes` for every
-    TCGA code in :func:`cancer_types()` and trims to ``top_n`` rows each.
-    """
+    """Top-N enriched genes per TCGA code (dict keyed by code)."""
     out: dict[str, pd.DataFrame] = {}
     for code in cancer_types():
         enriched = cancer_enriched_genes(
@@ -366,11 +324,8 @@ def top_enriched_per_cancer_type(top_n=20, min_fold=3.0, min_expression=0.01):
 def tumor_up_vs_matched_normal(cancer_code: str | None = None):
     """Solid-tumor genes dramatically up vs matched normal tissue.
 
-    Per-cancer rows with ``fold_change_vs_matched_normal``, ``tumor_tpm``,
-    ``matched_normal_ntpm``, and cross-tissue max columns. Built offline
-    by racing :func:`tcga_deconvolved_expression` tumor-only medians
-    against ``nTPM_<tissue>`` columns in :func:`pan_cancer_expression`.
-    ``None`` when the CSV is not bundled.
+    ``None`` when the CSV is not bundled (the bundled-with-pirlygenes
+    case never fires this branch but it preserves the legacy contract).
     """
     try:
         df = get_reference_data("tumor-up-vs-matched-normal")
@@ -382,11 +337,7 @@ def tumor_up_vs_matched_normal(cancer_code: str | None = None):
 
 
 def heme_tumor_up_vs_matched_normal(cancer_code: str | None = None):
-    """Heme analogue of :func:`tumor_up_vs_matched_normal`.
-
-    DLBC vs lymph_node, LAML vs bone_marrow; filter looser than the
-    solid panel because heme tumors are themselves immune tissue.
-    """
+    """Heme analogue of :func:`tumor_up_vs_matched_normal`."""
     try:
         df = get_reference_data("heme-tumor-up-vs-matched-normal")
     except ValueError:
@@ -400,11 +351,7 @@ def heme_tumor_up_vs_matched_normal(cancer_code: str | None = None):
 
 
 def hpa_cell_type_expression():
-    """Per-(gene, cell-type) nTPM from the HPA single-cell consensus.
-
-    Used by :mod:`trufflepig.decomposition.signature` to score lineage
-    purity against curated cell-type reference profiles.
-    """
+    """Per-(gene, cell-type) nTPM from the HPA single-cell consensus."""
     return get_reference_data("hpa-cell-type-expression")
 
 
@@ -412,8 +359,6 @@ def estimate_signatures():
     """ESTIMATE stromal / immune signature panels (Yoshihara 2013).
 
     Returns a frame with columns ``Symbol``, ``Ensembl_Gene_ID``,
-    ``Category`` (``Stromal`` or ``Immune``). Used by
-    :func:`trufflepig.tumor_purity.estimate_score` for the ESTIMATE
-    purity surrogate alongside the lineage-panel estimator.
+    ``Category`` (``Stromal`` or ``Immune``).
     """
     return get_reference_data("estimate-signatures")
