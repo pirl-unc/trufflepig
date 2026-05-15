@@ -106,7 +106,10 @@ def _load_cohort_vs_tissue(cancer_code, tissue=None):
     # intentionally compares raw TCGA bulk magnitude to matched-normal bulk
     # magnitude; column-wise technical-RNA renormalization can move canonical
     # retained-lineage markers such as PRAD KLK3 across the tolerance boundary.
-    ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
+    # Same reasoning blocks renormalize_to_million here (pirl-unc/trufflepig#27).
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(
+        subset="Symbol"
+    )
     cancer_col = f"FPKM_{cancer_code}"
     tissue_col = f"nTPM_{tissue}"
     missing = [c for c in (cancer_col, tissue_col) if c not in ref.columns]

@@ -121,7 +121,7 @@ def _tcga_deconv_wide(cache={}):
 def subtype_deconvolved_expression(
     technical_rna_normalize=False,
     remove_noncoding=False,
-    renormalize_to_million=False,
+    renormalize_to_million=True,
 ):
     """Per-(cancer_code, subtype, symbol) tumor-only TPM from multi-cohort deconv.
 
@@ -185,7 +185,7 @@ def pan_cancer_expression(
     log_transform=False,
     technical_rna_normalize=False,
     remove_noncoding=False,
-    renormalize_to_million=False,
+    renormalize_to_million=True,
 ):
     """Expression across 50 normal tissues (nTPM) and 33 TCGA cancer types.
 

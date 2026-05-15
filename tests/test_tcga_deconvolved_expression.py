@@ -63,7 +63,10 @@ def test_present_deconv_csv_adds_tcga_columns(monkeypatch):
         ]
     )
     monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: synthetic)
-    df = gsc.pan_cancer_expression(genes=["KLK3", "ERBB2"])
+    # Explicitly opt out of renormalize_to_million so these assertions can
+    # check raw bundled values; the universal default-True is exercised in
+    # test_tcga_columns_renormalize_to_million_when_flag_default below.
+    df = gsc.pan_cancer_expression(genes=["KLK3", "ERBB2"], renormalize_to_million=False)
     tcga_cols = [c for c in df.columns if c.startswith("tcga_")]
     assert "tcga_PRAD" in tcga_cols
     assert "tcga_BRCA" in tcga_cols
@@ -134,11 +137,17 @@ def test_technical_rna_reference_normalization_is_opt_in_and_preserves_nans(monk
     monkeypatch.setattr(gsc, "get_reference_data", lambda name: base.copy())
     monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: deconv)
 
-    raw = gsc.pan_cancer_expression()
+    # Test the technical_rna_normalize opt-in behavior on the native FPKM
+    # scale by also opting out of renormalize_to_million; the universal
+    # 1e6 footing has its own test below.
+    raw = gsc.pan_cancer_expression(renormalize_to_million=False)
     assert raw.loc[raw["Symbol"] == "RNA5SP389", "FPKM_PRAD"].iloc[0] == 10.0
     assert raw.loc[raw["Symbol"] == "RNA5SP389", "tcga_PRAD"].iloc[0] == 10.0
 
-    normalized = gsc.pan_cancer_expression(technical_rna_normalize=True)
+    normalized = gsc.pan_cancer_expression(
+        technical_rna_normalize=True,
+        renormalize_to_million=False,
+    )
     assert normalized.loc[normalized["Symbol"] == "RNA5SP389", "FPKM_PRAD"].iloc[0] == 0.0
     assert normalized.loc[normalized["Symbol"] == "KLK3", "FPKM_PRAD"].iloc[0] == pytest.approx(90.0 * 105.0 / 95.0)
     assert normalized.loc[normalized["Symbol"] == "RNA5SP389", "tcga_PRAD"].iloc[0] == 0.0
@@ -172,11 +181,15 @@ def test_subtype_deconvolved_technical_rna_normalization_is_opt_in(monkeypatch):
 
     monkeypatch.setattr(gsc, "get_reference_data", lambda name: synthetic.copy())
 
-    raw = gsc.subtype_deconvolved_expression()
+    # Test the technical_rna_normalize opt-in on native subtype values.
+    raw = gsc.subtype_deconvolved_expression(renormalize_to_million=False)
     assert raw.loc[raw["symbol"] == "RNA5SP389", "tumor_tpm_median"].iloc[0] == 20.0
     assert raw.loc[raw["symbol"] == "KLK3", "tumor_tpm_median"].iloc[0] == 80.0
 
-    normalized = gsc.subtype_deconvolved_expression(technical_rna_normalize=True)
+    normalized = gsc.subtype_deconvolved_expression(
+        technical_rna_normalize=True,
+        renormalize_to_million=False,
+    )
     assert (
         normalized.loc[
             normalized["symbol"] == "RNA5SP389",
