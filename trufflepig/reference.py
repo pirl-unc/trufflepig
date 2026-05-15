@@ -30,6 +30,34 @@ import pirlygenes as _pirlygenes
 from pirlygenes.load_dataset import get_data as get_reference_data
 
 
+_PAN_CANCER_CACHE: dict[tuple, pd.DataFrame] = {}
+
+
+def _pan_cancer_cache_key(
+    genes,
+    normalize,
+    log_transform,
+    technical_rna_normalize,
+    remove_noncoding,
+    renormalize_to_million,
+) -> tuple:
+    genes_tuple = None if genes is None else tuple(genes)
+    genes_key = (
+        None
+        if genes_tuple is None
+        else frozenset(str(g).upper() for g in genes_tuple)
+    )
+    cache_key = (
+        genes_key,
+        normalize,
+        bool(log_transform),
+        bool(technical_rna_normalize),
+        bool(remove_noncoding),
+        bool(renormalize_to_million),
+    )
+    return cache_key, genes_tuple
+
+
 def tcga_deconvolved_expression() -> pd.DataFrame:
     """Per-(symbol, TCGA code) tumor-only TPM medians from offline deconv."""
     return _pirlygenes.tcga_deconvolved_expression()
@@ -70,14 +98,28 @@ def pan_cancer_expression(
     ``renormalize_to_million=False`` for the native bundled scale —
     decomposition callsites explicitly opt out pending #27.
     """
-    return _pirlygenes.pan_cancer_expression(
-        genes=genes,
+    cache_key, genes_tuple = _pan_cancer_cache_key(
+        genes,
+        normalize,
+        log_transform,
+        technical_rna_normalize,
+        remove_noncoding,
+        renormalize_to_million,
+    )
+    cached = _PAN_CANCER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached.copy()
+
+    df = _pirlygenes.pan_cancer_expression(
+        genes=genes_tuple,
         normalize=normalize,
         log_transform=log_transform,
         technical_rna_normalize=technical_rna_normalize,
         remove_noncoding=remove_noncoding,
         renormalize_to_million=renormalize_to_million,
     )
+    _PAN_CANCER_CACHE[cache_key] = df
+    return df.copy()
 
 
 def cancer_types() -> list[str]:
@@ -92,17 +134,49 @@ def cancer_expression(cancer_type, genes=None) -> pd.DataFrame:
     Columns: ``Ensembl_Gene_ID``, ``Symbol``, ``expression``
     (housekeeping-normalized, technical-RNA-normalized).
     """
-    return _pirlygenes.cancer_expression(cancer_type, genes=genes)
+    from pirlygenes.gene_sets_cancer import resolve_cancer_type
 
-
-def cancer_enriched_genes(cancer_type, min_fold: float = 3.0, min_expression: float = 0.01):
-    """Genes enriched in one cancer type vs the median of all others."""
-    return _pirlygenes.cancer_enriched_genes(
-        cancer_type, min_fold=min_fold, min_expression=min_expression
+    code = resolve_cancer_type(cancer_type)
+    df = pan_cancer_expression(
+        genes=genes,
+        normalize="housekeeping",
+        technical_rna_normalize=True,
     )
+    col = f"FPKM_{code}"
+    return df[["Ensembl_Gene_ID", "Symbol", col]].rename(columns={col: "expression"})
 
 
-def top_enriched_per_cancer_type(top_n: int = 20, min_fold: float = 3.0, min_expression: float = 0.01):
+def cancer_enriched_genes(
+    cancer_type,
+    min_fold: float = 3.0,
+    min_expression: float = 0.01,
+) -> pd.DataFrame:
+    """Genes enriched in one cancer type vs the median of all others."""
+    from pirlygenes.gene_sets_cancer import resolve_cancer_type
+
+    code = resolve_cancer_type(cancer_type)
+    df = pan_cancer_expression(normalize="housekeeping", technical_rna_normalize=True)
+    target_col = f"FPKM_{code}"
+    if target_col not in df.columns:
+        raise ValueError(
+            f"Cancer type {cancer_type!r} -> {code!r} not in pan-cancer reference"
+        )
+    other_cols = [c for c in df.columns if c.startswith("FPKM_") and c != target_col]
+    target = df[target_col].astype(float)
+    other_median = df[other_cols].astype(float).median(axis=1)
+    fold = target / other_median.replace(0, float("nan"))
+    keep = (fold >= min_fold) & (target >= min_expression)
+    out = df.loc[keep, ["Ensembl_Gene_ID", "Symbol", target_col]].copy()
+    out = out.rename(columns={target_col: "expression"})
+    out["fold_over_others"] = fold[keep].values
+    return out.sort_values("fold_over_others", ascending=False)
+
+
+def top_enriched_per_cancer_type(
+    top_n: int = 20,
+    min_fold: float = 3.0,
+    min_expression: float = 0.01,
+) -> dict[str, pd.DataFrame]:
     """Top-N enriched genes per TCGA code (dict keyed by code)."""
     out: dict[str, pd.DataFrame] = {}
     for code in cancer_types():
