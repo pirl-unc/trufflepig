@@ -3,6 +3,10 @@ from types import SimpleNamespace
 import pandas as pd
 
 import trufflepig.aggregate_gene_expression as ag
+# Implementation lives in pirlygenes since the 5.1 reorganization;
+# monkey-patches that target the loaders for transcript→gene resolution
+# need to land on the pirlygenes module, not the trufflepig wrapper.
+import pirlygenes.expression.aggregate as pg_ag
 
 
 def test_expanded_tx_map_adds_versionless_keys():
@@ -21,11 +25,11 @@ def test_aggregate_gene_expression_with_resolution(monkeypatch):
     )
 
     monkeypatch.setattr(
-        ag,
+        pg_ag,
         "find_gene_name_from_ensembl_transcript_id",
         lambda tx, verbose=False: "GENE3" if tx == "tx3" else None,
     )
-    monkeypatch.setattr(ag, "extra_tx_mappings", {"tx4": "GENE4"})
+    monkeypatch.setattr(pg_ag, "extra_tx_mappings", {"tx4": "GENE4"})
 
     def fake_meta_lookup(gene_name):
         gene_id = {
@@ -38,7 +42,7 @@ def test_aggregate_gene_expression_with_resolution(monkeypatch):
         gene = SimpleNamespace(id=gene_id)
         return (genome, gene)
 
-    monkeypatch.setattr(ag, "find_gene_and_ensembl_release_by_name", fake_meta_lookup)
+    monkeypatch.setattr(pg_ag, "find_gene_and_ensembl_release_by_name", fake_meta_lookup)
 
     out = ag.aggregate_gene_expression(
         df,
@@ -55,12 +59,12 @@ def test_aggregate_gene_expression_with_resolution(monkeypatch):
 def test_aggregate_gene_expression_with_unresolved_transcripts(monkeypatch):
     df = pd.DataFrame({"transcript": ["u1", "u2"], "tpm": [2.5, 0.5]})
     monkeypatch.setattr(
-        ag,
+        pg_ag,
         "find_gene_name_from_ensembl_transcript_id",
         lambda tx, verbose=False: None,
     )
-    monkeypatch.setattr(ag, "extra_tx_mappings", {})
-    monkeypatch.setattr(ag, "find_gene_and_ensembl_release_by_name", lambda g: None)
+    monkeypatch.setattr(pg_ag, "extra_tx_mappings", {})
+    monkeypatch.setattr(pg_ag, "find_gene_and_ensembl_release_by_name", lambda g: None)
 
     out = ag.aggregate_gene_expression(
         df, tx_to_gene_name={}, verbose=True, progress=False

@@ -10,7 +10,11 @@ from trufflepig.tumor_purity import estimate_tumor_purity, rank_cancer_type_cand
 
 
 def _tcga_sample(cancer_code):
-    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    # Synthetic samples must match the decomposition engine's reference
+    # scale; the engine still opts out of renormalize_to_million pending #27.
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(
+        subset="Ensembl_Gene_ID"
+    )
     return pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
@@ -21,7 +25,9 @@ def _tcga_sample(cancer_code):
 
 
 def _normal_tissue_sample(tissue):
-    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(
+        subset="Ensembl_Gene_ID"
+    )
     return pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
@@ -56,7 +62,7 @@ def test_lymph_node_template_uses_broad_t_cell_only():
 
 def test_metastasis_template_ranking_uses_cancer_support():
     """Shared met-site matrices should still rank hypotheses by cancer support."""
-    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Ensembl_Gene_ID")
     df = pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
@@ -97,7 +103,7 @@ def test_empty_template_override_uses_default_templates():
 
 def test_tcga_prad_uses_external_purity_anchor():
     """TCGA PRAD median should stay near the known cohort purity scale."""
-    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Ensembl_Gene_ID")
     df = pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
@@ -119,7 +125,7 @@ def test_tcga_prad_uses_external_purity_anchor():
 
 def test_tcga_coad_primary_beats_lymph_node_template():
     """Primary-like COAD should not be nudged into lymph node by immune signal."""
-    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Ensembl_Gene_ID")
     df = pd.DataFrame(
         {
             "gene_id": ref["Ensembl_Gene_ID"],

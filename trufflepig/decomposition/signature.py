@@ -290,8 +290,17 @@ def _load_hpa_cell_types():
 
 
 def _load_normal_tissue_expression():
-    """Load the bulk normal-tissue expression matrix."""
-    return pan_cancer_expression(technical_rna_normalize=True)
+    """Load the bulk normal-tissue expression matrix.
+
+    Decomposition templates were calibrated against the native FPKM-as-
+    stored per-column scale, so we opt out of the loader's default
+    ``renormalize_to_million=True``. Flipping this universally is
+    tracked in pirl-unc/trufflepig#27 — needs a full calibration sweep.
+    """
+    return pan_cancer_expression(
+        technical_rna_normalize=True,
+        renormalize_to_million=False,
+    )
 
 
 def get_component_markers(component):

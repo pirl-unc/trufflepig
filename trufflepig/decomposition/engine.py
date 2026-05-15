@@ -1094,8 +1094,13 @@ def decompose_sample(
     from ..plot import _sample_expression_by_symbol
 
     sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
+    # Decomposition templates were tuned against native-scale references.
+    # Opt out of renormalize_to_million pending the #27 calibration sweep.
     ref = (
-        pan_cancer_expression(technical_rna_normalize=True)
+        pan_cancer_expression(
+            technical_rna_normalize=True,
+            renormalize_to_million=False,
+        )
         .drop_duplicates(subset="Symbol")
         .set_index("Symbol")
     )

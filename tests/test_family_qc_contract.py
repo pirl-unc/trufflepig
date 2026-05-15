@@ -1,23 +1,25 @@
 """Cross-package contract: every pirlygenes gene-family must map to a QC class.
 
 If pirlygenes adds a new family panel (a new ``<family>-genes.csv``
-under ``pirlygenes/data/``), and the trufflepig classifier doesn't
-list that family in ``_FAMILY_TO_QC``, the unknown-family branch
-silently falls through to ``("protein-coding/other", "other")`` and
-the panel is excluded from the default normalization drop set. That
-silent drift is exactly the kind of bug that's painful to notice
-months later when a downstream report stops mentioning a family.
+under ``pirlygenes/data/``), and the QC classifier (now also in
+pirlygenes) doesn't list that family in ``_FAMILY_TO_QC``, the
+unknown-family branch silently falls through to
+``("protein-coding/other", "other")`` and the panel is excluded from
+the default normalization drop set. That silent drift is exactly the
+kind of bug that's painful to notice months later when a downstream
+report stops mentioning a family.
 
-This test pins the contract: every family name pirlygenes exposes
-must either be in ``_FAMILY_TO_QC`` or in the explicit
-``_INTENTIONALLY_UNMAPPED`` set below.
+The classifier moved into ``pirlygenes.expression.qc`` in pirlygenes
+5.1; the contract is still load-bearing for trufflepig (the analysis
+layer assumes every classified family becomes a QC group), so this
+test stays here as the downstream guard.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from trufflepig.expression_qc import _FAMILY_TO_QC
+from pirlygenes.expression.qc import _FAMILY_TO_QC
 
 
 # Families that pirlygenes ships but trufflepig has deliberately
@@ -40,7 +42,7 @@ def _pirlygenes_family_names() -> list[str]:
 
 def test_every_pirlygenes_family_is_classified_or_explicitly_unmapped():
     """Every gene family pirlygenes exposes must either be in
-    ``trufflepig.expression_qc._FAMILY_TO_QC`` or in this module's
+    ``pirlygenes.expression.qc._FAMILY_TO_QC`` or in this module's
     ``_INTENTIONALLY_UNMAPPED`` set. New panels in pirlygenes must
     not silently fall through to ``"other"``."""
     pg_families = set(_pirlygenes_family_names())
@@ -48,12 +50,11 @@ def test_every_pirlygenes_family_is_classified_or_explicitly_unmapped():
     unmapped_but_intentional = _INTENTIONALLY_UNMAPPED
     drift = pg_families - mapped - unmapped_but_intentional
     assert not drift, (
-        "pirlygenes exposes gene-family names that trufflepig's "
-        "_FAMILY_TO_QC doesn't classify:\n  "
+        "pirlygenes exposes gene-family names that "
+        "pirlygenes.expression.qc._FAMILY_TO_QC doesn't classify:\n  "
         f"{sorted(drift)}\n"
-        "Either map each one to a QC group in "
-        "trufflepig/expression_qc.py::_FAMILY_TO_QC, or list it in "
-        "tests/test_family_qc_contract.py::_INTENTIONALLY_UNMAPPED "
+        "Either map each one to a QC group in pirlygenes, or list it "
+        "in tests/test_family_qc_contract.py::_INTENTIONALLY_UNMAPPED "
         "with a comment explaining why."
     )
 
@@ -61,14 +62,15 @@ def test_every_pirlygenes_family_is_classified_or_explicitly_unmapped():
 def test_family_qc_map_has_no_stale_entries():
     """The reverse direction: _FAMILY_TO_QC should not list family
     names that pirlygenes doesn't expose. Stale entries are a hint
-    that pirlygenes renamed or removed a family without trufflepig
+    that pirlygenes renamed or removed a family without the QC layer
     catching up."""
     pg_families = set(_pirlygenes_family_names())
     mapped = set(_FAMILY_TO_QC.keys())
     stale = mapped - pg_families
     assert not stale, (
-        "trufflepig._FAMILY_TO_QC references family names not exposed "
-        f"by pirlygenes.gene_families.gene_family_names(): {sorted(stale)}"
+        "pirlygenes.expression.qc._FAMILY_TO_QC references family "
+        "names not exposed by pirlygenes.gene_families.gene_family_names(): "
+        f"{sorted(stale)}"
     )
 
 
@@ -77,7 +79,7 @@ def test_unknown_family_silently_maps_to_other():
     family name returns ``("protein-coding/other", "other")``. This
     test pins the contract so a future change to a stricter raise
     doesn't silently break callers."""
-    from trufflepig.expression_qc import _family_to_qc_class
+    from pirlygenes.expression.qc import _family_to_qc_class
 
     qc = _family_to_qc_class("definitely_not_a_real_family")
     assert qc.group == "other"
