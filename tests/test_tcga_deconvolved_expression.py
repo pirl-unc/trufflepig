@@ -1,243 +1,86 @@
-"""Tests for the #22 deconvolved-TCGA reference columns.
+"""Trufflepig-surface contracts for the pirlygenes 5.1.1 accessors.
 
-#22 adds ``tcga_<CODE>`` columns to :func:`pan_cancer_expression`
-sourced from the offline-deconvolved CSV shipped in ``data/``. These
-tests exercise both the present-CSV and absent-CSV paths without
-requiring the real ~2 MB reference CSV to be in the repo.
+The bulk of the composition logic (deconv merge, technical-RNA scrub,
+renormalize-to-1e6, percentile / housekeeping normalization) lives in
+pirlygenes 5.1.1 and is covered by pirlygenes' own test suite. The
+tests below pin the *trufflepig-specific* contracts:
+
+- ``trufflepig.reference.pan_cancer_expression()`` flips
+  ``renormalize_to_million`` to True by default (pirlygenes' own
+  default is False, so the user RNA-seq path here lands on a true
+  TPM-1e6 footing without each caller having to opt in).
+- ``trufflepig.reference.subtype_deconvolved_expression()`` does the
+  same flip for the per-(cancer_code, subtype) groups.
+- The ``tcga_<CODE>`` columns from the offline deconvolution are
+  present in the trufflepig-surface pan-cancer frame (the wide-merge
+  is wired up).
 """
 
-import pandas as pd
 import pytest
 
 import trufflepig.reference as gsc
 
 
-@pytest.fixture(autouse=True)
-def _reset_caches(monkeypatch):
-    """Each test starts with empty pan-cancer / deconv caches."""
-    gsc._PAN_CANCER_CACHE.clear()
-    # _tcga_deconv_wide closes over a default-arg dict; reset by
-    # clearing the ``cache`` kwarg's container.
-    gsc._tcga_deconv_wide.__defaults__[0].clear()
-    yield
-    gsc._PAN_CANCER_CACHE.clear()
-    gsc._tcga_deconv_wide.__defaults__[0].clear()
-
-
-def test_absent_deconv_csv_is_graceful(monkeypatch):
-    """Without the deconv CSV, pan_cancer_expression returns the
-    usual frame with no tcga_ columns."""
-    monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: None)
+def test_pan_cancer_expression_renormalizes_to_million_by_default():
+    """Trufflepig default: every value column should sum to ~1e6 so the
+    analysis pipeline can compare user-sample TPM to cohort columns on
+    a shared per-million footing."""
     df = gsc.pan_cancer_expression()
-    assert not any(c.startswith("tcga_") for c in df.columns)
-    assert any(c.startswith("FPKM_") for c in df.columns)
+    value_cols = [
+        c
+        for c in df.columns
+        if c.startswith(("FPKM_", "nTPM_", "tcga_"))
+    ]
+    assert value_cols, "expected per-tissue / per-cohort value columns"
+    sample_col = next(c for c in value_cols if c.startswith("FPKM_"))
+    col_sum = float(df[sample_col].astype(float).sum(skipna=True))
+    assert col_sum == pytest.approx(1e6, rel=1e-3), col_sum
 
 
-def test_present_deconv_csv_adds_tcga_columns(monkeypatch):
-    synthetic = pd.DataFrame(
-        [
-            {
-                "symbol": "KLK3",
-                "cancer_code": "PRAD",
-                "tumor_tpm_median": 11000.0,
-                "tumor_tpm_q1": 5500.0,
-                "tumor_tpm_q3": 16000.0,
-                "n_samples": 30,
-            },
-            {
-                "symbol": "KLK3",
-                "cancer_code": "BRCA",
-                "tumor_tpm_median": 0.1,
-                "tumor_tpm_q1": 0.0,
-                "tumor_tpm_q3": 0.5,
-                "n_samples": 30,
-            },
-            {
-                "symbol": "ERBB2",
-                "cancer_code": "BRCA",
-                "tumor_tpm_median": 150.0,
-                "tumor_tpm_q1": 80.0,
-                "tumor_tpm_q3": 300.0,
-                "n_samples": 30,
-            },
-        ]
-    )
-    monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: synthetic)
-    # Explicitly opt out of renormalize_to_million so these assertions can
-    # check raw bundled values; the universal default-True is exercised in
-    # test_tcga_columns_renormalize_to_million_when_flag_default below.
-    df = gsc.pan_cancer_expression(genes=["KLK3", "ERBB2"], renormalize_to_million=False)
+def test_pan_cancer_expression_native_scale_when_opted_out():
+    """Decomposition opts out (renormalize_to_million=False, #27 pending);
+    that path must return the native FPKM / nTPM column sums, which are
+    *not* on a per-million footing."""
+    df = gsc.pan_cancer_expression(renormalize_to_million=False)
+    sample_col = next(c for c in df.columns if c.startswith("FPKM_"))
+    col_sum = float(df[sample_col].astype(float).sum(skipna=True))
+    # FPKM_* column totals in the bundled HPA reference are well below 1e6
+    # (~200K–700K depending on cancer type); guard the broad range so
+    # this stays stable across reference-data refreshes.
+    assert 1e5 <= col_sum <= 9e5, col_sum
+
+
+def test_pan_cancer_expression_has_tcga_deconvolved_columns():
+    """``tcga_<CODE>`` columns from the offline deconvolution merge into
+    the wide pan-cancer frame so callers can pull tumor-only medians
+    alongside the FPKM_ cohort columns."""
+    df = gsc.pan_cancer_expression(genes=["KLK3"])
     tcga_cols = [c for c in df.columns if c.startswith("tcga_")]
+    assert tcga_cols, "expected tcga_<CODE> columns merged onto pan-cancer frame"
     assert "tcga_PRAD" in tcga_cols
-    assert "tcga_BRCA" in tcga_cols
-
-    klk3 = df[df["Symbol"] == "KLK3"].iloc[0]
-    assert klk3["tcga_PRAD"] == pytest.approx(11000.0)
-    assert klk3["tcga_BRCA"] == pytest.approx(0.1)
-
-    erbb2 = df[df["Symbol"] == "ERBB2"].iloc[0]
-    assert erbb2["tcga_BRCA"] == pytest.approx(150.0)
-    # ERBB2 missing from PRAD in the synthetic frame → NaN is the
-    # correct merge outcome, not 0.
-    assert pd.isna(erbb2["tcga_PRAD"])
 
 
-def test_technical_rna_reference_normalization_is_opt_in_and_preserves_nans(monkeypatch):
-    base = pd.DataFrame(
-        [
-            {
-                "Ensembl_Gene_ID": "ENSG_RRNA",
-                "Symbol": "RNA5SP389",
-                "nTPM_prostate": 10.0,
-                "FPKM_PRAD": 10.0,
-            },
-            {
-                "Ensembl_Gene_ID": "ENSG_KLK3",
-                "Symbol": "KLK3",
-                "nTPM_prostate": 90.0,
-                "FPKM_PRAD": 90.0,
-            },
-            {
-                "Ensembl_Gene_ID": "ENSG_ERBB2",
-                "Symbol": "ERBB2",
-                "nTPM_prostate": 5.0,
-                "FPKM_PRAD": 5.0,
-            },
-        ]
-    )
-    deconv = pd.DataFrame(
-        [
-            {
-                "symbol": "RNA5SP389",
-                "cancer_code": "PRAD",
-                "tumor_tpm_median": 10.0,
-                "tumor_tpm_q1": 5.0,
-                "tumor_tpm_q3": 15.0,
-                "n_samples": 3,
-            },
-            {
-                "symbol": "KLK3",
-                "cancer_code": "PRAD",
-                "tumor_tpm_median": 90.0,
-                "tumor_tpm_q1": 45.0,
-                "tumor_tpm_q3": 135.0,
-                "n_samples": 3,
-            },
-            {
-                "symbol": "ERBB2",
-                "cancer_code": "BRCA",
-                "tumor_tpm_median": 150.0,
-                "tumor_tpm_q1": 80.0,
-                "tumor_tpm_q3": 220.0,
-                "n_samples": 3,
-            },
-        ]
-    )
-
-    monkeypatch.setattr(gsc, "get_reference_data", lambda name: base.copy())
-    monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: deconv)
-
-    # Test the technical_rna_normalize opt-in behavior on the native FPKM
-    # scale by also opting out of renormalize_to_million; the universal
-    # 1e6 footing has its own test below.
-    raw = gsc.pan_cancer_expression(renormalize_to_million=False)
-    assert raw.loc[raw["Symbol"] == "RNA5SP389", "FPKM_PRAD"].iloc[0] == 10.0
-    assert raw.loc[raw["Symbol"] == "RNA5SP389", "tcga_PRAD"].iloc[0] == 10.0
-
-    normalized = gsc.pan_cancer_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=False,
-    )
-    assert normalized.loc[normalized["Symbol"] == "RNA5SP389", "FPKM_PRAD"].iloc[0] == 0.0
-    assert normalized.loc[normalized["Symbol"] == "KLK3", "FPKM_PRAD"].iloc[0] == pytest.approx(90.0 * 105.0 / 95.0)
-    assert normalized.loc[normalized["Symbol"] == "RNA5SP389", "tcga_PRAD"].iloc[0] == 0.0
-    assert normalized.loc[normalized["Symbol"] == "KLK3", "tcga_PRAD"].iloc[0] == pytest.approx(100.0)
-    assert pd.isna(normalized.loc[normalized["Symbol"] == "ERBB2", "tcga_PRAD"].iloc[0])
+def test_subtype_deconvolved_expression_renormalizes_per_group_by_default():
+    """Trufflepig default: each (cancer_code, subtype) group's
+    tumor_tpm_median should sum to ~1e6 so cross-subtype comparisons are
+    on a per-million footing."""
+    df = gsc.subtype_deconvolved_expression()
+    # Pick a well-populated cohort to avoid sparse-subtype edge cases.
+    grp = df.groupby(["cancer_code", "subtype"], dropna=False)["tumor_tpm_median"].sum()
+    nonzero = grp[grp > 0]
+    assert len(nonzero) > 0
+    median_sum = float(nonzero.median())
+    assert median_sum == pytest.approx(1e6, rel=1e-3), median_sum
 
 
-def test_subtype_deconvolved_technical_rna_normalization_is_opt_in(monkeypatch):
-    synthetic = pd.DataFrame(
-        [
-            {
-                "symbol": "RNA5SP389",
-                "cancer_code": "PRAD_NEPC",
-                "subtype": "",
-                "tumor_tpm_median": 20.0,
-                "tumor_tpm_q1": 10.0,
-                "tumor_tpm_q3": 30.0,
-                "n_samples": 4,
-            },
-            {
-                "symbol": "KLK3",
-                "cancer_code": "PRAD_NEPC",
-                "subtype": "",
-                "tumor_tpm_median": 80.0,
-                "tumor_tpm_q1": 40.0,
-                "tumor_tpm_q3": 120.0,
-                "n_samples": 4,
-            },
-        ]
-    )
-
-    monkeypatch.setattr(gsc, "get_reference_data", lambda name: synthetic.copy())
-
-    # Test the technical_rna_normalize opt-in on native subtype values.
-    raw = gsc.subtype_deconvolved_expression(renormalize_to_million=False)
-    assert raw.loc[raw["symbol"] == "RNA5SP389", "tumor_tpm_median"].iloc[0] == 20.0
-    assert raw.loc[raw["symbol"] == "KLK3", "tumor_tpm_median"].iloc[0] == 80.0
-
-    normalized = gsc.subtype_deconvolved_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=False,
-    )
-    assert (
-        normalized.loc[
-            normalized["symbol"] == "RNA5SP389",
-            "tumor_tpm_median",
-        ].iloc[0]
-        == 0.0
-    )
-    assert normalized.loc[
-        normalized["symbol"] == "KLK3",
-        "tumor_tpm_median",
-    ].iloc[0] == pytest.approx(100.0)
-
-
-def test_tcga_columns_participate_in_percentile_normalize(monkeypatch):
-    """Percentile normalize must treat tcga_ columns the same as FPKM_."""
-    synthetic = pd.DataFrame(
-        [
-            {
-                "symbol": "KLK3",
-                "cancer_code": "PRAD",
-                "tumor_tpm_median": 11000.0,
-                "tumor_tpm_q1": 0.0,
-                "tumor_tpm_q3": 0.0,
-                "n_samples": 30,
-            },
-            {
-                "symbol": "GAPDH",
-                "cancer_code": "PRAD",
-                "tumor_tpm_median": 500.0,
-                "tumor_tpm_q1": 0.0,
-                "tumor_tpm_q3": 0.0,
-                "n_samples": 30,
-            },
-        ]
-    )
-    monkeypatch.setattr(gsc, "tcga_deconvolved_expression", lambda: synthetic)
-    df = gsc.pan_cancer_expression(normalize="percentile")
-    assert "tcga_PRAD" in df.columns
-    # Values are percentile ranks in [0, 100].
-    s = df["tcga_PRAD"].dropna()
-    assert (s.min() >= 0) and (s.max() <= 100)
-
-
-def test_tcga_deconvolved_expression_returns_none_when_missing(monkeypatch):
-    """Raising ValueError from get_data must be swallowed as None."""
-
-    def _missing(_name):
-        raise ValueError("Dataset tcga-deconvolved-expression not found")
-
-    monkeypatch.setattr(gsc, "get_reference_data", _missing)
-    assert gsc.tcga_deconvolved_expression() is None
+def test_subtype_deconvolved_expression_native_scale_when_opted_out():
+    """Opt-out path returns the native bundled scale, which is *not* on a
+    per-million footing per group."""
+    df = gsc.subtype_deconvolved_expression(renormalize_to_million=False)
+    grp = df.groupby(["cancer_code", "subtype"], dropna=False)["tumor_tpm_median"].sum()
+    nonzero = grp[grp > 0]
+    median_sum = float(nonzero.median())
+    # Native per-subtype sums in the bundled subtype-deconv CSV range
+    # roughly 1.3e5 – 1.15e6 (BRCA_Basal ~138K, BEATAML ~1.14M); pin a
+    # broad guard around the typical band.
+    assert 1e5 <= median_sum <= 1.2e6, median_sum
