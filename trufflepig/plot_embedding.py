@@ -156,7 +156,7 @@ def _tcga_parent_codes():
     if _tcga_parent_code_cache is None:
         ref = pan_cancer_expression(technical_rna_normalize=True)
         _tcga_parent_code_cache = {
-            c.replace("FPKM_", "") for c in ref.columns if c.startswith("FPKM_")
+            c.removesuffix("_TPM") for c in ref.columns if c.endswith("_TPM")
         }
     return _tcga_parent_code_cache
 
@@ -190,7 +190,7 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
         return {code: list(genes) for code, genes in cached.items()}
 
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
-    fpkm_cols = ref_matrices["fpkm_cols"]
+    cohort_cols = ref_matrices["cohort_cols"]
     expr_matrix = ref_matrices["expr_matrix"]
     z_matrix = ref_matrices["z_matrix"]
 
@@ -203,8 +203,8 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
     )
 
     panels = {}
-    for col in fpkm_cols:
-        code = col.replace("FPKM_", "")
+    for col in cohort_cols:
+        code = col.removesuffix("_TPM")
         genes = _select_tumor_specific_genes_for_panel(
             code,
             n=n_signature_genes,
@@ -245,13 +245,14 @@ def _compute_cancer_type_signature_stats(
     df_gene_expr,
     n_signature_genes=20,
     min_fold=2.0,
+    candidate_codes=None,
 ):
     """Score each cancer type by how well the sample matches its signature genes.
 
     Uses z-score–based gene selection (most specifically expressed genes per
     cancer type) and midrank percentile scoring — the sample's expression of
     each signature gene is ranked against the cross-cancer distribution.
-    This is robust to TPM-vs-FPKM scale differences.
+    This is robust to per-sample total-expression differences.
     """
     import numpy as np
 
@@ -261,7 +262,7 @@ def _compute_cancer_type_signature_stats(
         df_gene_expr
     )
     # HK-normalize both sides so percentile comparison is on the same
-    # scale (sample TPM/hk vs reference FPKM/hk). This is consistent
+    # scale (sample TPM/hk vs reference cohort TPM/hk). This is consistent
     # normalization, not mixed — both are divided by their own HK median.
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
@@ -269,9 +270,15 @@ def _compute_cancer_type_signature_stats(
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     stats = []
-    for code in sorted(sig.keys()):
+    if candidate_codes is None:
+        codes_to_score = sorted(sig.keys())
+    else:
+        requested = {str(code) for code in candidate_codes}
+        codes_to_score = sorted(code for code in sig.keys() if code in requested)
+
+    for code in codes_to_score:
         genes = sig[code]
-        cohort_col = f"FPKM_{code}"
+        cohort_col = f"{code}_TPM"
         gene_details = []
         percentiles = []
         for gene in genes:
@@ -373,14 +380,14 @@ def _select_embedding_genes_bottleneck(n_genes_per_type=5):
         return _bottleneck_gene_cache[cache_key]
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     ntpm_nonrepro = [
-        c for c in ntpm_cols if c.replace("nTPM_", "") not in _REPRODUCTIVE_TISSUES
+        c for c in ntpm_cols if c.removesuffix("_nTPM") not in _REPRODUCTIVE_TISSUES
     ]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol")
-    cancer_expr = ref_dedup[fpkm_cols].astype(float)
+    cancer_expr = ref_dedup[cohort_cols].astype(float)
 
     # Identify TME tissues (immune via PTPRC, plus stromal)
     ptprc_row = ref_dedup[ref_dedup["Symbol"] == "PTPRC"]
@@ -390,7 +397,7 @@ def _select_embedding_genes_bottleneck(n_genes_per_type=5):
     else:
         immune_cols = []
     stromal_cols = [
-        c for c in ntpm_nonrepro if c.replace("nTPM_", "") in _STROMAL_TISSUES
+        c for c in ntpm_nonrepro if c.removesuffix("_nTPM") in _STROMAL_TISSUES
     ]
     tme_cols = list(set(immune_cols + stromal_cols))
     tme_expr = ref_dedup[tme_cols].astype(float)
@@ -428,8 +435,8 @@ def _select_embedding_genes_bottleneck(n_genes_per_type=5):
     # Select top genes per type
     selected_idx = []
     per_type = {}
-    for col in fpkm_cols:
-        code = col.replace("FPKM_", "")
+    for col in cohort_cols:
+        code = col.removesuffix("_TPM")
         mask = (cancer_expr[col] > 0.5) & (~is_rearranged.values)
         valid = bottleneck[col][mask]
         top = valid.nlargest(n_genes_per_type)
@@ -445,7 +452,7 @@ def _select_embedding_genes_bottleneck(n_genes_per_type=5):
         "n_genes": len(selected_idx),
         "n_types": len([t for t, g in per_type.items() if g]),
         "method": "bottleneck",
-        "tme_tissues": sorted(c.replace("nTPM_", "") for c in tme_cols),
+        "tme_tissues": sorted(c.removesuffix("_nTPM") for c in tme_cols),
     }
 
     result = (ref_filtered, metadata)
@@ -478,10 +485,10 @@ def _select_pan_reference_genes(n_genes_per_type=6, n_genes_per_normal=None):
         return _pan_reference_gene_cache[cache_key]
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     ref_dedup = ref.drop_duplicates(subset="Symbol").copy()
-    reference_cols = fpkm_cols + ntpm_cols
+    reference_cols = cohort_cols + ntpm_cols
     expr = ref_dedup[reference_cols].astype(float)
     log_expr = np.log2(expr + 1.0)
 
@@ -513,14 +520,14 @@ def _select_pan_reference_genes(n_genes_per_type=6, n_genes_per_normal=None):
         top = score[mask].nlargest(n)
         return list(top.index)
 
-    for col in fpkm_cols:
-        code = col.replace("FPKM_", "")
+    for col in cohort_cols:
+        code = col.removesuffix("_TPM")
         top_idx = _top_for_column(col, n_genes_per_type)
         per_type[code] = list(ref_dedup.loc[top_idx, "Symbol"].astype(str))
         selected_idx.extend(top_idx)
 
     for col in ntpm_cols:
-        tissue = col.replace("nTPM_", "")
+        tissue = col.removesuffix("_nTPM")
         top_idx = _top_for_column(col, n_genes_per_normal)
         per_normal[tissue] = list(ref_dedup.loc[top_idx, "Symbol"].astype(str))
         selected_idx.extend(top_idx)
@@ -614,14 +621,14 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
         return _tme_gene_cache[cache_key]
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     ntpm_nonrepro = [
-        c for c in ntpm_cols if c.replace("nTPM_", "") not in _REPRODUCTIVE_TISSUES
+        c for c in ntpm_cols if c.removesuffix("_nTPM") not in _REPRODUCTIVE_TISSUES
     ]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol")
-    cancer_expr = ref_dedup[fpkm_cols].astype(float)
+    cancer_expr = ref_dedup[cohort_cols].astype(float)
     normal_expr = ref_dedup[ntpm_nonrepro].astype(float)
 
     # Immune tissues (PTPRC-defined) + stromal tissues = TME background
@@ -632,7 +639,7 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
     else:
         immune_cols = []
     stromal_cols = [
-        c for c in ntpm_nonrepro if c.replace("nTPM_", "") in _STROMAL_TISSUES
+        c for c in ntpm_nonrepro if c.removesuffix("_nTPM") in _STROMAL_TISSUES
     ]
     tme_cols = list(set(immune_cols + stromal_cols))
     tme_max = normal_expr[tme_cols].max(axis=1) if tme_cols else normal_expr.max(axis=1)
@@ -660,8 +667,8 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
     for tier_thresh in [sn_tme_threshold, 3, 1.5]:
         tier_mask = base_mask & (sn_tme > tier_thresh)
         tier_best_cancer = z_mat[tier_mask].idxmax(axis=1)
-        for code_col in fpkm_cols:
-            code = code_col.replace("FPKM_", "")
+        for code_col in cohort_cols:
+            code = code_col.removesuffix("_TPM")
             if code in covered:
                 continue
             genes = tier_best_cancer[tier_best_cancer == code_col].index
@@ -682,8 +689,8 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
             / 3
         )
         fallback_best = z_mat[fallback_mask].idxmax(axis=1)
-        for code_col in fpkm_cols:
-            code = code_col.replace("FPKM_", "")
+        for code_col in cohort_cols:
+            code = code_col.removesuffix("_TPM")
             if code in covered:
                 continue
             genes = fallback_best[fallback_best == code_col].index
@@ -694,8 +701,8 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
             covered.add(code)
 
     # Fill any remaining types with empty
-    for code_col in fpkm_cols:
-        code = code_col.replace("FPKM_", "")
+    for code_col in cohort_cols:
+        code = code_col.removesuffix("_TPM")
         if code not in per_type:
             per_type[code] = []
 
@@ -743,7 +750,7 @@ def _select_tme_low_genes(n_genes_per_type=3, sn_tme_threshold=10):
         "n_genes": len(selected_idx),
         "n_types": len([t for t, g in per_type.items() if g]),
         "sn_tme_threshold": sn_tme_threshold,
-        "tme_tissues": sorted(c.replace("nTPM_", "") for c in tme_cols),
+        "tme_tissues": sorted(c.removesuffix("_nTPM") for c in tme_cols),
     }
 
     result = (ref_filtered, metadata)
@@ -772,17 +779,17 @@ def _select_embedding_genes(n_genes_per_type=3):
         return _embedding_gene_cache[cache_key]
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
 
     # Exclude reproductive tissues from the normal-tissue denominator
     # so that cancer-testis antigens can pass the S/N filter.
     ntpm_nonrepro = [
-        c for c in ntpm_cols if c.replace("nTPM_", "") not in _REPRODUCTIVE_TISSUES
+        c for c in ntpm_cols if c.removesuffix("_nTPM") not in _REPRODUCTIVE_TISSUES
     ]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol")
-    cancer_expr = ref_dedup[fpkm_cols].astype(float)
+    cancer_expr = ref_dedup[cohort_cols].astype(float)
     normal_expr = ref_dedup[ntpm_nonrepro].astype(float)
     normal_max = normal_expr.max(axis=1)
 
@@ -823,8 +830,8 @@ def _select_embedding_genes(n_genes_per_type=3):
 
     selected_idx = []
     per_type = {}
-    for code_col in fpkm_cols:
-        code = code_col.replace("FPKM_", "")
+    for code_col in cohort_cols:
+        code = code_col.removesuffix("_TPM")
         code_genes = primary_best[primary_best == code_col].index
         top = best_z.loc[code_genes].nlargest(n_genes_per_type).index
         syms = list(ref_dedup.loc[top, "Symbol"].values)
@@ -837,8 +844,8 @@ def _select_embedding_genes(n_genes_per_type=3):
     # (log-expr), and have at least partial cancer vs. normal enrichment (S/N).
     fallback_types = []
     fallback_mask = (best_z > 1) & (cancer_expr.max(axis=1) > 0.1) & ~excluded
-    for code_col in fpkm_cols:
-        code = code_col.replace("FPKM_", "")
+    for code_col in cohort_cols:
+        code = code_col.removesuffix("_TPM")
         if len(per_type.get(code, [])) >= 2:
             continue
         fallback_types.append(code)
@@ -866,7 +873,7 @@ def _select_embedding_genes(n_genes_per_type=3):
         cta_row = cta_rows.iloc[0]
         cta_expr = cancer_expr.loc[cta_row.name]
         if cta_expr.max() < 1.0:
-            continue  # median < 1 FPKM in best type
+            continue  # median < 1 TPM in best type
         selected_idx.append(cta_row.name)
         cta_added.append(cta)
 
@@ -904,8 +911,8 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
     from .tumor_purity import _cached_reference_matrices
 
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
-    fpkm_cols = ref_matrices["fpkm_cols"]
-    labels = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = ref_matrices["cohort_cols"]
+    labels = [c.removesuffix("_TPM") for c in cohort_cols]
 
     expr_matrix = ref_matrices["expr_matrix"]
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
@@ -915,7 +922,7 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
     for j, target_code in enumerate(labels):
         genes = sig[target_code]
         for i, source_code in enumerate(labels):
-            source_col = f"FPKM_{source_code}"
+            source_col = f"{source_code}_TPM"
             pcts = []
             for gene in genes:
                 if gene not in expr_matrix.index:
@@ -954,7 +961,7 @@ def _reference_cancer_expression_df(cancer_code):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
         }
     )
 
@@ -963,7 +970,7 @@ def _hierarchy_feature_labels():
     from .tumor_purity import _CANCER_FAMILY_PANELS, CANCER_TO_TISSUE
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    codes = [c.replace("FPKM_", "") for c in ref.columns if c.startswith("FPKM_")]
+    codes = [c.removesuffix("_TPM") for c in ref.columns if c.endswith("_TPM")]
     families = list(_CANCER_FAMILY_PANELS)
     site_labels = sorted(
         set(CANCER_TO_TISSUE.values())
@@ -1052,7 +1059,7 @@ def _reference_family_feature_matrix(candidate_codes, family_labels):
 
     rows = []
     for code in candidate_codes:
-        col = f"FPKM_{code}"
+        col = f"{code}_TPM"
         family_values = []
         for family in family_labels:
             genes = [
@@ -1088,7 +1095,7 @@ def _reference_site_feature_matrix(candidate_codes, site_labels):
     )
     rows = []
     for code in candidate_codes:
-        sample_raw_by_symbol = ref[f"FPKM_{code}"].astype(float).to_dict()
+        sample_raw_by_symbol = ref[f"{code}_TPM"].astype(float).to_dict()
         site_scores = {
             tissue: score
             for tissue, score, _ in _score_host_tissues(
@@ -1175,7 +1182,7 @@ def _subtype_expression_values_for_ref(
 ):
     """Return subtype-reference expression columns aligned to ``ref_norm``.
 
-    The main pan-cancer table has one ``FPKM_<TCGA>`` column per parent
+    The main pan-cancer table has one ``<TCGA>_TPM`` column per parent
     cohort. Additional curated cancer types live in the registry and, for
     some subtypes, in ``subtype-deconvolved-expression`` as long-form
     tumor-TPM medians. This helper widens only those subtype references
@@ -1368,14 +1375,14 @@ def _cancer_type_feature_matrix(
         )
         ref_full = pan_cancer_expression(technical_rna_normalize=True)
 
-    fpkm_cols = [c for c in ref_full.columns if c.startswith("FPKM_")]
-    labels = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [c for c in ref_full.columns if c.endswith("_TPM")]
+    labels = [c.removesuffix("_TPM") for c in cohort_cols]
     normal_cols = []
     normal_labels = []
     if include_normals:
-        normal_cols = [c for c in ref_full.columns if c.startswith("nTPM_")]
+        normal_cols = [c for c in ref_full.columns if c.endswith("_nTPM")]
         normal_labels = [
-            "normal:" + c.replace("nTPM_", "").replace("_", " ") for c in normal_cols
+            "normal:" + c.removesuffix("_nTPM").replace("_", " ") for c in normal_cols
         ]
 
     # Gene selection
@@ -1408,7 +1415,7 @@ def _cancer_type_feature_matrix(
             for _, row in ref_norm.iterrows()
         ]
     )
-    ref_vals = ref_norm[fpkm_cols].astype(float).values  # (genes, cancers)
+    ref_vals = ref_norm[cohort_cols].astype(float).values  # (genes, cancers)
     subtype_labels, subtype_vals = (
         _subtype_expression_values_for_ref(
             ref_norm,
@@ -2283,12 +2290,12 @@ def plot_cohort_heatmap(
         technical_rna_normalize=True,
     )
     codes = cancer_types()
-    fpkm_cols = [f"FPKM_{c}" for c in codes if f"FPKM_{c}" in ref.columns]
-    codes = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [f"{c}_TPM" for c in codes if f"{c}_TPM" in ref.columns]
+    codes = [c.removesuffix("_TPM") for c in cohort_cols]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
     present = [s for s in gene_symbols if s in ref_dedup.index]
-    matrix = ref_dedup.loc[present, fpkm_cols].astype(float)
+    matrix = ref_dedup.loc[present, cohort_cols].astype(float)
     matrix = np.log2(matrix + 1)
 
     if zscore:
@@ -2384,14 +2391,14 @@ def plot_cohort_pca(
         normalize="housekeeping",
         technical_rna_normalize=True,
     )
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    codes = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    codes = [c.removesuffix("_TPM") for c in cohort_cols]
 
     ref_filtered = ref[ref["Symbol"].isin(all_symbols)].copy()
     gene_order = sorted(ref_filtered["Symbol"].unique())
 
     feature_matrix = []
-    for col in fpkm_cols:
+    for col in cohort_cols:
         vals = []
         for sym in gene_order:
             row_mask = ref_filtered["Symbol"] == sym
@@ -2461,12 +2468,12 @@ def plot_cohort_therapy_targets(
         technical_rna_normalize=True,
     )
     codes = cancer_types()
-    fpkm_cols = [f"FPKM_{c}" for c in codes if f"FPKM_{c}" in ref.columns]
-    codes = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [f"{c}_TPM" for c in codes if f"{c}_TPM" in ref.columns]
+    codes = [c.removesuffix("_TPM") for c in cohort_cols]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
     present = [s for s in target_symbols if s in ref_dedup.index]
-    matrix = ref_dedup.loc[present, fpkm_cols].astype(float)
+    matrix = ref_dedup.loc[present, cohort_cols].astype(float)
     matrix = np.log2(matrix + 1)
 
     if zscore:
@@ -2524,8 +2531,8 @@ def _plot_geneset_by_cancer_heatmap(
         technical_rna_normalize=True,
     )
     codes = cancer_types()
-    fpkm_cols = [f"FPKM_{c}" for c in codes if f"FPKM_{c}" in ref.columns]
-    codes = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [f"{c}_TPM" for c in codes if f"{c}_TPM" in ref.columns]
+    codes = [c.removesuffix("_TPM") for c in cohort_cols]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
     present = [s for s in gene_symbols if s in ref_dedup.index]
@@ -2533,7 +2540,7 @@ def _plot_geneset_by_cancer_heatmap(
     if not present:
         return None, None
 
-    matrix = ref_dedup.loc[present, fpkm_cols].astype(float)
+    matrix = ref_dedup.loc[present, cohort_cols].astype(float)
 
     # Filter to top N genes by max expression across any cancer type
     if top_n_per_cancer and len(present) > top_n_per_cancer:
@@ -2624,12 +2631,12 @@ def plot_cohort_ctas(
         technical_rna_normalize=True,
     )  # TPM values after technical-RNA normalization
     codes = cancer_types()
-    fpkm_cols = [f"FPKM_{c}" for c in codes if f"FPKM_{c}" in ref.columns]
-    codes_clean = [c.replace("FPKM_", "") for c in fpkm_cols]
+    cohort_cols = [f"{c}_TPM" for c in codes if f"{c}_TPM" in ref.columns]
+    codes_clean = [c.removesuffix("_TPM") for c in cohort_cols]
 
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
     present = [s for s in genes if s in ref_dedup.index]
-    matrix = ref_dedup.loc[present, fpkm_cols].astype(float)
+    matrix = ref_dedup.loc[present, cohort_cols].astype(float)
 
     # Filter to top 50 by max expression, sort by mean descending
     max_expr = matrix.max(axis=1)
@@ -2645,12 +2652,12 @@ def plot_cohort_ctas(
         row_std = matrix.std(axis=1).clip(lower=0.1)
         matrix = matrix.sub(row_mean, axis=0).div(row_std, axis=0)
         cmap, vmin, vmax = "RdBu_r", -3, 3
-        subtitle = "z-score of log2 FPKM across cancers"
+        subtitle = "z-score of log2 cohort TPM across cancers"
         cbar_label = "z-score"
     else:
         cmap, vmin, vmax = "magma_r", -3, 8
-        subtitle = "log2 FPKM"
-        cbar_label = "log2(FPKM + 1)"
+        subtitle = "log2 cohort TPM"
+        cbar_label = "log2(TPM + 1)"
     matrix.columns = codes_clean
 
     fig, ax = plt.subplots(figsize=figsize)

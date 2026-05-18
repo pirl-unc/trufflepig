@@ -1415,25 +1415,25 @@ def _reference_qc_fraction_rows():
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
     rows = []
     symbol_values = ref["Symbol"].fillna("").astype(str).tolist()
-    for col in [c for c in ref.columns if c.startswith("FPKM_")]:
+    for col in [c for c in ref.columns if c.endswith("_TPM")]:
         fractions = _qc_fraction_from_items(
             zip(symbol_values, ref[col].fillna(0.0).astype(float))
         )
         rows.append(
             {
                 "source": "TCGA cohort medians",
-                "label": col.replace("FPKM_", ""),
+                "label": col.removesuffix("_TPM"),
                 **fractions,
             }
         )
-    for col in [c for c in ref.columns if c.startswith("nTPM_")]:
+    for col in [c for c in ref.columns if c.endswith("_nTPM")]:
         fractions = _qc_fraction_from_items(
             zip(symbol_values, ref[col].fillna(0.0).astype(float))
         )
         rows.append(
             {
                 "source": "HPA normal tissues",
-                "label": col.replace("nTPM_", "").replace("_", " "),
+                "label": col.removesuffix("_nTPM").replace("_", " "),
                 **fractions,
             }
         )

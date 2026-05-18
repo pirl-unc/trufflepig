@@ -663,7 +663,7 @@ def test_expression_independent_indication_is_not_demoted_by_target_tpm():
         == "provisional"
     )
     bullet = _format_therapy_bullet(top[0][0], top[0][1], target_panel=targets_df)
-    assert "expression-independent indication" in bullet
+    assert "target expression is not the eligibility criterion" in bullet
     assert "target absent" not in bullet.lower()
 
 

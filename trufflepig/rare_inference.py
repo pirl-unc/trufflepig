@@ -339,73 +339,22 @@ def infer_rare_cancer_report_scope_from_fusions(fusion_records, analysis=None):
 def infer_rare_cancer_report_scope_from_rna(df_expr, analysis):
     """Return a rare-cancer report-scope hypothesis, or ``None``.
 
-    The classifier still supplies the reference expression context. This
-    helper only promotes rare entities that have a curated, high-specificity
-    RNA surrogate rule and pass broad-context gates.
+    This compatibility helper now delegates the report-scope decision to
+    the unified cancer-type evidence selector. Marker prompts are still
+    generated here from the data-backed rare-cancer rule table.
     """
-    try:
-        from .common import build_sample_tpm_by_symbol
+    from .cancer_type_evidence import select_report_scope_from_evidence
 
-        sample_tpm = build_sample_tpm_by_symbol(df_expr)
-    except Exception:
+    marker_hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis)
+    if not marker_hypotheses:
         return None
-
-    candidate_trace = analysis.get("candidate_trace") or []
-    top_reference = (
-        str(candidate_trace[0].get("code") or "").strip() if candidate_trace else ""
-    )
-    top_codes = [
-        str(row.get("code") or "").strip()
-        for row in candidate_trace
-        if str(row.get("code") or "").strip()
-    ]
-
-    rules = rare_cancer_rna_surrogate_rules_df().fillna("")
-    hits: list[tuple[tuple[float, int, float], RareCancerRnaInference]] = []
-    confidence_rank = {"high": 2, "moderate": 1, "low": 0}
-    for _, rule in rules.iterrows():
-        evidence = _evaluate_rna_rule(rule, sample_tpm, top_codes)
-        if evidence is None or not evidence["support_pass"]:
-            continue
-        if evidence["exclusion_genes_observed"]:
-            continue
-
-        inference = RareCancerRnaInference(
-            cancer_type=str(rule.get("cancer_code") or "").strip(),
-            rule_id=str(rule.get("rule_id") or "").strip(),
-            surrogate=evidence["primary_gene"],
-            surrogate_tpm=evidence["primary_tpm"],
-            threshold_tpm=evidence["min_tpm"],
-            top_reference_cancer_type=top_reference,
-            confidence=str(rule.get("confidence") or "moderate").strip(),
-            support_genes=tuple(evidence["support_genes"]),
-            basis=str(rule.get("basis") or "").strip(),
-            confirmatory_tests=str(rule.get("confirmatory_tests") or "").strip(),
-            caveat=str(rule.get("caveat") or "").strip(),
-            source=str(rule.get("source") or "").strip(),
-            missing_support_genes=tuple(evidence["missing_support_genes"]),
-            exclusion_genes_observed=tuple(evidence["exclusion_genes_observed"]),
-            absent_genes_confirmed=tuple(evidence["absent_genes_confirmed"]),
-            promote_report_scope=_safe_bool(
-                rule.get("promote_report_scope"),
-                default=True,
-            ),
-        )
-        sort_key = (
-            confidence_rank.get(inference.confidence.lower(), 0),
-            evidence["primary_tpm"] / evidence["min_tpm"]
-            if evidence["min_tpm"] > 0
-            else evidence["primary_tpm"],
-            len(evidence["support_genes"]),
-        )
-        hits.append((sort_key, inference))
-
-    if not hits:
-        return None
-    hits.sort(key=lambda item: item[0], reverse=True)
-    for _, inference in hits:
-        if inference.promote_report_scope:
-            return inference.public_dict()
+    selected = select_report_scope_from_evidence(
+        df_expr,
+        analysis,
+        rare_marker_hypotheses=marker_hypotheses,
+    ).get("selected")
+    if selected and "rare_marker" in set(selected.get("evidence_sources") or []):
+        return selected
     return None
 
 

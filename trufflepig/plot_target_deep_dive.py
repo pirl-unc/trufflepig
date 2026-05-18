@@ -259,7 +259,7 @@ def actionable_surface_targets(cancer_type):
 def _build_reference_context(symbols, cancer_code):
     """Build a reference context dict for a list of gene symbols.
 
-    Returns {symbol: {cancer_fpkm, origin_tissue_ntpm,
+    Returns {symbol: {cancer_tpm, origin_tissue_ntpm,
     vital_tissues: {tissue: ntpm}, all_cancer_median, all_cancer_max}}.
     """
     ref = (
@@ -267,7 +267,7 @@ def _build_reference_context(symbols, cancer_code):
         .drop_duplicates(subset="Symbol")
         .set_index("Symbol")
     )
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
     from .tumor_purity import CANCER_TO_TISSUE
 
     origin_tissue = CANCER_TO_TISSUE.get(cancer_code)
@@ -277,24 +277,24 @@ def _build_reference_context(symbols, cancer_code):
         if sym not in ref.index:
             continue
         row = ref.loc[sym]
-        cancer_col = f"FPKM_{cancer_code}"
-        cancer_fpkm = float(row[cancer_col]) if cancer_col in ref.columns else 0.0
+        cancer_col = f"{cancer_code}_TPM"
+        cancer_tpm = float(row[cancer_col]) if cancer_col in ref.columns else 0.0
 
         origin_ntpm = 0.0
         if origin_tissue:
-            origin_col = f"nTPM_{origin_tissue}"
+            origin_col = f"{origin_tissue}_nTPM"
             if origin_col in ref.columns:
                 origin_ntpm = float(row[origin_col])
 
         vital = {}
         for tissue in VITAL_TISSUES:
-            col = f"nTPM_{tissue}"
+            col = f"{tissue}_nTPM"
             if col in ref.columns:
                 vital[tissue] = float(row[col])
 
-        all_cancer_vals = [float(row[c]) for c in fpkm_cols if c in ref.columns]
+        all_cancer_vals = [float(row[c]) for c in cohort_cols if c in ref.columns]
         result[sym] = {
-            "cancer_fpkm": cancer_fpkm,
+            "cancer_tpm": cancer_tpm,
             "origin_tissue_ntpm": origin_ntpm,
             "vital_tissues": vital,
             "all_cancer_median": float(np.median(all_cancer_vals))
@@ -339,7 +339,7 @@ def _get_tme_reference(symbols, cancer_code):
     )
     from .plot_tumor_expr import _TME_TISSUES
 
-    tme_cols = [f"nTPM_{t}" for t in _TME_TISSUES if f"nTPM_{t}" in ref.columns]
+    tme_cols = [f"{t}_nTPM" for t in _TME_TISSUES if f"{t}_nTPM" in ref.columns]
     result = {}
     for sym in symbols:
         if sym in ref.index and tme_cols:
@@ -471,7 +471,7 @@ def plot_actionable_targets(
                 "tumor_high": tumor_high,
                 "central_model": central_model,
                 "source_label": source_label,
-                "cancer_median": ctx["cancer_fpkm"],
+                "cancer_median": ctx["cancer_tpm"],
                 "max_vital_tissue": max_vital,
                 "origin_tissue": ctx["origin_tissue_ntpm"],
                 "tme_background": tme,
@@ -1135,9 +1135,9 @@ def _priority_target_rows(
     def _eligibility_component(curated):
         """Score orthogonal eligibility and therapy-state evidence.
 
-        Expression is only one piece of the actionability chain. HLA-gated,
-        alteration-gated, or currently-modulated therapy rows should carry that
-        uncertainty into the rank instead of being promoted by TPM alone.
+        Expression is only one piece of the actionability chain. HLA-restricted,
+        alteration-required, or currently-modulated therapy rows should carry
+        that uncertainty into the rank instead of being promoted by TPM alone.
         """
         if curated is None:
             return 0.0, "generic expression-linked"
@@ -1667,7 +1667,7 @@ def plot_cta_deep_dive(
                 "symbol": sym,
                 "observed": obs,
                 "tumor_adjusted": tumor_adj,
-                "cancer_median": ctx["cancer_fpkm"],
+                "cancer_median": ctx["cancer_tpm"],
                 "max_vital_tissue": max_vital,
                 "tme_background": tme,
             }

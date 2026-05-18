@@ -469,10 +469,10 @@ def infer_mapk_activity_sources(
 
 
 def _cohort_median_for_symbol(symbol, cancer_code, ref_flat):
-    """Return the TCGA cohort median (FPKM) for a symbol in a cancer
+    """Return the TCGA cohort median TPM for a symbol in a cancer
     type, or None if the cohort column is missing or the symbol is
     absent from the reference universe."""
-    col = f"FPKM_{cancer_code}"
+    col = f"{cancer_code}_TPM"
     if col not in ref_flat.columns:
         return None
     sub = ref_flat[ref_flat["Symbol"] == symbol]

@@ -11,6 +11,7 @@
 # limitations under the License.
 
 from contextlib import contextmanager
+from functools import lru_cache
 import pandas as pd
 from typing import Iterator, Optional
 
@@ -94,14 +95,24 @@ _guess_gene_cols = guess_gene_cols
 # -------------------- TPM-by-symbol --------------------
 
 
+@lru_cache(maxsize=1)
+def ensembl_id_to_symbol_map() -> dict[str, str]:
+    """Return the reference Ensembl ID -> HGNC symbol map."""
+    from trufflepig.reference import pan_cancer_expression
+
+    ref = pan_cancer_expression()
+    return dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
+
+
 def build_sample_tpm_by_symbol(df_gene_expr):
-    """Return ``{symbol: max_TPM}`` from expression data (no normalization).
+    """Return ``{symbol: max_TPM}`` from already-clean sample expression.
 
     Maps Ensembl gene IDs to HGNC symbols via the bundled pan-cancer
     reference, then groups by symbol keeping the maximum TPM per gene.
     """
     from .plot_data_helpers import _strip_ensembl_version
-    from trufflepig.reference import pan_cancer_expression
+    from trufflepig.clean_tpm import assert_clean_tpm
+
     with without_dataframe_attrs(df_gene_expr):
         gene_id_col, _gene_name_col = guess_gene_cols(df_gene_expr)
         gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)
@@ -115,9 +126,15 @@ def build_sample_tpm_by_symbol(df_gene_expr):
             raise KeyError(
                 f"No TPM column found. Columns: {list(df_gene_expr.columns)}"
             )
+        assert_clean_tpm(
+            df_gene_expr,
+            value_cols=[tpm_col],
+            label_col=_gene_name_col,
+            id_col=gene_id_col,
+            context="analysis sample expression",
+        )
 
-        ref = pan_cancer_expression()
-        id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+        id_to_sym = ensembl_id_to_symbol_map()
 
         syms = gene_ids.map(id_to_sym)
         tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")

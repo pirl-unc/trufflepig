@@ -32,6 +32,7 @@ from trufflepig.expression_qc import (
     summarize_qc_class_shares,
 )
 from trufflepig.expression_normalize import normalize_expression
+from trufflepig.clean_tpm import assert_clean_tpm, technical_rna_mask
 
 # Patterns for fuzzy column guessing (tried in order, first match wins).
 # Each is matched case-insensitively against the full column name.
@@ -56,8 +57,8 @@ _TPM_PATTERNS = [
 ]
 
 # Strict FPKM column patterns — match raw FPKM columns only, not derived
-# columns like log2_fpkm, FPKM_zscore, FPKM_adjusted, or per-cohort
-# reference columns like FPKM_COAD.  A full column-name match is required.
+# columns like log2_fpkm, FPKM_zscore, FPKM_adjusted, or legacy
+# per-cohort columns like FPKM_COAD.  A full column-name match is required.
 _RAW_FPKM_PATTERNS = [
     r"^FPKM$",
     r"^fpkm$",
@@ -275,7 +276,7 @@ def _detect_and_convert_to_tpm(df, verbose=True):
 
     Only raw FPKM columns are converted (full-name match against
     _RAW_FPKM_PATTERNS).  Derived columns like ``log2_fpkm``,
-    ``FPKM_zscore``, or per-cohort reference columns like ``FPKM_COAD``
+    ``FPKM_zscore``, or legacy per-cohort columns like ``FPKM_COAD``
     are deliberately NOT treated as raw FPKM — those contain values that
     have already been transformed or belong to a different use case.
 
@@ -453,11 +454,13 @@ def apply_expression_qc_rescue(
     ----------
     df : pandas.DataFrame
         Gene-level TPM table.
-    mode : {"auto", "always", "off", "never", "false"}
+    mode : {"auto", "always"}
         ``auto`` applies the same technical-RNA normalization used for
         references whenever removable features are present, but marks the row as
         high-burden only when mtDNA/rRNA-like features dominate raw TPM.
-        ``always`` forces the same normalization. ``off``/``never`` disables it.
+        ``always`` forces the same normalization. Dirty TPM is not a supported
+        analysis mode; raw TPM remains available through the pre-normalization
+        QC record.
     remove_noncoding : bool
         If True, also removes noncoding-biotype rows when a biotype column is
         present, while retaining protein-coding, immunoglobulin, and TCR genes.
@@ -469,13 +472,11 @@ def apply_expression_qc_rescue(
     """
 
     mode_norm = str(mode or "auto").strip().lower().replace("-", "_")
-    if mode_norm in {"none", "false", "0", "no", "off", "never"}:
-        mode_norm = "off"
-    elif mode_norm in {"true", "1", "yes", "on", "force", "forced"}:
+    if mode_norm in {"true", "1", "yes", "on", "force", "forced"}:
         mode_norm = "always"
     elif mode_norm not in {"auto", "always"}:
         raise ValueError(
-            "--expression-qc-rescue must be one of auto, always, or off"
+            "--expression-qc-rescue must be one of auto or always"
         )
 
     if "TPM" not in set(df.columns):
@@ -508,6 +509,19 @@ def apply_expression_qc_rescue(
         ),
         None,
     )
+    id_col = next(
+        (
+            col
+            for col in (
+                "canonical_gene_id",
+                "ensembl_gene_id",
+                "gene_id",
+                "Ensembl_Gene_ID",
+            )
+            if col in df.columns
+        ),
+        None,
+    )
     record = {
         "mode": mode_norm,
         "applied": False,
@@ -522,13 +536,22 @@ def apply_expression_qc_rescue(
         "reason": "",
         "warnings": [],
     }
-    if label_col is None or raw_sum <= 0 or mode_norm == "off":
-        if mode_norm == "off":
-            record["reason"] = "disabled"
+    if (label_col is None and id_col is None) or raw_sum <= 0:
+        if label_col is None and id_col is None:
+            record["reason"] = "not applied: no gene label or Ensembl ID column"
         return df, record
 
-    labels = df[label_col].fillna("").astype(str).str.strip()
-    removable = labels.map(is_rescue_feature)
+    labels = (
+        df[label_col].fillna("").astype(str).str.strip()
+        if label_col is not None
+        else pd.Series([""] * len(df), index=df.index)
+    )
+    ids = (
+        df[id_col].fillna("").astype(str).str.strip()
+        if id_col is not None
+        else pd.Series([""] * len(df), index=df.index)
+    )
+    removable = technical_rna_mask(df, label_col=label_col, id_col=id_col)
     removed_tpm = float(tpm[removable].sum())
     remaining_tpm = raw_sum - removed_tpm
     removed_fraction = removed_tpm / raw_sum if raw_sum > 0 else 0.0
@@ -543,10 +566,11 @@ def apply_expression_qc_rescue(
     removed_rows = []
     for idx, value in tpm[removable].sort_values(ascending=False).head(12).items():
         gene = str(labels.loc[idx] or "").strip()
-        qc = classify_gene_qc(gene)
+        ensg = str(ids.loc[idx] or "").strip()
+        qc = classify_gene_qc(gene, ensembl_id=ensg)
         removed_rows.append(
             {
-                "gene": gene,
+                "gene": gene or ensg,
                 "tpm": float(value),
                 "share": float(value / raw_sum) if raw_sum > 0 else 0.0,
                 "qc_class": qc.label,
@@ -596,9 +620,16 @@ def apply_expression_qc_rescue(
     if not should_apply:
         return df, record
 
+    norm_input = df
+    norm_label_col = label_col
+    if norm_label_col is None:
+        norm_label_col = "__trufflepig_qc_label"
+        norm_input = df.copy()
+        norm_input[norm_label_col] = ""
     out, normalization_record = normalize_expression(
-        df,
-        label_col=label_col,
+        norm_input,
+        label_col=norm_label_col,
+        id_col=id_col,
         value_cols=["TPM"],
         remove_noncoding=remove_noncoding,
     )
@@ -606,6 +637,8 @@ def apply_expression_qc_rescue(
         record["reason"] = normalization_record.get("reason") or record["reason"]
         return df, record
     out = out.copy()
+    if norm_label_col == "__trufflepig_qc_label" and norm_label_col in out.columns:
+        out = out.drop(columns=[norm_label_col])
     out["TPM_raw_before_qc_rescue"] = tpm
     tpm_record = (normalization_record.get("columns") or {}).get("TPM") or {}
     removed_tpm = float(tpm_record.get("removed_tpm") or removed_tpm)
@@ -614,6 +647,13 @@ def apply_expression_qc_rescue(
     scale = raw_sum / remaining_tpm if remaining_tpm > 0 else 1.0
     final_qc = _expression_scale_qc(out)
     final_qc["rescued_from_qc_artifact"] = True
+    assert_clean_tpm(
+        out,
+        value_cols=["TPM"],
+        label_col=label_col,
+        id_col=id_col,
+        context="sample expression after technical-RNA normalization",
+    )
     out.attrs = dict(getattr(df, "attrs", {}))
     out.attrs["raw_expression_scale_qc"] = scale_qc
     out.attrs["expression_qc_rescue"] = record | {

@@ -1207,7 +1207,7 @@ def _tcga_sample(cancer_code):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
         }
     )
 
@@ -1220,7 +1220,7 @@ def _normal_tissue_reference_sample(tissue):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"nTPM_{tissue}"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM"].astype(float),
         }
     )
 
@@ -1816,12 +1816,12 @@ def test_plot_ctas_vs_cancer_type_detail_worst_vital_excludes_testis_and_thymus(
             {
                 "Ensembl_Gene_ID": ["ENSGCTA"],
                 "Symbol": ["CTA1"],
-                "FPKM_PRAD": [1.0],
-                "nTPM_prostate": [0.5],
-                "nTPM_testis": [300.0],
-                "nTPM_thymus": [250.0],
-                "nTPM_heart_muscle": [35.0],
-                "nTPM_liver": [4.0],
+                "PRAD_TPM": [1.0],
+                "prostate_nTPM": [0.5],
+                "testis_nTPM": [300.0],
+                "thymus_nTPM": [250.0],
+                "heart_muscle_nTPM": [35.0],
+                "liver_nTPM": [4.0],
             }
         ),
     )

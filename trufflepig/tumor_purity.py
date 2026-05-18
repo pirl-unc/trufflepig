@@ -4,8 +4,8 @@
 
 Uses within-sample gene-set enrichment ratios to estimate tumor content.
 The key insight: the ratio (gene_set_TPM_sum / housekeeping_TPM_sum) is
-platform-independent (works across TPM, FPKM, etc.) because both numerator
-and denominator come from the same sample.
+scale-independent because both numerator and denominator come from the
+same sample.
 
 Comparing this ratio to the TCGA cohort reference gives a purity estimate:
 
@@ -26,7 +26,7 @@ import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
 
-    cancer_family_panels, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type,
+    cancer_family_panels, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type, resolve_cancer_type,
 
 )
 
@@ -267,7 +267,7 @@ TUMOR_PURITY_PARAMETERS = {
 
 _SIGNATURE_PANEL_CACHE = {}
 
-# The derived reference matrices (Symbol-indexed frame, FPKM expression
+# The derived reference matrices (Symbol-indexed frame, cohort TPM expression
 # matrix, z-score matrix across cancer types) are identical for every
 # cancer code given the same `normalize` parameter. Build them once per
 # distinct normalization, not once per (code, normalize) pair — the 33×
@@ -282,11 +282,11 @@ def _cached_reference_matrices(normalize="housekeeping"):
     Returns a dict with:
         ref_by_sym    — pan_cancer_expression() deduped on Symbol and
                         indexed by Symbol
-        fpkm_cols     — list of FPKM_* column names
-        expr_matrix   — ref_by_sym[fpkm_cols] as float
+        cohort_cols     — list of *_TPM column names
+        expr_matrix   — ref_by_sym[cohort_cols] as float
         gene_mean     — per-gene mean across cancer types
         gene_std      — per-gene std (zero replaced with NaN for safe div)
-        z_matrix      — full z-score matrix (columns: fpkm_cols)
+        z_matrix      — full z-score matrix (columns: cohort_cols)
 
     Keyed on `normalize` alone because the per-cancer panel builder only
     needs one view of the reference data. If callers ever need raw
@@ -298,15 +298,15 @@ def _cached_reference_matrices(normalize="housekeeping"):
 
     ref = pan_cancer_expression(normalize=normalize, technical_rna_normalize=True)
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-    expr_matrix = ref_by_sym[fpkm_cols].astype(float)
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+    expr_matrix = ref_by_sym[cohort_cols].astype(float)
     gene_mean = expr_matrix.mean(axis=1)
     gene_std = expr_matrix.std(axis=1).replace(0, np.nan)
     z_matrix = expr_matrix.sub(gene_mean, axis=0).div(gene_std, axis=0).fillna(0)
 
     entry = {
         "ref_by_sym": ref_by_sym,
-        "fpkm_cols": fpkm_cols,
+        "cohort_cols": cohort_cols,
         "expr_matrix": expr_matrix,
         "gene_mean": gene_mean,
         "gene_std": gene_std,
@@ -386,7 +386,7 @@ _CANCER_NORMAL_TISSUES = {
 
 
 def _build_sample_tpm_by_symbol(df_gene_expr):
-    """Return {symbol: max_TPM} from expression data (no normalization).
+    """Return {symbol: max_TPM} from already-clean sample expression.
 
     Canonical implementation lives in ``common.build_sample_tpm_by_symbol``;
     this is a thin delegate kept for backward compatibility.
@@ -397,7 +397,7 @@ def _build_sample_tpm_by_symbol(df_gene_expr):
 def _geneset_hk_ratio(genes, hk_symbols, expr_by_symbol):
     """Sum of gene set expression / sum of housekeeping expression.
 
-    This ratio is platform-independent (cancels out the TPM/FPKM
+    This ratio is scale-independent (cancels out the per-sample
     scaling factor since both come from the same sample/column).
     """
     gs_sum = sum(expr_by_symbol.get(g, 0) for g in genes)
@@ -408,7 +408,7 @@ def _geneset_hk_ratio(genes, hk_symbols, expr_by_symbol):
 
 
 def _sample_hk_median(sample_tpm):
-    """Return the sample housekeeping median on raw TPM scale."""
+    """Return the sample housekeeping median on clean TPM scale."""
     ref = pan_cancer_expression(technical_rna_normalize=True)
     id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
     hk_syms = [id_to_sym[gid] for gid in housekeeping_gene_ids() if gid in id_to_sym]
@@ -450,8 +450,8 @@ def _cancer_specific_lineage_genes(cancer_code: str) -> list:
     """Return the subset of the cancer type's lineage panel that is
     specific to its home cohort.
 
-    A gene is considered specific when its FPKM in ``cancer_code``'s
-    cohort exceeds every other cohort's FPKM such that
+    A gene is considered specific when its TPM in ``cancer_code``'s
+    cohort exceeds every other cohort's TPM such that
     ``home / (home + max_other) ≥ _LINEAGE_SPECIFICITY_MIN``. Genes
     with near-zero home expression (below
     ``_LINEAGE_SPECIFICITY_IGNORE_BELOW``) are kept regardless — those
@@ -473,8 +473,8 @@ def _cancer_specific_lineage_genes(cancer_code: str) -> list:
         subset="Symbol"
     )
     ref = ref.set_index("Symbol")
-    home_col = f"FPKM_{cancer_code}"
-    other_cols = [c for c in ref.columns if c.startswith("FPKM_") and c != home_col]
+    home_col = f"{cancer_code}_TPM"
+    other_cols = [c for c in ref.columns if c.endswith("_TPM") and c != home_col]
     if home_col not in ref.columns or not other_cols:
         _LINEAGE_SPECIFIC_CACHE[cancer_code] = list(panel)
         return list(panel)
@@ -546,9 +546,9 @@ def _lineage_purity_estimates(
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     _repro = {"testis", "epididymis", "seminal_vesicle", "placenta", "ovary"}
-    ntpm_nonrepro = [c for c in ntpm_cols if c.replace("nTPM_", "") not in _repro]
+    ntpm_nonrepro = [c for c in ntpm_cols if c.removesuffix("_nTPM") not in _repro]
 
     # Curated TME tissues (immune organs + stromal/connective)
     _tme = {
@@ -563,18 +563,18 @@ def _lineage_purity_estimates(
         "heart_muscle",
         "adipose_tissue",
     }
-    tme_cols = [c for c in ntpm_nonrepro if c.replace("nTPM_", "") in _tme]
+    tme_cols = [c for c in ntpm_nonrepro if c.removesuffix("_nTPM") in _tme]
 
     # HK symbols in reference
     hk_in_ref = [s for s in hk_syms if s in ref_dedup.index]
 
     # HK medians per column
-    cancer_col = f"FPKM_{cancer_code}"
+    cancer_col = f"{cancer_code}_TPM"
     if cancer_col not in ref_dedup.columns:
-        return []
+        return [], []
     ref_hk_cancer = ref_dedup.loc[hk_in_ref, cancer_col].astype(float).median()
     if ref_hk_cancer <= 0:
-        return []
+        return [], []
 
     tme_hk_medians = {}
     for col in tme_cols:
@@ -705,7 +705,7 @@ def _subtype_tumor_tpm_lookup(subtype_code):
 
     Source: ``subtype-deconvolved-expression.csv.gz`` (tumor-only TPM
     per (cancer_code, subtype)). Used by mixture-cohort lineage
-    estimation (#171) — the parent-cohort median (``FPKM_SARC``) is a
+    estimation (#171) — the parent-cohort median (``SARC_TPM``) is a
     diluted mixture; the subtype median is a clean per-subtype tumor
     profile.
     """
@@ -757,8 +757,8 @@ def _subtype_lineage_purity_estimates(
         "heart_muscle",
         "adipose_tissue",
     }
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
-    tme_cols = [c for c in ntpm_cols if c.replace("nTPM_", "") in _tme]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
+    tme_cols = [c for c in ntpm_cols if c.removesuffix("_nTPM") in _tme]
     hk_in_ref = [s for s in hk_syms if s in ref_dedup.index]
 
     tme_hk_medians = {
@@ -774,12 +774,12 @@ def _subtype_lineage_purity_estimates(
     # median of HK genes as the normalizer that converts subtype tumor
     # TPM into an HK-relative "tumor ratio". This follows the same
     # normalization spirit as the parent-cohort helper but without a
-    # cohort-specific FPKM column.
+    # cohort-specific TPM column.
     ref_hk_median_cols = [
         c
         for c in ntpm_cols
-        if c.replace("nTPM_", "") not in _tme
-        and c.replace("nTPM_", "")
+        if c.removesuffix("_nTPM") not in _tme
+        and c.removesuffix("_nTPM")
         not in {"testis", "epididymis", "seminal_vesicle", "placenta", "ovary"}
     ]
     if not ref_hk_median_cols:
@@ -977,7 +977,7 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     Returns a dict with the cancer-side HK-normalized expression, the
     maximum across matched-normal and broad-normal backgrounds (union), the
     max across TME tissues, the combined background, and a z-score over
-    cancer types. Returns None if the cancer code has no FPKM column.
+    cancer types. Returns None if the cancer code has no TPM column.
 
     `ref_by_sym` is accepted for backward compatibility but ignored — the
     cached reference matrices (`_cached_reference_matrices`) are used so
@@ -991,15 +991,15 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     expr_matrix = cached["expr_matrix"]
     z_matrix = cached["z_matrix"]
 
-    cancer_col = f"FPKM_{cancer_code}"
+    cancer_col = f"{cancer_code}_TPM"
     if cancer_col not in expr_matrix.columns:
         return None
 
-    ntpm_cols = [c for c in ref_by_sym.columns if c.startswith("nTPM_")]
+    ntpm_cols = [c for c in ref_by_sym.columns if c.endswith("_nTPM")]
     ntpm_nonrepro = [
         c
         for c in ntpm_cols
-        if c.replace("nTPM_", "") not in _REPRODUCTIVE_TISSUES_FOR_BROAD_BACKGROUND
+        if c.removesuffix("_nTPM") not in _REPRODUCTIVE_TISSUES_FOR_BROAD_BACKGROUND
     ]
 
     matched_tissues = list(_CANCER_NORMAL_TISSUES.get(cancer_code, []))
@@ -1007,14 +1007,14 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     if tissue and tissue not in matched_tissues:
         matched_tissues.append(tissue)
     normal_cols = [
-        f"nTPM_{t}"
+        f"{t}_nTPM"
         for t in sorted(set(matched_tissues))
-        if f"nTPM_{t}" in ref_by_sym.columns
+        if f"{t}_nTPM" in ref_by_sym.columns
     ]
     tme_cols = [
-        f"nTPM_{t}"
+        f"{t}_nTPM"
         for t in sorted(_HOST_SITE_BACKGROUND_TISSUES)
-        if f"nTPM_{t}" in ref_by_sym.columns
+        if f"{t}_nTPM" in ref_by_sym.columns
     ]
 
     z_scores = z_matrix[cancer_col]
@@ -1311,6 +1311,89 @@ def _signature_conflicts_with_lineage(sig_purity, lineage_purity, sig_stability)
     )
 
 
+def _registry_parent_code(code):
+    try:
+        from trufflepig.analyze.cancer_type_context import registry_parent_code
+
+        return registry_parent_code(code)
+    except Exception:
+        return ""
+
+
+_BROAD_PURITY_REFERENCE_FALLBACKS = {
+    # TARGET osteosarcoma has tumor-expression priors, but no direct purity
+    # marker panel yet. The CLI already treats OS as a refined report label
+    # over the broad sarcoma reference when purity/decomposition need a broad
+    # cohort; keep the direct Python API aligned with that behavior.
+    "OS": "SARC",
+}
+
+
+def _broad_purity_fallback_code(code):
+    parent = _registry_parent_code(code)
+    if parent:
+        return parent
+    return _BROAD_PURITY_REFERENCE_FALLBACKS.get(str(code or "").strip().upper(), "")
+
+
+def _has_direct_purity_markers(cancer_code):
+    """Whether ``cancer_code`` has marker panels usable for direct purity."""
+    return bool(
+        LINEAGE_GENES.get(cancer_code)
+        or _select_tumor_specific_genes(cancer_code, n=1)
+    )
+
+
+def _resolve_purity_reference(cancer_code, ref_by_sym):
+    """Return the expression reference used for purity estimation.
+
+    Local deconvolved references can provide tumor-only expression for rare or
+    refined labels, but they are not sufficient by themselves: the purity model
+    also needs tumor-specific or lineage markers for that same label. When a
+    refined label has expression but no purity markers yet, fall back to its
+    registry parent cohort and keep the requested label in the returned result.
+    """
+    cancer_col = f"{cancer_code}_TPM"
+    if cancer_col in ref_by_sym.columns:
+        return {
+            "reference_cancer_code": cancer_code,
+            "reference_expression_source": "pan_cancer",
+            "reference_purity": TCGA_MEDIAN_PURITY.get(cancer_code, 0.7),
+            "ref_expr": ref_by_sym[cancer_col].to_dict(),
+        }
+
+    local_ref_expr = _subtype_tumor_tpm_lookup(cancer_code)
+    if local_ref_expr and _has_direct_purity_markers(cancer_code):
+        return {
+            "reference_cancer_code": cancer_code,
+            "reference_expression_source": "subtype_deconvolved",
+            "reference_purity": 1.0,
+            "ref_expr": local_ref_expr,
+        }
+
+    parent_code = _broad_purity_fallback_code(cancer_code)
+    parent_col = f"{parent_code}_TPM" if parent_code else ""
+    if parent_col and parent_col in ref_by_sym.columns:
+        return {
+            "reference_cancer_code": parent_code,
+            "reference_expression_source": "parent_pan_cancer",
+            "reference_purity": TCGA_MEDIAN_PURITY.get(parent_code, 0.7),
+            "ref_expr": ref_by_sym[parent_col].to_dict(),
+        }
+
+    if local_ref_expr:
+        raise ValueError(
+            f"Cancer type {cancer_code!r} has a local deconvolved expression "
+            "reference but no direct purity marker panel or broad purity "
+            "fallback. Pass a broad reference cancer type for purity."
+        )
+
+    raise ValueError(
+        f"Cancer type {cancer_code!r} has no pan-cancer TPM column "
+        "and no local deconvolved expression reference"
+    )
+
+
 # -------------------- main estimation --------------------
 
 
@@ -1333,13 +1416,10 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
         overall_upper : float — upper bound
         components : dict — per-component details
     """
-    from .plot import (
-        _compute_cancer_type_signature_stats,
-        resolve_cancer_type,
-    )
-
     # Auto-detect cancer type
     if cancer_type is None:
+        from .plot_embedding import _compute_cancer_type_signature_stats
+
         stats = _compute_cancer_type_signature_stats(df_gene_expr)
         cancer_code = stats[0]["code"]
         cancer_score = stats[0]["score"]
@@ -1349,10 +1429,14 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
 
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
 
-    # Reference expression by symbol (raw FPKM, within-dataset)
+    # Reference expression by symbol (normalized cohort TPM)
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    ref_expr = ref_by_sym[f"FPKM_{cancer_code}"].to_dict()
+    reference_context = _resolve_purity_reference(cancer_code, ref_by_sym)
+    reference_cancer_code = reference_context["reference_cancer_code"]
+    ref_expr = reference_context["ref_expr"]
+    reference_expression_source = reference_context["reference_expression_source"]
+    reference_purity = reference_context["reference_purity"]
 
     # HK gene symbols
     hk_ids = housekeeping_gene_ids()
@@ -1360,10 +1444,10 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     hk_syms = [id_to_sym[gid] for gid in hk_ids if gid in id_to_sym]
 
     # TCGA reference purity (the TCGA cohort is NOT 100% pure)
-    tcga_purity = TCGA_MEDIAN_PURITY.get(cancer_code, 0.7)
+    tcga_purity = reference_purity
 
     # ---- Component 1: Cancer-type signature genes ----
-    sig_genes = _select_tumor_specific_genes(cancer_code, n=30)
+    sig_genes = _select_tumor_specific_genes(reference_cancer_code, n=30)
     sig_sample_ratio = _geneset_hk_ratio(sig_genes, hk_syms, sample_tpm)
     sig_ref_ratio = _geneset_hk_ratio(sig_genes, hk_syms, ref_expr)
 
@@ -1431,13 +1515,22 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     estimate_purity = float(np.clip(np.sqrt(stromal_purity * immune_purity), 0.0, 1.0))
 
     # ---- Component 3: Lineage gene refinement ----
-    lineage_per_gene, lineage_skipped_detected = _lineage_purity_estimates(
-        cancer_code,
-        sample_tpm,
-        ref_by_sym,
-        hk_syms,
-        tcga_purity,
-    )
+    if reference_expression_source == "subtype_deconvolved":
+        lineage_per_gene, lineage_skipped_detected = _subtype_lineage_purity_estimates(
+            reference_cancer_code,
+            LINEAGE_GENES.get(reference_cancer_code, []),
+            sample_tpm,
+            hk_syms,
+            ref_by_sym=ref_by_sym,
+        )
+    else:
+        lineage_per_gene, lineage_skipped_detected = _lineage_purity_estimates(
+            reference_cancer_code,
+            sample_tpm,
+            ref_by_sym,
+            hk_syms,
+            tcga_purity,
+        )
     # #171: mixture-cohort modeling. When the parent cohort is a union
     # of lineage-distinct subtypes (SARC = LMS ∪ liposarcoma ∪ synovial
     # ∪ ...), the TCGA parent median drowns subtype-specific markers.
@@ -1453,8 +1546,10 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     # gene-count and scores better concordance.
     winning_subtype = None
     mixture_subtype_details = None
-    if is_mixture_cohort(cancer_code):
-        mixture = _mixture_cohort_lineage_summary(cancer_code, sample_tpm, hk_syms)
+    if is_mixture_cohort(reference_cancer_code):
+        mixture = _mixture_cohort_lineage_summary(
+            reference_cancer_code, sample_tpm, hk_syms
+        )
         if mixture is not None and mixture.get("lineage_per_gene"):
             parent_support = _summarize_lineage_support(lineage_per_gene)
             parent_conc = parent_support.get("concordance") or 0.0
@@ -1492,7 +1587,9 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
         sig_purity=sig_purity,
         sig_lower=sig_lower,
         sig_upper=sig_upper,
-        estimate_purity=estimate_purity if stromal_genes else None,
+        estimate_purity=estimate_purity
+        if stromal_genes and reference_expression_source == "pan_cancer"
+        else None,
         lineage_purity=lineage_purity,
         lineage_lower=lineage_lower,
         lineage_upper=lineage_upper,
@@ -1518,9 +1615,11 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
 
     return {
         "cancer_type": cancer_code,
+        "reference_cancer_type": reference_cancer_code,
         "cancer_type_score": cancer_score,
-        "tissue": CANCER_TO_TISSUE.get(cancer_code),
+        "tissue": CANCER_TO_TISSUE.get(reference_cancer_code),
         "tcga_median_purity": tcga_purity,
+        "reference_expression_source": reference_expression_source,
         "overall_estimate": overall,
         "overall_lower": overall_lower,
         "overall_upper": overall_upper,
@@ -2140,7 +2239,7 @@ def _score_normal_tissues(sample_tpm_by_symbol, top_n=10):
     """
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
 
     expr = ref_by_sym[ntpm_cols].astype(float)
     gene_mean = expr.mean(axis=1)
@@ -2149,7 +2248,7 @@ def _score_normal_tissues(sample_tpm_by_symbol, top_n=10):
 
     results = []
     for col in ntpm_cols:
-        tissue = col.replace("nTPM_", "")
+        tissue = col.removesuffix("_nTPM")
         z_col = z_matrix[col]
         expr_col = expr[col]
         sig_genes = list(z_col[expr_col > 0.5].nlargest(20).index)
@@ -2184,7 +2283,7 @@ def _score_host_tissue_details(
     """
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     expr = ref_by_sym[ntpm_cols].astype(float)
     hk_median = _sample_hk_median(sample_tpm_by_symbol)
     if hk_median <= 0:
@@ -2208,7 +2307,7 @@ def _score_host_tissue_details(
 
     results = []
     for col in ntpm_cols:
-        tissue = col.replace("nTPM_", "")
+        tissue = col.removesuffix("_nTPM")
         if tissues is not None and tissue not in tissues:
             continue
 
@@ -2216,7 +2315,7 @@ def _score_host_tissue_details(
             other
             for other in ntpm_cols
             if other != col
-            and other.replace("nTPM_", "") in _HOST_SITE_BACKGROUND_TISSUES
+            and other.removesuffix("_nTPM") in _HOST_SITE_BACKGROUND_TISSUES
         ]
         if background_cols:
             background_max = expr_hk[background_cols].max(axis=1)
@@ -2958,7 +3057,7 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     if not top_tcga:
         return rows
 
-    coarse_code = str(top_tcga[0][0] or "").replace("FPKM_", "")
+    coarse_code = str(top_tcga[0][0] or "").removesuffix("_TPM")
     if not coarse_code:
         return rows
 
@@ -2999,7 +3098,7 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     top_normals = list(getattr(tissue_signal, "top_normal_tissues", None) or [])
     expected_tissue = CANCER_TO_TISSUE.get(coarse_code)
     observed_tissue = (
-        str(top_normals[0][0] or "").replace("nTPM_", "") if top_normals else ""
+        str(top_normals[0][0] or "").removesuffix("_nTPM") if top_normals else ""
     )
     tissue_matches = bool(expected_tissue and observed_tissue == expected_tissue)
     raw_dominates = coarse_raw >= (
@@ -3051,6 +3150,7 @@ def rank_cancer_type_candidates(
     candidate_codes=None,
     top_k=5,
     tissue_signal=None,
+    use_subtype_signatures=True,
 ):
     """Rank cancer-type hypotheses by signature evidence and purity plausibility.
 
@@ -3064,11 +3164,22 @@ def rank_cancer_type_candidates(
     This keeps "one of these two is plausible" ambiguity visible while
     downweighting types whose purity model does not fit the sample.
     """
-    from .plot import _compute_cancer_type_signature_stats, resolve_cancer_type
+    from .plot_embedding import _compute_cancer_type_signature_stats
     from .subtype_signature import compute_subtype_signature_stats
 
-    stats = _compute_cancer_type_signature_stats(df_gene_expr)
+    unconstrained = candidate_codes is None
+    if unconstrained:
+        resolved_candidate_codes = None
+    else:
+        resolved_candidate_codes = [
+            resolve_cancer_type(code) for code in candidate_codes
+        ]
+    stats = _compute_cancer_type_signature_stats(
+        df_gene_expr,
+        candidate_codes=resolved_candidate_codes,
+    )
     signature_score_map = {row["code"]: float(row["score"]) for row in stats}
+
     # Subtype-aware signature scoring: for cohorts with subtype data
     # (BRCA Basal/LumA/B/Her2/Normal; HNSC HPV+/-; LUAD by driver), score
     # against each subtype's data-derived signature panel. The candidate
@@ -3076,9 +3187,17 @@ def rank_cancer_type_candidates(
     # cohort score, and tags the candidate with the winning_subtype.
     # This is the principled answer to the basal-BRCA / squamous overlap
     # problem (see :mod:`trufflepig.subtype_signature`).
-    subtype_stats = compute_subtype_signature_stats(df_gene_expr)
+    subtype_stats = {}
+    if use_subtype_signatures:
+        if unconstrained:
+            subtype_stats = compute_subtype_signature_stats(df_gene_expr)
+        else:
+            subtype_parent_codes = {"BRCA", "HNSC", "LUAD"}
+            if any(
+                code in subtype_parent_codes for code in resolved_candidate_codes
+            ):
+                subtype_stats = compute_subtype_signature_stats(df_gene_expr)
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
-    unconstrained = candidate_codes is None
     family_scores = _score_cancer_family_panels(sample_tpm)
     family_params = TUMOR_PURITY_PARAMETERS["family_scoring"]
     soft_families = set(family_params.get("non_penalizing_families", []))
@@ -3137,7 +3256,7 @@ def rank_cancer_type_candidates(
         # logic for HNSC (HPV+/-) and LUAD (driver mutations).
         # Restrict to codes that are valid TCGA pan-cancer cohorts —
         # BEATAML / TARGET_NBL appear in subtype data but aren't TCGA
-        # cohorts and don't have FPKM_* columns to score against.
+        # cohorts and don't have *_TPM columns to score against.
         valid_tcga_codes = {row["code"] for row in stats}
         subtype_aware_codes = sorted(
             code for code in subtype_stats.keys() if code in valid_tcga_codes
@@ -3156,7 +3275,7 @@ def rank_cancer_type_candidates(
                 if "BRCA" not in candidate_codes:
                     candidate_codes.append("BRCA")
     else:
-        candidate_codes = [resolve_cancer_type(code) for code in candidate_codes]
+        candidate_codes = resolved_candidate_codes
 
     seen = set()
     ordered_codes = []

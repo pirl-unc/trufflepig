@@ -11,7 +11,6 @@ from dataclasses import replace
 
 from trufflepig.healthy_vs_tumor import TissueCompositionSignal
 from trufflepig.reasoning import (
-    DerivedFlags,
     aggregate_tumor_evidence,
     compute_derived_flags,
     confident_healthy_tissue,
@@ -19,6 +18,7 @@ from trufflepig.reasoning import (
     high_proliferation_panel,
     lymphoid_tissue_ambiguity,
     mesenchymal_tissue_ambiguity,
+    near_exact_normal_reference_match,
     run_step0_rules,
     tcga_dominant_correlation,
     tumor_marker_overrides_ambiguity,
@@ -88,8 +88,8 @@ def test_tumor_marker_overrides_ambiguity_skips_without_strong_signal():
 
 def test_lymphoid_ambiguity_fires_and_marks_structural():
     s = _make_signal(
-        top_normal_tissues=[("nTPM_lymph_node", 0.82)],
-        top_tcga_cohorts=[("FPKM_DLBC", 0.83)],
+        top_normal_tissues=[("lymph_node_nTPM", 0.82)],
+        top_tcga_cohorts=[("DLBC_TPM", 0.83)],
     )
     f = _flags(s, lymphoid_ambiguity=True)
     out = lymphoid_tissue_ambiguity(s, f)
@@ -100,8 +100,8 @@ def test_lymphoid_ambiguity_fires_and_marks_structural():
 
 def test_mesenchymal_ambiguity_fires_and_marks_structural():
     s = _make_signal(
-        top_normal_tissues=[("nTPM_smooth_muscle", 0.85)],
-        top_tcga_cohorts=[("FPKM_SARC", 0.80)],
+        top_normal_tissues=[("smooth_muscle_nTPM", 0.85)],
+        top_tcga_cohorts=[("SARC_TPM", 0.80)],
     )
     f = _flags(s, mesenchymal_ambiguity=True)
     out = mesenchymal_tissue_ambiguity(s, f)
@@ -139,6 +139,12 @@ def test_aggregate_tumor_evidence_fires_on_strong_single_cta():
     assert "CTA_strong" in out.rationale
 
 
+def test_single_high_cta_gene_is_not_strong_by_itself():
+    s = _make_signal(cta_count_above_1_tpm=1, cta_panel_sum_tpm=100.0)
+    f = _flags(s)
+    assert f.cta_strong is False
+
+
 def test_aggregate_tumor_evidence_skips_below_thresholds():
     s = _make_signal(
         cta_count_above_1_tpm=1,
@@ -146,6 +152,42 @@ def test_aggregate_tumor_evidence_skips_below_thresholds():
     )
     f = _flags(s)
     assert aggregate_tumor_evidence(s, f) is None
+
+
+# ---------- near_exact_normal_reference_match ----------
+
+
+def test_near_exact_normal_reference_match_beats_panel_noise():
+    s = _make_signal(
+        top_normal_tissues=[("colon_nTPM", 0.999)],
+        top_tcga_cohorts=[("COAD_TPM", 0.86)],
+        cta_count_above_1_tpm=5,
+        oncofetal_count_above_threshold=2,
+        type_specific_hits=[("A", 5.0), ("B", 4.0)],
+        evidence=TumorEvidenceScore(
+            cta=1.0,
+            oncofetal=1.0,
+            type_specific=1.0,
+            glycolysis=0.5,
+            prolif_log2=2.4,
+        ),
+    )
+    f = _flags(s)
+    out = near_exact_normal_reference_match(s, f)
+    assert out is not None
+    assert out.hint == "healthy-dominant"
+
+
+def test_near_exact_normal_reference_match_with_high_proliferation_is_ambiguous():
+    s = _make_signal(
+        top_normal_tissues=[("rectum_nTPM", 0.999)],
+        top_tcga_cohorts=[("READ_TPM", 0.85)],
+        evidence=TumorEvidenceScore(prolif_log2=4.8),
+    )
+    f = _flags(s)
+    out = near_exact_normal_reference_match(s, f)
+    assert out is not None
+    assert out.hint == "possibly-tumor"
 
 
 # ---------- high_proliferation_panel ----------
@@ -170,8 +212,8 @@ def test_high_proliferation_skips_when_quiet():
 
 def test_confident_healthy_fires_on_clean_healthy_profile():
     s = _make_signal(
-        top_normal_tissues=[("nTPM_cerebral_cortex", 0.95)],
-        top_tcga_cohorts=[("FPKM_LGG", 0.85)],
+        top_normal_tissues=[("cerebral_cortex_nTPM", 0.95)],
+        top_tcga_cohorts=[("LGG_TPM", 0.85)],
         evidence=TumorEvidenceScore(prolif_log2=0.5),
     )
     f = _flags(s)
@@ -182,8 +224,8 @@ def test_confident_healthy_fires_on_clean_healthy_profile():
 
 def test_healthy_with_soft_tumor_signal_demotes_on_soft_cta():
     s = _make_signal(
-        top_normal_tissues=[("nTPM_cerebral_cortex", 0.95)],
-        top_tcga_cohorts=[("FPKM_LGG", 0.85)],
+        top_normal_tissues=[("cerebral_cortex_nTPM", 0.95)],
+        top_tcga_cohorts=[("LGG_TPM", 0.85)],
         evidence=TumorEvidenceScore(prolif_log2=0.5),
         cta_count_above_1_tpm=3,  # soft CTA
     )
@@ -199,8 +241,8 @@ def test_healthy_with_soft_tumor_signal_demotes_on_soft_cta():
 
 def test_weak_healthy_lean_fires_on_weak_margin():
     s = _make_signal(
-        top_normal_tissues=[("nTPM_lung", 0.82)],
-        top_tcga_cohorts=[("FPKM_LUAD", 0.79)],
+        top_normal_tissues=[("lung_nTPM", 0.82)],
+        top_tcga_cohorts=[("LUAD_TPM", 0.79)],
     )
     f = _flags(s)
     out = weak_healthy_lean(s, f)

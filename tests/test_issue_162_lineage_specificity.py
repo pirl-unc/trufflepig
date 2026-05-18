@@ -117,7 +117,7 @@ def test_filter_returns_subset_of_original_panel():
 
 def test_filter_result_cached_across_calls():
     """The cache short-circuits repeated calls — important because
-    the filter reads the full FPKM matrix."""
+    the filter reads the full cohort TPM matrix."""
     _cancer_specific_lineage_genes("STAD")
     assert "STAD" in _LINEAGE_SPECIFIC_CACHE
 
@@ -131,7 +131,7 @@ def _cohort_median_sample(code: str) -> pd.DataFrame:
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{code}"].astype(float),
+            "TPM": ref[f"{code}_TPM"].astype(float),
         }
     )
 

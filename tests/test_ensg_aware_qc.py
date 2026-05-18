@@ -99,7 +99,7 @@ def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
             # Symbols deliberately wrong; ENSG path should still match
             # the HK panel by stable ID.
             "Symbol": ["NOT_ACTB", "NOT_GAPDH", "MYC"],
-            "TPM_S": [100.0, 100.0, 200.0],
+            "S_TPM": [100.0, 100.0, 200.0],
         }
     )
     out, record = tpm_to_housekeeping_normalized(df)

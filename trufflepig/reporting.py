@@ -60,6 +60,79 @@ def _safe_int(value, default=0) -> int:
         return int(default)
 
 
+_THERAPY_FILTER_RULES = (
+    {
+        "cancer_code": "BLCA",
+        "symbol": "TACSTD2",
+        "agent_contains": "sacituzumab govitecan",
+        "indication_contains": ("urothelial", "bladder"),
+        "note": (
+            "withdrawn urothelial carcinoma indication; do not shortlist as a "
+            "current BLCA option"
+        ),
+    },
+    {
+        "cancer_code": "OS",
+        "symbol": "IGF1R",
+        "agent_contains": "ganitumab",
+        "indication_contains": ("os", "osteosarcoma"),
+        "note": (
+            "suppressed osteosarcoma row; cited ganitumab evidence is not a "
+            "current osteosarcoma-specific recommendation"
+        ),
+    },
+)
+
+
+def therapy_filter_note(target_row) -> str:
+    """Return why a stale therapy row should be hidden from reports.
+
+    This is deliberately report-layer filtering. Pirlygenes owns the source
+    curation table, but trufflepig should not present known-withdrawn or
+    miscited disease-specific rows as active recommendations while the upstream
+    release catches up.
+    """
+    if target_row is None or not hasattr(target_row, "get"):
+        return ""
+    cancer_code = _clean_text(target_row.get("cancer_code")).upper()
+    symbol = _clean_text(target_row.get("symbol")).upper()
+    agent = _clean_text(target_row.get("agent")).lower()
+    indication = _clean_text(target_row.get("indication")).lower()
+    for rule in _THERAPY_FILTER_RULES:
+        if cancer_code != rule["cancer_code"]:
+            continue
+        if symbol != rule["symbol"]:
+            continue
+        if rule["agent_contains"] not in agent:
+            continue
+        if not any(term in indication for term in rule["indication_contains"]):
+            continue
+        return rule["note"]
+    return ""
+
+
+def therapy_withdrawal_note(target_row) -> str:
+    """Return only current-market withdrawal notes for stale therapy rows."""
+    note = therapy_filter_note(target_row)
+    return note if "withdrawn" in note else ""
+
+
+def filter_current_therapy_targets(targets_df):
+    """Drop therapy rows that should not be surfaced as current options."""
+    if targets_df is None:
+        return None
+    try:
+        if len(targets_df) == 0:
+            return targets_df.reset_index(drop=True)
+        keep = [
+            not therapy_filter_note(row)
+            for _, row in targets_df.iterrows()
+        ]
+        return targets_df.loc[keep].reset_index(drop=True)
+    except Exception:
+        return targets_df
+
+
 @lru_cache(maxsize=1)
 def _cancer_registry_display_names():
     try:
@@ -257,8 +330,8 @@ def tpm_semantics_note() -> str:
         "reasoning; it can collapse to a single value when the range model has "
         "no meaningful spread. Do not treat context TPM as tumor-source evidence "
         "when the tumor-attribution row says background-dominant. For immune/stromal "
-        "markers, agent-only rows, and expression-independent indications, bulk "
-        "RNA is contextual and the clinical biomarker must come from the "
+        "markers, agent-only rows, and therapies whose eligibility does not depend "
+        "on target expression, bulk RNA is contextual and the clinical biomarker must come from the "
         "indicated assay."
     )
 
@@ -316,8 +389,12 @@ def indication_biomarker(target_row) -> str:
         target_row.get("cancer_code") if hasattr(target_row, "get") else ""
     ).upper()
     agent_class = _agent_class_text(target_row)
+    agent = _clean_text(target_row.get("agent") if hasattr(target_row, "get") else "")
+    agent_low = agent.lower()
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
         return "mutation"
+    if cancer_code == "ADCC" and "lenvatinib" in agent_low:
+        return "histology_only"
     if _MSI_HIGH_INDICATION.search(low) and not _MMR_PROFICIENT.search(low):
         return "msi_high"
     if "tmb" in low or "tumor mutational burden" in low:
@@ -325,7 +402,6 @@ def indication_biomarker(target_row) -> str:
     if _MUTATION_INDICATION.search(text):
         return "mutation"
 
-    agent = _clean_text(target_row.get("agent") if hasattr(target_row, "get") else "")
     if _IMMUNE_CHECKPOINT_AGENTS.search(
         agent
     ) and not _TARGET_EXPRESSION_INDICATION.search(text):
@@ -352,18 +428,18 @@ def expression_independent_indication(target_row) -> bool:
 def expression_independent_interpretation(target_row) -> str:
     label = indication_biomarker_label(target_row)
     if indication_biomarker(target_row) == "histology_only":
-        return "expression-independent indication — confirm clinical eligibility"
-    return f"expression-independent indication — confirm {label} status"
+        return "target expression is not the eligibility criterion — confirm clinical eligibility"
+    return f"target expression is not the eligibility criterion — confirm {label} status"
 
 
 def expression_independent_rna_context(expression_row) -> str:
-    """Explain RNA values for eligibility that is not expression-gated."""
+    """Explain RNA values when eligibility does not depend on target expression."""
     if expression_row is None:
         return "target RNA not measured; eligibility is not inferred from expression"
     observed = _safe_float(expression_row.get("observed_tpm"), 0.0)
     return (
-        f"target RNA is contextual only (bulk {observed:.1f} TPM; "
-        "eligibility is not inferred from expression)"
+        f"target RNA is context only (bulk {observed:.1f} TPM; "
+        "it does not establish eligibility)"
     )
 
 
@@ -460,7 +536,7 @@ def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
             labels.append(f"{gene} {alteration}".strip())
     suffix = "" if len(supported) <= 3 else f" (+{len(supported) - 3} more)"
     return (
-        "supplied alteration evidence supports this eligibility gate: "
+        "supplied alteration evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
         + "; verify against the clinical assay report"
@@ -604,25 +680,25 @@ def target_reliability_status(row, *, category=None, target_row=None):
 
 _ESSENTIAL_TISSUE_COLS = {
     "brain": [
-        "nTPM_cerebral_cortex",
-        "nTPM_cerebellum",
-        "nTPM_basal_ganglia",
-        "nTPM_hippocampal_formation",
-        "nTPM_amygdala",
-        "nTPM_midbrain",
-        "nTPM_hypothalamus",
-        "nTPM_spinal_cord",
-        "nTPM_choroid_plexus",
+        "cerebral_cortex_nTPM",
+        "cerebellum_nTPM",
+        "basal_ganglia_nTPM",
+        "hippocampal_formation_nTPM",
+        "amygdala_nTPM",
+        "midbrain_nTPM",
+        "hypothalamus_nTPM",
+        "spinal_cord_nTPM",
+        "choroid_plexus_nTPM",
     ],
-    "heart": ["nTPM_heart_muscle"],
-    "liver": ["nTPM_liver"],
-    "lung": ["nTPM_lung"],
-    "kidney": ["nTPM_kidney"],
-    "bone_marrow": ["nTPM_bone_marrow"],
-    "spleen": ["nTPM_spleen"],
-    "pancreas": ["nTPM_pancreas"],
-    "colon": ["nTPM_colon", "nTPM_rectum", "nTPM_duodenum", "nTPM_small_intestine"],
-    "stomach": ["nTPM_stomach"],
+    "heart": ["heart_muscle_nTPM"],
+    "liver": ["liver_nTPM"],
+    "lung": ["lung_nTPM"],
+    "kidney": ["kidney_nTPM"],
+    "bone_marrow": ["bone_marrow_nTPM"],
+    "spleen": ["spleen_nTPM"],
+    "pancreas": ["pancreas_nTPM"],
+    "colon": ["colon_nTPM", "rectum_nTPM", "duodenum_nTPM", "small_intestine_nTPM"],
+    "stomach": ["stomach_nTPM"],
 }
 
 
@@ -1335,7 +1411,7 @@ def hla_eligibility_context(target_row, *, analysis=None) -> str:
     agent = _clean_text(target_row.get("agent")) if hasattr(target_row, "get") else ""
     agent_clause = f" for {agent}" if agent else ""
     return (
-        f"HLA-gated{agent_clause}: requires {required}; supply germline/tumor "
+        f"HLA requirement{agent_clause}: requires {required}; supply germline/tumor "
         "HLA type to assess eligibility"
     )
 

@@ -302,7 +302,7 @@ def build_analyze_comparison_markdown(
     lines = [
         f"# {title}",
         "",
-        "This comparison is assembled from completed `pirlygenes analyze` summary files. "
+        "This comparison is assembled from completed `trufflepig run` summary files. "
         "It is a navigation aid, not a clinical recommendation.",
         "",
         "## Snapshot",

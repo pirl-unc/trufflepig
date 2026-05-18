@@ -53,11 +53,14 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                 code_text = _clean(code)
                 if not code_text:
                     continue
-                values = {
-                    _clean(v)
-                    for v in group.get("source_cohort", []).dropna().unique()
-                    if _clean(v)
-                }
+                if "source_cohort" in group.columns:
+                    values = {
+                        _clean(v)
+                        for v in group["source_cohort"].dropna().unique()
+                        if _clean(v)
+                    }
+                else:
+                    values = set()
                 sources_by_code.setdefault(code_text, set()).update(values or {"TCGA"})
 
         sub = subtype_deconvolved_expression()
@@ -66,11 +69,14 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                 code_text = _clean(code)
                 if not code_text:
                     continue
-                values = {
-                    _clean(v)
-                    for v in group.get("source_cohort", []).dropna().unique()
-                    if _clean(v)
-                }
+                if "source_cohort" in group.columns:
+                    values = {
+                        _clean(v)
+                        for v in group["source_cohort"].dropna().unique()
+                        if _clean(v)
+                    }
+                else:
+                    values = set()
                 subtype_values = (
                     group.get("subtype")
                     .fillna("")
@@ -90,11 +96,14 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                     subtype_text = _clean(subtype)
                     if not subtype_text:
                         continue
-                    values = {
-                        _clean(v)
-                        for v in group.get("source_cohort", []).dropna().unique()
-                        if _clean(v)
-                    }
+                    if "source_cohort" in group.columns:
+                        values = {
+                            _clean(v)
+                            for v in group["source_cohort"].dropna().unique()
+                            if _clean(v)
+                        }
+                    else:
+                        values = set()
                     sources_by_code.setdefault(subtype_text, set()).update(
                         values or {"subtype_reference"}
                     )

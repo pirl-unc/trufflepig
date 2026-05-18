@@ -79,19 +79,19 @@ _HPA_MARGIN_WEAK = 0.02
 # cycling) and regardless of correlation margin.
 _LYMPHOID_NORMAL_TISSUES = frozenset(
     {
-        "nTPM_lymph_node",
-        "nTPM_spleen",
-        "nTPM_thymus",
-        "nTPM_bone_marrow",
-        "nTPM_appendix",
-        "nTPM_tonsil",
+        "lymph_node_nTPM",
+        "spleen_nTPM",
+        "thymus_nTPM",
+        "bone_marrow_nTPM",
+        "appendix_nTPM",
+        "tonsil_nTPM",
     }
 )
 _HEME_LYMPHOID_TCGA_COHORTS = frozenset(
     {
-        "FPKM_DLBC",
-        "FPKM_LAML",
-        "FPKM_THYM",
+        "DLBC_TPM",
+        "LAML_TPM",
+        "THYM_TPM",
     }
 )
 
@@ -106,20 +106,20 @@ _HEME_LYMPHOID_TCGA_COHORTS = frozenset(
 # proceeds — we just note the ambiguity so the clinician sees it.
 _MESENCHYMAL_NORMAL_TISSUES = frozenset(
     {
-        "nTPM_smooth_muscle",
-        "nTPM_adipose_tissue",
-        "nTPM_skeletal_muscle",
-        "nTPM_heart_muscle",
-        "nTPM_endometrium",  # uterine myometrium
-        "nTPM_cervix",  # also smooth-muscle-rich
-        "nTPM_urinary_bladder",  # smooth-muscle dominant
-        "nTPM_epididymis",  # smooth muscle
+        "smooth_muscle_nTPM",
+        "adipose_tissue_nTPM",
+        "skeletal_muscle_nTPM",
+        "heart_muscle_nTPM",
+        "endometrium_nTPM",  # uterine myometrium
+        "cervix_nTPM",  # also smooth-muscle-rich
+        "urinary_bladder_nTPM",  # smooth-muscle dominant
+        "epididymis_nTPM",  # smooth muscle
     }
 )
 _MESENCHYMAL_SARC_TCGA_COHORTS = frozenset(
     {
-        "FPKM_SARC",
-        "FPKM_UCS",
+        "SARC_TPM",
+        "UCS_TPM",
     }
 )
 
@@ -139,9 +139,9 @@ _CTA_SYMBOLS_CACHE: frozenset[str] | None = None
 # regimes would false-positive on reproductive-tissue normals.
 _CTA_NORMAL_TISSUES = frozenset(
     {
-        "nTPM_testis",
-        "nTPM_placenta",
-        "nTPM_ovary",
+        "testis_nTPM",
+        "placenta_nTPM",
+        "ovary_nTPM",
     }
 )
 
@@ -168,10 +168,10 @@ _ONCOFETAL_LOOSE: frozenset[str] = frozenset()
 # HPA tissues where oncofetal expression is physiological.
 _ONCOFETAL_NORMAL_TISSUES = frozenset(
     {
-        "nTPM_testis",
-        "nTPM_placenta",
-        "nTPM_ovary",
-        "nTPM_liver",  # AFP can be elevated in regenerating / fetal-pattern liver
+        "testis_nTPM",
+        "placenta_nTPM",
+        "ovary_nTPM",
+        "liver_nTPM",  # AFP can be elevated in regenerating / fetal-pattern liver
     }
 )
 
@@ -283,10 +283,10 @@ class TissueCompositionSignal:
             )
 
         def _fmt_tissue(name, rho):
-            return f"{name.replace('nTPM_', '').replace('_', ' ')} (ρ={rho:.2f})"
+            return f"{name.removesuffix('_nTPM').replace('_', ' ')} (ρ={rho:.2f})"
 
         def _fmt_cancer(name, rho):
-            return f"{name.replace('FPKM_', '')} (ρ={rho:.2f})"
+            return f"{name.removesuffix('_TPM')} (ρ={rho:.2f})"
 
         tissues = ", ".join(_fmt_tissue(n, r) for n, r in self.top_normal_tissues[:3])
         cohorts = ", ".join(_fmt_cancer(n, r) for n, r in self.top_tcga_cohorts[:3])
@@ -360,9 +360,9 @@ class TissueCompositionSignal:
                     return None
 
         tissue, rho = self.top_normal_tissues[0]
-        tissue_name = tissue.replace("nTPM_", "").replace("_", " ")
+        tissue_name = tissue.removesuffix("_nTPM").replace("_", " ")
         cohort = (
-            self.top_tcga_cohorts[0][0].replace("FPKM_", "")
+            self.top_tcga_cohorts[0][0].removesuffix("_TPM")
             if self.top_tcga_cohorts
             else "—"
         )
@@ -580,8 +580,8 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
         .set_index("Symbol")
     )
 
-    hpa_cols = [c for c in ref.columns if c.startswith("nTPM_")]
-    tcga_cols = [c for c in ref.columns if c.startswith("FPKM_")]
+    hpa_cols = [c for c in ref.columns if c.endswith("_nTPM")]
+    tcga_cols = [c for c in ref.columns if c.endswith("_TPM")]
 
     shared_symbols = [s for s in sample_by_symbol if s in ref.index]
     n_overlap = len(shared_symbols)
@@ -645,7 +645,7 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
 
     # Cancer-type-specific tumor-up panel: check the top TCGA cohort's
     # tumor-vs-matched-normal private markers against the sample.
-    top_tcga_code = top_tcga[0][0].replace("FPKM_", "") if top_tcga else ""
+    top_tcga_code = top_tcga[0][0].removesuffix("_TPM") if top_tcga else ""
     type_specific_hits = _type_specific_tumor_up_signal(
         sample_by_symbol,
         top_tcga_code,
@@ -745,8 +745,8 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
     if cancer_hint == "healthy-dominant":
         verdict = (
             f"Healthy-dominant: best HPA "
-            f"{top_normal[0][0].replace('nTPM_', '')} ρ={best_normal_rho:.3f} "
-            f"beats best TCGA {top_tcga[0][0].replace('FPKM_', '') if top_tcga else '-'} "
+            f"{top_normal[0][0].removesuffix('_nTPM')} ρ={best_normal_rho:.3f} "
+            f"beats best TCGA {top_tcga[0][0].removesuffix('_TPM') if top_tcga else '-'} "
             f"ρ={best_tcga_rho:.3f} by {margin:+.3f}; proliferation "
             f"{prolif_log2:.1f} log2-TPM quiet."
         )

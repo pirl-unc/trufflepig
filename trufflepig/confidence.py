@@ -320,7 +320,7 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
         if tcga:
             name, _rho = tcga[0]
             step0_top_code = (
-                name.replace("FPKM_", "") if isinstance(name, str) else None
+                name.removesuffix("_TPM") if isinstance(name, str) else None
             )
     if step0_top_code and top_code and step0_top_code != top_code:
         if tier == "high":

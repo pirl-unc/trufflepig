@@ -192,7 +192,7 @@ def test_tiebreaker_table_empty_without_annotations():
 
 
 def test_winning_subtype_uses_subtype_medians_not_broad_cohort(monkeypatch):
-    """v1 of evidence_tables.py pulled "BRCA_Basal median" from FPKM_BRCA,
+    """v1 of evidence_tables.py pulled "BRCA_Basal median" from BRCA_TPM,
     which is luminal-dominated. The header said "BRCA_Basal" but the
     values were the broad BRCA cohort. This regression test pins the fix.
 
@@ -206,8 +206,8 @@ def test_winning_subtype_uses_subtype_medians_not_broad_cohort(monkeypatch):
         {
             "Symbol": ["KRT81"],
             "Ensembl_Gene_ID": ["ENSG_KRT81"],
-            "FPKM_BRCA": [5.0],
-            "FPKM_HNSC": [0.5],
+            "BRCA_TPM": [5.0],
+            "HNSC_TPM": [0.5],
         }
     )
 
@@ -282,7 +282,7 @@ def test_build_block_surfaces_rescue_payload_when_present(monkeypatch):
         ref_mod,
         "pan_cancer_expression",
         lambda **k: pd.DataFrame(
-            {"Symbol": ["FOXC1"], "Ensembl_Gene_ID": ["ENSG_FOXC1"], "FPKM_BRCA": [1.4]}
+            {"Symbol": ["FOXC1"], "Ensembl_Gene_ID": ["ENSG_FOXC1"], "BRCA_TPM": [1.4]}
         ),
     )
     trace = [

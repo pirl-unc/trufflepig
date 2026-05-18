@@ -79,7 +79,7 @@ def test_step0_mismatch_downgrades_to_moderate():
     — surface the mismatch."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_SARC", 0.77)]
+        top_tcga_cohorts = [("SARC_TPM", 0.77)]
 
     analysis = {
         "candidate_trace": [
@@ -98,7 +98,7 @@ def test_multiple_contradictions_all_surface_at_low_tier():
     ``low`` and all three reasons appear."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_SARC", 0.77)]
+        top_tcga_cohorts = [("SARC_TPM", 0.77)]
 
     analysis = {
         "candidate_trace": [
@@ -123,7 +123,7 @@ def test_step0_match_does_not_downgrade():
     """Step-0 agreeing with the classifier keeps the tier high."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_PRAD", 0.82)]
+        top_tcga_cohorts = [("PRAD_TPM", 0.82)]
 
     analysis = {
         "candidate_trace": [

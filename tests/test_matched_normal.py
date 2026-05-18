@@ -40,23 +40,23 @@ from trufflepig.tumor_purity import estimate_tumor_purity
 
 
 def _tcga_sample(cancer_code):
-    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
         }
     )
 
 
 def _normal_tissue_sample(tissue):
-    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Ensembl_Gene_ID")
+    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"nTPM_{tissue}"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM"].astype(float),
         }
     )
 
@@ -310,9 +310,9 @@ def test_vs_tcga_inf_routes_for_silent_tcga_with_sample_expression():
     df = _tcga_sample("PRAD")
     # Inject a CTA-like gene (silent in PRAD cohort) at high sample TPM.
     # Use an Ensembl ID known to be in the reference but near-zero in
-    # FPKM_PRAD. MAGE-family CTAs typically satisfy this.
-    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(subset="Symbol")
-    ref = ref[ref["FPKM_PRAD"].astype(float) < 0.01]
+    # PRAD_TPM. MAGE-family CTAs typically satisfy this.
+    ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
+    ref = ref[ref["PRAD_TPM"].astype(float) < 0.01]
     if ref.empty:
         pytest.skip("No silent-in-PRAD gene found in reference")
     target = ref.iloc[0]

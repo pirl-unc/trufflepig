@@ -74,7 +74,7 @@ def test_met_site_liver_includes_liver_tissue_in_tme_reference():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_liver"].astype(float),  # a liver-rich synthetic
+            "TPM": ref["liver_nTPM"].astype(float),  # a liver-rich synthetic
         }
     )
     purity = {
@@ -132,7 +132,7 @@ def test_met_site_rejects_unknown_value():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_liver"].astype(float),
+            "TPM": ref["liver_nTPM"].astype(float),
         }
     )
     purity = {

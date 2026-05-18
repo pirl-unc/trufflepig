@@ -25,7 +25,7 @@ Step-6 are planned follow-ups. The framework is ready to extend.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
     from .healthy_vs_tumor import TissueCompositionSignal
@@ -42,6 +42,9 @@ _CTA_STRONG_COUNT = 4
 _CTA_STRONG_SUM_TPM = 30.0
 _ONCOFETAL_STRONG_COUNT = 2
 _TUMOR_UP_PANEL_STRONG_COUNT = 2
+_NORMAL_REFERENCE_RHO_STRONG = 0.98
+_NORMAL_REFERENCE_MARGIN_STRONG = 0.08
+_PROLIFERATION_OVERRIDES_NORMAL_LOG2 = 6.0
 
 
 @dataclass(frozen=True)
@@ -140,7 +143,10 @@ def compute_derived_flags(signal) -> DerivedFlags:
         mesenchymal_ambiguity=False,
         cta_strong=(
             signal.cta_count_above_1_tpm >= _CTA_STRONG_COUNT
-            or signal.cta_panel_sum_tpm >= _CTA_STRONG_SUM_TPM
+            or (
+                signal.cta_count_above_1_tpm >= 2
+                and signal.cta_panel_sum_tpm >= _CTA_STRONG_SUM_TPM
+            )
         ),
         oncofetal_strong=(
             signal.oncofetal_count_above_threshold >= _ONCOFETAL_STRONG_COUNT
@@ -232,6 +238,44 @@ def aggregate_tumor_evidence(s, f) -> Optional[RuleOutcome]:
         hint="tumor-consistent",
         rule_name=aggregate_tumor_evidence.rule_name,
         rationale=",".join(reasons),
+    )
+
+
+@rule("near-exact-normal-reference-match")
+def near_exact_normal_reference_match(s, f) -> Optional[RuleOutcome]:
+    """A very strong HPA normal-tissue match beats broad tumor evidence.
+
+    This handles pure normal references and normal-like input samples. Some
+    HPA tissues physiologically express genes that also appear in CTA,
+    oncofetal, glycolysis, or tumor-up panels. When the sample is almost an
+    exact normal-tissue profile and that match beats every TCGA cohort by a
+    large margin, those expression channels should not turn the sample into a
+    confident cancer call. Lymphoid and mesenchymal structural-ambiguity rules
+    run before this rule, so those tissues still surface as possibly tumor.
+    """
+    if not s.top_normal_tissues or not s.top_tcga_cohorts:
+        return None
+    top_normal_rho = float(s.top_normal_tissues[0][1] or 0.0)
+    if top_normal_rho < _NORMAL_REFERENCE_RHO_STRONG:
+        return None
+    if f.correlation_margin < _NORMAL_REFERENCE_MARGIN_STRONG:
+        return None
+    if s.evidence.prolif_log2 >= _PROLIFERATION_OVERRIDES_NORMAL_LOG2:
+        return None
+    if s.evidence.prolif_log2 >= _PROLIFERATION_HIGH_LOG2:
+        return RuleOutcome(
+            hint="possibly-tumor",
+            rule_name=near_exact_normal_reference_match.rule_name,
+            rationale=(
+                f"normal_rho={top_normal_rho:.2f},"
+                f"margin={f.correlation_margin:+.2f},"
+                f"proliferation={s.evidence.prolif_log2:.1f}"
+            ),
+        )
+    return RuleOutcome(
+        hint="healthy-dominant",
+        rule_name=near_exact_normal_reference_match.rule_name,
+        rationale=f"normal_rho={top_normal_rho:.2f},margin={f.correlation_margin:+.2f}",
     )
 
 
@@ -347,6 +391,7 @@ STEP0_RULES: list[Step0Rule] = [
     tumor_marker_overrides_ambiguity,
     lymphoid_tissue_ambiguity,
     mesenchymal_tissue_ambiguity,
+    near_exact_normal_reference_match,
     aggregate_tumor_evidence,
     high_proliferation_panel,
     confident_healthy_tissue,

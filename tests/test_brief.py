@@ -631,8 +631,8 @@ def test_expression_independent_therapy_summary_keeps_rna_contextual():
     pdcd1_line = next(
         line for line in md.splitlines() if line.startswith("- **CD274**")
     )
-    assert "expression-independent indication" in pdcd1_line
-    assert "target RNA is contextual only" in pdcd1_line
+    assert "target expression is not the eligibility criterion" in pdcd1_line
+    assert "target RNA is context only" in pdcd1_line
     assert "Clinical maturity: approved antibody" in pdcd1_line
     assert "; Clinical maturity" not in pdcd1_line
     assert "model interval" not in pdcd1_line
@@ -665,8 +665,8 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
 
     line = _format_therapy_bullet(target, expression, analysis=analysis)
 
-    assert "expression-independent indication" in line
-    assert "target RNA is contextual only" in line
+    assert "target expression is not the eligibility criterion" in line
+    assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
 
@@ -796,7 +796,7 @@ def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillo
     assert "**Alteration evidence:** supplied EGFR kinase domain duplication" in md
     top_lines = [line for line in md.splitlines() if line.startswith("- **")]
     assert top_lines[0].startswith("- **EGFR**")
-    assert "supplied alteration evidence supports this eligibility gate" in md
+    assert "supplied alteration evidence matches this therapy requirement" in md
     assert "- **PDGFRA**" not in md
     assert "- **NTRK1**" not in md
     assert "- **CDK4**" not in md
@@ -933,7 +933,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
         cancer_code="PRAD",
         disease_state="",
     )
-    assert "Target expression source trace" in md
+    assert "Where target RNA signal appears to come from" in md
     assert "Tumor-source bulk TPM" in md
     assert "Top non-tumor attribution" in md
     assert "STEAP2" in md
@@ -970,7 +970,7 @@ def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
         pd.DataFrame([expr]),
         [(target, expr)],
     )
-    assert "Target expression source trace" in md
+    assert "Where target RNA signal appears to come from" in md
     assert "none modeled" in md
 
 

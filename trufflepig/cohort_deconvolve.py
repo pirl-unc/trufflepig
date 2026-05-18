@@ -17,7 +17,7 @@ Shape:
    header, then one column per sample). Normalise to TPM.
 2. Optionally attach subtype labels per sample.
 3. For each sample, either:
-   - run full pirlygenes deconvolution (solid-primary templates) —
+   - run full trufflepig deconvolution (solid-primary templates) —
      appropriate for solid-tumour cohorts with TME admixture;
    - OR, in ``high_purity_passthrough`` mode, treat observed TPM as
      tumor TPM directly. This is correct for sorted heme malignancies
@@ -40,15 +40,30 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trufflepig.clean_tpm import assert_clean_tpm
+from trufflepig.expression_normalize import normalize_expression
+
+
+_ANNOTATION_COLS = {"symbol", "Ensembl_Gene_ID", "Entrez_Gene_Id"}
+
 
 def _normalise_gene_column(df: pd.DataFrame, path: str | Path) -> pd.DataFrame:
     """Return a copy with the gene-symbol column named ``symbol``."""
+    out = df.copy()
+    for candidate in ("Ensembl_Gene_ID", "ensembl_gene_id", "gene_id"):
+        if candidate in out.columns and candidate != "Ensembl_Gene_ID":
+            out = out.rename(columns={candidate: "Ensembl_Gene_ID"})
+            break
     for candidate in ("symbol", "Gene", "Hugo_Symbol"):
-        if candidate in df.columns:
+        if candidate in out.columns:
             if candidate == "symbol":
-                return df.copy()
-            return df.rename(columns={candidate: "symbol"})
+                return out
+            return out.rename(columns={candidate: "symbol"})
     raise ValueError(f"Expected one of symbol/Gene/Hugo_Symbol columns in {path}")
+
+
+def _sample_columns(df: pd.DataFrame) -> list[str]:
+    return [c for c in df.columns if c not in _ANNOTATION_COLS]
 
 
 def validate_tpm_sample_sums(
@@ -65,7 +80,7 @@ def validate_tpm_sample_sums(
     logging; a ``ValueError`` is raised when any non-empty sample falls
     outside ``expected_total ± tolerance_fraction``.
     """
-    sample_cols = [c for c in tpm_frame.columns if c != "symbol"]
+    sample_cols = _sample_columns(tpm_frame)
     if not sample_cols:
         return pd.DataFrame(columns=["sample", "total_tpm", "fraction_of_expected"])
 
@@ -106,7 +121,7 @@ def load_cbioportal_rpkm(path: str | Path) -> pd.DataFrame:
     if "Hugo_Symbol" not in df.columns:
         raise ValueError(f"Expected Hugo_Symbol column in {path}")
     df = df.rename(columns={"Hugo_Symbol": "symbol"})
-    sample_cols = [c for c in df.columns if c not in ("symbol", "Entrez_Gene_Id")]
+    sample_cols = _sample_columns(df)
     df[sample_cols] = df[sample_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     df = df[df["symbol"].notna() & (df["symbol"].astype(str).str.len() > 0)]
     df = df.groupby("symbol", as_index=False, sort=False)[sample_cols].sum()
@@ -143,7 +158,7 @@ def load_log2_tpm(
             if len(missing) > 8:
                 preview += f", ... (+{len(missing) - 8})"
             raise ValueError(f"Missing requested sample columns in {path}: {preview}")
-    sample_cols = [c for c in df.columns if c != "symbol"]
+    sample_cols = _sample_columns(df)
     df[sample_cols] = df[sample_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     df[sample_cols] = np.power(2.0, df[sample_cols]) - 1.0
     df = df[df["symbol"].notna() & (df["symbol"].astype(str).str.len() > 0)]
@@ -160,11 +175,33 @@ def rpkm_to_tpm(rpkm_frame: pd.DataFrame) -> pd.DataFrame:
     column is a sample's RPKM vector.
     """
     out = rpkm_frame.copy()
-    sample_cols = [c for c in out.columns if c != "symbol"]
+    sample_cols = _sample_columns(out)
     totals = out[sample_cols].sum(axis=0)
     totals = totals.replace(0, np.nan)
     out[sample_cols] = out[sample_cols].divide(totals, axis=1) * 1_000_000
     out[sample_cols] = out[sample_cols].fillna(0.0)
+    return out
+
+
+def clean_tpm_matrix(tpm_frame: pd.DataFrame) -> pd.DataFrame:
+    """Return a technical-RNA-cleaned TPM matrix for cohort generation."""
+    out = tpm_frame.copy()
+    sample_cols = _sample_columns(out)
+    if not sample_cols:
+        return out
+    out, _record = normalize_expression(
+        out,
+        label_col="symbol",
+        id_col="Ensembl_Gene_ID" if "Ensembl_Gene_ID" in out.columns else None,
+        value_cols=sample_cols,
+    )
+    assert_clean_tpm(
+        out,
+        value_cols=sample_cols,
+        label_col="symbol",
+        id_col="Ensembl_Gene_ID" if "Ensembl_Gene_ID" in out.columns else None,
+        context="cohort deconvolution input",
+    )
     return out
 
 
@@ -191,14 +228,17 @@ def summarise_passthrough(
     Returns long-form frame with columns: symbol, cancer_code,
     [subtype,] tumor_tpm_median, tumor_tpm_q1, tumor_tpm_q3, n_samples.
     """
-    sample_cols = [c for c in tpm_frame.columns if c != "symbol"]
+    sample_cols = _sample_columns(tpm_frame)
+    id_vars = ["symbol"]
+    if "Ensembl_Gene_ID" in tpm_frame.columns:
+        id_vars.insert(0, "Ensembl_Gene_ID")
     # Drop near-zero-expression rows across every sample to keep the
     # aggregate compact — low-TPM genes are noise anyway.
     row_max = tpm_frame[sample_cols].max(axis=1)
     dense = tpm_frame[row_max >= min_tpm].copy()
 
     melted = dense.melt(
-        id_vars="symbol",
+        id_vars=id_vars,
         value_vars=sample_cols,
         var_name="sample",
         value_name="tumor_tpm",
@@ -209,12 +249,12 @@ def summarise_passthrough(
     if has_subtype:
         melted["subtype"] = melted["sample"].map(subtype_map).fillna("")
         melted = melted[melted["subtype"].astype(str).str.len() > 0]
-        group_cols = ["cancer_code", "subtype", "symbol"]
+        group_cols = ["cancer_code", "subtype"] + id_vars
     else:
-        group_cols = ["cancer_code", "symbol"]
+        group_cols = ["cancer_code"] + id_vars
 
     if melted.empty:
-        cols = ["symbol", "cancer_code"]
+        cols = id_vars + ["cancer_code"]
         if has_subtype:
             cols.append("subtype")
         cols += ["tumor_tpm_median", "tumor_tpm_q1", "tumor_tpm_q3", "n_samples"]
@@ -228,7 +268,7 @@ def summarise_passthrough(
         n_samples="count",
     ).reset_index()
 
-    cols = ["symbol", "cancer_code"]
+    cols = id_vars + ["cancer_code"]
     if has_subtype:
         cols.append("subtype")
     cols += ["tumor_tpm_median", "tumor_tpm_q1", "tumor_tpm_q3", "n_samples"]
@@ -263,6 +303,8 @@ def run(
         f"{tpm.shape[1] - 1} samples in {time.time() - t0:.1f}s",
         flush=True,
     )
+    tpm = clean_tpm_matrix(tpm)
+    print(f"[cohort] {cohort_code}: technical-RNA-cleaned TPM matrix", flush=True)
 
     subtype_map = (
         load_subtype_labels(subtype_labels_csv) if subtype_labels_csv else None
@@ -272,7 +314,7 @@ def run(
 
     if not passthrough:
         raise NotImplementedError(
-            "Full pirlygenes deconv on non-TCGA cohorts is not wired yet — "
+            "Full trufflepig deconv on non-TCGA cohorts is not wired yet — "
             "the HGNC→Ensembl mapping + template selection for cohort-specific "
             "sample modes (heme/sorted/FFPE) is a follow-up. Use "
             "passthrough=True for now; documented in the module docstring."

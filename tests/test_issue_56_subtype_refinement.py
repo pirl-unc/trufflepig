@@ -176,6 +176,7 @@ def test_estimate_tumor_expression_ranges_emits_subtype_refinement_columns(tmp_p
     three new provenance columns in the output frame and mark the
     expected marker genes as refined."""
     import pandas as pd
+    from trufflepig.clean_tpm import technical_rna_mask
     from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot import estimate_tumor_expression_ranges
 
@@ -188,9 +189,15 @@ def test_estimate_tumor_expression_ranges_emits_subtype_refinement_columns(tmp_p
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_colon"].astype(float) + 1.0,
+            "TPM": ref["colon_nTPM"].astype(float),
         }
     )
+    technical = technical_rna_mask(
+        df,
+        label_col="gene_symbol",
+        id_col="ensembl_gene_id",
+    )
+    df.loc[~technical, "TPM"] = df.loc[~technical, "TPM"] + 1.0
     # Inject expected marker genes at high TPM so the refinement path
     # lights up.
     marker_boosts = {"FAP": 250.0, "POSTN": 400.0, "CD163": 180.0, "MRC1": 120.0}

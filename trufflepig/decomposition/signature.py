@@ -9,6 +9,8 @@ They do *not* support fine-grained T-cell subtype splits such as CD4 vs CD8
 or alpha-beta vs gamma-delta in a way that is stable for bulk decomposition.
 """
 
+from functools import lru_cache
+
 from .templates import TISSUE_CATEGORIES, COMPONENT_TO_CATEGORY
 from trufflepig.reference import hpa_cell_type_expression, pan_cancer_expression
 
@@ -86,7 +88,7 @@ COMPONENT_TO_BULK_TISSUE = {
 # one arbitrarily.
 #
 # Coverage is ~64/76 leaf cancers; tissues missing from this map
-# fall back to the bulk whole-tissue ``nTPM_<tissue>`` column
+# fall back to the bulk whole-tissue ``<tissue>_nTPM`` column
 # (existing behavior). Gaps: thyroid, urinary_bladder, adrenal_gland,
 # bone (osteoblasts not in HPA), cartilage, notochord, thymus — see
 # issue #214 for the extension plan.
@@ -245,7 +247,7 @@ def get_matched_normal_cell_type(tissue):
     - ``'proxy'`` — closest-related proxy (confidence < 1.0; see
       :data:`MATCHED_NORMAL_CELL_TYPE_PROXY` for rationale)
     - ``'bulk_fallback'`` — no mapping available; callers should use
-      the bulk ``nTPM_<tissue>`` column from pan-cancer-expression
+      the bulk ``<tissue>_nTPM`` column from pan-cancer-expression
     """
     if tissue in MATCHED_NORMAL_CELL_TYPE:
         return (MATCHED_NORMAL_CELL_TYPE[tissue], 1.0, "direct")
@@ -290,16 +292,33 @@ def _load_hpa_cell_types():
 
 
 def _load_normal_tissue_expression():
-    """Load the bulk normal-tissue expression matrix.
+    """Load the bulk normal-tissue expression matrix on TPM scale."""
+    return pan_cancer_expression(technical_rna_normalize=True)
 
-    Decomposition templates were calibrated against the native FPKM-as-
-    stored per-column scale, so we opt out of the loader's default
-    ``renormalize_to_million=True``. Flipping this universally is
-    tracked in pirl-unc/trufflepig#27 — needs a full calibration sweep.
-    """
-    return pan_cancer_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=False,
+
+@lru_cache(maxsize=1)
+def _signature_reference_tables():
+    """Return indexed HPA/bulk reference tables shared by signature builds."""
+    hpa = _load_hpa_cell_types().drop_duplicates(subset="Ensembl_Gene_ID").copy()
+    bulk = (
+        _load_normal_tissue_expression()
+        .drop_duplicates(subset="Ensembl_Gene_ID")
+        .copy()
+    )
+    hpa["Ensembl_Gene_ID"] = hpa["Ensembl_Gene_ID"].astype(str)
+    bulk["Ensembl_Gene_ID"] = bulk["Ensembl_Gene_ID"].astype(str)
+
+    gene_ids = set(hpa["Ensembl_Gene_ID"])
+    gene_ids |= set(bulk["Ensembl_Gene_ID"])
+    symbol_map = dict(zip(hpa["Ensembl_Gene_ID"], hpa["Symbol"].astype(str)))
+    symbol_map.update(
+        dict(zip(bulk["Ensembl_Gene_ID"], bulk["Symbol"].astype(str)))
+    )
+    return (
+        hpa.set_index("Ensembl_Gene_ID", drop=False),
+        bulk.set_index("Ensembl_Gene_ID", drop=False),
+        frozenset(gene_ids),
+        symbol_map,
     )
 
 
@@ -323,12 +342,12 @@ def _select_best_category_tissue(category, sample_by_eid, genes, bulk_indexed):
 
     tissues = TISSUE_CATEGORIES[category]
     available_cols = [
-        f"nTPM_{t}" for t in tissues if f"nTPM_{t}" in bulk_indexed.columns
+        f"{t}_nTPM" for t in tissues if f"{t}_nTPM" in bulk_indexed.columns
     ]
     if not available_cols:
-        return tissues[0], f"nTPM_{tissues[0]}"
+        return tissues[0], f"{tissues[0]}_nTPM"
 
-    available_tissues = [col.replace("nTPM_", "") for col in available_cols]
+    available_tissues = [col.removesuffix("_nTPM") for col in available_cols]
     if len(available_cols) == 1:
         return available_tissues[0], available_cols[0]
 
@@ -339,7 +358,7 @@ def _select_best_category_tissue(category, sample_by_eid, genes, bulk_indexed):
             for col in available_cols
         ]
     )
-    all_ntpm_cols = [c for c in bulk_indexed.columns if c.startswith("nTPM_")]
+    all_ntpm_cols = [c for c in bulk_indexed.columns if c.endswith("_nTPM")]
     background_median = np.median(
         bulk_indexed[all_ntpm_cols].astype(float).reindex(genes).fillna(0.0).values,
         axis=1,
@@ -404,29 +423,14 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
     """
     import numpy as np
 
-    hpa = _load_hpa_cell_types().drop_duplicates(subset="Ensembl_Gene_ID").copy()
-    bulk = (
-        _load_normal_tissue_expression()
-        .drop_duplicates(subset="Ensembl_Gene_ID")
-        .copy()
-    )
+    hpa, bulk, all_gene_ids, symbol_map = _signature_reference_tables()
 
-    gene_ids = set(hpa["Ensembl_Gene_ID"].astype(str))
-    gene_ids |= set(bulk["Ensembl_Gene_ID"].astype(str))
+    gene_ids = set(all_gene_ids)
     if gene_subset is not None:
         gene_ids &= {str(gene_id) for gene_id in gene_subset}
 
     genes = sorted(gene_ids)
-    symbol_map = dict(
-        zip(hpa["Ensembl_Gene_ID"].astype(str), hpa["Symbol"].astype(str))
-    )
-    symbol_map.update(
-        dict(zip(bulk["Ensembl_Gene_ID"].astype(str), bulk["Symbol"].astype(str)))
-    )
     symbols = [symbol_map.get(gene_id, gene_id) for gene_id in genes]
-
-    hpa = hpa.set_index(hpa["Ensembl_Gene_ID"].astype(str))
-    bulk = bulk.set_index(bulk["Ensembl_Gene_ID"].astype(str))
 
     cols = []
     for comp in components:
@@ -440,13 +444,13 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
         # lineage-cell-only), so the matched-normal compartment
         # doesn't absorb stromal / immune signal that belongs to
         # dedicated fibroblast / myeloid / endothelial compartments.
-        # Fall back to the bulk ``nTPM_<tissue>`` column for tissues
+        # Fall back to the bulk ``<tissue>_nTPM`` column for tissues
         # without a cell-type match (thyroid, urinary_bladder, bone,
         # thymus, etc.).
         if comp.startswith("matched_normal_"):
             tissue = comp[len("matched_normal_") :]
 
-            tissue_col = f"nTPM_{tissue}"
+            tissue_col = f"{tissue}_nTPM"
             bulk_vals = None
             if tissue_col in bulk.columns:
                 bulk_vals = (
@@ -501,7 +505,7 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
                 )
             else:
                 first_tissue = TISSUE_CATEGORIES[category][0]
-                tissue_col = f"nTPM_{first_tissue}"
+                tissue_col = f"{first_tissue}_nTPM"
             if tissue_col in bulk.columns:
                 vals = bulk[tissue_col].astype(float).reindex(genes).fillna(0.0).values
                 cols.append(vals)
@@ -512,9 +516,9 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
         bulk_tissues = COMPONENT_TO_BULK_TISSUE.get(comp, [])
         if bulk_tissues:
             bulk_cols = [
-                f"nTPM_{tissue}"
+                f"{tissue}_nTPM"
                 for tissue in bulk_tissues
-                if f"nTPM_{tissue}" in bulk.columns
+                if f"{tissue}_nTPM" in bulk.columns
             ]
             if bulk_cols:
                 vals = (

@@ -69,7 +69,7 @@ def _prepare_sample_vs_cancer_data(
     )
 
     # Internally we still HK-normalize the reference so the cross-dataset
-    # scale mismatch (sample TPM totals ~1M; TCGA `FPKM_*` cohort medians
+    # scale mismatch (sample TPM totals ~1M; TCGA `*_TPM` cohort medians
     # total ~250K over the ~20K genes we track) cancels out. For display
     # we then multiply back by the sample's own HK median TPM — so both
     # axes end up on a familiar TPM scale that's correctly rescaled to
@@ -80,13 +80,13 @@ def _prepare_sample_vs_cancer_data(
     )
     if cancer_type is not None:
         cancer_type = resolve_cancer_type(cancer_type)
-        ref_col = f"FPKM_{cancer_type}"
+        ref_col = f"{cancer_type}_TPM"
         ref["_ref_hk"] = ref[ref_col].astype(float)
         cancer_label = CANCER_TYPE_NAMES.get(cancer_type, cancer_type)
         cohort_label = f"{cancer_label} cohort ({cancer_type})"
     else:
-        fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
-        ref["_ref_hk"] = ref[fpkm_cols].astype(float).mean(axis=1)
+        cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
+        ref["_ref_hk"] = ref[cohort_cols].astype(float).mean(axis=1)
         cohort_label = "Mean across 33 TCGA cancer cohorts"
 
     ref_lookup = dict(

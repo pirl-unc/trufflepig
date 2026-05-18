@@ -105,11 +105,15 @@ def _compute_tissue_baselines():
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     symbols = ref["Symbol"].tolist()
     mt_set = set(_MT_GENES)
-    ntpm_cols = [c for c in ref.columns if c.startswith("nTPM_")]
+    ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM_raw")]
+    suffix = "_nTPM_raw"
+    if not ntpm_cols:
+        ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
+        suffix = "_nTPM"
 
     baselines = {}
     for col in ntpm_cols:
-        tissue = col.replace("nTPM_", "")
+        tissue = col.removesuffix(suffix)
         vals = ref[col].astype(float).values
         total = sum(
             v
@@ -163,6 +167,42 @@ def _gene_tpm_lookup(sample_tpm_by_symbol, genes):
     return vals, len(vals)
 
 
+def _build_qc_sample_tpm_by_symbol(df_gene_expr):
+    """Return ``{symbol: max_TPM}`` for raw-QC checks.
+
+    Unlike the analysis helpers, sample-quality degradation metrics
+    intentionally inspect raw technical-RNA burden before cleanup.
+    """
+    import pandas as pd
+
+    from .common import guess_gene_cols, without_dataframe_attrs
+    from .plot_data_helpers import _strip_ensembl_version
+    from .reference import pan_cancer_expression
+
+    with without_dataframe_attrs(df_gene_expr):
+        gene_id_col, gene_name_col = guess_gene_cols(df_gene_expr)
+        tpm_col = (
+            "TPM"
+            if "TPM" in df_gene_expr.columns
+            else next((c for c in df_gene_expr.columns if c.lower() == "tpm"), None)
+        )
+        if tpm_col is None:
+            raise KeyError(f"No TPM column found. Columns: {list(df_gene_expr.columns)}")
+
+        ref = pan_cancer_expression()
+        id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+        gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)
+        fallback = df_gene_expr[gene_name_col].fillna("").astype(str)
+        symbols = gene_ids.map(id_to_sym).fillna(fallback)
+        tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
+        valid = symbols.notna() & tpms.notna() & symbols.astype(str).str.len().gt(0)
+        return dict(
+            pd.DataFrame({"sym": symbols[valid], "tpm": tpms[valid]})
+            .groupby("sym")["tpm"]
+            .max()
+        )
+
+
 def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
     """Assess sample quality from a TPM expression matrix.
 
@@ -198,9 +238,7 @@ def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
         has_issues : bool
             True if any quality concern was detected.
     """
-    from .common import build_sample_tpm_by_symbol
-
-    sample_tpm = build_sample_tpm_by_symbol(df_gene_expr)
+    sample_tpm = _build_qc_sample_tpm_by_symbol(df_gene_expr)
 
     # Filter NaN values from the TPM dict (some reference genes have NaN
     # in TCGA cohorts where they were not measured, e.g. BCR/TCR loci).

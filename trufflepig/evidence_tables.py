@@ -292,7 +292,7 @@ def build_candidate_evidence_block(
         cached = pan_dict_cache.get(code)
         if cached is not None:
             return cached
-        col = f"FPKM_{code}"
+        col = f"{code}_TPM"
         if col not in pan.columns:
             pan_dict_cache[code] = {}
             return {}

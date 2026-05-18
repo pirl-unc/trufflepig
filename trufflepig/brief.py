@@ -45,6 +45,7 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_interpretation,
     expression_independent_rna_context,
+    filter_current_therapy_targets,
     hla_restrictions_for_target_row,
     hla_restricted_target_supported,
     normal_expression_context,
@@ -551,7 +552,7 @@ def _scope_level_eligibility_context(target_row, analysis) -> str:
 
 
 def _expression_independent_evidence_gap(target_row, analysis) -> str:
-    """Surface when a non-expression eligibility gate was not provided."""
+    """Surface when non-expression eligibility evidence was not provided."""
     if not expression_independent_indication(target_row):
         return ""
     supplied_context = supplied_alteration_context_for_target_row(
@@ -930,15 +931,21 @@ def _source_trace_reason(target_row, expression_row, *, in_shortlist: bool) -> s
     if phase and phase != "approved":
         parts.append(phase)
 
-    if in_shortlist:
+    if expression_independent_indication(target_row):
+        parts.append("RNA is context only; eligibility does not depend on target expression")
+    elif in_shortlist:
         if source["tier"] == "tumor_supported":
-            parts.append("clears source gate")
+            parts.append("mostly tumor signal")
         elif lineage_material:
-            parts.append("same-lineage marker, provisional source")
+            parts.append("same-lineage marker; tumor origin uncertain")
+        elif source["tier"] == "mixed_source":
+            parts.append("mixed tumor/background signal")
+        elif source["tier"] == "background_dominant":
+            parts.append("mostly background signal")
         else:
-            parts.append(f"{source['label']}, clears source gate")
+            parts.append(source["summary"])
     elif lineage_material:
-        parts.append("same-lineage marker, provisional source")
+        parts.append("same-lineage marker; tumor origin uncertain")
     elif _brief_truthy(expression_row.get("matched_normal_over_predicted")):
         if comp_label != "—":
             background = (
@@ -1035,7 +1042,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     if not rows:
         return ""
     lines = [
-        "**Target expression source trace**",
+        "**Where target RNA signal appears to come from**",
         "",
         "| Gene | Bulk TPM | Tumor-source bulk TPM | Tumor fraction | Top non-tumor attribution | Component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
@@ -1111,6 +1118,7 @@ def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
         targets_df = cancer_therapy_targets(panel_code, subtype=panel_subtype)
     else:
         targets_df = cancer_therapy_targets(panel_code)
+    targets_df = filter_current_therapy_targets(targets_df)
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 
 
@@ -1230,6 +1238,29 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
             f"{surrogate}{tpm_clause} sets a provisional report label; confirm "
             f"with {confirm} or clinical diagnosis before using the therapy shortlist."
         )
+    fine_inference = analysis.get("fine_report_scope_inference") or {}
+    if fine_inference and not constrained_code and source != "user-specified":
+        reference = str(
+            fine_inference.get("reference_cancer_type")
+            or analysis.get("reference_cancer_type")
+            or "the broad reference"
+        ).strip()
+        metrics = fine_inference.get("metrics") or {}
+        score = metrics.get("fine_reference_support") or fine_inference.get(
+            "fine_reference_strength"
+        )
+        score_clause = (
+            f" (fine-reference support {score:.2f})"
+            if isinstance(score, (int, float))
+            else ""
+        )
+        return (
+            f"**Cancer-type basis:** RNA evidence supports "
+            f"{_cancer_type_context_label(cancer_code)} as the fine label over "
+            f"the broader {_cancer_type_context_label(reference)} context"
+            f"{score_clause}; broad-cohort modules still use {reference} where "
+            "a coarse reference is required."
+        )
     call_rescue = analysis.get("cancer_call_rescue") or {}
     if call_rescue and not constrained_code and source != "user-specified":
         return _cancer_call_rescue_basis_line(analysis, cancer_code)
@@ -1344,8 +1375,8 @@ def _alteration_evidence_line(analysis) -> str:
     if analysis.get("alteration_inputs_supplied"):
         return (
             "**Alteration evidence:** alteration input was supplied, but no usable "
-            "calls were parsed; verify the file format before using alteration-gated "
-            "therapies."
+            "calls were parsed; verify the file format before using therapies "
+            "that require alteration evidence."
         )
     return ""
 
@@ -1441,6 +1472,19 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
                 f"hypothesis; nearest TCGA expression reference is "
                 f"{top_code or 'unresolved'}{alt_clause}. Use these TCGA labels for "
                 "expression context, not as the diagnosis."
+            )
+        fine_inference = analysis.get("fine_report_scope_inference") or {}
+        if fine_inference:
+            reference = str(
+                fine_inference.get("reference_cancer_type")
+                or analysis.get("reference_cancer_type")
+                or ""
+            ).strip()
+            return (
+                f"**RNA classifier check:** broad RNA ranking supports "
+                f"{reference or 'the parent context'}; fine-label evidence supports "
+                f"{cancer_code}. Use the broad label for cohort math and the fine "
+                "label for report interpretation."
             )
         return ""
 
@@ -1654,7 +1698,7 @@ def _missing_hla_prompts(targets_df, ranges_df, analysis, limit: int = 3) -> Lis
         tumor_tpm = _brief_float(expr.get("attr_tumor_tpm"), observed)
         if max(observed, tumor_tpm) < 1.0:
             continue
-        agent = str(target.get("agent") or "the HLA-gated therapy").strip()
+        agent = str(target.get("agent") or "the HLA-restricted therapy").strip()
         key = (sym, agent)
         if key in seen:
             continue

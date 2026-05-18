@@ -17,7 +17,7 @@ def _tcga_sample(cancer_code):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM_raw"].astype(float),
         }
     )
 
@@ -28,7 +28,7 @@ def _normal_tissue_sample(tissue):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"nTPM_{tissue}"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM_raw"].astype(float),
         }
     )
 
@@ -59,15 +59,15 @@ def test_all_tcga_types_pass_quality_with_tissue_match():
     from trufflepig.tumor_purity import CANCER_TO_TISSUE
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
-    fpkm_cols = [c for c in ref.columns if c.startswith("FPKM_")]
+    cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
 
-    for col in fpkm_cols:
-        code = col.replace("FPKM_", "")
+    for col in cohort_cols:
+        code = col.removesuffix("_TPM")
         df = pd.DataFrame(
             {
                 "ensembl_gene_id": ref["Ensembl_Gene_ID"],
                 "gene_symbol": ref["Symbol"],
-                "TPM": ref[col].astype(float),
+                "TPM": ref[f"{code}_TPM_raw"].astype(float),
             }
         )
         tissue = CANCER_TO_TISSUE.get(code)
@@ -228,7 +228,7 @@ def test_nan_tpm_values_do_not_cause_errors():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["FPKM_COAD"].astype(float),  # has 189 NaN values
+            "TPM": ref["COAD_TPM_raw"].astype(float),  # has NaN values
         }
     )
     result = assess_sample_quality(df)

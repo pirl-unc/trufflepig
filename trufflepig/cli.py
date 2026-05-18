@@ -70,7 +70,7 @@ def _add_run_parser(sub):
     p.add_argument("--genes", default=None, help="Explicit gene-level input path.")
     p.add_argument("--transcripts", default=None, help="Explicit transcript-level input path.")
     p.add_argument("--aggregate-gene-expression", action="store_true")
-    p.add_argument("--expression-qc-rescue", default="auto")
+    p.add_argument("--expression-qc-rescue", default="auto", choices=("auto", "always"))
     p.add_argument("--expression-qc-remove-noncoding", action="store_true")
     p.add_argument("--therapy-target-top-k", type=int, default=10)
     p.add_argument("--therapy-target-tpm-threshold", type=float, default=30.0)

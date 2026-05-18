@@ -182,8 +182,18 @@ DECOMPOSITION_PARAMETERS = {
         # expression evidence makes a metastatic template less plausible.
         "met_origin_preference_min": 0.5,
         # Penalty = clip(1 - gain × (origin_score - template_score), floor, 1)
-        "met_origin_penalty_gain": 0.6,
-        "met_origin_penalty_floor": 0.65,
+        "met_origin_penalty_gain": 1.0,
+        "met_origin_penalty_floor": 0.35,
+        # When a metastatic template has both stronger site-context support than
+        # the primary origin and a real site-specific host compartment in the
+        # fitted sample, let that evidence overcome broad-compartment residuals.
+        # This matters after TPM-renormalizing references: liver bulk is no
+        # longer on the old native scale, so hepatocyte-heavy samples should be
+        # routed by host-site evidence rather than by generic immune/stromal fit.
+        "met_site_dominance_min_delta": 0.10,
+        "met_site_dominance_min_extra_fraction": 0.25,
+        "met_site_dominance_gain": 12.0,
+        "met_site_dominance_cap": 3.0,
         # Extra-component factor rewards met templates whose site-specific
         # host cell (e.g. hepatocyte, astrocyte) is actually detected.
         # factor = base + gain × clip(extra_fraction / full_fraction, 0, 1)
@@ -200,9 +210,9 @@ DECOMPOSITION_PARAMETERS = {
         # How much the NNLS fit quality matters relative to cancer-type
         # support.  score = fit × (base + gain × cancer_support), so at
         # cancer_support=1.0 the fit matters fully; at 0.0 the fit is
-        # discounted to 35% weight.
-        "fit_score_base": 0.35,
-        "fit_score_gain": 0.65,
+        # discounted to 30% weight.
+        "fit_score_base": 0.30,
+        "fit_score_gain": 0.70,
         # Hard floor on the combined template factor to prevent a template
         # from being completely zeroed out by a poor tissue match.
         "min_template_factor": 0.05,
@@ -1016,6 +1026,20 @@ def _fit_one_hypothesis(
         * (scoring["fit_score_base"] + scoring["fit_score_gain"] * cancer_support)
         * template_factor
     )
+    if template_name.startswith("met_") and extra_components:
+        site_delta = float(template_tissue_score - origin_tissue_score)
+        if (
+            site_delta >= scoring["met_site_dominance_min_delta"]
+            and extra_sample_fraction >= scoring["met_site_dominance_min_extra_fraction"]
+        ):
+            site_boost = float(
+                np.clip(
+                    1.0 + scoring["met_site_dominance_gain"] * site_delta,
+                    1.0,
+                    scoring["met_site_dominance_cap"],
+                )
+            )
+            score *= site_boost
 
     # Purity floor penalty (#98): candidates with biologically
     # implausible purity (<2%) get their score collapsed so they
@@ -1076,6 +1100,9 @@ def decompose_sample(
     site_hint=None,
     sample_context=None,
     candidate_rows=None,
+    sample_raw_by_symbol=None,
+    sample_by_eid=None,
+    use_subtype_signatures=True,
 ):
     """Decompose a sample across multiple cancer-type and template hypotheses.
 
@@ -1093,23 +1120,20 @@ def decompose_sample(
     """
     from ..plot import _sample_expression_by_symbol
 
-    sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
-    # Decomposition templates were tuned against native-scale references.
-    # Opt out of renormalize_to_million pending the #27 calibration sweep.
-    ref = (
-        pan_cancer_expression(
-            technical_rna_normalize=True,
-            renormalize_to_million=False,
+    if sample_raw_by_symbol is None:
+        sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
+    if sample_by_eid is None:
+        ref = (
+            pan_cancer_expression(technical_rna_normalize=True)
+            .drop_duplicates(subset="Symbol")
+            .set_index("Symbol")
         )
-        .drop_duplicates(subset="Symbol")
-        .set_index("Symbol")
-    )
-    sym_to_eid = ref["Ensembl_Gene_ID"].to_dict()
-    sample_by_eid = {}
-    for symbol, tpm in sample_raw_by_symbol.items():
-        eid = sym_to_eid.get(symbol)
-        if eid:
-            sample_by_eid[eid] = float(tpm)
+        sym_to_eid = ref["Ensembl_Gene_ID"].to_dict()
+        sample_by_eid = {}
+        for symbol, tpm in sample_raw_by_symbol.items():
+            eid = sym_to_eid.get(symbol)
+            if eid:
+                sample_by_eid[eid] = float(tpm)
 
     # Reuse pre-ranked candidates when the caller has them (#85). The
     # CLI's analyze() already computes the full ranking trace —
@@ -1120,6 +1144,7 @@ def decompose_sample(
             df_gene_expr,
             candidate_codes=cancer_types,
             top_k=len(cancer_types) if cancer_types is not None else 6,
+            use_subtype_signatures=use_subtype_signatures,
         )
     else:
         if cancer_types is not None:

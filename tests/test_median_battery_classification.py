@@ -1,6 +1,6 @@
 """Battery contract: every TCGA cohort median must classify as itself.
 
-Running ``rank_cancer_type_candidates`` on the FPKM_<code> median
+Running ``rank_cancer_type_candidates`` on the ``<code>_TPM`` median
 vector (as a pseudo-sample) is the easiest possible classification
 task — if the classifier can't call the cohort median correctly, any
 real-sample call against that cohort is suspect.
@@ -20,7 +20,7 @@ from trufflepig.tumor_purity import rank_cancer_type_candidates
 
 def _all_tcga_codes():
     ref = pan_cancer_expression()
-    return sorted(c.replace("FPKM_", "") for c in ref.columns if c.startswith("FPKM_"))
+    return sorted(c.removesuffix("_TPM") for c in ref.columns if c.endswith("_TPM"))
 
 
 def _cohort_median_sample(code: str) -> pd.DataFrame:
@@ -29,7 +29,7 @@ def _cohort_median_sample(code: str) -> pd.DataFrame:
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{code}"].astype(float),
+            "TPM": ref[f"{code}_TPM"].astype(float),
         }
     )
 

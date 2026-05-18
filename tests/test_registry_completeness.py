@@ -3,7 +3,7 @@
 Every **leaf** cancer-type code in ``cancer-type-registry.csv``
 (parent_code empty) must carry a minimum package of information:
 
-1. **Expression data** — either an ``FPKM_<code>`` column in
+1. **Expression data** — either a ``<code>_TPM`` column in
    ``pan-cancer-expression.csv`` (the TCGA-style pan-cancer reference)
    or a row-set in ``subtype-deconvolved-expression.csv.gz``.
 2. **Lineage panel** — at least five genes registered in
@@ -222,7 +222,7 @@ def _leaf_codes_with_coverage():
     leaf = reg[reg["parent_code"].fillna("").astype(str).eq("")]
 
     pan = pan_cancer_expression()
-    pan_codes = {c.replace("FPKM_", "") for c in pan.columns if c.startswith("FPKM_")}
+    pan_codes = {c.removesuffix("_TPM") for c in pan.columns if c.endswith("_TPM")}
     sub = subtype_deconvolved_expression()
     sub_codes = set(sub["cancer_code"].dropna().unique()) if sub is not None else set()
 

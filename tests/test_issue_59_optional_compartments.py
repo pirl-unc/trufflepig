@@ -204,7 +204,7 @@ def test_detection_signature_path_survives_through_engine_api():
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     sample_tpm = dict(
-        zip(ref["Symbol"].astype(str), ref["nTPM_prostate"].astype(float))
+        zip(ref["Symbol"].astype(str), ref["prostate_nTPM"].astype(float))
     )
     # Inject Schwann markers so the gate should fire on PRAD.
     sample_tpm["MPZ"] = 50.0

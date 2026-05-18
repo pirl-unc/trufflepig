@@ -12,9 +12,11 @@ import pytest
 
 from trufflepig.tcga_decompose import (
     aggregate_per_type,
+    clean_tcga_tpm_matrix,
     is_primary_tumor_sample,
     sample_barcode_to_project,
     select_samples,
+    technical_rna_mask_for_ids,
 )
 
 
@@ -99,40 +101,95 @@ def test_select_samples_cancer_type_filter():
     assert pairs == [("TCGA-19-1787-01", "GBM")]
 
 
+def test_clean_tcga_tpm_matrix_zeros_technical_rows_by_id():
+    df = pd.DataFrame(
+        {
+            "sample_a": [200.0, 300.0, 500.0],
+            "sample_b": [50.0, 50.0, 900.0],
+        },
+        index=pd.Index(
+            ["ENSG00000198804.2", "ENSG00000142515.1", "ENSG00000075624.13"]
+        ),
+        dtype="float32",
+    )
+
+    mask = technical_rna_mask_for_ids(df.index)
+    assert mask.tolist() == [True, False, False]
+    out = clean_tcga_tpm_matrix(df)
+
+    assert out is df
+    assert out.iloc[0].sum() == pytest.approx(0.0)
+    assert out["sample_a"].sum() == pytest.approx(1000.0)
+    assert out["sample_b"].sum() == pytest.approx(1000.0)
+    assert out.loc["ENSG00000142515.1", "sample_a"] == pytest.approx(375.0)
+
+
+def test_clean_tcga_tpm_matrix_writes_back_when_numpy_returns_copy():
+    df = pd.DataFrame(
+        {
+            "sample_a": [200.0, 300.0, 500.0],
+            "sample_b": [50.0, 50.0, 900.0],
+        },
+        index=pd.Index(
+            ["ENSG00000198804.2", "ENSG00000142515.1", "ENSG00000075624.13"]
+        ),
+    )
+
+    assert df.dtypes.tolist() == [float, float]
+    out = clean_tcga_tpm_matrix(df)
+
+    assert out is df
+    assert out.iloc[0].sum() == pytest.approx(0.0)
+    assert out["sample_a"].sum() == pytest.approx(1000.0)
+    assert out.loc["ENSG00000142515.1", "sample_a"] == pytest.approx(375.0)
+
+
 def test_aggregate_per_type_basic_stats():
     per_sample = pd.DataFrame(
         [
             {
                 "sample": "s1",
+                "Ensembl_Gene_ID": "ENSG00000141510",
                 "cancer_code": "BRCA",
                 "symbol": "TP53",
                 "tumor_tpm": 10.0,
             },
             {
                 "sample": "s2",
+                "Ensembl_Gene_ID": "ENSG00000141510",
                 "cancer_code": "BRCA",
                 "symbol": "TP53",
                 "tumor_tpm": 20.0,
             },
             {
                 "sample": "s3",
+                "Ensembl_Gene_ID": "ENSG00000141510",
                 "cancer_code": "BRCA",
                 "symbol": "TP53",
                 "tumor_tpm": 30.0,
             },
             {
                 "sample": "s4",
+                "Ensembl_Gene_ID": "ENSG00000141510",
                 "cancer_code": "BRCA",
                 "symbol": "TP53",
                 "tumor_tpm": 40.0,
             },
-            {"sample": "s1", "cancer_code": "GBM", "symbol": "TP53", "tumor_tpm": 5.0},
+            {
+                "sample": "s1",
+                "Ensembl_Gene_ID": "ENSG00000141510",
+                "cancer_code": "GBM",
+                "symbol": "TP53",
+                "tumor_tpm": 5.0,
+            },
         ]
     )
     summary = aggregate_per_type(per_sample)
+    assert "Ensembl_Gene_ID" in summary.columns
     brca = summary[
         (summary["cancer_code"] == "BRCA") & (summary["symbol"] == "TP53")
     ].iloc[0]
+    assert brca["Ensembl_Gene_ID"] == "ENSG00000141510"
     assert brca["tumor_tpm_median"] == pytest.approx(25.0)
     assert brca["tumor_tpm_q1"] == pytest.approx(17.5)
     assert brca["tumor_tpm_q3"] == pytest.approx(32.5)
@@ -142,9 +199,12 @@ def test_aggregate_per_type_basic_stats():
 
 
 def test_aggregate_per_type_empty_input():
-    empty = pd.DataFrame(columns=["sample", "cancer_code", "symbol", "tumor_tpm"])
+    empty = pd.DataFrame(
+        columns=["sample", "Ensembl_Gene_ID", "cancer_code", "symbol", "tumor_tpm"]
+    )
     summary = aggregate_per_type(empty)
     assert list(summary.columns) == [
+        "Ensembl_Gene_ID",
         "symbol",
         "cancer_code",
         "tumor_tpm_median",
@@ -160,6 +220,7 @@ def test_aggregate_per_type_with_subtype_partitions_rows():
         [
             {
                 "sample": "s1",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "BRCA_Basal",
                 "symbol": "KRT17",
@@ -167,6 +228,7 @@ def test_aggregate_per_type_with_subtype_partitions_rows():
             },
             {
                 "sample": "s2",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "BRCA_Basal",
                 "symbol": "KRT17",
@@ -174,6 +236,7 @@ def test_aggregate_per_type_with_subtype_partitions_rows():
             },
             {
                 "sample": "s3",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "BRCA_LumA",
                 "symbol": "KRT17",
@@ -181,6 +244,7 @@ def test_aggregate_per_type_with_subtype_partitions_rows():
             },
             {
                 "sample": "s4",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "BRCA_LumA",
                 "symbol": "KRT17",
@@ -203,6 +267,7 @@ def test_aggregate_per_type_drops_blank_subtype_rows():
         [
             {
                 "sample": "s1",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "BRCA_Basal",
                 "symbol": "KRT17",
@@ -210,6 +275,7 @@ def test_aggregate_per_type_drops_blank_subtype_rows():
             },
             {
                 "sample": "s2",
+                "Ensembl_Gene_ID": "ENSG00000186847",
                 "cancer_code": "BRCA",
                 "subtype": "",
                 "symbol": "KRT17",

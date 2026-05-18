@@ -60,6 +60,7 @@ from trufflepig.reference import (
 from PIL import Image
 from .load_expression import load_expression_data
 from .load_expression import apply_expression_qc_rescue
+from .clean_tpm import assert_clean_tpm
 from trufflepig.expression_qc import (
     expression_qc_rescue_summary_line,
     qc_category_levels_lines,
@@ -124,6 +125,7 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_interpretation,
     expression_independent_rna_context,
+    filter_current_therapy_targets,
     normal_expression_context,
     report_disease_state_text,
     resolved_subtype_code_for_analysis,
@@ -611,6 +613,7 @@ def print_cancer_registry(
         else:
             bm_count = _safe_count(cancer_biomarker_genes, lookup_code)
             tg_df = cancer_therapy_targets(lookup_code) if code else None
+        tg_df = filter_current_therapy_targets(tg_df)
         tg_count = 0 if tg_df is None else len(tg_df)
         expression = _expression_label(code)
         parent = _clean(row.get("parent_code"))
@@ -1886,6 +1889,38 @@ def _analyze_body(run: AnalyzeRun):
         mode=config.expression_qc_rescue,
         remove_noncoding=config.expression_qc_remove_noncoding,
     )
+    assert_clean_tpm(
+        df_expr,
+        value_cols=["TPM"],
+        label_col=next(
+            (
+                col
+                for col in (
+                    "gene_display_name",
+                    "canonical_gene_name",
+                    "gene",
+                    "gene_symbol",
+                    "symbol",
+                )
+                if col in df_expr.columns
+            ),
+            None,
+        ),
+        id_col=next(
+            (
+                col
+                for col in (
+                    "canonical_gene_id",
+                    "ensembl_gene_id",
+                    "gene_id",
+                    "Ensembl_Gene_ID",
+                )
+                if col in df_expr.columns
+            ),
+            None,
+        ),
+        context="analysis sample expression",
+    )
     expression_scale_qc = dict(df_expr.attrs.get("expression_scale_qc") or {})
     if expression_qc_rescue.get("applied"):
         removed = float(expression_qc_rescue.get("removed_fraction") or 0.0)
@@ -2165,14 +2200,7 @@ def _analyze_body(run: AnalyzeRun):
     else:
         analysis["fusion_findings"] = []
     rare_scope_inference = None
-    if not cancer_type and not report_scope_cancer_type and fusion_scope_inference:
-        report_scope_cancer_type = fusion_scope_inference["cancer_type"]
-    if not cancer_type and not report_scope_cancer_type:
-        rare_scope_inference = _infer_registry_report_scope_from_rna(
-            df_expr, analysis
-        )
-        if rare_scope_inference:
-            report_scope_cancer_type = rare_scope_inference["cancer_type"]
+    fine_scope_inference = None
     try:
         from .rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
 
@@ -2181,16 +2209,52 @@ def _analyze_body(run: AnalyzeRun):
         )
     except Exception:
         analysis["rare_marker_hypotheses"] = []
+    cancer_type_evidence = None
+    if not cancer_type and not report_scope_cancer_type:
+        try:
+            from .cancer_type_evidence import select_report_scope_from_evidence
+
+            cancer_type_evidence = select_report_scope_from_evidence(
+                df_expr,
+                analysis,
+                rare_marker_hypotheses=analysis.get("rare_marker_hypotheses"),
+                fusion_scope_inference=fusion_scope_inference,
+            )
+            analysis["cancer_type_evidence"] = cancer_type_evidence
+            selected_scope = (cancer_type_evidence or {}).get("selected")
+            if selected_scope and selected_scope.get("cancer_type"):
+                report_scope_cancer_type = selected_scope["cancer_type"]
+                evidence_sources = set(selected_scope.get("evidence_sources") or [])
+                if "rare_marker" in evidence_sources:
+                    rare_scope_inference = selected_scope
+                elif "fine_reference" in evidence_sources:
+                    fine_scope_inference = selected_scope
+        except Exception:
+            cancer_type_evidence = None
     if report_scope_cancer_type:
-        analysis["reference_cancer_type"] = rna_inferred_cancer_type
-        analysis["reference_cancer_name"] = rna_inferred_cancer_name
+        selected_reference_cancer_type = (
+            (selected_scope or {}).get("reference_cancer_type")
+            if "selected_scope" in locals()
+            else None
+        ) or rna_inferred_cancer_type
+        analysis["reference_cancer_type"] = selected_reference_cancer_type
+        analysis["reference_cancer_name"] = cancer_code_display_name(
+            selected_reference_cancer_type,
+            selected_reference_cancer_type or rna_inferred_cancer_name,
+        )
         analysis["report_scope_cancer_type"] = report_scope_cancer_type
         if analysis_cancer_type:
             analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
+        elif fine_scope_inference and fine_scope_inference.get("reference_cancer_type"):
+            analysis["report_scope_parent_cancer_type"] = fine_scope_inference[
+                "reference_cancer_type"
+            ]
         if fusion_scope_inference:
             analysis["fusion_report_scope_inference"] = fusion_scope_inference
         if rare_scope_inference:
             analysis["rare_report_scope_inference"] = rare_scope_inference
+        if fine_scope_inference:
+            analysis["fine_report_scope_inference"] = fine_scope_inference
         analysis["cancer_type"] = report_scope_cancer_type
         analysis["cancer_name"] = cancer_code_display_name(
             report_scope_cancer_type, report_scope_cancer_type
@@ -2255,10 +2319,14 @@ def _analyze_body(run: AnalyzeRun):
             parts.append(
                 f"(runner-up {runner['code']} {runner.get('support_norm', 0.0):.2f})"
             )
-        if report_scope_cancer_type:
+        top_code_for_print = str(top_row.get("code") or "").strip()
+        supplied_label_diverges = bool(cancer_type) and (
+            top_code_for_print != str(cancer_code or "").strip()
+        )
+        if report_scope_cancer_type or supplied_label_diverges:
             print(
                 f"[analysis] Cancer label context: {analysis['cancer_name']} ({cancer_code}); "
-                f"RNA top candidate: {rna_inferred_cancer_type}, "
+                f"RNA top candidate: {top_code_for_print or rna_inferred_cancer_type}, "
                 + ", ".join(parts)
             )
         else:
@@ -2867,6 +2935,9 @@ def _analyze_body(run: AnalyzeRun):
             if panel_subtype_for_tissues
             else cancer_therapy_targets(panel_code_for_tissues)
         )
+        target_panel_for_tissues = filter_current_therapy_targets(
+            target_panel_for_tissues
+        )
         if target_panel_for_tissues is not None and not target_panel_for_tissues.empty:
             curated_target_symbols.update(
                 str(sym).strip()
@@ -3074,6 +3145,9 @@ def _analyze_body(run: AnalyzeRun):
     adj_pngs = []
     audit_only_pngs = []
     ranges_df = None
+    expression_reference_cancer_code = (
+        cancer_type_context.code_for("expression") or effective_cancer_type
+    )
     _range_plot_categories = [
         ("CTA", "ctas"),
         ("surface", "surface"),
@@ -3090,6 +3164,7 @@ def _analyze_body(run: AnalyzeRun):
             purity_result=purity_dict,
             decomposition_results=decomp_results,
             met_site=_effective_met_site_for_background(analysis),
+            expression_reference_type=expression_reference_cancer_code,
         )
         ranges_tsv = (
             "%s-tumor-expression-ranges.tsv" % prefix
@@ -3245,6 +3320,7 @@ def _analyze_body(run: AnalyzeRun):
                     if panel_subtype
                     else cancer_therapy_targets(panel_code)
                 )
+                target_panel = filter_current_therapy_targets(target_panel)
                 actionable_genes = _select_actionable_plot_genes(
                     ranges_df,
                     panel_code,
@@ -4519,20 +4595,32 @@ def _registry_parent_analysis_scope(report_scope):
         return None
 
 
+def _has_pan_cancer_expression_cohort(code):
+    """True when ``code`` has a broad pan-cancer TPM column."""
+    if not code:
+        return False
+    try:
+        return str(code).strip().upper() in set(cancer_types())
+    except Exception:
+        # Preserve older control flow if the reference loader is unavailable;
+        # the downstream lookup will surface the original failure.
+        return True
+
+
 def _analysis_input_cancer_type(cancer_type):
     """Return (composition_scope, report_scope) for an analyze label.
 
     Three kinds of labels are distinguished:
 
-    1. Plain expression-cohort code (TCGA / TARGET-backed cohort, e.g.
-       COAD, SARC, OS) — constrains analysis directly.
+    1. Plain pan-cancer expression-cohort code (TCGA-backed cohort, e.g.
+       COAD, SARC) — constrains analysis directly.
        Returns ``(code, None)``.
     2. Registry child of an expression cohort (e.g. SARC_SYN → SARC) —
        analysis runs against the parent cohort, the child stays as the
        report label.  Returns ``(parent_code, child_code)``.
-    3. Registry-only label without an expression cohort (e.g. NUTM,
-       which is ``LITERATURE_CURATED``) — stays report-only while the
-       RNA classifier runs unconstrained for cross-checking.
+    3. Registry-only or local-reference-only labels without a pan-cancer
+       cohort column (e.g. NUTM, OS) — stay report-only while the RNA
+       classifier runs unconstrained for cross-checking.
        Returns ``(None, code)``.
     """
     if not cancer_type:
@@ -4550,6 +4638,10 @@ def _analysis_input_cancer_type(cancer_type):
     parent = _registry_parent_analysis_scope(resolved)
     if parent:
         return parent, resolved
+    if not _has_pan_cancer_expression_cohort(resolved):
+        report_scope = _report_scope_cancer_type(resolved)
+        if report_scope:
+            return None, report_scope
     if _is_registry_only_label(resolved):
         return None, resolved
     return resolved, None
@@ -5002,7 +5094,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         bullets.append(sentence)
 
     if hvt is not None and getattr(hvt, "top_tcga_cohorts", None):
-        coarse = str(hvt.top_tcga_cohorts[0][0]).replace("FPKM_", "")
+        coarse = str(hvt.top_tcga_cohorts[0][0]).removesuffix("_TPM")
         coarse_label = _cancer_label(coarse)
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         if distinct_reference_used and coarse == reference_cancer_code:
@@ -5464,7 +5556,8 @@ def _alteration_effect_markdown(
     elif analysis.get("alteration_inputs_supplied"):
         lines.append(
             "Alteration input was supplied, but no usable alteration calls were parsed. "
-            "Review the file format/content before using alteration-gated therapies.\n"
+            "Review the file format/content before using therapies that require "
+            "alteration evidence.\n"
         )
     if not hypotheses:
         return "\n".join(lines)
@@ -5759,12 +5852,12 @@ def _generate_text_reports(
             f"{hvt.proliferation_genes_observed}/{_prolif_panel_size} genes observed"
         )
         hpa_line = ", ".join(
-            f"{t.replace('nTPM_', '').replace('_', ' ')} (ρ={rho:.2f})"
+            f"{t.removesuffix('_nTPM').replace('_', ' ')} (ρ={rho:.2f})"
             for t, rho in hvt.top_normal_tissues[:3]
         )
         lines.append(f"- **Top normal-tissue matches**: {hpa_line}")
         tcga_line = ", ".join(
-            f"{t.replace('FPKM_', '')} (ρ={rho:.2f})"
+            f"{t.removesuffix('_TPM')} (ρ={rho:.2f})"
             for t, rho in hvt.top_tcga_cohorts[:3]
         )
         lines.append(f"- **Top TCGA cohort matches**: {tcga_line}")
@@ -6637,19 +6730,51 @@ def _build_target_report(
     lines = [f"# Therapeutic Target Analysis — {cancer_code} ({cancer_name})\n"]
     lines.append(_target_report_mode_intro(sample_mode, cancer_code, p_lo, p_mid, p_hi))
     if reference_cancer_code != cancer_code:
-        fine_clause = ""
-        if cancer_type_context.fine_expression_available:
-            fine_clause = (
-                f" Exact fine-grained expression references exist for {cancer_code}, "
-                "but this table still uses the broad pan-reference context unless "
-                "a downstream module explicitly supports subtype expression refs."
+        expr_ref_code = cancer_type_context.code_for("expression")
+        expr_ref_source = ""
+        if (
+            expr_ref_code
+            and ranges_df is not None
+            and len(ranges_df) > 0
+            and "expression_reference_code" in ranges_df.columns
+        ):
+            expr_rows = ranges_df[
+                ranges_df["expression_reference_code"].astype(str).eq(expr_ref_code)
+            ]
+            if not expr_rows.empty and "expression_reference_source" in expr_rows.columns:
+                sources = [
+                    str(value).strip()
+                    for value in expr_rows["expression_reference_source"].dropna().unique()
+                    if str(value).strip()
+                ]
+                expr_ref_source = sources[0] if sources else ""
+        if (
+            expr_ref_code
+            and expr_ref_code != reference_cancer_code
+            and (expr_ref_source or cancer_type_context.fine_expression_available)
+        ):
+            source_label = (
+                expr_ref_source
+                or ", ".join(cancer_type_context.fine_expression_sources)
+                or "local deconvolved"
+            )
+            expression_clause = (
+                f" Tumor-expression priors use the exact {expr_ref_code} "
+                f"deconvolved reference ({source_label}) where genes are present; "
+                f"genes absent from that exact reference and broad-cohort "
+                f"percentiles still use {reference_cancer_code}."
+            )
+        else:
+            expression_clause = (
+                f" Tumor-expression priors and broad-cohort percentiles use "
+                f"{reference_cancer_code}."
             )
         lines.append(
-            f"> **RNA reference context**: target-expression ranges and broad-cohort percentiles "
+            f"> **RNA reference context**: decomposition, purity, and broad-reference context "
             f"use {reference_cancer_code} ({reference_cancer_name}) because this "
             f"stage currently needs a broad pan-reference cohort while {cancer_code} is "
             "the refined/registry report label. Curated therapy rows below remain "
-            f"keyed to {cancer_code}.{fine_clause}\n"
+            f"keyed to {cancer_code}.{expression_clause}\n"
         )
 
     # Low-purity TME-inflation caveat (#35). Below 20% purity, every
@@ -6862,9 +6987,17 @@ def _build_target_report(
             cap = row.get("_cap_tpm")
             cap_lo = _num(row.get("low_purity_cap_tpm_low"), None)
             cap_hi = _num(row.get("low_purity_cap_tpm_high"), None)
-            if cap_lo is not None and cap_hi is not None and abs(cap_hi - cap_lo) > 0.05:
+
+            def _has_number(value):
+                return value is not None and not pd.isna(value)
+
+            if (
+                _has_number(cap_lo)
+                and _has_number(cap_hi)
+                and abs(float(cap_hi) - float(cap_lo)) > 0.05
+            ):
                 cap_cell = f"{float(cap_lo):.1f}-{float(cap_hi):.1f}"
-            elif cap is not None:
+            elif _has_number(cap):
                 cap_cell = f"{float(cap):.1f}"
             else:
                 cap_cell = "—"
@@ -7064,7 +7197,7 @@ def _build_target_report(
                 "approved only in another indication, or not disease-matched. "
                 "The **priority** list is intentionally narrower: it ranks the "
                 "curated cancer-specific therapy landscape by indication fit, "
-                "required alteration or HLA gates, clinical maturity, and "
+                "required alteration or HLA evidence, clinical maturity, and "
                 "tumor-source attribution. A target such as HER3/ERBB3 or "
                 "ADAM9 can therefore appear in the expression screen without "
                 "being a priority recommendation for this sample.\n"
@@ -7074,6 +7207,7 @@ def _build_target_report(
                 if panel_subtype
                 else cancer_therapy_targets(panel_code)
             )
+            targets_df = filter_current_therapy_targets(targets_df)
             panel_target_symbols = {
                 str(sym).strip()
                 for sym in targets_df.get("symbol", pd.Series(dtype=object))

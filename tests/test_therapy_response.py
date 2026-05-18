@@ -74,7 +74,7 @@ def test_score_ar_signaling_suppressed_when_ar_targets_are_low_in_prad_context()
         sub = ref[ref["Symbol"] == sym]
         if sub.empty:
             return 0.0
-        col = "FPKM_PRAD"
+        col = "PRAD_TPM"
         return float(sub.iloc[0][col]) if col in sub.columns else 0.0
 
     sample = {}
@@ -109,7 +109,7 @@ def test_her2_signaling_active_when_erbb2_elevated_in_brca():
     from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
-    col = "FPKM_BRCA"
+    col = "BRCA_TPM"
 
     def cohort(sym):
         sub = ref[ref["Symbol"] == sym]
@@ -133,7 +133,7 @@ def test_mapk_activity_score_is_pan_cancer_mpas_like():
     from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
-    col = "FPKM_SARC"
+    col = "SARC_TPM"
 
     def cohort(sym):
         sub = ref[ref["Symbol"] == sym]

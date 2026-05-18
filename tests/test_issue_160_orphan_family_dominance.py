@@ -35,7 +35,7 @@ def _cohort_median_sample(code: str) -> pd.DataFrame:
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{code}"].astype(float),
+            "TPM": ref[f"{code}_TPM"].astype(float),
         }
     )
 
@@ -96,11 +96,11 @@ def test_override_rejects_orphan_with_tme_driven_raw_signal():
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     coad = pd.Series(
-        ref["FPKM_COAD"].astype(float).values,
+        ref["COAD_TPM"].astype(float).values,
         index=ref["Ensembl_Gene_ID"].values,
     )
     lymph = pd.Series(
-        ref["nTPM_lymph_node"].astype(float).values,
+        ref["lymph_node_nTPM"].astype(float).values,
         index=ref["Ensembl_Gene_ID"].values,
     )
     mix = 0.3 * coad + 0.7 * lymph
@@ -200,8 +200,8 @@ def test_coarse_tcga_context_rescues_orphan_from_family_penalty(
     ]
     tissue = CANCER_TO_TISSUE[orphan_code]
     signal = _TissueSignal(
-        [(f"FPKM_{orphan_code}", 0.84), (f"FPKM_{competitor_code}", 0.82)],
-        [(f"nTPM_{tissue}", 0.79)],
+        [(f"{orphan_code}_TPM", 0.84), (f"{competitor_code}_TPM", 0.82)],
+        [(f"{tissue}_nTPM", 0.79)],
     )
 
     rescued = _apply_coarse_tcga_orphan_rescue(
@@ -225,9 +225,9 @@ def test_all_tcga_codes_are_either_family_mapped_or_context_rescuable_orphans():
     """
 
     codes = sorted(
-        c.replace("FPKM_", "")
+        c.removesuffix("_TPM")
         for c in pan_cancer_expression().columns
-        if c.startswith("FPKM_")
+        if c.endswith("_TPM")
     )
     orphans = [code for code in codes if code not in _CANCER_FAMILY_BY_CODE]
     assert orphans, "test setup should include orphan-family TCGA codes"
@@ -261,8 +261,8 @@ def test_coarse_tcga_context_rescue_allows_met_site_background_by_raw_dominance(
         ),
     ]
     signal = _TissueSignal(
-        [("FPKM_BLCA", 0.84), ("FPKM_SARC", 0.82)],
-        [("nTPM_liver", 0.91)],
+        [("BLCA_TPM", 0.84), ("SARC_TPM", 0.82)],
+        [("liver_nTPM", 0.91)],
     )
 
     rescued = _apply_coarse_tcga_orphan_rescue(
@@ -302,8 +302,8 @@ def test_coarse_tcga_context_does_not_rescue_family_coded_sarc_signal():
         ),
     ]
     signal = _TissueSignal(
-        [("FPKM_SARC", 0.81)],
-        [("nTPM_smooth_muscle", 0.86)],
+        [("SARC_TPM", 0.81)],
+        [("smooth_muscle_nTPM", 0.86)],
     )
 
     rescued = _apply_coarse_tcga_orphan_rescue(
