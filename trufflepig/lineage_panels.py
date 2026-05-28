@@ -379,6 +379,103 @@ _PAAD_PANEL = LineagePanel(
     description="Pancreatic ductal adenocarcinoma",
 )
 
+# --- Panels added to close TCGA-160 top-3 misses (issue #42) ---
+
+_CHOL_PANEL = LineagePanel(
+    name="CHOL",
+    parent_cohort="CHOL",
+    high_markers=("KRT19", "MUC1", "MUC5AC", "EPCAM", "CDH1", "CFTR"),
+    low_markers=(
+        ("ALB", 30.0),     # not hepatocyte (otherwise → LIHC)
+        ("AFP", 5.0),
+        ("CDX2", 30.0),    # not colorectal (otherwise → COAD/READ)
+        ("CDH17", 50.0),
+        ("VIL1", 50.0),
+    ),
+    obligate=("KRT19",),
+    description="Cholangiocarcinoma — biliary epithelium",
+)
+
+_UCEC_PANEL = LineagePanel(
+    name="UCEC",
+    parent_cohort="UCEC",
+    high_markers=("PAX8", "ESR1", "PGR", "FOXA2", "HOXA10", "WT1"),
+    low_markers=(
+        ("VIM", 200.0),    # not mesenchymal-dominant (UCS shows VIM high)
+        ("KRT5", 50.0),    # not basal-squamous
+        ("KRT14", 50.0),
+        ("MUC16", 1.0),    # OV uses MUC16 (CA125); UCEC variable
+    ),
+    obligate=("PAX8",),
+    description="Endometrial adenocarcinoma — Müllerian glandular",
+)
+
+_MESO_PANEL = LineagePanel(
+    name="MESO",
+    parent_cohort="MESO",
+    high_markers=("WT1", "MSLN", "CALB2", "UPK3B", "KRT5", "PDPN", "KRT8"),
+    low_markers=(
+        ("SFTPC", 5.0),    # not LUAD (alveolar surfactant)
+        ("NAPSA", 10.0),
+        ("CDX2", 5.0),     # not GI
+        ("FOXA1", 30.0),
+        ("MUCL1", 1.0),    # not mammary
+    ),
+    obligate=("MSLN",),    # mesothelin is the canonical mesothelial obligate
+    description="Mesothelioma — mesothelium",
+    references=("Hassan 2014",),
+)
+
+_ACC_PANEL = LineagePanel(
+    name="ACC",
+    parent_cohort="ACC",
+    high_markers=("CYP11A1", "CYP17A1", "CYP21A2", "STAR", "NR5A1", "INHA", "MC2R"),
+    low_markers=(
+        ("KRT5", 30.0),    # not squamous
+        ("KRT14", 30.0),
+        ("TP63", 30.0),
+        ("TG", 5.0),       # not thyroid (otherwise → THCA)
+        ("PAX8", 10.0),    # PAX8 is gyn/thyroid; low in ACC
+    ),
+    # NR5A1 (SF1) is the master TF for adrenocortical lineage. Without
+    # it, the sample isn't expressing the ACC program — dedifferentiated
+    # variants will fail this obligate, leaving no lineage panel hypothesis
+    # for ACC. That IS the correct honest-reporting outcome per issue #42.
+    obligate=("NR5A1",),
+    description="Adrenocortical carcinoma — cortical steroidogenic",
+    references=("Roden 2024",),
+)
+
+_THYM_PANEL = LineagePanel(
+    name="THYM",
+    parent_cohort="THYM",
+    high_markers=("AIRE", "FOXN1", "PSMB11", "PRSS16", "CCL25", "CHRNA1"),
+    low_markers=(
+        ("MUCL1", 1.0),    # not mammary
+        ("UPK1B", 1.0),    # not urothelial
+        ("FOXA1", 30.0),
+    ),
+    obligate=("FOXN1",),   # thymic epithelium master TF
+    description="Thymoma — thymic epithelium",
+)
+
+_BLCA_BASAL_PANEL = LineagePanel(
+    name="BLCA_BASAL",
+    parent_cohort="BLCA",
+    # Basal MIBC retains partial uroplakin expression but loses the
+    # luminal urothelial differentiation; squamous-like keratins rise.
+    high_markers=("KRT5", "KRT14", "KRT6A", "UPK1B", "UPK2", "S100P"),
+    low_markers=(
+        ("MUCL1", 1.0),    # not mammary (otherwise → BRCA_BASAL)
+        ("SCGB2A2", 1.0),
+        ("FOXA1", 200.0),  # luminal urothelial has FOXA1/GATA3 very high
+        ("GATA3", 200.0),
+    ),
+    obligate=("UPK1B",),   # urothelial obligate — distinguishes from BRCA_BASAL
+    description="Basal-like muscle-invasive bladder cancer",
+    references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
+)
+
 
 # Public registry. Tier-1 broad triage (squamous-vs-glandular-vs-...)
 # is a separate concern — these are tier-3 within-tier discriminators.
@@ -387,9 +484,15 @@ LINEAGE_PANELS: tuple[LineagePanel, ...] = (
     _BRCA_LUMINAL,
     _ESCA_SQUAMOUS,
     _BLCA_LUMINAL,
+    _BLCA_BASAL_PANEL,
     _HNSC_PANEL,
     _LIHC_PANEL,
     _PAAD_PANEL,
+    _CHOL_PANEL,
+    _UCEC_PANEL,
+    _MESO_PANEL,
+    _ACC_PANEL,
+    _THYM_PANEL,
 )
 
 
