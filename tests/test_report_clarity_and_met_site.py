@@ -23,8 +23,8 @@ from trufflepig.reference import pan_cancer_expression
 
 def test_next_best_support_gap_returns_ratio_for_two_candidates():
     trace = [
-        {"code": "PRAD", "support_norm": 1.00},
-        {"code": "HNSC", "support_norm": 0.40},
+        {"code": "PRAD", "support_fraction_of_top": 1.00},
+        {"code": "HNSC", "support_fraction_of_top": 0.40},
     ]
     code, ratio = _next_best_support_gap(trace)
     assert code == "HNSC"
@@ -33,7 +33,7 @@ def test_next_best_support_gap_returns_ratio_for_two_candidates():
 
 def test_next_best_support_gap_handles_edge_cases():
     # One candidate — no gap to measure
-    assert _next_best_support_gap([{"code": "PRAD", "support_norm": 1.0}]) == (
+    assert _next_best_support_gap([{"code": "PRAD", "support_fraction_of_top": 1.0}]) == (
         None,
         None,
     )
@@ -42,8 +42,8 @@ def test_next_best_support_gap_handles_edge_cases():
     # Runner-up has zero support — can't divide
     code, ratio = _next_best_support_gap(
         [
-            {"code": "PRAD", "support_norm": 1.0},
-            {"code": "HNSC", "support_norm": 0.0},
+            {"code": "PRAD", "support_fraction_of_top": 1.0},
+            {"code": "HNSC", "support_fraction_of_top": 0.0},
         ]
     )
     assert code == "HNSC"
@@ -74,7 +74,7 @@ def test_met_site_liver_includes_liver_tissue_in_tme_reference():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_liver"].astype(float),  # a liver-rich synthetic
+            "TPM": ref["liver_nTPM"].astype(float),  # a liver-rich synthetic
         }
     )
     purity = {
@@ -132,7 +132,7 @@ def test_met_site_rejects_unknown_value():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_liver"].astype(float),
+            "TPM": ref["liver_nTPM"].astype(float),
         }
     )
     purity = {
@@ -275,8 +275,8 @@ def test_summary_md_structure_for_report_clarity(tmp_path):
         "mhc1": {"HLA-A": 25, "HLA-B": 30, "HLA-C": 22, "B2M": 3000},
         "mhc2": {},
         "candidate_trace": [
-            {"code": "PRAD", "support_norm": 1.00, "signature_score": 0.67},
-            {"code": "HNSC", "support_norm": 0.40, "signature_score": 0.35},
+            {"code": "PRAD", "support_fraction_of_top": 1.00, "signature_score": 0.67},
+            {"code": "HNSC", "support_fraction_of_top": 0.40, "signature_score": 0.35},
         ],
         "family_summary": {},
         "fit_quality": {
@@ -439,7 +439,7 @@ def test_detailed_report_uses_generic_lineage_caveat(tmp_path):
                 "code": "HNSC",
                 "support_score": 0.18,
                 "support_geomean": 0.18,
-                "support_norm": 1.0,
+                "support_fraction_of_top": 1.0,
                 "signature_score": 0.81,
                 "purity_estimate": 0.42,
                 "family_label": "SQUAMOUS",
@@ -450,7 +450,7 @@ def test_detailed_report_uses_generic_lineage_caveat(tmp_path):
                 "code": "LUSC",
                 "support_score": 0.12,
                 "support_geomean": 0.12,
-                "support_norm": 0.67,
+                "support_fraction_of_top": 0.67,
                 "signature_score": 0.72,
                 "purity_estimate": 0.38,
                 "family_label": "SQUAMOUS",

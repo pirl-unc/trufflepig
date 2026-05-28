@@ -23,10 +23,10 @@ from typing import Any, Iterable
 
 @dataclass(frozen=True)
 class ResponseAxisState:
-    """One row of the per-axis therapy-state context.
+    """One row of the per-axis pathway and treatment-state signals.
 
     Mirrors what trufflepig's analyze() prints to the evidence.md
-    "Therapy-state context" section, e.g.::
+    "Pathway and Treatment-State Signals" section, e.g.::
 
         **MAPK EGFR signaling** — active.
         Active signaling: up-panel geomean 3.52× cohort
@@ -108,7 +108,11 @@ def _normalize_axis_state(text: str | None) -> str:
 
 
 def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxisState]:
-    """Parse the ``### Therapy-state context`` section of evidence.md.
+    """Parse the ``### Pathway and Treatment-State Signals`` section of evidence.md.
+
+    Older reports used ``Therapy Response Signals``, ``Therapy-State Evidence``,
+    and ``Therapy-state context``; keep accepting those headings so longitudinal
+    comparison can read saved workspaces.
 
     The trufflepig renderer emits each axis as either a single line::
 
@@ -161,7 +165,13 @@ def parse_response_axes(evidence_lines: Iterable[str]) -> dict[str, ResponseAxis
             if in_section:
                 _flush()
                 in_section = False
-            if stripped.startswith("#") and "therapy-state context" in stripped.lower():
+            heading = stripped.lower()
+            if stripped.startswith("#") and (
+                "pathway and treatment-state signals" in heading
+                or "therapy response signals" in heading
+                or "therapy-state evidence" in heading
+                or "therapy-state context" in heading
+            ):
                 in_section = True
             continue
         if not in_section:

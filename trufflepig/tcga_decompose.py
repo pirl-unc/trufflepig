@@ -6,12 +6,11 @@
 
 """Offline TCGA per-sample deconvolution (#21).
 
-Runs the pirlygenes decomposition engine on every TCGA sample in the
+Runs the trufflepig decomposition engine on every TCGA sample in the
 Xena TOIL RSEM TPM matrix, extracts the tumor-only TPM per gene, then
 aggregates per TCGA cancer code to median + IQR + N. The resulting
-CSV (``trufflepig/data/tcga-deconvolved-expression.csv``) feeds the
-decon-derived tumor-only columns that augment the HPA/FPKM references
-in :func:`trufflepig.reference.pan_cancer_expression`.
+CSV (``trufflepig/data/tcga-deconvolved-expression.csv.gz``) is loaded
+through :func:`trufflepig.reference.tcga_deconvolved_expression`.
 
 This module is NOT imported by the package at runtime. It exists as
 an offline batch script that the maintainer runs once per TCGA update.
@@ -28,10 +27,8 @@ Usage
         --barcode-project-pkl eval/barcode_to_project.pkl \\
         --output-csv tcga-deconvolved-expression.csv
 
-The output CSV is committed back to the `pirlygenes` data package
-(``pirlygenes/data/tcga-deconvolved-expression.csv.gz``) — the
-recomputation lives in trufflepig but the curated artifact ships
-with the data package.
+The output CSV is committed back to ``trufflepig/data`` because it is
+derived from trufflepig's decomposition algorithm.
 
 Smoke-test with a handful of samples::
 
@@ -49,6 +46,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from pirlygenes.expression.qc import classify_gene_qc
+
+from trufflepig.clean_tpm import TECHNICAL_RNA_QC_GROUPS, assert_clean_tpm
+from trufflepig.expression_normalize import normalize_expression
 
 
 def load_barcode_to_project(pkl_path: str | Path) -> dict[str, str]:
@@ -148,33 +149,113 @@ def load_tcga_tpm_matrix(
     return out
 
 
+def technical_rna_mask_for_ids(versioned_ids: pd.Index) -> np.ndarray:
+    """Return a boolean mask for technical-RNA rows in a TCGA TPM matrix."""
+    bare_ids = pd.Index(versioned_ids).astype(str).str.split(".", n=1).str[0]
+    return np.asarray(
+        [
+            classify_gene_qc("", ensembl_id=str(ensg)).group
+            in TECHNICAL_RNA_QC_GROUPS
+            for ensg in bare_ids
+        ],
+        dtype=bool,
+    )
+
+
+def clean_tcga_tpm_matrix(tpm_frame: pd.DataFrame) -> pd.DataFrame:
+    """Zero technical-RNA rows and rescale every TCGA sample in place."""
+    if tpm_frame.empty:
+        return tpm_frame
+    technical_mask = technical_rna_mask_for_ids(tpm_frame.index)
+    if not bool(technical_mask.any()):
+        return tpm_frame
+    values = tpm_frame.to_numpy(copy=False)
+    needs_writeback = not np.shares_memory(
+        values,
+        tpm_frame.iloc[:, 0].to_numpy(copy=False),
+    )
+    if not np.issubdtype(values.dtype, np.floating):
+        values = values.astype(float, copy=True)
+        needs_writeback = True
+    elif not values.flags.writeable:
+        values = values.copy()
+        needs_writeback = True
+    raw_totals = values.sum(axis=0, dtype=np.float64)
+    values[technical_mask, :] = 0.0
+    clean_totals = values.sum(axis=0, dtype=np.float64)
+    scales = np.divide(
+        raw_totals,
+        clean_totals,
+        out=np.ones_like(raw_totals),
+        where=clean_totals > 0,
+    )
+    values *= scales.astype(values.dtype, copy=False)
+    residual = float(np.abs(values[technical_mask, :]).sum(dtype=np.float64))
+    if residual > 1e-6:
+        raise ValueError(
+            f"TCGA clean TPM matrix still has technical-RNA mass {residual:.6g}"
+        )
+    if needs_writeback:
+        cleaned = pd.DataFrame(
+            values,
+            index=tpm_frame.index,
+            columns=tpm_frame.columns,
+        )
+        for col in tpm_frame.columns:
+            dtype = tpm_frame[col].dtype
+            if pd.api.types.is_float_dtype(dtype):
+                tpm_frame[col] = cleaned[col].astype(dtype, copy=False)
+            else:
+                tpm_frame[col] = cleaned[col]
+    return tpm_frame
+
+
 def sample_frame(
     tpm_column: pd.Series,
     versioned_ids: pd.Index,
+    *,
+    already_clean: bool = False,
 ) -> pd.DataFrame:
-    """Build the per-sample DataFrame that ``decompose_sample`` expects.
+    """Build the clean per-sample DataFrame that ``decompose_sample`` expects.
 
     ``_guess_gene_cols`` recognises ``gene_id`` (lower-case). We keep
     the versioned ID there because pirlygenes's loader strips the
-    version internally.
+    version internally. The returned TPM values are technical-RNA-cleaned;
+    raw TCGA TPM is not used beyond source-scale QC.
     """
     # ``_guess_gene_cols`` requires a gene-name column too. Leave it
     # empty — downstream resolution rebuilds the symbol from the pan-
     # cancer reference's ``Ensembl_Gene_ID`` → ``Symbol`` map.
-    return pd.DataFrame(
+    df = pd.DataFrame(
         {
             "gene_id": versioned_ids,
             "gene_name": "",
             "TPM": tpm_column.to_numpy(dtype=np.float32),
         }
     )
+    if already_clean:
+        return df
+    out, _record = normalize_expression(
+        df,
+        label_col="gene_name",
+        id_col="gene_id",
+        value_cols=["TPM"],
+    )
+    assert_clean_tpm(
+        out,
+        value_cols=["TPM"],
+        label_col="gene_name",
+        id_col="gene_id",
+        context="TCGA sample deconvolution input",
+    )
+    return out
 
 
 def _observed_as_tumor(
     tpm_column: pd.Series,
     versioned_ids: pd.Index,
 ) -> pd.DataFrame:
-    """Build a ``[symbol, tumor_tpm]`` frame using the observed TPM directly.
+    """Build an ID-keyed tumor TPM frame using the observed TPM directly.
 
     Used when the decomposer reports ≥99.9% tumor fraction — in that
     degenerate case it returns an empty ``gene_attribution`` because
@@ -182,23 +263,55 @@ def _observed_as_tumor(
     for a primary-tumor reference is that the observed TPM *is* the
     tumor TPM.
     """
-    from trufflepig.reference import pan_cancer_expression
-    ref = pan_cancer_expression()[["Ensembl_Gene_ID", "Symbol"]].drop_duplicates(
-        subset="Ensembl_Gene_ID"
-    )
-    eid_to_symbol = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+    from trufflepig.common import ensembl_id_to_symbol_map
+
+    eid_to_symbol = ensembl_id_to_symbol_map()
     bare_ids = pd.Index(versioned_ids).astype(str).str.split(".", n=1).str[0]
     symbols = [eid_to_symbol.get(eid, "") for eid in bare_ids]
     out = pd.DataFrame(
         {
+            "Ensembl_Gene_ID": bare_ids,
             "symbol": symbols,
             "tumor_tpm": tpm_column.to_numpy(dtype=float),
         }
     )
     out = out[out["symbol"].astype(str).str.len() > 0]
     out = out[out["tumor_tpm"] >= 0.01]
-    # Collapse duplicate symbols (mapped from multiple ENSGs): sum TPM.
-    return out.groupby("symbol", as_index=False, sort=False)["tumor_tpm"].sum()
+    return out.groupby(
+        ["Ensembl_Gene_ID", "symbol"],
+        as_index=False,
+        sort=False,
+    )["tumor_tpm"].sum()
+
+
+def known_cancer_candidate_row(df_gene_expr: pd.DataFrame, cancer_code: str) -> dict:
+    """Build the single known-code candidate row for offline TCGA runs.
+
+    TCGA sample barcodes already tell us the cohort. Running the full
+    cancer-type classifier would only re-confirm that known code before
+    normalizing the lone candidate's support to 1.0.
+    """
+    from trufflepig.tumor_purity import estimate_tumor_purity
+
+    purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_code)
+    purity_estimate = float(purity_result.get("overall_estimate") or 0.0)
+    lineage = purity_result.get("components", {}).get("lineage", {}) or {}
+    return {
+        "code": cancer_code,
+        "signature_score": 1.0,
+        "broad_signature_score": 1.0,
+        "signature_stability": 1.0,
+        "purity_estimate": purity_estimate,
+        "lineage_purity": lineage.get("purity"),
+        "lineage_concordance": lineage.get("concordance"),
+        "lineage_detection_fraction": lineage.get("detection_fraction"),
+        "lineage_support_factor": float(lineage.get("support_factor") or 1.0),
+        "winning_subtype": lineage.get("winning_subtype"),
+        "support_score": 1.0,
+        "support_geomean": 1.0,
+        "support_fraction_of_top": 1.0,
+        "purity_result": purity_result,
+    }
 
 
 def decompose_one_sample(
@@ -206,9 +319,11 @@ def decompose_one_sample(
     tpm_column: pd.Series,
     cancer_code: str,
     versioned_ids: pd.Index,
-    sample_mode: str = "solid",
+    sample_mode: str = "auto",
+    *,
+    already_clean: bool = False,
 ) -> pd.DataFrame | None:
-    """Decompose one TCGA sample and return ``[symbol, tumor_tpm]``.
+    """Decompose one TCGA sample and return an ID-keyed tumor TPM frame.
 
     Returns ``None`` when the decomposition throws or returns no
     candidate (rare — a nearly-empty expression vector). When the
@@ -217,15 +332,36 @@ def decompose_one_sample(
     tumor TPM — correct for TCGA primary-tumor samples that are
     already tumor-enriched by the consortium's pathology review.
     """
-    from trufflepig.decomposition import decompose_sample
+    from trufflepig.decomposition.engine import decompose_sample
 
-    df = sample_frame(tpm_column, versioned_ids)
+    df = sample_frame(tpm_column, versioned_ids, already_clean=already_clean)
+    cleaned_tpm = pd.Series(df["TPM"].to_numpy(dtype=float), index=versioned_ids)
+    sample_by_eid = dict(
+        zip(
+            pd.Index(versioned_ids).astype(str).str.split(".", n=1).str[0],
+            cleaned_tpm.to_numpy(dtype=float, copy=False),
+        )
+    )
+    from trufflepig.common import ensembl_id_to_symbol_map
+
+    eid_to_symbol = ensembl_id_to_symbol_map()
+    sample_raw_by_symbol = {
+        eid_to_symbol[eid]: float(tpm)
+        for eid, tpm in sample_by_eid.items()
+        if eid in eid_to_symbol
+    }
+    candidate_row = known_cancer_candidate_row(df, cancer_code)
     try:
         results = decompose_sample(
             df,
             cancer_types=[cancer_code],
             top_k=1,
             sample_mode=sample_mode,
+            tumor_context="primary",
+            sample_raw_by_symbol=sample_raw_by_symbol,
+            sample_by_eid=sample_by_eid,
+            candidate_rows=[candidate_row],
+            use_subtype_signatures=False,
         )
     except Exception as exc:  # noqa: BLE001
         print(
@@ -238,12 +374,14 @@ def decompose_one_sample(
     best = results[0]
     if best.gene_attribution.empty:
         if best.purity >= 0.999:
-            attr = _observed_as_tumor(tpm_column, versioned_ids)
+            attr = _observed_as_tumor(cleaned_tpm, versioned_ids)
         else:
             return None
     else:
-        attr = best.gene_attribution[["symbol", "tumor"]].copy()
-        attr = attr.rename(columns={"tumor": "tumor_tpm"})
+        attr = best.gene_attribution[["gene_id", "symbol", "tumor"]].copy()
+        attr = attr.rename(
+            columns={"gene_id": "Ensembl_Gene_ID", "tumor": "tumor_tpm"}
+        )
     attr["sample"] = sample_barcode
     attr["cancer_code"] = cancer_code
     return attr
@@ -253,31 +391,38 @@ def aggregate_per_type(
     per_sample_rows: pd.DataFrame,
     group_by_subtype: bool = False,
 ) -> pd.DataFrame:
-    """Reduce per-(sample, symbol) tumor TPM to per-(cancer_code[, subtype], symbol) stats.
+    """Reduce per-sample tumor TPM to per-(cancer_code[, subtype], gene) stats.
 
     When ``group_by_subtype=True`` the input must carry a ``subtype``
     column and the output grows a ``subtype`` column — samples with a
     blank subtype are dropped so each row represents a coherent
     sub-cohort rather than a mix of annotated + unannotated samples.
 
-    Output columns: ``symbol``, ``cancer_code``, [``subtype``,]
-    ``tumor_tpm_median``, ``tumor_tpm_q1``, ``tumor_tpm_q3``, ``n_samples``.
+    Output columns: [``Ensembl_Gene_ID``,] ``symbol``, ``cancer_code``,
+    [``subtype``,] ``tumor_tpm_median``, ``tumor_tpm_q1``,
+    ``tumor_tpm_q3``, ``n_samples``.
     """
-    base_cols = [
-        "symbol",
-        "cancer_code",
+    gene_cols = (
+        ["Ensembl_Gene_ID"] if "Ensembl_Gene_ID" in per_sample_rows.columns else []
+    ) + ["symbol"]
+    metric_cols = [
         "tumor_tpm_median",
         "tumor_tpm_q1",
         "tumor_tpm_q3",
         "n_samples",
     ]
-    cols = base_cols[:2] + (["subtype"] if group_by_subtype else []) + base_cols[2:]
+    cols = (
+        gene_cols
+        + ["cancer_code"]
+        + (["subtype"] if group_by_subtype else [])
+        + metric_cols
+    )
 
     if per_sample_rows.empty:
         return pd.DataFrame(columns=cols)
 
     df = per_sample_rows
-    group_cols = ["cancer_code", "symbol"]
+    group_cols = ["cancer_code"] + gene_cols
     if group_by_subtype:
         if "subtype" not in df.columns:
             raise ValueError(
@@ -286,15 +431,19 @@ def aggregate_per_type(
         df = df[df["subtype"].astype(str).str.len() > 0]
         if df.empty:
             return pd.DataFrame(columns=cols)
-        group_cols = ["cancer_code", "subtype", "symbol"]
+        group_cols = ["cancer_code", "subtype"] + gene_cols
 
-    grouped = df.groupby(group_cols)["tumor_tpm"]
-    summary = grouped.agg(
-        tumor_tpm_median="median",
-        tumor_tpm_q1=lambda s: float(np.quantile(s, 0.25)),
-        tumor_tpm_q3=lambda s: float(np.quantile(s, 0.75)),
-        n_samples="count",
-    ).reset_index()
+    grouped = df.groupby(group_cols, sort=False)["tumor_tpm"]
+    quantiles = grouped.quantile([0.25, 0.5, 0.75]).unstack(level=-1)
+    summary = quantiles.rename(
+        columns={
+            0.25: "tumor_tpm_q1",
+            0.5: "tumor_tpm_median",
+            0.75: "tumor_tpm_q3",
+        }
+    )
+    summary["n_samples"] = grouped.size()
+    summary = summary.reset_index()
     return summary[cols]
 
 
@@ -375,19 +524,31 @@ def run(
 
     print(f"[tcga] Decomposing {len(pairs)} samples", flush=True)
     versioned_ids = pd.Index(tpm.index).astype(str)
+    print(
+        "[tcga] Cleaning TCGA TPM matrix by Ensembl ID before deconvolution",
+        flush=True,
+    )
+    tpm = clean_tcga_tpm_matrix(tpm)
     group_by_subtype = subtype_map is not None
 
-    checkpoint_path = Path(output_csv).with_suffix(".partial.csv")
+    checkpoint_path = Path(f"{output_csv}.partial.csv.gz")
     accum: list[pd.DataFrame] = []
+    progress_every = 500
     t0 = time.time()
     for i, (sample, code) in enumerate(pairs, start=1):
         col = tpm[sample]
-        attr = decompose_one_sample(sample, col, code, versioned_ids)
+        attr = decompose_one_sample(
+            sample,
+            col,
+            code,
+            versioned_ids,
+            already_clean=True,
+        )
         if attr is not None:
             if group_by_subtype:
                 attr["subtype"] = subtype_map.get(sample[:12], "")
             accum.append(attr)
-        if i % checkpoint_every == 0:
+        if i % progress_every == 0:
             elapsed = time.time() - t0
             per = elapsed / i
             eta = per * (len(pairs) - i)
@@ -396,6 +557,7 @@ def run(
                 f"({elapsed:.0f}s elapsed, {per:.2f}s/sample, ETA {eta / 60:.1f} min)",
                 flush=True,
             )
+        if checkpoint_every > 0 and i % checkpoint_every == 0:
             pd.concat(accum, ignore_index=True).to_csv(checkpoint_path, index=False)
 
     if not accum:
@@ -429,7 +591,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--output-csv",
         required=True,
-        help="Output CSV path (e.g. pirlygenes/data/tcga-deconvolved-expression.csv)",
+        help="Output CSV path (e.g. trufflepig/data/tcga-deconvolved-expression.csv)",
     )
     p.add_argument(
         "--cancer-types",
@@ -446,7 +608,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         "--checkpoint-every",
         type=int,
         default=500,
-        help="Write a .partial.csv every N processed samples",
+        help="Write a gzip-compressed .partial.csv.gz every N processed samples; 0 disables checkpoints",
     )
     p.add_argument(
         "--subtype-map",

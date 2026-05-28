@@ -86,6 +86,27 @@ def test_summarise_passthrough_without_subtype():
     assert gapdh["n_samples"] == 3
 
 
+def test_summarise_passthrough_preserves_ensembl_ids_when_present():
+    tpm = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG00000111640"],
+            "symbol": ["GAPDH"],
+            "s1": [500.0],
+            "s2": [600.0],
+        }
+    )
+
+    summary = summarise_passthrough(tpm, cohort_code="TEST_COHORT")
+
+    assert list(summary.columns[:3]) == [
+        "Ensembl_Gene_ID",
+        "symbol",
+        "cancer_code",
+    ]
+    assert summary.iloc[0]["Ensembl_Gene_ID"] == "ENSG00000111640"
+    assert summary.iloc[0]["tumor_tpm_median"] == pytest.approx(550.0)
+
+
 def test_summarise_passthrough_with_subtype_partition():
     """APL vs non-APL subtype split — the canonical AML curation case
     where MPO is expected to trend differently across groups."""

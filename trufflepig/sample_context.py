@@ -1415,25 +1415,42 @@ def _reference_qc_fraction_rows():
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
     rows = []
     symbol_values = ref["Symbol"].fillna("").astype(str).tolist()
-    for col in [c for c in ref.columns if c.startswith("FPKM_")]:
+
+    def qc_value_columns(alias_suffix: str, raw_suffix: str):
+        alias_cols = [str(c) for c in ref.columns if str(c).endswith(alias_suffix)]
+        if alias_cols:
+            return [
+                (
+                    col.removesuffix(alias_suffix),
+                    f"{col}_raw" if f"{col}_raw" in ref.columns else col,
+                )
+                for col in alias_cols
+            ]
+        return [
+            (str(col).removesuffix(raw_suffix), str(col))
+            for col in ref.columns
+            if str(col).endswith(raw_suffix)
+        ]
+
+    for label, col in qc_value_columns("_TPM", "_TPM_raw"):
         fractions = _qc_fraction_from_items(
             zip(symbol_values, ref[col].fillna(0.0).astype(float))
         )
         rows.append(
             {
                 "source": "TCGA cohort medians",
-                "label": col.replace("FPKM_", ""),
+                "label": label,
                 **fractions,
             }
         )
-    for col in [c for c in ref.columns if c.startswith("nTPM_")]:
+    for label, col in qc_value_columns("_nTPM", "_nTPM_raw"):
         fractions = _qc_fraction_from_items(
             zip(symbol_values, ref[col].fillna(0.0).astype(float))
         )
         rows.append(
             {
                 "source": "HPA normal tissues",
-                "label": col.replace("nTPM_", "").replace("_", " "),
+                "label": label.replace("_", " "),
                 **fractions,
             }
         )

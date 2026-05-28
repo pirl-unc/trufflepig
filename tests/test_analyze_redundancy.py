@@ -52,7 +52,7 @@ def test_plot_sample_summary_accepts_precomputed_analysis(tmp_path):
         "top_cancers": [("BRCA", 0.9)],
         "signature_top_cancers": [("BRCA", 0.8)],
         "candidate_trace": [
-            {"code": "BRCA", "support_score": 0.9, "support_norm": 1.0}
+            {"code": "BRCA", "support_score": 0.9, "support_fraction_of_top": 1.0}
         ],
         "purity": {
             "overall_estimate": 0.5,
@@ -167,7 +167,7 @@ def test_decompose_sample_skips_reranking_when_rows_passed():
             "code": "BRCA",
             "signature_score": 0.9,
             "purity_estimate": 0.5,
-            "support_norm": 1.0,
+            "support_fraction_of_top": 1.0,
             "support_score": 1.0,
             "purity_result": {"overall_estimate": 0.5, "components": {}},
         }

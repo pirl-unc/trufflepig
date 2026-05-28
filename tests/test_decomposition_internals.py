@@ -40,9 +40,9 @@ def test_shared_lineage_curated_fallback_is_cancer_agnostic(monkeypatch):
     fake_panel = pd.DataFrame(
         {
             "symbol": ["CURATED_MARKER", "GENERIC_MARKER"],
-            "tumor_fpkm": [20.0, 20.0],
+            "tumor_tpm": [20.0, 20.0],
             "normal_ntpm": [80.0, 80.0],
-            "tcga_bulk_fpkm": [20.0, 20.0],
+            "tcga_bulk_tpm": [20.0, 20.0],
         }
     )
 
@@ -259,7 +259,7 @@ def test_low_purity_candidate_is_penalised():
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["FPKM_PRAD"].astype(float),
+            "TPM": ref["PRAD_TPM"].astype(float),
         }
     )
     results = decompose_sample(

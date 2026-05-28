@@ -62,7 +62,7 @@ def _smooth_muscle_pseudo_sample() -> pd.DataFrame:
     lms = sub[sub["cancer_code"] == "SARC_LMS"][["symbol", "tumor_tpm_median"]]
     pan = pan_cancer_expression().drop_duplicates(subset="Symbol")
     merged = pan.merge(lms, left_on="Symbol", right_on="symbol", how="left")
-    merged["tpm"] = merged["tumor_tpm_median"].fillna(merged["FPKM_SARC"])
+    merged["tpm"] = merged["tumor_tpm_median"].fillna(merged["SARC_TPM"])
     return pd.DataFrame(
         {
             "ensembl_gene_id": merged["Ensembl_Gene_ID"],
@@ -99,7 +99,7 @@ def test_winning_subtype_none_for_non_mixture():
         {
             "ensembl_gene_id": pan["Ensembl_Gene_ID"],
             "gene_symbol": pan["Symbol"],
-            "TPM": pan["FPKM_PRAD"].astype(float),
+            "TPM": pan["PRAD_TPM"].astype(float),
         }
     )
     ranked = rank_cancer_type_candidates(sample)

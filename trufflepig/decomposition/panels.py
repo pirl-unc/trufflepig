@@ -20,7 +20,7 @@ three gene categories:
   marker sets — these cannot discriminate tumor from matched normal.
 
 These utilities operate on the bundled ``pan_cancer_expression`` table
-(FPKM_<cancer> cancer cohort medians and nTPM_<tissue> bulk normal
+(entity-first ``<cancer>_TPM`` cohort medians and ``<tissue>_nTPM`` bulk normal
 references). They are currently provided for downstream calibration /
 inspection and are NOT wired into the decomposition marker selection.
 
@@ -72,8 +72,8 @@ def _load_cohort_vs_tissue(cancer_code, tissue=None):
     """Return a DataFrame with per-gene tumor-cell and matched-normal estimates.
 
     TCGA cohort medians are bulk, not tumor-cell-only (median TCGA purity
-    is 0.4–0.8 depending on cancer type). A raw ``FPKM_<cancer> /
-    nTPM_<tissue>`` ratio therefore understates the tumor-vs-normal
+    is 0.4–0.8 depending on cancer type). A raw ``<cancer>_TPM /
+    <tissue>_nTPM`` ratio therefore understates the tumor-vs-normal
     difference for genes where benign admixed parent tissue contributes
     meaningfully to the TCGA bulk average — the exact class of genes a
     matched-normal panel cares about (AMACR in PRAD, CDX2 in COAD, ...).
@@ -82,16 +82,15 @@ def _load_cohort_vs_tissue(cancer_code, tissue=None):
     only estimate using the published TCGA median purity and the matched-
     normal bulk as the non-tumor background:
 
-        tumor_cell ≈ max(0, (FPKM_cancer - (1 - p) * nTPM_tissue) / p)
+        tumor_cell ≈ max(0, (cancer_TPM - (1 - p) * tissue_nTPM) / p)
 
     The TCGA_MEDIAN_PURITY dict is the same calibration constant used in
     ``estimate_tumor_expression_ranges`` to build the per-gene cohort
     prior, so the two code paths use a consistent definition.
 
     Returns ``(df, tissue)`` where ``df`` has columns ``symbol``,
-    ``tumor_fpkm`` (deconvolved tumor-cell estimate), ``normal_ntpm``,
-    and ``tcga_bulk_fpkm`` (the raw cohort median, retained for
-    inspection).
+    ``tumor_tpm`` (deconvolved tumor-cell estimate), ``normal_ntpm``,
+    and ``tcga_bulk_tpm`` (the cohort median, retained for inspection).
     """
     if tissue is None:
         tissue = EPITHELIAL_MATCHED_NORMAL_TISSUE.get(cancer_code)
@@ -102,16 +101,9 @@ def _load_cohort_vs_tissue(cancer_code, tissue=None):
                 f"EPITHELIAL_MATCHED_NORMAL_TISSUE."
             )
 
-    # Keep raw bundled references here. Shared-lineage panel construction
-    # intentionally compares raw TCGA bulk magnitude to matched-normal bulk
-    # magnitude; column-wise technical-RNA renormalization can move canonical
-    # retained-lineage markers such as PRAD KLK3 across the tolerance boundary.
-    # Same reasoning blocks renormalize_to_million here (pirl-unc/trufflepig#27).
-    ref = pan_cancer_expression(renormalize_to_million=False).drop_duplicates(
-        subset="Symbol"
-    )
-    cancer_col = f"FPKM_{cancer_code}"
-    tissue_col = f"nTPM_{tissue}"
+    ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
+    cancer_col = f"{cancer_code}_TPM"
+    tissue_col = f"{tissue}_nTPM"
     missing = [c for c in (cancer_col, tissue_col) if c not in ref.columns]
     if missing:
         raise KeyError(f"Missing reference columns: {missing}")
@@ -127,9 +119,9 @@ def _load_cohort_vs_tissue(cancer_code, tissue=None):
     out = pd.DataFrame(
         {
             "symbol": ref["Symbol"].astype(str),
-            "tumor_fpkm": tumor_cell,
+            "tumor_tpm": tumor_cell,
             "normal_ntpm": normal_ntpm,
-            "tcga_bulk_fpkm": cohort_bulk,
+            "tcga_bulk_tpm": cohort_bulk,
         }
     )
     # Drop gene families where bulk-vs-bulk comparisons are technical-
@@ -196,17 +188,17 @@ def build_tumor_biased_panel(
     delta_log2 : float
         Minimum log2(tumor / normal) ratio. ``1.0`` ≡ ≥2× tumor-biased.
     min_tumor_expression : float
-        Require ``FPKM_<cancer> >= min_tumor_expression`` so we don't
+        Require ``<cancer>_TPM >= min_tumor_expression`` so we don't
         retain noisy ratios driven purely by the floor term.
 
     Returns
     -------
-    DataFrame with columns ``symbol, tumor_fpkm, normal_ntpm,
+    DataFrame with columns ``symbol, tumor_tpm, normal_ntpm,
     log2_ratio``, sorted by ``log2_ratio`` descending.
     """
     df, _tissue = _load_cohort_vs_tissue(cancer_code, tissue=tissue)
-    df["log2_ratio"] = _log2_ratio(df["tumor_fpkm"], df["normal_ntpm"])
-    keep = (df["tumor_fpkm"] >= min_tumor_expression) & (df["log2_ratio"] >= delta_log2)
+    df["log2_ratio"] = _log2_ratio(df["tumor_tpm"], df["normal_ntpm"])
+    keep = (df["tumor_tpm"] >= min_tumor_expression) & (df["log2_ratio"] >= delta_log2)
     return df[keep].sort_values("log2_ratio", ascending=False).reset_index(drop=True)
 
 
@@ -236,14 +228,14 @@ def build_matched_normal_biased_panel(
     delta_log2 : float
         Minimum log2(normal / tumor_cell) ratio. ``1.0`` ≡ ≥2× normal-biased.
     min_normal_expression : float
-        Require ``nTPM_<tissue> >= min_normal_expression``.
+        Require ``<tissue>_nTPM >= min_normal_expression``.
     stromal_collinearity_ratio : float
         Reject genes where the max across HPA fibroblast / endothelial
         / broad-immune references exceeds this fraction of the matched-
         normal reference expression. Set to ``None`` or ``0`` to skip.
     """
     df, _tissue = _load_cohort_vs_tissue(cancer_code, tissue=tissue)
-    df["log2_ratio"] = _log2_ratio(df["normal_ntpm"], df["tumor_fpkm"])
+    df["log2_ratio"] = _log2_ratio(df["normal_ntpm"], df["tumor_tpm"])
     keep = (df["normal_ntpm"] >= min_normal_expression) & (
         df["log2_ratio"] >= delta_log2
     )
@@ -269,8 +261,8 @@ def build_shared_lineage_panel(
     Useful to flag retained-lineage markers (e.g. KLK3 in PRAD, SFTPB in
     LUAD) that cannot distinguish tumor from benign parent tissue.
 
-    Note: the comparison uses **raw bulk** (``tcga_bulk_fpkm`` vs
-    ``nTPM_tissue``), not the deconvolved tumor-cell estimate. A naive
+    Note: the comparison uses cohort bulk (``tcga_bulk_tpm`` vs
+    ``tissue_nTPM``), not the deconvolved tumor-cell estimate. A naive
     TCGA deconvolution subtracts the full normal contribution, which by
     construction pulls lineage-shared genes toward zero and would remove
     them from a "shared" panel — precisely the wrong answer. Raw bulk
@@ -292,20 +284,20 @@ def build_shared_lineage_panel(
 
     Returns
     -------
-    DataFrame with columns ``symbol, tumor_fpkm, normal_ntpm,
-    tcga_bulk_fpkm, abs_log2_ratio``.
+    DataFrame with columns ``symbol, tumor_tpm, normal_ntpm,
+    tcga_bulk_tpm, abs_log2_ratio``.
     """
     df, _tissue = _load_cohort_vs_tissue(cancer_code, tissue=tissue)
-    df["abs_log2_ratio"] = np.abs(_log2_ratio(df["tcga_bulk_fpkm"], df["normal_ntpm"]))
+    df["abs_log2_ratio"] = np.abs(_log2_ratio(df["tcga_bulk_tpm"], df["normal_ntpm"]))
     ratio_keep = (
-        (df["tcga_bulk_fpkm"] >= min_expression)
+        (df["tcga_bulk_tpm"] >= min_expression)
         & (df["normal_ntpm"] >= min_expression)
         & (df["abs_log2_ratio"] <= tolerance_log2)
     )
     curated_genes = set(lineage_gene_symbols(cancer_code))
     curated_keep = (
         df["symbol"].isin(curated_genes)
-        & (df["tcga_bulk_fpkm"] >= min_expression)
+        & (df["tcga_bulk_tpm"] >= min_expression)
         & (df["normal_ntpm"] >= min_expression)
         & (df["abs_log2_ratio"] <= curated_lineage_tolerance_log2)
     )
@@ -342,7 +334,7 @@ def estimate_lineage_tumor_fraction(
     ``tumor_cell_g`` comes from deconvolving the TCGA cohort median
     against ``TCGA_MEDIAN_PURITY`` (same definition as in
     ``estimate_tumor_expression_ranges``). ``normal_ref_g`` is
-    ``nTPM_<tissue>`` for the matched-normal tissue.
+    ``<tissue>_nTPM`` for the matched-normal tissue.
 
     The robust summary (winsorized median + IQR stability) gives a
     lineage-specific purity estimate that does not rely on the
@@ -390,7 +382,7 @@ def estimate_lineage_tumor_fraction(
     for row in panel.itertuples(index=False):
         symbol = str(row.symbol)
         sample_val = float(sample_tpm_by_symbol.get(symbol, 0.0))
-        tumor_val = float(row.tumor_fpkm)
+        tumor_val = float(row.tumor_tpm)
         normal_val = float(row.normal_ntpm)
         denom = tumor_val - normal_val
         if denom <= 0:

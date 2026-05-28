@@ -169,7 +169,7 @@ def test_summary_uses_generic_text_for_orphan_context_rescue():
         "competing_code": "ESCA",
         "context_basis": "raw_signal_dominance",
         "message": (
-            "Step-0 TCGA correlation and direct cancer evidence support BLCA; "
+            "Tissue composition screen and direct cancer evidence support BLCA; "
             "suspending the orphan family penalty for the auto-detected call."
         ),
     }
@@ -251,7 +251,8 @@ def test_summary_marks_supplied_cancer_type_rna_concordance():
     )
 
     assert (
-        "**RNA classifier check:** broad RNA context is concordant with supplied "
+        "**RNA classifier check:** expression-reference context is concordant "
+        "with supplied "
         "PRAD (Prostate Adenocarcinoma)"
     ) in md
     assert "nearest RNA alternatives: BLCA, COAD" in md
@@ -278,7 +279,7 @@ def test_summary_compares_registry_child_against_parent_reference():
         disease_state="",
     )
 
-    assert "broad RNA context is concordant at the parent level" in md
+    assert "expression-reference context is concordant at the parent level" in md
     assert "SARC (Sarcoma) is top" in md
     assert "refined report label remains SARC_SYN (Synovial Sarcoma)" in md
     assert "nearest RNA alternatives: BLCA" in md
@@ -304,9 +305,9 @@ def test_summary_marks_supplied_cancer_type_rna_discordance():
         disease_state="",
     )
 
-    assert "broad RNA context is discordant with supplied COAD" in md
+    assert "expression-reference context is discordant with supplied COAD" in md
     assert (
-        "top broad RNA candidate is SARC (Sarcoma) while "
+        "top expression-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
     assert "Keep the supplied label as the report label" in md
@@ -332,9 +333,9 @@ def test_summary_marks_supplied_cancer_type_rna_ambiguity():
         disease_state="",
     )
 
-    assert "broad RNA context is ambiguous against supplied COAD" in md
+    assert "expression-reference context is ambiguous against supplied COAD" in md
     assert (
-        "top broad RNA candidate is SARC (Sarcoma) while "
+        "top expression-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
 
@@ -363,7 +364,7 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     )
 
     assert "externally supplied OS (Osteosarcoma) sets the fine/report label" in md
-    assert "broad RNA context is SARC (Sarcoma)" in md
+    assert "expression-reference context is SARC (Sarcoma)" in md
     assert "sarcoma-family broad-context support for supplied OS (Osteosarcoma)" in md
     assert "does not independently resolve the refined label" in md
     assert "raw signature favors KIRC" not in md
@@ -431,7 +432,7 @@ def test_summary_does_not_list_rna_alternatives_for_supplied_label():
         disease_state="",
     )
 
-    assert "broad RNA context is concordant with supplied PRAD" in md
+    assert "expression-reference context is concordant with supplied PRAD" in md
     assert "**RNA alternatives:**" not in md
 
 
@@ -631,8 +632,8 @@ def test_expression_independent_therapy_summary_keeps_rna_contextual():
     pdcd1_line = next(
         line for line in md.splitlines() if line.startswith("- **CD274**")
     )
-    assert "expression-independent indication" in pdcd1_line
-    assert "target RNA is contextual only" in pdcd1_line
+    assert "target expression is not the eligibility criterion" in pdcd1_line
+    assert "target RNA is context only" in pdcd1_line
     assert "Clinical maturity: approved antibody" in pdcd1_line
     assert "; Clinical maturity" not in pdcd1_line
     assert "model interval" not in pdcd1_line
@@ -665,8 +666,8 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
 
     line = _format_therapy_bullet(target, expression, analysis=analysis)
 
-    assert "expression-independent indication" in line
-    assert "target RNA is contextual only" in line
+    assert "target expression is not the eligibility criterion" in line
+    assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
 
@@ -796,7 +797,7 @@ def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillo
     assert "**Alteration evidence:** supplied EGFR kinase domain duplication" in md
     top_lines = [line for line in md.splitlines() if line.startswith("- **")]
     assert top_lines[0].startswith("- **EGFR**")
-    assert "supplied alteration evidence supports this eligibility gate" in md
+    assert "supplied alteration evidence matches this therapy requirement" in md
     assert "- **PDGFRA**" not in md
     assert "- **NTRK1**" not in md
     assert "- **CDK4**" not in md
@@ -933,7 +934,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
         cancer_code="PRAD",
         disease_state="",
     )
-    assert "Target expression source trace" in md
+    assert "Where target RNA signal appears to come from" in md
     assert "Tumor-source bulk TPM" in md
     assert "Top non-tumor attribution" in md
     assert "STEAP2" in md
@@ -970,7 +971,7 @@ def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
         pd.DataFrame([expr]),
         [(target, expr)],
     )
-    assert "Target expression source trace" in md
+    assert "Where target RNA signal appears to come from" in md
     assert "none modeled" in md
 
 
@@ -1086,7 +1087,7 @@ def test_actionable_is_longer_but_structured():
     for heading in [
         "Sample and confidence",
         "Cancer call and disease state",
-        "Therapy landscape",
+        "Therapy Prioritization",
     ]:
         assert heading in md, f"missing heading: {heading}"
     assert "model interval" in md

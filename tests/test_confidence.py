@@ -41,12 +41,12 @@ def test_concise_call_confidence_reasons_keep_summary_skimmable():
         reasons=[
             "fit quality is ambiguous — preserve alternate cancer hypotheses (long detail)",
             "top candidate SARC beats runner-up ESCA by only 4% on geomean (0.498 vs 0.477) — call is ambiguous",
-            "Step-0 correlation favored BLCA but the classifier picked SARC",
+            "Tissue composition screen favored BLCA but the classifier picked SARC",
         ],
     )
     assert (
         concise_confidence_reasons(tier)
-        == "ambiguous fit; near tie with ESCA; Step-0 favors BLCA"
+        == "ambiguous fit; near tie with ESCA; tissue composition favors BLCA"
     )
 
 

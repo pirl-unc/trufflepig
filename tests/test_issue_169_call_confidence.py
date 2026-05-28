@@ -62,7 +62,7 @@ def test_zero_concordance_top_call_is_low_confidence():
 
 
 def test_tied_geomean_downgrades_to_moderate():
-    """Geomean gap of < 10% is a tied call — downgrade to moderate."""
+    """Geomean gap of < 15% is a tied call — downgrade to moderate."""
     analysis = {
         "candidate_trace": [
             _candidate("A", support_geomean=0.50, lineage_concordance=0.8),
@@ -74,12 +74,47 @@ def test_tied_geomean_downgrades_to_moderate():
     assert any("ambiguous" in r.lower() for r in tier.reasons)
 
 
+def test_three_way_tied_geomean_downgrades_to_low():
+    """3-way tie within 15% of top — drop all the way to low / provisional.
+
+    Captures the PFO017-liver scenario: SARC 1.000 / ESCA 0.891 / BLCA 0.867.
+    The current-code reading of "moderate confidence" overstates fit
+    quality when three candidates are clustered together; the report
+    should call it provisional.
+    """
+    analysis = {
+        "candidate_trace": [
+            _candidate("SARC", support_geomean=1.000, lineage_concordance=0.8),
+            _candidate("ESCA", support_geomean=0.891, lineage_concordance=0.8),
+            _candidate("BLCA", support_geomean=0.867, lineage_concordance=0.8),
+        ],
+    }
+    tier = compute_call_confidence(analysis)
+    assert tier.tier == "low"
+    assert any("3-way tied call" in r for r in tier.reasons)
+    assert any("provisional" in r.lower() for r in tier.reasons)
+
+
+def test_2way_tied_but_3rd_diverges_stays_at_moderate():
+    """2-way tie at the top with a distant 3rd-place is moderate, not low."""
+    analysis = {
+        "candidate_trace": [
+            _candidate("A", support_geomean=0.500, lineage_concordance=0.8),
+            _candidate("B", support_geomean=0.470, lineage_concordance=0.8),
+            _candidate("C", support_geomean=0.200, lineage_concordance=0.8),
+        ],
+    }
+    tier = compute_call_confidence(analysis)
+    assert tier.tier == "moderate"
+    assert not any("3-way" in r for r in tier.reasons)
+
+
 def test_step0_mismatch_downgrades_to_moderate():
     """Step-0 correlation favors a cohort the classifier didn't pick
     — surface the mismatch."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_SARC", 0.77)]
+        top_tcga_cohorts = [("SARC_TPM", 0.77)]
 
     analysis = {
         "candidate_trace": [
@@ -98,7 +133,7 @@ def test_multiple_contradictions_all_surface_at_low_tier():
     ``low`` and all three reasons appear."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_SARC", 0.77)]
+        top_tcga_cohorts = [("SARC_TPM", 0.77)]
 
     analysis = {
         "candidate_trace": [
@@ -123,7 +158,7 @@ def test_step0_match_does_not_downgrade():
     """Step-0 agreeing with the classifier keeps the tier high."""
 
     class _HVT:
-        top_tcga_cohorts = [("FPKM_PRAD", 0.82)]
+        top_tcga_cohorts = [("PRAD_TPM", 0.82)]
 
     analysis = {
         "candidate_trace": [

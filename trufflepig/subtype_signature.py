@@ -86,29 +86,19 @@ def subtype_signature_panels(
     from .tumor_purity import _compile_excluded_gene_matcher
 
     # Subtype panel selection compares subtype TPM medians across
-    # cohorts via log2 ratios. Without renormalize_to_million, that's
-    # a TPM-vs-FPKM comparison on different per-column mass totals
-    # (BRCA_Basal sums to 138K, BEATAML to 1.14M, FPKM_BRCA to 230K,
-    # FPKM_ESCA to 700K in the bundled reference). Opt in here so the
-    # discriminator is apples-to-apples; the downstream scoring path
-    # uses HK-normalized values from a separately-cached reference
-    # matrix and is unaffected by this knob.
-    sub_df = subtype_deconvolved_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    # cohorts via log2 ratios. The trufflepig reference surface already
+    # renormalizes subtype and pan-cancer cohorts to a common per-million
+    # footing before this comparison.
+    sub_df = subtype_deconvolved_expression(technical_rna_normalize=True)
     if sub_df is None or sub_df.empty:
         return {}
 
-    pan = pan_cancer_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    pan = pan_cancer_expression(technical_rna_normalize=True)
     pan = pan.drop_duplicates(subset="Symbol").set_index("Symbol")
-    fpkm_cols = [c for c in pan.columns if c.startswith("FPKM_")]
-    if not fpkm_cols:
+    cohort_cols = [c for c in pan.columns if c.endswith("_TPM")]
+    if not cohort_cols:
         return {}
-    cohort_means = pan[fpkm_cols].astype(float).mean(axis=1)
+    cohort_means = pan[cohort_cols].astype(float).mean(axis=1)
 
     is_excluded = _compile_excluded_gene_matcher()
 

@@ -290,6 +290,8 @@ def test_ranges_dataframe_columns():
         "max_healthy_tpm",
         "tme_explainable",
         "cohort_prior_tpm",
+        "expression_reference_code",
+        "expression_reference_source",
         "est_1",
         "est_5",
         "est_9",
@@ -302,6 +304,188 @@ def test_ranges_dataframe_columns():
     ]
     for col in expected_cols:
         assert col in result.columns, f"Missing column: {col}"
+
+
+def test_ranges_use_fine_deconvolved_expression_reference(monkeypatch):
+    """Fine report labels can provide tumor-expression priors while the
+    broad cohort still controls decomposition/TME context."""
+    import pandas as pd
+    import trufflepig.plot_tumor_expr as mod
+
+    def fake_deconvolved_reference(code):
+        if str(code).upper() == "OS":
+            return {"PTK2": 123.0}, "subtype_deconvolved"
+        return {}, ""
+
+    monkeypatch.setattr(
+        mod, "_deconvolved_tumor_tpm_reference", fake_deconvolved_reference
+    )
+    df = pd.DataFrame(
+        {
+            "ensembl_gene_id": ["ENSG00000169398", "ENSG00000160752"],
+            "gene_symbol": ["PTK2", "IL34"],
+            "TPM": [50.0, 10.0],
+        }
+    )
+    purity_result = {
+        "overall_lower": 0.05,
+        "overall_estimate": 0.10,
+        "overall_upper": 0.15,
+    }
+
+    result = mod.estimate_tumor_expression_ranges(
+        df,
+        "SARC",
+        purity_result,
+        expression_reference_type="OS",
+    )
+    row = result[result["symbol"].eq("PTK2")].iloc[0]
+    assert row["cohort_prior_tpm"] == 123.0
+    assert row["expression_reference_code"] == "OS"
+    assert row["expression_reference_source"] == "subtype_deconvolved"
+
+
+def test_deconvolved_reference_preserves_source_cohort(monkeypatch):
+    import pandas as pd
+    import trufflepig.plot_tumor_expr as mod
+
+    monkeypatch.setattr(
+        mod,
+        "tcga_deconvolved_expression",
+        lambda: pd.DataFrame(columns=["cancer_code", "symbol", "tumor_tpm_median"]),
+    )
+    monkeypatch.setattr(
+        mod,
+        "subtype_deconvolved_expression",
+        lambda: pd.DataFrame(
+            [
+                {
+                    "cancer_code": "OS",
+                    "symbol": "RUNX2",
+                    "source_cohort": "TREEHOUSE_POLYA_25_01",
+                    "tumor_tpm_median": 25.0,
+                }
+            ]
+        ),
+    )
+    mod._deconvolved_tumor_tpm_reference.cache_clear()
+    mod._exact_expression_tpm_reference.cache_clear()
+
+    try:
+        values, source = mod._deconvolved_tumor_tpm_reference("OS")
+    finally:
+        mod._deconvolved_tumor_tpm_reference.cache_clear()
+        mod._exact_expression_tpm_reference.cache_clear()
+
+    assert values == {"RUNX2": 25.0}
+    assert source == "subtype_deconvolved:TREEHOUSE_POLYA_25_01"
+
+
+def test_deconvolved_reference_uses_source_code_alias(monkeypatch):
+    from types import SimpleNamespace
+
+    import pandas as pd
+    import trufflepig.analyze as analyze
+    import trufflepig.plot_tumor_expr as mod
+
+    monkeypatch.setattr(
+        analyze,
+        "expression_reference_options",
+        lambda code, include_fallback=False: (
+            SimpleNamespace(
+                source_kind="deconvolved_tumor_reference",
+                source_code="TARGET_WT",
+                reference_code="WILMS",
+            ),
+        )
+        if str(code).upper() == "WILMS"
+        else (),
+    )
+    monkeypatch.setattr(
+        mod,
+        "tcga_deconvolved_expression",
+        lambda: pd.DataFrame(columns=["cancer_code", "symbol", "tumor_tpm_median"]),
+    )
+    monkeypatch.setattr(
+        mod,
+        "subtype_deconvolved_expression",
+        lambda: pd.DataFrame(
+            [
+                {
+                    "cancer_code": "TARGET_WT",
+                    "symbol": "SIX2",
+                    "source_cohort": "TARGET_WT_2015",
+                    "tumor_tpm_median": 42.0,
+                }
+            ]
+        ),
+    )
+    mod._deconvolved_tumor_tpm_reference.cache_clear()
+    mod._exact_expression_tpm_reference.cache_clear()
+
+    try:
+        values, source = mod._deconvolved_tumor_tpm_reference("WILMS")
+    finally:
+        mod._deconvolved_tumor_tpm_reference.cache_clear()
+        mod._exact_expression_tpm_reference.cache_clear()
+
+    assert values == {"SIX2": 42.0}
+    assert source == "subtype_deconvolved:TARGET_WT_2015"
+
+
+def test_ranges_use_observed_reference_when_deconvolved_missing(monkeypatch):
+    """Observed pirlygenes references can supply priors, but the sample's
+    tumor-specific estimate is still computed from the sample."""
+    import pandas as pd
+    import trufflepig.plot_tumor_expr as mod
+
+    monkeypatch.setattr(
+        mod,
+        "_deconvolved_tumor_tpm_reference",
+        lambda code: ({}, ""),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_observed_bulk_tpm_reference",
+        lambda code: (
+            {"PTK2": 77.0},
+            "observed_bulk_reference:MMRF_COMMPASS",
+        )
+        if str(code).upper() == "MM"
+        else ({}, ""),
+    )
+    mod._exact_expression_tpm_reference.cache_clear()
+
+    df = pd.DataFrame(
+        {
+            "ensembl_gene_id": ["ENSG00000169398", "ENSG00000160752"],
+            "gene_symbol": ["PTK2", "IL34"],
+            "TPM": [50.0, 10.0],
+        }
+    )
+    purity_result = {
+        "overall_lower": 0.05,
+        "overall_estimate": 0.10,
+        "overall_upper": 0.15,
+    }
+
+    try:
+        result = mod.estimate_tumor_expression_ranges(
+            df,
+            "DLBC",
+            purity_result,
+            expression_reference_type="MM",
+        )
+    finally:
+        mod._exact_expression_tpm_reference.cache_clear()
+
+    row = result[result["symbol"].eq("PTK2")].iloc[0]
+    assert row["cohort_prior_tpm"] == 77.0
+    assert row["expression_reference_code"] == "MM"
+    assert row["expression_reference_source"] == "observed_bulk_reference:MMRF_COMMPASS"
+    assert row["expression_reference_kind"] == "observed_bulk_reference"
+    assert bool(row["expression_reference_is_tumor_cell_estimate"]) is False
+    assert row["tumor_attributed_bulk_tpm"] >= 0.0
 
 
 def test_ranges_tme_explainable_clamps_at_observed():
@@ -355,7 +539,7 @@ def test_ranges_skips_shrinkage_when_cohort_prior_is_near_zero():
     cta_map = CTA_gene_id_to_name()
     zero_cohort_ctas = []
     for gid, sym in cta_map.items():
-        if sym in ref.index and float(ref.loc[sym, "FPKM_PRAD"]) < 0.1:
+        if sym in ref.index and float(ref.loc[sym, "PRAD_TPM"]) < 0.1:
             zero_cohort_ctas.append((gid, sym))
         if len(zero_cohort_ctas) >= 3:
             break
@@ -508,8 +692,8 @@ def test_source_attribution_invariants_on_low_purity_prad_stroma_mix():
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     sample_tpm = (
-        0.15 * ref["FPKM_PRAD"].astype(float)
-        + 0.85 * ref["nTPM_smooth_muscle"].astype(float)
+        0.15 * ref["PRAD_TPM"].astype(float)
+        + 0.85 * ref["smooth_muscle_nTPM"].astype(float)
     )
     df = pd.DataFrame(
         {
@@ -595,8 +779,8 @@ def test_ranges_pct_cancer_median_steap1_near_one():
     hk_in_ref = sorted(hk_syms & set(ref_dedup.index))
 
     # STEAP1 TCGA PRAD fold
-    prad_hk = ref_dedup.loc[hk_in_ref, "FPKM_PRAD"].astype(float).median()
-    steap1_prad = float(ref_dedup.loc["STEAP1", "FPKM_PRAD"])
+    prad_hk = ref_dedup.loc[hk_in_ref, "PRAD_TPM"].astype(float).median()
+    steap1_prad = float(ref_dedup.loc["STEAP1", "PRAD_TPM"])
     steap1_fold = steap1_prad / prad_hk
 
     # Build a sample with the same fold, at 100% purity (so we can check)
@@ -721,7 +905,7 @@ def test_tme_tissues_are_valid():
     from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression()
-    ntpm_cols = {c.replace("nTPM_", "") for c in ref.columns if c.startswith("nTPM_")}
+    ntpm_cols = {c.removesuffix("_nTPM") for c in ref.columns if c.endswith("_nTPM")}
     for tissue in _TME_TISSUES:
         assert tissue in ntpm_cols, (
             f"TME tissue {tissue!r} not in reference nTPM columns"

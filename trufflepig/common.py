@@ -11,6 +11,7 @@
 # limitations under the License.
 
 from contextlib import contextmanager
+from functools import lru_cache
 import pandas as pd
 from typing import Iterator, Optional
 
@@ -94,14 +95,24 @@ _guess_gene_cols = guess_gene_cols
 # -------------------- TPM-by-symbol --------------------
 
 
+@lru_cache(maxsize=1)
+def ensembl_id_to_symbol_map() -> dict[str, str]:
+    """Return the reference Ensembl ID -> HGNC symbol map."""
+    from trufflepig.reference import pan_cancer_expression
+
+    ref = pan_cancer_expression()
+    return dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
+
+
 def build_sample_tpm_by_symbol(df_gene_expr):
-    """Return ``{symbol: max_TPM}`` from expression data (no normalization).
+    """Return ``{symbol: max_TPM}`` from already-clean sample expression.
 
     Maps Ensembl gene IDs to HGNC symbols via the bundled pan-cancer
     reference, then groups by symbol keeping the maximum TPM per gene.
     """
     from .plot_data_helpers import _strip_ensembl_version
-    from trufflepig.reference import pan_cancer_expression
+    from trufflepig.clean_tpm import assert_clean_tpm
+
     with without_dataframe_attrs(df_gene_expr):
         gene_id_col, _gene_name_col = guess_gene_cols(df_gene_expr)
         gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)
@@ -115,9 +126,15 @@ def build_sample_tpm_by_symbol(df_gene_expr):
             raise KeyError(
                 f"No TPM column found. Columns: {list(df_gene_expr.columns)}"
             )
+        assert_clean_tpm(
+            df_gene_expr,
+            value_cols=[tpm_col],
+            label_col=_gene_name_col,
+            id_col=gene_id_col,
+            context="analysis sample expression",
+        )
 
-        ref = pan_cancer_expression()
-        id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+        id_to_sym = ensembl_id_to_symbol_map()
 
         syms = gene_ids.map(id_to_sym)
         tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
@@ -131,3 +148,154 @@ def build_sample_tpm_by_symbol(df_gene_expr):
 
 # Underscore alias for backward compatibility with internal callers.
 _build_sample_tpm_by_symbol = build_sample_tpm_by_symbol
+
+
+# -------------------- ranges_df accessors --------------------
+#
+# Profiling identified ``for _, row in ranges_df.iterrows()`` as the
+# single largest analyze-time bottleneck — ~95% of total time in a
+# typical sample. Pandas' iterrows materializes a Series per row, and
+# subsequent ``row.get(...)`` calls trigger ``Series.__finalize__``
+# which deep-copies the attrs dict. With ~30k rows and ~10 different
+# rendering passes each scanning the frame, this compounds to ~2 hours
+# per sample.
+#
+# CRITICAL: the caches are keyed by id(ranges_df) in a module-level
+# dict, NOT on ranges_df.attrs. Stashing the records list on
+# ``ranges_df.attrs["_records_cache"]`` would make every remaining
+# ``Series.__finalize__`` deep-copy the cache itself — *amplifying*
+# the bug the cache was supposed to fix.
+
+_RANGES_RECORDS_CACHE: dict[int, list[dict]] = {}
+_RANGES_BY_SYMBOL_CACHE: dict[int, dict[str, dict]] = {}
+_RANGES_BY_GENE_ID_CACHE: dict[int, dict[str, dict]] = {}
+_PANEL_SYMBOL_TO_ID_CACHE: dict[frozenset[str], dict[str, str]] = {}
+
+
+def _cap_cache(cache: dict, max_size: int = 4) -> None:
+    """Bound the per-id cache so long-running processes (notebooks,
+    upcoming service mode) don't accumulate stale frames."""
+    while len(cache) > max_size:
+        cache.pop(next(iter(cache)))
+
+
+def ranges_records(ranges_df) -> list[dict]:
+    """Return ranges_df as a list of plain dicts (cached by id).
+
+    Use this instead of ``ranges_df.iterrows()`` in any rendering
+    helper. See module-level comment for the perf rationale.
+    """
+    if ranges_df is None or len(ranges_df) == 0:
+        return []
+    key = id(ranges_df)
+    cached = _RANGES_RECORDS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    records = ranges_df.to_dict("records")
+    _RANGES_RECORDS_CACHE[key] = records
+    _cap_cache(_RANGES_RECORDS_CACHE)
+    return records
+
+
+def ranges_by_symbol(ranges_df) -> dict[str, dict]:
+    """Return ``{symbol -> record_dict}`` keyed by both the original
+    symbol and a hyphen-stripped fallback (matches HLA-A → HLAA style
+    sloppy lookups some target tables use).
+
+    Cached by id alongside ``ranges_records``.
+
+    Prefer :func:`ranges_by_gene_id` for new code — Ensembl IDs are
+    stable across HGNC renames and don't have hyphen-collision
+    ambiguity. Symbol-keyed lookups remain here for compatibility
+    with the symbol-only ``cancer_biomarker_genes()`` panel API.
+    """
+    if ranges_df is None or len(ranges_df) == 0:
+        return {}
+    key = id(ranges_df)
+    cached = _RANGES_BY_SYMBOL_CACHE.get(key)
+    if cached is not None:
+        return cached
+    out: dict[str, dict] = {}
+    for rec in ranges_records(ranges_df):
+        sym = str(rec.get("symbol") or "").strip()
+        if not sym:
+            continue
+        out[sym] = rec
+        alt = sym.replace("-", "")
+        if alt != sym:
+            out.setdefault(alt, rec)
+    _RANGES_BY_SYMBOL_CACHE[key] = out
+    _cap_cache(_RANGES_BY_SYMBOL_CACHE)
+    return out
+
+
+def _versionless_gene_id(value) -> str:
+    """Strip ``.N`` version suffix from an Ensembl gene id."""
+    return str(value or "").split(".", 1)[0]
+
+
+def ranges_by_gene_id(ranges_df) -> dict[str, dict]:
+    """Return ``{ensembl_gene_id (versionless) -> record_dict}``.
+
+    Ensembl IDs are the canonical key for per-gene lookups inside
+    trufflepig — they're stable across HGNC symbol renames, don't
+    suffer the HLA-A/HLAA hyphen ambiguity that symbols do, and they
+    match the ``gene_id`` column trufflepig already stores in
+    ``ranges_df``. Use this in any new lookup-by-gene code.
+
+    Cached by id alongside the other ranges accessors.
+    """
+    if ranges_df is None or len(ranges_df) == 0:
+        return {}
+    key = id(ranges_df)
+    cached = _RANGES_BY_GENE_ID_CACHE.get(key)
+    if cached is not None:
+        return cached
+    out: dict[str, dict] = {}
+    for rec in ranges_records(ranges_df):
+        gene_id = _versionless_gene_id(rec.get("gene_id"))
+        if not gene_id:
+            continue
+        out[gene_id] = rec
+    _RANGES_BY_GENE_ID_CACHE[key] = out
+    _cap_cache(_RANGES_BY_GENE_ID_CACHE)
+    return out
+
+
+def panel_symbols_to_gene_ids(symbols) -> dict[str, str]:
+    """Resolve a set of HGNC symbols to canonical Ensembl gene IDs.
+
+    Used to convert symbol-only panel APIs (e.g.
+    ``cancer_biomarker_genes(code)``) into the ID space used by
+    :func:`ranges_by_gene_id`. Cached on the symbol set so a
+    rendering pass scanning the same panel multiple times pays the
+    Ensembl lookup cost once.
+
+    Returns ``{symbol -> versionless_gene_id}``. Symbols that can't
+    be resolved are omitted from the mapping.
+    """
+    if not symbols:
+        return {}
+    sym_set = frozenset(str(s).strip() for s in symbols if str(s).strip())
+    if not sym_set:
+        return {}
+    cached = _PANEL_SYMBOL_TO_ID_CACHE.get(sym_set)
+    if cached is not None:
+        return cached
+    out: dict[str, str] = {}
+    try:
+        from pirlygenes.gene_ids import find_gene_id_by_name_from_ensembl
+    except ImportError:
+        _PANEL_SYMBOL_TO_ID_CACHE[sym_set] = out
+        _cap_cache(_PANEL_SYMBOL_TO_ID_CACHE)
+        return out
+    for sym in sym_set:
+        try:
+            gid = find_gene_id_by_name_from_ensembl(sym)
+        except Exception:  # noqa: BLE001
+            continue
+        if gid:
+            out[sym] = _versionless_gene_id(gid)
+    _PANEL_SYMBOL_TO_ID_CACHE[sym_set] = out
+    _cap_cache(_PANEL_SYMBOL_TO_ID_CACHE)
+    return out

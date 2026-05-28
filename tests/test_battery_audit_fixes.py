@@ -116,17 +116,17 @@ def test_lineage_estimator_separates_tme_dominated_from_usable():
         {
             "Ensembl_Gene_ID": ["ENSG_LIN", "ENSG_HK"],
             "Symbol": ["LIN", "HK"],
-            "FPKM_FAKE": [1.0, 10.0],
-            "nTPM_smooth_muscle": [200.0, 10.0],
-            "nTPM_skeletal_muscle": [200.0, 10.0],
-            "nTPM_heart_muscle": [200.0, 10.0],
-            "nTPM_adipose_tissue": [100.0, 10.0],
-            "nTPM_bone_marrow": [50.0, 10.0],
-            "nTPM_lymph_node": [50.0, 10.0],
-            "nTPM_spleen": [50.0, 10.0],
-            "nTPM_thymus": [50.0, 10.0],
-            "nTPM_tonsil": [50.0, 10.0],
-            "nTPM_appendix": [50.0, 10.0],
+            "FAKE_TPM": [1.0, 10.0],
+            "smooth_muscle_nTPM": [200.0, 10.0],
+            "skeletal_muscle_nTPM": [200.0, 10.0],
+            "heart_muscle_nTPM": [200.0, 10.0],
+            "adipose_tissue_nTPM": [100.0, 10.0],
+            "bone_marrow_nTPM": [50.0, 10.0],
+            "lymph_node_nTPM": [50.0, 10.0],
+            "spleen_nTPM": [50.0, 10.0],
+            "thymus_nTPM": [50.0, 10.0],
+            "tonsil_nTPM": [50.0, 10.0],
+            "appendix_nTPM": [50.0, 10.0],
         }
     )
 
@@ -175,7 +175,7 @@ def _tcga_sample_with_mt_override(cancer_code, mt_tpm):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
         }
     )
     mt_mask = df["gene_symbol"].isin(set(_MT_GENES))

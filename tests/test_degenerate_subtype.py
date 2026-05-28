@@ -5,13 +5,14 @@ fusion-surrogate voting, the NE-axis site disambiguator, and the
 data-integrity contract on both CSV files.
 """
 
+from pirlygenes.gene_sets_cancer import cancer_type_registry
+
 from trufflepig.degenerate_subtype import (
     degenerate_subtype_pairs,
     fusion_surrogate_expression,
     fusion_surrogate_genes_for,
     resolve_degenerate_subtype,
 )
-from pirlygenes.gene_sets_cancer import cancer_type_registry
 
 
 def test_degenerate_pairs_csv_loads_and_parses():
@@ -558,11 +559,12 @@ def test_key_genes_lookup_matches_uppercase_parent_subtype_rows():
     ) == ("SARC", "MPNST")
 
 
-def test_brief_uses_os_therapy_panel_after_corrected_subtype():
+def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
     """User-facing pin for the Sid public osteosarcoma-data failure mode.
 
     The summary should stop surfacing DDLPS-only therapies once the
-    bone-site tiebreaker resolves the sample to osteosarcoma.
+    bone-site tiebreaker resolves the sample to osteosarcoma, while
+    still filtering stale OS rows such as miscited ganitumab.
     """
     import pandas as pd
 
@@ -625,7 +627,7 @@ def test_brief_uses_os_therapy_panel_after_corrected_subtype():
         sample_id="synthetic-bone-os-panel",
     )
     assert "Subtype-resolved therapy curation" in summary, summary
-    assert "ganitumab + chemo" in summary, summary
+    assert "ganitumab + chemo" not in summary, summary
     assert "brigimadlin" not in summary, summary
 
 

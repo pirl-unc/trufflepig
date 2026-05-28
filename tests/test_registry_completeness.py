@@ -3,9 +3,9 @@
 Every **leaf** cancer-type code in ``cancer-type-registry.csv``
 (parent_code empty) must carry a minimum package of information:
 
-1. **Expression data** — either an ``FPKM_<code>`` column in
-   ``pan-cancer-expression.csv`` (the TCGA-style pan-cancer reference)
-   or a row-set in ``subtype-deconvolved-expression.csv.gz``.
+1. **Expression reference** — either a direct clean-TPM expression cohort
+   for the code or a documented fallback to a compatible parent/family
+   reference.
 2. **Lineage panel** — at least five genes registered in
    ``lineage-genes.csv``.
 3. **Biomarker** — at least one row in ``cancer-key-genes.csv``
@@ -21,19 +21,18 @@ Every **leaf** cancer-type code in ``cancer-type-registry.csv``
 Subtype rows (``parent_code`` set) are exempt.
 
 This lives in trufflepig (not pirlygenes) because fields #1 and #5
-cross the new package boundary — expression matrices ship with
-trufflepig as of #23, while registry + curated panels stay in
-pirlygenes. The contract still pins the integrated picture: when a new
-entity is added to the registry, this test flags the gap.
+cross the package boundary — direct expression references may come from
+pirlygenes or trufflepig, while fallback selection lives in the analysis
+context layer. The contract still pins the integrated picture: when a
+new entity is added to the registry, this test flags the gap.
 """
 
 from pirlygenes import get_data
 from pirlygenes.gene_sets_cancer import cancer_type_registry
 
+from trufflepig.analyze import effective_expression_reference
 from trufflepig.reference import (
     heme_tumor_up_vs_matched_normal,
-    pan_cancer_expression,
-    subtype_deconvolved_expression,
     tumor_up_vs_matched_normal,
 )
 
@@ -221,11 +220,6 @@ def _leaf_codes_with_coverage():
     reg = cancer_type_registry()
     leaf = reg[reg["parent_code"].fillna("").astype(str).eq("")]
 
-    pan = pan_cancer_expression()
-    pan_codes = {c.replace("FPKM_", "") for c in pan.columns if c.startswith("FPKM_")}
-    sub = subtype_deconvolved_expression()
-    sub_codes = set(sub["cancer_code"].dropna().unique()) if sub is not None else set()
-
     ln = get_data("lineage-genes")
     ln_codes = {code for code, group in ln.groupby("Cancer_Type") if len(group) >= 5}
 
@@ -251,7 +245,7 @@ def _leaf_codes_with_coverage():
     for _, row in leaf.iterrows():
         code = row["code"]
         out[code] = {
-            "expression": code in pan_codes or code in sub_codes,
+            "expression": effective_expression_reference(code) is not None,
             "lineage": code in ln_codes,
             "biomarker": code in biomarker_codes,
             "therapy": code in therapy_codes,

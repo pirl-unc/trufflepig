@@ -46,7 +46,7 @@ def _tcga_sample(cancer_code):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"FPKM_{cancer_code}"].astype(float),
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
         }
     )
 
@@ -57,7 +57,7 @@ def _normal_tissue_sample(tissue):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"nTPM_{tissue}"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM"].astype(float),
         }
     )
 

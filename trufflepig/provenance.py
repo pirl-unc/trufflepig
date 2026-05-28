@@ -70,23 +70,23 @@ def build_provenance_md(
     )
     lines.append("")
 
-    # Step 0b — tissue composition screen (#149). Runs before the
-    # lineage-aware steps so the reader sees "what kind of tissue is
-    # this, and is there any hint of cancer" in the first breath.
+    # Tissue composition screen (#149). Runs before the lineage-aware
+    # stages so the reader sees "what kind of tissue is this, and is
+    # there any hint of cancer" in the first breath.
     hvt = analysis.get("healthy_vs_tumor")
     if hvt is not None and hvt.top_normal_tissues:
-        lines.append("## 0. Tissue composition screen\n")
+        lines.append("## Tissue Composition Screen\n")
         lines.append(hvt.summary_line())
         if hvt.cancer_hint != "tumor-consistent":
             lines.append(
-                "\nThis Step-0 signal carries forward: the downstream "
+                "\nThis tissue-composition signal carries forward: the downstream "
                 "cancer call is treated more cautiously, and the per-gene "
                 "expression ranges are widened to reflect the ambiguity."
             )
         lines.append("")
 
-    # Step 1 — library prep
-    lines.append("## 1. Library prep\n")
+    # RNA prep and preservation.
+    lines.append("## RNA Prep and Preservation\n")
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", "unknown")
         confidence = float(
@@ -128,8 +128,7 @@ def build_provenance_md(
         lines.append("*Library prep could not be inferred from this input.*")
     lines.append("")
 
-    # Step 2 — preservation / degradation
-    lines.append("## 2. Preservation\n")
+    lines.append("### Preservation and Degradation\n")
     if sample_context is not None:
         pres = getattr(sample_context, "preservation", "unknown").replace("_", " ")
         sev = getattr(sample_context, "degradation_severity", "none")
@@ -150,8 +149,8 @@ def build_provenance_md(
             )
     lines.append("")
 
-    # Step 3 — coarse composition
-    lines.append("## 3. Coarse composition\n")
+    # Coarse composition.
+    lines.append("## Tumor Purity and Coarse Composition\n")
     best = decomp_results[0] if decomp_results else None
     if best is not None:
         tumor_frac = float(getattr(best, "purity", 0.0) or 0.0)
@@ -179,8 +178,8 @@ def build_provenance_md(
         lines.append("*No decomposition result available for this sample.*")
     lines.append("")
 
-    # Step 4 — activated subtypes
-    lines.append("## 4. Subtype refinements\n")
+    # Activated subtypes.
+    lines.append("## Subtype and Background Refinements\n")
     if best is not None:
         trace = getattr(best, "component_trace", None)
         subtype_notes = []
@@ -211,8 +210,8 @@ def build_provenance_md(
             )
     lines.append("")
 
-    # Step 5 — tumor-linked expression
-    lines.append("## 5. Tumor-linked expression\n")
+    # Tumor-linked expression.
+    lines.append("## Tumor-Attributed Expression\n")
     if ranges_df is not None and len(ranges_df):
         if "attribution" in ranges_df.columns:
             supported_core, provisional_core, _ = partition_tumor_core_rows(

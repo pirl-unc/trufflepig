@@ -1,11 +1,4 @@
-"""Where the gene-set / reference CSVs live.
-
-After the analysis migration, all curated data still ships from
-``pirlygenes`` — the package was deliberately reduced to a data-only
-shape. trufflepig modules that need to read a CSV directly (rather
-than through :func:`pirlygenes.load_dataset.get_data`) should import
-:data:`DATA_DIR` from here.
-"""
+"""Where bundled reference CSVs live."""
 
 from __future__ import annotations
 
@@ -13,4 +6,10 @@ from pathlib import Path
 
 import pirlygenes
 
-DATA_DIR: Path = Path(pirlygenes.__file__).resolve().parent / "data"
+PIRLYGENES_DATA_DIR: Path = Path(pirlygenes.__file__).resolve().parent / "data"
+TRUFFLEPIG_DATA_DIR: Path = Path(__file__).resolve().parent / "data"
+
+# Back-compat for modules that still read pirlygenes-owned curated tables
+# directly. Trufflepig-owned generated artifacts should use
+# TRUFFLEPIG_DATA_DIR.
+DATA_DIR: Path = PIRLYGENES_DATA_DIR

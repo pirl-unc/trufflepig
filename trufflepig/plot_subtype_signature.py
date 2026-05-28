@@ -82,7 +82,7 @@ SUBTYPE_CONTRASTS = {
 
 def _score_axis_genes(sample_tpm, ref_by_sym, cancer_code, axis_genes):
     """Return list of {symbol, sample_tpm, cohort_median, fold_change, direction}."""
-    cancer_col = f"FPKM_{cancer_code}"
+    cancer_col = f"{cancer_code}_TPM"
     rows = []
     for rec in axis_genes:
         sym = rec["symbol"]

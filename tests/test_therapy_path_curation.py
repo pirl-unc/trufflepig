@@ -5,10 +5,15 @@ import pandas as pd
 from trufflepig._data import DATA_DIR as _DATA_DIR
 from trufflepig.reporting import (
     THERAPY_PATH_TIERS,
+    expression_independent_indication,
+    indication_biomarker,
     hla_eligibility_context,
     hla_restricted_target_supported,
     subtype_curation_scope_note,
     target_hla_eligibility,
+    filter_current_therapy_targets,
+    therapy_filter_note,
+    therapy_withdrawal_note,
     therapy_path_context,
     therapy_path_rank,
     therapy_path_tier,
@@ -63,6 +68,76 @@ def test_target_row_sources_are_present_for_most_curation_rows():
     sources = targets["source"].astype(str).str.strip()
     assert sources.ne("").mean() >= 0.95
     assert sources[sources.ne("")].str.contains("PMID:", regex=False).all()
+
+
+def test_withdrawn_disease_specific_rows_are_filtered_from_reports():
+    targets = pd.DataFrame(
+        [
+            {
+                "cancer_code": "BLCA",
+                "symbol": "TACSTD2",
+                "agent": "sacituzumab govitecan",
+                "indication": "advanced urothelial cancer",
+            },
+            {
+                "cancer_code": "BLCA",
+                "symbol": "NECTIN4",
+                "agent": "enfortumab vedotin",
+                "indication": "advanced urothelial cancer",
+            },
+            {
+                "cancer_code": "BRCA",
+                "symbol": "TACSTD2",
+                "agent": "sacituzumab govitecan",
+                "indication": "metastatic HR-positive HER2-negative breast cancer",
+            },
+        ]
+    )
+
+    note = therapy_withdrawal_note(targets.iloc[0])
+    filtered = filter_current_therapy_targets(targets)
+
+    assert "withdrawn urothelial" in note
+    assert list(filtered["agent"]) == ["enfortumab vedotin", "sacituzumab govitecan"]
+    assert list(filtered["cancer_code"]) == ["BLCA", "BRCA"]
+
+
+def test_miscited_osteosarcoma_ganitumab_row_is_filtered_from_reports():
+    targets = pd.DataFrame(
+        [
+            {
+                "cancer_code": "OS",
+                "symbol": "IGF1R",
+                "agent": "ganitumab + chemo",
+                "indication": "metastatic OS",
+            },
+            {
+                "cancer_code": "OS",
+                "symbol": "VEGFA",
+                "agent": "cabozantinib",
+                "indication": "R/R OS",
+            },
+        ]
+    )
+
+    assert "osteosarcoma" in therapy_filter_note(targets.iloc[0])
+    filtered = filter_current_therapy_targets(targets)
+    assert list(filtered["symbol"]) == ["VEGFA"]
+
+
+def test_adcc_lenvatinib_is_not_fgf2_expression_gated():
+    row = {
+        "cancer_code": "ADCC",
+        "symbol": "FGF2",
+        "agent": "lenvatinib",
+        "agent_class": "small_molecule",
+        "phase": "phase_2",
+        "indication": "advanced ADCC",
+        "rationale": "Multikinase TKI - modest activity in advanced ADCC",
+    }
+
+    assert indication_biomarker(row) == "histology_only"
+    assert expression_independent_indication(row) is True
 
 
 def test_reports_prefer_explicit_treatment_path_tier_over_rationale_text():

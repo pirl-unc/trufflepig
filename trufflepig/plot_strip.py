@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 
 from adjustText import adjust_text
 
+from .clean_tpm import assert_clean_tpm
 from .common import _guess_gene_cols
 from .plot_data_helpers import prepare_gene_expr_df
 from pirlygenes.gene_ids import find_canonical_gene_ids_and_names
@@ -139,6 +140,13 @@ def plot_gene_expression(
 ):
     # Pick the correct ID/name columns from the incoming DF
     gene_id_col, gene_name_col = _guess_gene_cols(df_gene_expr)
+    assert_clean_tpm(
+        df_gene_expr,
+        value_cols=["TPM"],
+        label_col=gene_name_col,
+        id_col=gene_id_col,
+        context="strip plot sample expression",
+    )
 
     # - join by IDs, label with names, include 'other' as a category and place it first.
     df_gene_expr_annot = prepare_gene_expr_df(

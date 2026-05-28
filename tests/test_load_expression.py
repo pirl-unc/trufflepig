@@ -367,6 +367,32 @@ def test_expression_qc_rescue_removes_rrna_like_dominator():
     )
 
 
+def test_expression_qc_rescue_uses_ensembl_id_when_symbol_is_missing():
+    df = pd.DataFrame(
+        {
+            "gene_id": ["ENSG00000198804.2", "ENSG00000142515.1", "ENSG00000075624.13"],
+            "TPM": [200_000.0, 300_000.0, 500_000.0],
+        }
+    )
+
+    rescued, record = le.apply_expression_qc_rescue(df, mode="auto")
+
+    assert record["applied"] is True
+    assert record["removed_fraction"] == pytest.approx(0.2)
+    assert record["top_removed_genes"][0]["gene"] == "ENSG00000198804.2"
+    assert rescued.loc[0, "TPM"] == pytest.approx(0.0)
+    assert rescued["TPM"].sum() == pytest.approx(1_000_000.0)
+    assert "__trufflepig_qc_label" not in rescued.columns
+
+
+@pytest.mark.parametrize("mode", ["off", "never", "false", "no", "0"])
+def test_expression_qc_rescue_rejects_disabled_modes(mode):
+    df = pd.DataFrame({"gene": ["RNA5SP389", "KLK3"], "TPM": [10.0, 90.0]})
+
+    with pytest.raises(ValueError, match="auto or always"):
+        le.apply_expression_qc_rescue(df, mode=mode)
+
+
 def test_expression_qc_rescue_keeps_raw_qc_before_normalized_view():
     df = pd.DataFrame(
         {
@@ -716,8 +742,8 @@ def test_detect_and_convert_to_tpm_noop_when_no_fpkm_column():
         "FPKM_zscore",
         "fpkm_adjusted",
         "FPKM_rank",
-        "FPKM_COAD",  # TCGA reference column
-        "FPKM_BRCA",
+        "COAD_TPM",  # TCGA reference column
+        "BRCA_TPM",
         "fpkm_per_million",
     ],
 )

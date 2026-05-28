@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from pirlygenes.gene_sets_cancer import degradation_gene_pairs
 from trufflepig.reference import pan_cancer_expression
@@ -25,7 +26,7 @@ def _pan_cancer_ntpm_sample(tissue):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"nTPM_{tissue}"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM"].astype(float),
         }
     )
 
@@ -536,6 +537,36 @@ def test_plot_reference_technical_rna_qc_writes_pngs(tmp_path):
     assert out2.stat().st_size > 1000
     assert out3.exists()
     assert out3.stat().st_size > 1000
+
+
+def test_reference_technical_rna_qc_uses_raw_reference_companions(monkeypatch):
+    from trufflepig import reference as reference_module
+    from trufflepig.sample_context import _reference_qc_fraction_rows
+
+    monkeypatch.setattr(
+        reference_module,
+        "pan_cancer_expression",
+        lambda *args, **kwargs: pd.DataFrame(
+            {
+                "Ensembl_Gene_ID": [
+                    "ENSG00000211459",
+                    "ENSG00000198888",
+                    "ENSG00000111640",
+                ],
+                "Symbol": ["MT-RNR1", "MT-ND1", "ACTB"],
+                "COAD_TPM": [0.0, 0.0, 1_000_000.0],
+                "COAD_TPM_raw": [200_000.0, 100_000.0, 700_000.0],
+                "colon_nTPM": [0.0, 0.0, 1_000_000.0],
+                "colon_nTPM_raw": [50_000.0, 50_000.0, 900_000.0],
+            }
+        ),
+    )
+
+    rows = _reference_qc_fraction_rows()
+    by_label = {row["label"]: row for row in rows}
+
+    assert by_label["COAD"]["mt_dna_fraction"] == pytest.approx(0.3)
+    assert by_label["colon"]["mt_dna_fraction"] == pytest.approx(0.1)
 
 
 def test_histone_prefixes_include_both_hgnc_old_and_new():

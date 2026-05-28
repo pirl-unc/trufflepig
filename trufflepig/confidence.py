@@ -93,9 +93,20 @@ def concise_confidence_reasons(tier: ConfidenceTier, max_reasons: int = 3) -> st
                 if match
                 else "raw signature conflict"
             )
-        elif "step-0 correlation favored" in low:
-            match = re.search(r"Step-0 correlation favored ([A-Za-z0-9_]+)", text)
-            note = f"Step-0 favors {match.group(1)}" if match else "Step-0 conflict"
+        elif (
+            "tissue composition screen favored" in low
+            or "step-0 correlation favored" in low
+        ):
+            match = re.search(
+                r"(?:Tissue composition screen|Step-0 correlation) favored "
+                r"([A-Za-z0-9_]+)",
+                text,
+            )
+            note = (
+                f"tissue composition favors {match.group(1)}"
+                if match
+                else "tissue composition conflict"
+            )
         else:
             note = text.split(" — ", 1)[0].strip()
         if note and note not in notes:
@@ -191,9 +202,9 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
       pattern matches the candidate's expected pattern. Near-zero
       concordance means the classifier picked a candidate whose
       lineage genes aren't expressed in the sample.
-    - Step-0 top-ρ TCGA cohort vs the classifier's pick. When Step
-      0 ranks cohort A first by correlation but the classifier picks
-      cohort B, that's a mismatch worth surfacing.
+    - Tissue-composition screen top cancer-reference match vs the classifier's
+      pick. When the screen ranks cohort A first by correlation but the
+      classifier picks cohort B, that's a mismatch worth surfacing.
     - Geomean gap to the runner-up. Top geomean 0.431 vs second 0.429
       is a tied call, not a clean win.
 
@@ -262,22 +273,48 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
             f"{top_code} lineage-gene pattern"
         )
 
-    # 2. Geomean gap to the runner-up. Within ~10% of the runner-up is
-    # a tied call.
+    # 2. Geomean gap to the runner-up and 3rd-place. Within 15% of the
+    # runner-up is a tied 2-way call (downgrade by one tier). Within 15%
+    # of the 3rd-place candidate is a tied 3-way call (downgrade all the
+    # way to low / provisional). The relative-gap metric — 1 − cand/top —
+    # is invariant to the normalization scale of ``support_geomean`` so
+    # the threshold reads identically whether the trace stores raw
+    # geomeans (0.43, 0.42, …) or normalized scores (1.000, 0.891, …).
     if len(candidate_trace) >= 2:
-        second = candidate_trace[1]
         top_gm = float(top.get("support_geomean") or 0.0)
+        second = candidate_trace[1]
         second_gm = float(second.get("support_geomean") or 0.0)
-        if second_gm > 0 and (top_gm / second_gm) < 1.1:
-            gap_pct = (top_gm / second_gm - 1.0) * 100 if second_gm else 0
+        third = candidate_trace[2] if len(candidate_trace) >= 3 else None
+        third_gm = float(third.get("support_geomean") or 0.0) if third else 0.0
+
+        def _rel_gap(cand_gm: float) -> float:
+            return 1.0 - cand_gm / top_gm if top_gm > 0 else 1.0
+
+        gap_to_second = _rel_gap(second_gm)
+        gap_to_third = _rel_gap(third_gm) if third else 1.0
+        TIED_GAP_THRESHOLD = 0.15
+
+        if second_gm > 0 and gap_to_second <= TIED_GAP_THRESHOLD:
             second_code = second.get("code")
             if tier == "high":
                 tier = "moderate"
             reasons.append(
                 f"top candidate {top_code} beats runner-up {second_code} "
-                f"by only {gap_pct:.0f}% on geomean ({top_gm:.3f} vs "
-                f"{second_gm:.3f}) — call is ambiguous"
+                f"by only {gap_to_second * 100:.0f}% on geomean "
+                f"({top_gm:.3f} vs {second_gm:.3f}) — call is ambiguous"
             )
+            # 3-way tie: third-place is also within threshold. The top-1
+            # call is provisional regardless of which one of the three
+            # the classifier picked.
+            if third and third_gm > 0 and gap_to_third <= TIED_GAP_THRESHOLD:
+                third_code = third.get("code")
+                tier = "low"
+                reasons.append(
+                    f"3-way tied call: {top_code} / {second.get('code')} / "
+                    f"{third_code} all within {TIED_GAP_THRESHOLD * 100:.0f}% on "
+                    f"geomean ({top_gm:.3f} / {second_gm:.3f} / {third_gm:.3f}) — "
+                    f"treat the top label as provisional"
+                )
 
     # 2b. Raw signature tension: the final support score can promote a
     # candidate via purity/family factors even when another cancer type has
@@ -309,7 +346,7 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
             f"({best_sig_score:.3f} vs {top_sig:.3f})"
         )
 
-    # 3. Step-0 top-ρ TCGA cohort disagrees with the classifier's
+    # 3. Tissue-composition top cancer-reference match disagrees with the classifier's
     # pick. Sample-level correlation is the coarsest signal and can
     # be more reliable than the classifier's geomean when the panel
     # evidence is weak.
@@ -320,13 +357,13 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
         if tcga:
             name, _rho = tcga[0]
             step0_top_code = (
-                name.replace("FPKM_", "") if isinstance(name, str) else None
+                name.removesuffix("_TPM") if isinstance(name, str) else None
             )
     if step0_top_code and top_code and step0_top_code != top_code:
         if tier == "high":
             tier = "moderate"
         reasons.append(
-            f"Step-0 correlation favored {step0_top_code} but the "
+            f"Tissue composition screen favored {step0_top_code} but the "
             f"classifier picked {top_code}"
         )
 

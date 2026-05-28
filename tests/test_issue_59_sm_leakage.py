@@ -1,6 +1,6 @@
 """Regression tests for #59 item 1 — smooth-muscle stromal leakage annotation.
 
-The matched-normal reference (``nTPM_prostate`` / ``nTPM_colon`` / …)
+The matched-normal reference (``prostate_nTPM`` / ``colon_nTPM`` / …)
 carries *average* fibromuscular-stroma density for the parent tissue.
 A biopsy with above-average smooth-muscle content leaks SM-lineage
 signal into the tumor-attributed column. This annotation flags
@@ -111,6 +111,7 @@ def test_matched_normal_over_predicted_wins_over_sm_leakage():
 def test_ranges_df_emits_smooth_muscle_stromal_leakage_column(tmp_path):
     """Pin the new column surface area on the real estimator."""
     import pandas as pd
+    from trufflepig.clean_tpm import technical_rna_mask
     from trufflepig.reference import pan_cancer_expression
     from trufflepig.plot import estimate_tumor_expression_ranges
 
@@ -119,9 +120,15 @@ def test_ranges_df_emits_smooth_muscle_stromal_leakage_column(tmp_path):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref["nTPM_prostate"].astype(float) + 1.0,
+            "TPM": ref["prostate_nTPM"].astype(float),
         }
     )
+    technical = technical_rna_mask(
+        df,
+        label_col="gene_symbol",
+        id_col="ensembl_gene_id",
+    )
+    df.loc[~technical, "TPM"] = df.loc[~technical, "TPM"] + 1.0
     # Inject high TAGLN so the flag has a chance to fire.
     df.loc[df["gene_symbol"] == "TAGLN", "TPM"] = 1500.0
 

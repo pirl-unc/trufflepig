@@ -1,0 +1,5328 @@
+{
+  "decomposition_parameters": {
+    "family_scoring": {
+      "candidate_panel_min_score": 0.05,
+      "candidate_panel_top_n": 2,
+      "family_display_fraction": 0.4,
+      "min_factor": 0.05,
+      "non_family_penalty": 0.85,
+      "non_penalizing_families": [
+        "MESENCHYMAL"
+      ],
+      "orphan_context_dominant_raw_ratio": 1.3,
+      "orphan_context_min_raw_ratio": 0.85,
+      "orphan_context_min_signature": 0.55,
+      "presence_scale": 0.15,
+      "signature_stability_floor": 0.2,
+      "soft_family_penalty_gain": 0.75,
+      "support_fraction_of_top_floor": 0.05,
+      "within_family_base": 0.35,
+      "within_family_gain": 0.65
+    }
+  },
+  "hpa_normal_baseline": {
+    "per_tissue": [
+      {
+        "bucket": "tumor-like",
+        "hint": "tumor-consistent",
+        "tissue": "adipose_tissue",
+        "top_normal": "adipose_tissue_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.848"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "adrenal_gland",
+        "top_normal": "adrenal_gland_nTPM=1.000",
+        "top_tcga": "ACC_TPM=0.869"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "amygdala",
+        "top_normal": "amygdala_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.863"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "appendix",
+        "top_normal": "appendix_nTPM=1.000",
+        "top_tcga": "LUAD_TPM=0.846"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "basal_ganglia",
+        "top_normal": "basal_ganglia_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.847"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "bone_marrow",
+        "top_normal": "bone_marrow_nTPM=1.000",
+        "top_tcga": "LAML_TPM=0.853"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "breast",
+        "top_normal": "breast_nTPM=1.000",
+        "top_tcga": "BRCA_TPM=0.863"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "cerebellum",
+        "top_normal": "cerebellum_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.810"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "cerebral_cortex",
+        "top_normal": "cerebral_cortex_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.873"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "cervix",
+        "top_normal": "cervix_nTPM=1.000",
+        "top_tcga": "PAAD_TPM=0.849"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "choroid_plexus",
+        "top_normal": "choroid_plexus_nTPM=1.000",
+        "top_tcga": "GBM_TPM=0.810"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "colon",
+        "top_normal": "colon_nTPM=1.000",
+        "top_tcga": "PAAD_TPM=0.860"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "duodenum",
+        "top_normal": "duodenum_nTPM=1.000",
+        "top_tcga": "STAD_TPM=0.853"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "tumor-consistent",
+        "tissue": "endometrium",
+        "top_normal": "endometrium_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.870"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "epididymis",
+        "top_normal": "epididymis_nTPM=1.000",
+        "top_tcga": "PRAD_TPM=0.795"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "esophagus",
+        "top_normal": "esophagus_nTPM=1.000",
+        "top_tcga": "HNSC_TPM=0.879"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "fallopian_tube",
+        "top_normal": "fallopian_tube_nTPM=1.000",
+        "top_tcga": "UCEC_TPM=0.840"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "gallbladder",
+        "top_normal": "gallbladder_nTPM=1.000",
+        "top_tcga": "PAAD_TPM=0.868"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "tumor-consistent",
+        "tissue": "heart_muscle",
+        "top_normal": "heart_muscle_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.817"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "hippocampal_formation",
+        "top_normal": "hippocampal_formation_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.858"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "hypothalamus",
+        "top_normal": "hypothalamus_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.853"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "kidney",
+        "top_normal": "kidney_nTPM=1.000",
+        "top_tcga": "KIRP_TPM=0.877"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "liver",
+        "top_normal": "liver_nTPM=1.000",
+        "top_tcga": "LIHC_TPM=0.914"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "lung",
+        "top_normal": "lung_nTPM=1.000",
+        "top_tcga": "LUAD_TPM=0.880"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "lymph_node",
+        "top_normal": "lymph_node_nTPM=1.000",
+        "top_tcga": "DLBC_TPM=0.878"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "midbrain",
+        "top_normal": "midbrain_nTPM=1.000",
+        "top_tcga": "GBM_TPM=0.864"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "ovary",
+        "top_normal": "ovary_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.852"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "pancreas",
+        "top_normal": "pancreas_nTPM=1.000",
+        "top_tcga": "PAAD_TPM=0.857"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "parathyroid_gland",
+        "top_normal": "parathyroid_gland_nTPM=1.000",
+        "top_tcga": "KICH_TPM=0.848"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "pituitary_gland",
+        "top_normal": "pituitary_gland_nTPM=1.000",
+        "top_tcga": "PCPG_TPM=0.824"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "placenta",
+        "top_normal": "placenta_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.832"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "prostate",
+        "top_normal": "prostate_nTPM=1.000",
+        "top_tcga": "PRAD_TPM=0.904"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "rectum",
+        "top_normal": "rectum_nTPM=1.000",
+        "top_tcga": "COAD_TPM=0.857"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "retina",
+        "top_normal": "retina_nTPM=1.000",
+        "top_tcga": "LGG_TPM=0.752"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "salivary_gland",
+        "top_normal": "salivary_gland_nTPM=1.000",
+        "top_tcga": "LUAD_TPM=0.841"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "seminal_vesicle",
+        "top_normal": "seminal_vesicle_nTPM=1.000",
+        "top_tcga": "PRAD_TPM=0.853"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "skeletal_muscle",
+        "top_normal": "skeletal_muscle_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.790"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "skin",
+        "top_normal": "skin_nTPM=1.000",
+        "top_tcga": "HNSC_TPM=0.845"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "small_intestine",
+        "top_normal": "small_intestine_nTPM=1.000",
+        "top_tcga": "STAD_TPM=0.854"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "smooth_muscle",
+        "top_normal": "smooth_muscle_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.855"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "spinal_cord",
+        "top_normal": "spinal_cord_nTPM=1.000",
+        "top_tcga": "GBM_TPM=0.865"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "tumor-consistent",
+        "tissue": "spleen",
+        "top_normal": "spleen_nTPM=1.000",
+        "top_tcga": "DLBC_TPM=0.842"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "stomach",
+        "top_normal": "stomach_nTPM=1.000",
+        "top_tcga": "PAAD_TPM=0.877"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "testis",
+        "top_normal": "testis_nTPM=1.000",
+        "top_tcga": "TGCT_TPM=0.667"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "thymus",
+        "top_normal": "thymus_nTPM=1.000",
+        "top_tcga": "THYM_TPM=0.863"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "thyroid_gland",
+        "top_normal": "thyroid_gland_nTPM=1.000",
+        "top_tcga": "THCA_TPM=0.906"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "tongue",
+        "top_normal": "tongue_nTPM=1.000",
+        "top_tcga": "SARC_TPM=0.798"
+      },
+      {
+        "bucket": "tumor-like",
+        "hint": "possibly-tumor",
+        "tissue": "tonsil",
+        "top_normal": "tonsil_nTPM=1.000",
+        "top_tcga": "LUSC_TPM=0.834"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "urinary_bladder",
+        "top_normal": "urinary_bladder_nTPM=1.000",
+        "top_tcga": "LUAD_TPM=0.869"
+      },
+      {
+        "bucket": "healthy",
+        "hint": "healthy-dominant",
+        "tissue": "vagina",
+        "top_normal": "vagina_nTPM=1.000",
+        "top_tcga": "HNSC_TPM=0.867"
+      }
+    ],
+    "summary": {
+      "by_bucket": {
+        "healthy": 37,
+        "tumor-like": 13
+      },
+      "n_tissues": 50
+    }
+  },
+  "local_no_override": {
+    "manifest_path": "/Users/iskander/code/pirlygenes/local_reports/rnaseq-20260506-132208/manifest.json",
+    "per_sample": [
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "fine_reference"
+        ],
+        "expected_cancer_type": "OS",
+        "expected_selected_by": "fine_reference",
+        "inferred_cancer_type": "OS",
+        "input_path": "/Users/iskander/data/pathfinder/pfo004/analysis/gene-expression.csv",
+        "name": "sid-pfo004-osteosarcoma-gene-expression",
+        "notes": "PFO004 osteosarcoma \u2014 fine OS reference inside SARC context",
+        "sample_id_value": null,
+        "seconds": 20.8,
+        "selected_by": "fine_reference",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "SARC",
+          "UCS",
+          "THYM"
+        ],
+        "top_code": "SARC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "fine_reference"
+        ],
+        "expected_cancer_type": "OS",
+        "expected_selected_by": "fine_reference",
+        "inferred_cancer_type": "OS",
+        "input_path": "/Users/iskander/data/pathfinder/pfo004/analysis/transcripts_quant/quant.gene_tpm.csv",
+        "name": "sid-pfo004-osteosarcoma-salmon-gene-tpm",
+        "notes": "PFO004 osteosarcoma salmon",
+        "sample_id_value": null,
+        "seconds": 20.66,
+        "selected_by": "fine_reference",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "SARC",
+          "UCS",
+          "THYM"
+        ],
+        "top_code": "SARC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "COAD|READ",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "READ",
+        "input_path": "/Users/iskander/data/pathfinder/pfo002/Personalis-PSNLDx20240402135/Processed/RNA_Pipeline/Expression_Reports/tsv/RNA_PSNLDx20240402135_tumor_rna_gene_expression_report.tsv",
+        "name": "pfo002-personalis-gene-expression",
+        "notes": "PFO002 CRC (personalis)",
+        "sample_id_value": null,
+        "seconds": 20.22,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "top_code": "READ"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "COAD|READ",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "READ",
+        "input_path": "/Users/iskander/data/pathfinder/pfo002/WashU/mcdb032-BG002179-2022-05-colon/mcdb-workflow_results/gene_abundance.tsv",
+        "name": "pfo002-washu-kallisto-gene-abundance",
+        "notes": "PFO002 CRC (washu kallisto)",
+        "sample_id_value": null,
+        "seconds": 20.78,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "top_code": "READ"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "COAD|READ",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "READ",
+        "input_path": "/Users/iskander/data/pathfinder/pfo002/WashU/mcdb032-BG002179-2022-05-colon/mcdb-workflow_results/rna_stringtie_gene_expression.tsv",
+        "name": "pfo002-washu-stringtie-gene-expression",
+        "notes": "PFO002 CRC (washu stringtie)",
+        "sample_id_value": null,
+        "seconds": 20.9,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "top_code": "READ"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "PRAD",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "PRAD",
+        "input_path": "/Users/iskander/data/Kat-DL/tempus/tempus-rna/salmon_rich_quant/quant.gene_tpm.csv",
+        "name": "rs-tempus-salmon-rich-gene-tpm",
+        "notes": "Kat-DL Tempus PRAD",
+        "sample_id_value": null,
+        "seconds": 1.38,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "PRAD",
+          "HNSC",
+          "LAML"
+        ],
+        "top_code": "PRAD"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "COAD|READ",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "READ",
+        "input_path": "/Users/iskander/data/asy/salmon-output-asy/quant.gene_tpm.csv",
+        "name": "asy-salmon-gene-tpm",
+        "notes": "ASY CRC context",
+        "sample_id_value": null,
+        "seconds": 20.46,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "top_code": "READ"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "SARC",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "SARC",
+        "input_path": "/Users/iskander/data/alvin/RNA/2025-10-31_salmon/quant.gene_tpm.csv",
+        "name": "alvin-salmon-gene-tpm",
+        "notes": "Alvin SARC",
+        "sample_id_value": null,
+        "seconds": 20.75,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "SARC",
+          "UCS",
+          "GBM"
+        ],
+        "top_code": "SARC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "BRCA",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "BRCA",
+        "input_path": "/Users/iskander/data/hcc1395/rnaseq/kallisto_expression/gene_abundance.tsv",
+        "name": "hcc1395-kallisto-gene-abundance",
+        "notes": "HCC1395 BRCA (kallisto)",
+        "sample_id_value": null,
+        "seconds": 21.04,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "BRCA",
+          "ESCA",
+          "HNSC"
+        ],
+        "top_code": "BRCA"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "BRCA",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "BRCA",
+        "input_path": "/Users/iskander/data/hcc1395/rnaseq/stringtie_expression/stringtie_gene_expression.tsv",
+        "name": "hcc1395-stringtie-gene-expression",
+        "notes": "HCC1395 BRCA (stringtie)",
+        "sample_id_value": null,
+        "seconds": 21.3,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "BRCA",
+          "ESCA",
+          "SKCM"
+        ],
+        "top_code": "BRCA"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "rare_marker"
+        ],
+        "expected_cancer_type": "NUTM",
+        "expected_selected_by": "rare_marker",
+        "inferred_cancer_type": "NUTM",
+        "input_path": "/Users/iskander/data/pathfinder/pfo019/BostonGene-BG011335-2024-03-20-nasal/Processed/final_results/final_results/rnaseq/kallisto_expression/gene_abundance.tsv",
+        "name": "pfo019-kallisto-gene-abundance",
+        "notes": "PFO019 NUTM by RNA marker (no fusion data here)",
+        "sample_id_value": null,
+        "seconds": 20.75,
+        "selected_by": "rare_marker",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top_code": "LUSC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "rare_marker"
+        ],
+        "expected_cancer_type": "NUTM",
+        "expected_selected_by": "rare_marker",
+        "inferred_cancer_type": "NUTM",
+        "input_path": "/Users/iskander/data/pathfinder/pfo019/BostonGene-BG011335-2024-03-20-nasal/Processed/final_results/final_results/rnaseq/stringtie_expression/stringtie_gene_expression.tsv",
+        "name": "pfo019-stringtie-gene-expression",
+        "notes": "PFO019 NUTM by RNA marker (stringtie)",
+        "sample_id_value": null,
+        "seconds": 21.06,
+        "selected_by": "rare_marker",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top_code": "LUSC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "BLCA",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "BLCA",
+        "input_path": "/Users/iskander/data/pathfinder/pfo017/salmon.merged.gene_tpm.tsv",
+        "name": "pfo017-pfo017-bladder-2023",
+        "notes": "PFO017 bladder 2023",
+        "sample_id_value": "PFO017-bladder-2023",
+        "seconds": 2.14,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "BLCA",
+          "ESCA",
+          "BRCA"
+        ],
+        "top_code": "BLCA"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "BLCA",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "BLCA",
+        "input_path": "/Users/iskander/data/pathfinder/pfo017/salmon.merged.gene_tpm.tsv",
+        "name": "pfo017-pfo017-bladder-2025",
+        "notes": "PFO017 bladder 2025",
+        "sample_id_value": "PFO017-bladder-2025",
+        "seconds": 20.83,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "BLCA",
+          "CHOL",
+          "UCS"
+        ],
+        "top_code": "BLCA"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "BLCA",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "BLCA",
+        "input_path": "/Users/iskander/data/pathfinder/pfo017/salmon.merged.gene_tpm.tsv",
+        "name": "pfo017-pfo017-liver-2023",
+        "notes": "PFO017 liver met (BLCA primary)",
+        "sample_id_value": "PFO017-liver-2023",
+        "seconds": 21.1,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "BLCA",
+          "SARC",
+          "ESCA"
+        ],
+        "top_code": "BLCA"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "rare_marker"
+        ],
+        "expected_cancer_type": "NUTM",
+        "expected_selected_by": "rare_marker",
+        "inferred_cancer_type": "NUTM",
+        "input_path": "/Users/iskander/data/tempus-unc-nutm1/data_backfill/Data/Group_Level_Molecular/normalized_rna.csv",
+        "name": "tempus-nutm1-unc_0026-tl-21-ks8t3eyh",
+        "notes": "Tempus NUTM1 case 0026",
+        "sample_id_value": "TL-21-KS8T3EYH",
+        "seconds": 3.92,
+        "selected_by": "rare_marker",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top_code": "LUSC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "rare_marker"
+        ],
+        "expected_cancer_type": "NUTM",
+        "expected_selected_by": "rare_marker",
+        "inferred_cancer_type": "NUTM",
+        "input_path": "/Users/iskander/data/tempus-unc-nutm1/data_backfill/Data/Group_Level_Molecular/normalized_rna.csv",
+        "name": "tempus-nutm1-unc_0027-tl-21-tayehe9b",
+        "notes": "Tempus NUTM1 case 0027",
+        "sample_id_value": "TL-21-TAYEHE9B",
+        "seconds": 3.95,
+        "selected_by": "rare_marker",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "LUSC",
+          "HNSC",
+          "CESC"
+        ],
+        "top_code": "LUSC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "rare_marker"
+        ],
+        "expected_cancer_type": "NUTM",
+        "expected_selected_by": "rare_marker",
+        "inferred_cancer_type": "NUTM",
+        "input_path": "/Users/iskander/data/tempus-unc-nutm1/data_backfill/Data/Group_Level_Molecular/normalized_rna.csv",
+        "name": "tempus-nutm1-unc_0028-tl-20-10a3fc",
+        "notes": "Tempus NUTM1 case 0028",
+        "sample_id_value": "TL-20-10A3FC",
+        "seconds": 1.42,
+        "selected_by": "rare_marker",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top_code": "LUSC"
+      },
+      {
+        "code_match": true,
+        "evidence_sources": [
+          "broad_rna"
+        ],
+        "expected_cancer_type": "PRAD",
+        "expected_selected_by": null,
+        "inferred_cancer_type": "PRAD",
+        "input_path": "/Users/iskander/data/Kat-DL/CeGaT/salmon-output/quant.gene_tpm.csv",
+        "name": "low-purity-prad-cegat-salmon-gene-tpm",
+        "notes": "Kat-DL CeGaT PRAD (low purity)",
+        "sample_id_value": null,
+        "seconds": 20.68,
+        "selected_by": "primary_expression_match",
+        "selector_match": true,
+        "status": "ok",
+        "top3": [
+          "PRAD",
+          "SARC",
+          "ESCA"
+        ],
+        "top_code": "PRAD"
+      }
+    ],
+    "summary": {
+      "code_match_rate": 1.0,
+      "full_match_rate": 1.0,
+      "layer_breakdown": {
+        "broad_only_code_match_rate": 0.6316,
+        "consolidated_code_match_rate": 1.0,
+        "delta_consolidated_vs_broad": 0.3684,
+        "n_lifted_by_consolidation": 7
+      },
+      "n_code_match": 19,
+      "n_evaluated": 19,
+      "n_full_match": 19,
+      "per_selector": {
+        "fine_reference": {
+          "code_match_rate": 1.0,
+          "n": 2
+        },
+        "primary_expression_match": {
+          "code_match_rate": 1.0,
+          "n": 12
+        },
+        "rare_marker": {
+          "code_match_rate": 1.0,
+          "n": 5
+        }
+      }
+    }
+  },
+  "pirlygenes_version": "5.2.7",
+  "tcga_per_sample": {
+    "per_cohort": {
+      "ACC": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 0.8,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 0.8
+      },
+      "BLCA": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 0.8,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 0.8
+      },
+      "BRCA": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 0.8,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 0.8
+      },
+      "CESC": {
+        "broad_top1_accuracy": 0.4,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.4,
+        "n": 5,
+        "top1_accuracy": 0.4,
+        "top3_accuracy": 1.0
+      },
+      "CHOL": {
+        "broad_top1_accuracy": 0.6,
+        "broad_top3_accuracy": 0.6,
+        "consolidated_top1_accuracy": 0.4,
+        "n": 5,
+        "top1_accuracy": 0.6,
+        "top3_accuracy": 0.6
+      },
+      "COAD": {
+        "broad_top1_accuracy": 0.4,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.4,
+        "n": 5,
+        "top1_accuracy": 0.4,
+        "top3_accuracy": 1.0
+      },
+      "DLBC": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "ESCA": {
+        "broad_top1_accuracy": 0.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.0,
+        "n": 5,
+        "top1_accuracy": 0.0,
+        "top3_accuracy": 1.0
+      },
+      "GBM": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "HNSC": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 1.0
+      },
+      "KICH": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "KIRC": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "KIRP": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "LGG": {
+        "broad_top1_accuracy": 0.6,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.6,
+        "n": 5,
+        "top1_accuracy": 0.6,
+        "top3_accuracy": 1.0
+      },
+      "LIHC": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "LUAD": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 1.0
+      },
+      "LUSC": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 1.0
+      },
+      "MESO": {
+        "broad_top1_accuracy": 0.2,
+        "broad_top3_accuracy": 0.4,
+        "consolidated_top1_accuracy": 0.2,
+        "n": 5,
+        "top1_accuracy": 0.2,
+        "top3_accuracy": 0.4
+      },
+      "OV": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "PAAD": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "PCPG": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "PRAD": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "READ": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "SARC": {
+        "broad_top1_accuracy": 0.4,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.4,
+        "n": 5,
+        "top1_accuracy": 0.4,
+        "top3_accuracy": 1.0
+      },
+      "SKCM": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "STAD": {
+        "broad_top1_accuracy": 0.6,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 0.6,
+        "n": 5,
+        "top1_accuracy": 0.6,
+        "top3_accuracy": 1.0
+      },
+      "TGCT": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "THCA": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "THYM": {
+        "broad_top1_accuracy": 0.8,
+        "broad_top3_accuracy": 0.8,
+        "consolidated_top1_accuracy": 0.8,
+        "n": 5,
+        "top1_accuracy": 0.8,
+        "top3_accuracy": 0.8
+      },
+      "UCEC": {
+        "broad_top1_accuracy": 0.6,
+        "broad_top3_accuracy": 0.6,
+        "consolidated_top1_accuracy": 0.6,
+        "n": 5,
+        "top1_accuracy": 0.6,
+        "top3_accuracy": 0.6
+      },
+      "UCS": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      },
+      "UVM": {
+        "broad_top1_accuracy": 1.0,
+        "broad_top3_accuracy": 1.0,
+        "consolidated_top1_accuracy": 1.0,
+        "n": 5,
+        "top1_accuracy": 1.0,
+        "top3_accuracy": 1.0
+      }
+    },
+    "per_sample": [
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "ACC",
+          "UCS",
+          "OV"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "ACC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "ACC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "ACC",
+        "sample_id": "TCGA-OR-A5JS-01",
+        "seconds": 57.5,
+        "top1_match": true,
+        "top3": [
+          "ACC",
+          "UCS",
+          "OV"
+        ],
+        "top3_match": true,
+        "top_code": "ACC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "ACC",
+          "SKCM",
+          "PCPG"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "ACC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "ACC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "ACC",
+        "sample_id": "TCGA-OR-A5LJ-01",
+        "seconds": 0.91,
+        "top1_match": true,
+        "top3": [
+          "ACC",
+          "SKCM",
+          "PCPG"
+        ],
+        "top3_match": true,
+        "top_code": "ACC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "ACC",
+          "UCS",
+          "OV"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "ACC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "ACC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "ACC",
+        "sample_id": "TCGA-OR-A5L5-01",
+        "seconds": 26.04,
+        "top1_match": true,
+        "top3": [
+          "ACC",
+          "UCS",
+          "OV"
+        ],
+        "top3_match": true,
+        "top_code": "ACC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "ACC",
+          "SARC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "ACC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "ACC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "ACC",
+        "sample_id": "TCGA-OR-A5KT-01",
+        "seconds": 21.27,
+        "top1_match": true,
+        "top3": [
+          "ACC",
+          "SARC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "ACC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "CESC",
+          "LUSC",
+          "HNSC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "CESC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CESC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "ACC",
+        "sample_id": "TCGA-OR-A5JB-01",
+        "seconds": 21.82,
+        "top1_match": false,
+        "top3": [
+          "CESC",
+          "LUSC",
+          "HNSC"
+        ],
+        "top3_match": false,
+        "top_code": "CESC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "HNSC",
+          "CESC",
+          "LUSC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "BLCA",
+        "sample_id": "TCGA-DK-AA6R-01",
+        "seconds": 1.57,
+        "top1_match": false,
+        "top3": [
+          "HNSC",
+          "CESC",
+          "LUSC"
+        ],
+        "top3_match": false,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BLCA",
+          "LUSC",
+          "KIRP"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BLCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BLCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BLCA",
+        "sample_id": "TCGA-5N-A9KM-01",
+        "seconds": 20.74,
+        "top1_match": true,
+        "top3": [
+          "BLCA",
+          "LUSC",
+          "KIRP"
+        ],
+        "top3_match": true,
+        "top_code": "BLCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BLCA",
+          "HNSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BLCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BLCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BLCA",
+        "sample_id": "TCGA-ZF-AA5N-01",
+        "seconds": 1.51,
+        "top1_match": true,
+        "top3": [
+          "BLCA",
+          "HNSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "BLCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BLCA",
+          "CESC",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BLCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BLCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BLCA",
+        "sample_id": "TCGA-DK-AA6U-01",
+        "seconds": 1.57,
+        "top1_match": true,
+        "top3": [
+          "BLCA",
+          "CESC",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "BLCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BLCA",
+          "LUSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BLCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BLCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BLCA",
+        "sample_id": "TCGA-E7-A8O7-01",
+        "seconds": 1.66,
+        "top1_match": true,
+        "top3": [
+          "BLCA",
+          "LUSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "BLCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BRCA",
+          "HNSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BRCA",
+        "sample_id": "TCGA-JL-A3YX-01",
+        "seconds": 0.95,
+        "top1_match": true,
+        "top3": [
+          "BRCA",
+          "HNSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BRCA",
+          "UCS",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BRCA",
+        "sample_id": "TCGA-A2-A0D1-01",
+        "seconds": 21.21,
+        "top1_match": true,
+        "top3": [
+          "BRCA",
+          "UCS",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BRCA",
+          "CHOL",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BRCA",
+        "sample_id": "TCGA-AO-A125-01",
+        "seconds": 20.96,
+        "top1_match": true,
+        "top3": [
+          "BRCA",
+          "CHOL",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "BRCA",
+        "sample_id": "TCGA-AR-A0TS-01",
+        "seconds": 1.58,
+        "top1_match": false,
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top3_match": false,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "BRCA",
+          "UCS",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "BRCA",
+        "sample_id": "TCGA-E2-A15J-01",
+        "seconds": 20.8,
+        "top1_match": true,
+        "top3": [
+          "BRCA",
+          "UCS",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "HNSC",
+          "LUSC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "CESC",
+        "sample_id": "TCGA-C5-A7CH-01",
+        "seconds": 1.62,
+        "top1_match": false,
+        "top3": [
+          "HNSC",
+          "LUSC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CESC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CESC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "CESC",
+        "sample_id": "TCGA-EK-A2RK-01",
+        "seconds": 1.41,
+        "top1_match": true,
+        "top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "CESC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "BRCA",
+          "HNSC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "CESC",
+        "sample_id": "TCGA-VS-A8QF-01",
+        "seconds": 1.66,
+        "top1_match": false,
+        "top3": [
+          "BRCA",
+          "HNSC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CESC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CESC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "CESC",
+        "sample_id": "TCGA-C5-A7XC-01",
+        "seconds": 1.44,
+        "top1_match": true,
+        "top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "CESC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "LUSC",
+          "HNSC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "CESC",
+        "sample_id": "TCGA-C5-A8ZZ-01",
+        "seconds": 1.49,
+        "top1_match": false,
+        "top3": [
+          "LUSC",
+          "HNSC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "CHOL",
+          "KIRP",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CHOL",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CHOL",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "CHOL",
+        "sample_id": "TCGA-3X-AAVA-01",
+        "seconds": 20.53,
+        "top1_match": true,
+        "top3": [
+          "CHOL",
+          "KIRP",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "CHOL",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "HNSC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "CHOL",
+        "sample_id": "TCGA-ZH-A8Y8-01",
+        "seconds": 1.36,
+        "top1_match": false,
+        "top3": [
+          "COAD",
+          "READ",
+          "HNSC"
+        ],
+        "top3_match": false,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "CHOL",
+          "KIRP",
+          "LIHC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CHOL",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "CHOL",
+        "sample_id": "TCGA-YR-A95A-01",
+        "seconds": 1.48,
+        "top1_match": true,
+        "top3": [
+          "CHOL",
+          "KIRP",
+          "LIHC"
+        ],
+        "top3_match": true,
+        "top_code": "CHOL",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "CHOL",
+          "DLBC",
+          "LAML"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CHOL",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CHOL",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "CHOL",
+        "sample_id": "TCGA-W5-AA2R-01",
+        "seconds": 20.69,
+        "top1_match": true,
+        "top3": [
+          "CHOL",
+          "DLBC",
+          "LAML"
+        ],
+        "top3_match": true,
+        "top_code": "CHOL",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "SARC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "CHOL",
+        "sample_id": "TCGA-3X-AAV9-01",
+        "seconds": 20.99,
+        "top1_match": false,
+        "top3": [
+          "COAD",
+          "READ",
+          "SARC"
+        ],
+        "top3_match": false,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "COAD",
+        "sample_id": "TCGA-G4-6311-01",
+        "seconds": 1.5,
+        "top1_match": true,
+        "top3": [
+          "COAD",
+          "READ",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "COAD",
+        "sample_id": "TCGA-AU-6004-01",
+        "seconds": 1.38,
+        "top1_match": false,
+        "top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "COAD",
+        "sample_id": "TCGA-AZ-5403-01",
+        "seconds": 1.51,
+        "top1_match": false,
+        "top3": [
+          "READ",
+          "COAD",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "COAD",
+        "sample_id": "TCGA-CM-6161-01",
+        "seconds": 1.39,
+        "top1_match": false,
+        "top3": [
+          "READ",
+          "COAD",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "COAD",
+        "sample_id": "TCGA-AA-3660-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "COAD",
+          "READ",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "DLBC",
+          "LAML",
+          "TGCT"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "DLBC",
+        "sample_id": "TCGA-GS-A9TU-01",
+        "seconds": 20.21,
+        "top1_match": true,
+        "top3": [
+          "DLBC",
+          "LAML",
+          "TGCT"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "DLBC",
+          "LAML",
+          "TGCT"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "DLBC",
+        "sample_id": "TCGA-FA-A82F-01",
+        "seconds": 20.04,
+        "top1_match": true,
+        "top3": [
+          "DLBC",
+          "LAML",
+          "TGCT"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "DLBC",
+          "LAML",
+          "THYM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "DLBC",
+        "sample_id": "TCGA-FA-A6HO-01",
+        "seconds": 19.97,
+        "top1_match": true,
+        "top3": [
+          "DLBC",
+          "LAML",
+          "THYM"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "DLBC",
+          "THYM",
+          "LAML"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "DLBC",
+        "sample_id": "TCGA-GS-A9TW-01",
+        "seconds": 19.89,
+        "top1_match": true,
+        "top3": [
+          "DLBC",
+          "THYM",
+          "LAML"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "DLBC",
+          "LAML",
+          "THYM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "DLBC",
+        "sample_id": "TCGA-FF-A7CR-01",
+        "seconds": 19.94,
+        "top1_match": true,
+        "top3": [
+          "DLBC",
+          "LAML",
+          "THYM"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "HNSC",
+          "ESCA",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "ESCA",
+        "sample_id": "TCGA-L5-A88Y-01",
+        "seconds": 1.48,
+        "top1_match": false,
+        "top3": [
+          "HNSC",
+          "ESCA",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "STAD",
+          "ESCA",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "STAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "STAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "ESCA",
+        "sample_id": "TCGA-JY-A6F8-01",
+        "seconds": 1.47,
+        "top1_match": false,
+        "top3": [
+          "STAD",
+          "ESCA",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "STAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "ESCA",
+        "sample_id": "TCGA-L5-A891-01",
+        "seconds": 0.78,
+        "top1_match": false,
+        "top3": [
+          "COAD",
+          "READ",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "ESCA",
+        "sample_id": "TCGA-LN-A9FQ-01",
+        "seconds": 1.42,
+        "top1_match": false,
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "HNSC",
+          "ESCA",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "ADCC",
+        "consolidated_selected_by": "rare_marker",
+        "consolidated_top1_match": false,
+        "expected_code": "ESCA",
+        "sample_id": "TCGA-R6-A6XQ-01",
+        "seconds": 1.36,
+        "top1_match": false,
+        "top3": [
+          "HNSC",
+          "ESCA",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "GBM",
+        "sample_id": "TCGA-06-0187-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "GBM",
+        "sample_id": "TCGA-06-0686-01",
+        "seconds": 1.45,
+        "top1_match": true,
+        "top3": [
+          "GBM",
+          "LGG",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "GBM",
+        "sample_id": "TCGA-27-2528-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "GBM",
+        "sample_id": "TCGA-28-5204-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "GBM",
+          "LGG",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "GBM",
+        "sample_id": "TCGA-41-4097-01",
+        "seconds": 1.45,
+        "top1_match": true,
+        "top3": [
+          "GBM",
+          "LGG",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "HNSC",
+          "LUSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "HNSC",
+        "sample_id": "TCGA-CV-A6JO-01",
+        "seconds": 1.46,
+        "top1_match": true,
+        "top3": [
+          "HNSC",
+          "LUSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "CESC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "CESC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "HNSC",
+        "sample_id": "TCGA-P3-A6T6-01",
+        "seconds": 1.75,
+        "top1_match": false,
+        "top3": [
+          "CESC",
+          "HNSC",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "CESC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "HNSC",
+          "LUSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "HNSC",
+        "sample_id": "TCGA-CV-7423-01",
+        "seconds": 1.43,
+        "top1_match": true,
+        "top3": [
+          "HNSC",
+          "LUSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "HNSC",
+          "CESC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "HNSC",
+        "sample_id": "TCGA-CV-5442-01",
+        "seconds": 1.48,
+        "top1_match": true,
+        "top3": [
+          "HNSC",
+          "CESC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "HNSC",
+          "LUSC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "HNSC",
+        "sample_id": "TCGA-CV-7410-01",
+        "seconds": 1.82,
+        "top1_match": true,
+        "top3": [
+          "HNSC",
+          "LUSC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KICH",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KICH",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KICH",
+        "sample_id": "TCGA-KN-8432-01",
+        "seconds": 1.74,
+        "top1_match": true,
+        "top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KICH",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KICH",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KICH",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KICH",
+        "sample_id": "TCGA-KN-8426-01",
+        "seconds": 21.43,
+        "top1_match": true,
+        "top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KICH",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KICH",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KICH",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KICH",
+        "sample_id": "TCGA-KN-8428-01",
+        "seconds": 21.3,
+        "top1_match": true,
+        "top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KICH",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KICH",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KICH",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KICH",
+        "sample_id": "TCGA-KN-8419-01",
+        "seconds": 20.48,
+        "top1_match": true,
+        "top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KICH",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KICH",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KICH",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KICH",
+        "sample_id": "TCGA-KM-8476-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "KICH",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KICH",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRC",
+        "sample_id": "TCGA-A3-3373-01",
+        "seconds": 1.4,
+        "top1_match": true,
+        "top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRC",
+        "sample_id": "TCGA-CJ-4889-01",
+        "seconds": 1.35,
+        "top1_match": true,
+        "top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRC",
+        "sample_id": "TCGA-BP-4983-01",
+        "seconds": 1.32,
+        "top1_match": true,
+        "top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRC",
+        "sample_id": "TCGA-BP-5200-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRC",
+        "sample_id": "TCGA-B0-4691-01",
+        "seconds": 1.42,
+        "top1_match": true,
+        "top3": [
+          "KIRC",
+          "KIRP",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRP",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRP",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRP",
+        "sample_id": "TCGA-J7-6720-01",
+        "seconds": 20.86,
+        "top1_match": true,
+        "top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KIRP",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRP",
+          "KICH",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRP",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRP",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRP",
+        "sample_id": "TCGA-4A-A93Y-01",
+        "seconds": 20.86,
+        "top1_match": true,
+        "top3": [
+          "KIRP",
+          "KICH",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "KIRP",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRP",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRP",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRP",
+        "sample_id": "TCGA-A4-A4ZT-01",
+        "seconds": 1.41,
+        "top1_match": true,
+        "top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KIRP",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRP",
+          "KIRC",
+          "KICH"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRP",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRP",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRP",
+        "sample_id": "TCGA-A4-A48D-01",
+        "seconds": 1.4,
+        "top1_match": true,
+        "top3": [
+          "KIRP",
+          "KIRC",
+          "KICH"
+        ],
+        "top3_match": true,
+        "top_code": "KIRP",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "KIRP",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "KIRP",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "KIRP",
+        "sample_id": "TCGA-GL-8500-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "KIRP",
+          "KICH",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "KIRP",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LGG",
+          "GBM",
+          "TGCT"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LGG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LGG",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LGG",
+        "sample_id": "TCGA-DU-8164-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "LGG",
+          "GBM",
+          "TGCT"
+        ],
+        "top3_match": true,
+        "top_code": "LGG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "LGG",
+        "sample_id": "TCGA-HW-A5KL-01",
+        "seconds": 1.5,
+        "top1_match": false,
+        "top3": [
+          "GBM",
+          "LGG",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LGG",
+          "GBM",
+          "BRCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LGG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LGG",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LGG",
+        "sample_id": "TCGA-E1-A7YS-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "LGG",
+          "GBM",
+          "BRCA"
+        ],
+        "top3_match": true,
+        "top_code": "LGG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LGG",
+          "GBM",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LGG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LGG",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LGG",
+        "sample_id": "TCGA-S9-A6WO-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "LGG",
+          "GBM",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "LGG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "GBM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "GBM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "LGG",
+        "sample_id": "TCGA-TQ-A7RH-01",
+        "seconds": 1.33,
+        "top1_match": false,
+        "top3": [
+          "GBM",
+          "LGG",
+          "SKCM"
+        ],
+        "top3_match": true,
+        "top_code": "GBM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LIHC",
+          "CHOL",
+          "UCEC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LIHC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "LIHC",
+        "sample_id": "TCGA-CC-A8HS-01",
+        "seconds": 20.65,
+        "top1_match": true,
+        "top3": [
+          "LIHC",
+          "CHOL",
+          "UCEC"
+        ],
+        "top3_match": true,
+        "top_code": "LIHC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LIHC",
+          "KIRP",
+          "CHOL"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LIHC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "LIHC",
+        "sample_id": "TCGA-DD-A3A3-01",
+        "seconds": 20.67,
+        "top1_match": true,
+        "top3": [
+          "LIHC",
+          "KIRP",
+          "CHOL"
+        ],
+        "top3_match": true,
+        "top_code": "LIHC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LIHC",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LIHC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "LIHC",
+        "sample_id": "TCGA-CC-A7IK-01",
+        "seconds": 0.97,
+        "top1_match": true,
+        "top3": [
+          "LIHC",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "LIHC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LIHC",
+          "CHOL",
+          "UCEC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LIHC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "LIHC",
+        "sample_id": "TCGA-2Y-A9H1-01",
+        "seconds": 0.78,
+        "top1_match": true,
+        "top3": [
+          "LIHC",
+          "CHOL",
+          "UCEC"
+        ],
+        "top3_match": true,
+        "top_code": "LIHC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LIHC",
+          "THYM",
+          "CHOL"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LIHC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HEPB",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "LIHC",
+        "sample_id": "TCGA-2Y-A9H8-01",
+        "seconds": 20.03,
+        "top1_match": true,
+        "top3": [
+          "LIHC",
+          "THYM",
+          "CHOL"
+        ],
+        "top3_match": true,
+        "top_code": "LIHC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUAD",
+          "DLBC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUAD",
+        "sample_id": "TCGA-73-4666-01",
+        "seconds": 19.98,
+        "top1_match": true,
+        "top3": [
+          "LUAD",
+          "DLBC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "LUAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUAD",
+          "STAD",
+          "READ"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUAD",
+        "sample_id": "TCGA-69-8254-01",
+        "seconds": 1.37,
+        "top1_match": true,
+        "top3": [
+          "LUAD",
+          "STAD",
+          "READ"
+        ],
+        "top3_match": true,
+        "top_code": "LUAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "STAD",
+          "LUAD",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "STAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "STAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "LUAD",
+        "sample_id": "TCGA-38-A44F-01",
+        "seconds": 1.37,
+        "top1_match": false,
+        "top3": [
+          "STAD",
+          "LUAD",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "STAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUAD",
+          "COAD",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUAD",
+        "sample_id": "TCGA-55-6985-01",
+        "seconds": 0.83,
+        "top1_match": true,
+        "top3": [
+          "LUAD",
+          "COAD",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "LUAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUAD",
+          "HNSC",
+          "COAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUAD",
+        "sample_id": "TCGA-44-4112-01",
+        "seconds": 0.83,
+        "top1_match": true,
+        "top3": [
+          "LUAD",
+          "HNSC",
+          "COAD"
+        ],
+        "top3_match": true,
+        "top_code": "LUAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUSC",
+          "HNSC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUSC",
+        "sample_id": "TCGA-18-5592-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "LUSC",
+          "HNSC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUSC",
+          "CESC",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUSC",
+        "sample_id": "TCGA-66-2766-01",
+        "seconds": 1.51,
+        "top1_match": true,
+        "top3": [
+          "LUSC",
+          "CESC",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUSC",
+          "HNSC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUSC",
+        "sample_id": "TCGA-63-7020-01",
+        "seconds": 1.37,
+        "top1_match": true,
+        "top3": [
+          "LUSC",
+          "HNSC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "LUSC",
+          "CESC",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "LUSC",
+        "sample_id": "TCGA-85-A53L-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "LUSC",
+          "CESC",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "HNSC",
+          "CESC",
+          "LUSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "HNSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "HNSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "LUSC",
+        "sample_id": "TCGA-NC-A5HG-01",
+        "seconds": 1.36,
+        "top1_match": false,
+        "top3": [
+          "HNSC",
+          "CESC",
+          "LUSC"
+        ],
+        "top3_match": true,
+        "top_code": "HNSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "MESO",
+          "ESCA",
+          "SARC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "MESO",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "MESO",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "MESO",
+        "sample_id": "TCGA-TS-A7OZ-01",
+        "seconds": 19.86,
+        "top1_match": true,
+        "top3": [
+          "MESO",
+          "ESCA",
+          "SARC"
+        ],
+        "top3_match": true,
+        "top_code": "MESO",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "LUAD",
+          "DLBC",
+          "STAD"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "LUAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "MESO",
+        "sample_id": "TCGA-LK-A4O4-01",
+        "seconds": 19.96,
+        "top1_match": false,
+        "top3": [
+          "LUAD",
+          "DLBC",
+          "STAD"
+        ],
+        "top3_match": false,
+        "top_code": "LUAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "DLBC",
+          "MESO",
+          "KIRP"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "MESO",
+        "sample_id": "TCGA-3H-AB3O-01",
+        "seconds": 19.82,
+        "top1_match": false,
+        "top3": [
+          "DLBC",
+          "MESO",
+          "KIRP"
+        ],
+        "top3_match": true,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "SARC",
+          "DLBC",
+          "ESCA"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "SARC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SARC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "MESO",
+        "sample_id": "TCGA-3H-AB3T-01",
+        "seconds": 20.25,
+        "top1_match": false,
+        "top3": [
+          "SARC",
+          "DLBC",
+          "ESCA"
+        ],
+        "top3_match": false,
+        "top_code": "SARC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "DLBC",
+          "SARC",
+          "THYM"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "DLBC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "DLBC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "MESO",
+        "sample_id": "TCGA-MQ-A4LM-01",
+        "seconds": 19.7,
+        "top1_match": false,
+        "top3": [
+          "DLBC",
+          "SARC",
+          "THYM"
+        ],
+        "top3_match": false,
+        "top_code": "DLBC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "OV",
+          "UCEC",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "OV",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "OV",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "OV",
+        "sample_id": "TCGA-13-0720-01",
+        "seconds": 19.63,
+        "top1_match": true,
+        "top3": [
+          "OV",
+          "UCEC",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "OV",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "OV",
+          "SARC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "OV",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "OV",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "OV",
+        "sample_id": "TCGA-24-2289-01",
+        "seconds": 19.51,
+        "top1_match": true,
+        "top3": [
+          "OV",
+          "SARC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "OV",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "OV",
+          "PAAD",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "OV",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "OV",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "OV",
+        "sample_id": "TCGA-25-1635-01",
+        "seconds": 19.58,
+        "top1_match": true,
+        "top3": [
+          "OV",
+          "PAAD",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "OV",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "OV",
+          "COAD",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "OV",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "OV",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "OV",
+        "sample_id": "TCGA-23-1023-01",
+        "seconds": 19.58,
+        "top1_match": true,
+        "top3": [
+          "OV",
+          "COAD",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "OV",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "OV",
+          "ESCA",
+          "UCEC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "OV",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "OV",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "OV",
+        "sample_id": "TCGA-25-1323-01",
+        "seconds": 0.81,
+        "top1_match": true,
+        "top3": [
+          "OV",
+          "ESCA",
+          "UCEC"
+        ],
+        "top3_match": true,
+        "top_code": "OV",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PAAD",
+          "CESC",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PAAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PAAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PAAD",
+        "sample_id": "TCGA-FB-AAQ2-01",
+        "seconds": 1.33,
+        "top1_match": true,
+        "top3": [
+          "PAAD",
+          "CESC",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "PAAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PAAD",
+          "STAD",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PAAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PAAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PAAD",
+        "sample_id": "TCGA-IB-AAUR-01",
+        "seconds": 20.1,
+        "top1_match": true,
+        "top3": [
+          "PAAD",
+          "STAD",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "PAAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PAAD",
+          "STAD",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PAAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PAAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PAAD",
+        "sample_id": "TCGA-2L-AAQE-01",
+        "seconds": 1.34,
+        "top1_match": true,
+        "top3": [
+          "PAAD",
+          "STAD",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "PAAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PAAD",
+          "STAD",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PAAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PAAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PAAD",
+        "sample_id": "TCGA-FB-A545-01",
+        "seconds": 19.98,
+        "top1_match": true,
+        "top3": [
+          "PAAD",
+          "STAD",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "PAAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PAAD",
+          "STAD",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PAAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PAAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PAAD",
+        "sample_id": "TCGA-IB-A6UG-01",
+        "seconds": 1.33,
+        "top1_match": true,
+        "top3": [
+          "PAAD",
+          "STAD",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "PAAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PCPG",
+          "UCS",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PCPG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PANNET",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "PCPG",
+        "sample_id": "TCGA-TT-A6YK-01",
+        "seconds": 19.38,
+        "top1_match": true,
+        "top3": [
+          "PCPG",
+          "UCS",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "PCPG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PCPG",
+          "UCS",
+          "ACC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PCPG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PANNET",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "PCPG",
+        "sample_id": "TCGA-SR-A6MQ-01",
+        "seconds": 19.92,
+        "top1_match": true,
+        "top3": [
+          "PCPG",
+          "UCS",
+          "ACC"
+        ],
+        "top3_match": true,
+        "top_code": "PCPG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PCPG",
+          "UCS",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PCPG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PANNET",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "PCPG",
+        "sample_id": "TCGA-QR-A703-01",
+        "seconds": 19.33,
+        "top1_match": true,
+        "top3": [
+          "PCPG",
+          "UCS",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "PCPG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PCPG",
+          "UCS",
+          "ACC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PCPG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PANNET",
+        "consolidated_selected_by": "local_expression_reference",
+        "consolidated_top1_match": false,
+        "expected_code": "PCPG",
+        "sample_id": "TCGA-RW-A686-01",
+        "seconds": 19.43,
+        "top1_match": true,
+        "top3": [
+          "PCPG",
+          "UCS",
+          "ACC"
+        ],
+        "top3_match": true,
+        "top_code": "PCPG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PCPG",
+          "ACC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PCPG",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "MTC",
+        "consolidated_selected_by": "rare_marker",
+        "consolidated_top1_match": false,
+        "expected_code": "PCPG",
+        "sample_id": "TCGA-WB-A81T-01",
+        "seconds": 19.54,
+        "top1_match": true,
+        "top3": [
+          "PCPG",
+          "ACC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "PCPG",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PRAD",
+          "HNSC",
+          "COAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PRAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PRAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PRAD",
+        "sample_id": "TCGA-YL-A8S9-01",
+        "seconds": 1.3,
+        "top1_match": true,
+        "top3": [
+          "PRAD",
+          "HNSC",
+          "COAD"
+        ],
+        "top3_match": true,
+        "top_code": "PRAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PRAD",
+          "HNSC",
+          "BRCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PRAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PRAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PRAD",
+        "sample_id": "TCGA-HC-8262-01",
+        "seconds": 1.3,
+        "top1_match": true,
+        "top3": [
+          "PRAD",
+          "HNSC",
+          "BRCA"
+        ],
+        "top3_match": true,
+        "top_code": "PRAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PRAD",
+          "COAD",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PRAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PRAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PRAD",
+        "sample_id": "TCGA-EJ-7782-01",
+        "seconds": 1.31,
+        "top1_match": true,
+        "top3": [
+          "PRAD",
+          "COAD",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "PRAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PRAD",
+          "HNSC",
+          "COAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PRAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PRAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PRAD",
+        "sample_id": "TCGA-CH-5762-01",
+        "seconds": 1.3,
+        "top1_match": true,
+        "top3": [
+          "PRAD",
+          "HNSC",
+          "COAD"
+        ],
+        "top3_match": true,
+        "top_code": "PRAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "PRAD",
+          "HNSC",
+          "LGG"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "PRAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "PRAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "PRAD",
+        "sample_id": "TCGA-EJ-A7NH-01",
+        "seconds": 1.29,
+        "top1_match": true,
+        "top3": [
+          "PRAD",
+          "HNSC",
+          "LGG"
+        ],
+        "top3_match": true,
+        "top_code": "PRAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "READ",
+        "sample_id": "TCGA-DY-A1DF-01",
+        "seconds": 1.31,
+        "top1_match": true,
+        "top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "READ",
+        "sample_id": "TCGA-CI-6621-01",
+        "seconds": 1.32,
+        "top1_match": true,
+        "top3": [
+          "READ",
+          "COAD",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "READ",
+        "sample_id": "TCGA-AH-6547-01",
+        "seconds": 1.27,
+        "top1_match": true,
+        "top3": [
+          "READ",
+          "COAD",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "READ",
+        "sample_id": "TCGA-EI-7004-01",
+        "seconds": 19.88,
+        "top1_match": true,
+        "top3": [
+          "READ",
+          "COAD",
+          "SARC"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "READ",
+        "sample_id": "TCGA-AH-6644-01",
+        "seconds": 1.31,
+        "top1_match": true,
+        "top3": [
+          "READ",
+          "COAD",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SARC",
+          "UCS",
+          "PCPG"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SARC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SARC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SARC",
+        "sample_id": "TCGA-KF-A41W-01",
+        "seconds": 19.89,
+        "top1_match": true,
+        "top3": [
+          "SARC",
+          "UCS",
+          "PCPG"
+        ],
+        "top3_match": true,
+        "top_code": "SARC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "PAAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "SARC",
+        "sample_id": "TCGA-DX-A6YR-01",
+        "seconds": 19.9,
+        "top1_match": false,
+        "top3": [
+          "UCS",
+          "SARC",
+          "PAAD"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "BRCA",
+          "SARC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "BRCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "BRCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "SARC",
+        "sample_id": "TCGA-DX-A23U-01",
+        "seconds": 19.69,
+        "top1_match": false,
+        "top3": [
+          "BRCA",
+          "SARC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "BRCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SARC",
+          "UCS",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SARC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SARC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SARC",
+        "sample_id": "TCGA-3R-A8YX-01",
+        "seconds": 20.11,
+        "top1_match": true,
+        "top3": [
+          "SARC",
+          "UCS",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "SARC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "THYM",
+          "SARC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THYM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THYM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "SARC",
+        "sample_id": "TCGA-QQ-A5VB-01",
+        "seconds": 19.46,
+        "top1_match": false,
+        "top3": [
+          "THYM",
+          "SARC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "THYM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SKCM",
+          "UVM",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SKCM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SKCM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SKCM",
+        "sample_id": "TCGA-BF-AAP6-01",
+        "seconds": 19.89,
+        "top1_match": true,
+        "top3": [
+          "SKCM",
+          "UVM",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "SKCM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SKCM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SKCM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SKCM",
+        "sample_id": "TCGA-BF-A1PV-01",
+        "seconds": 1.27,
+        "top1_match": true,
+        "top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "SKCM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SKCM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SKCM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SKCM",
+        "sample_id": "TCGA-EB-A24D-01",
+        "seconds": 1.27,
+        "top1_match": true,
+        "top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "SKCM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SKCM",
+          "UVM",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SKCM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SKCM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SKCM",
+        "sample_id": "TCGA-EB-A551-01",
+        "seconds": 1.28,
+        "top1_match": true,
+        "top3": [
+          "SKCM",
+          "UVM",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "SKCM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "SKCM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "SKCM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "SKCM",
+        "sample_id": "TCGA-FR-A726-01",
+        "seconds": 1.27,
+        "top1_match": true,
+        "top3": [
+          "SKCM",
+          "UVM",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "SKCM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "STAD",
+          "READ",
+          "COAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "STAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "STAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "STAD",
+        "sample_id": "TCGA-D7-6524-01",
+        "seconds": 20.06,
+        "top1_match": true,
+        "top3": [
+          "STAD",
+          "READ",
+          "COAD"
+        ],
+        "top3_match": true,
+        "top_code": "STAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "COAD",
+          "READ",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "COAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "COAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "STAD",
+        "sample_id": "TCGA-BR-6566-01",
+        "seconds": 20.49,
+        "top1_match": false,
+        "top3": [
+          "COAD",
+          "READ",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "COAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "STAD",
+          "COAD",
+          "READ"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "STAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "STAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "STAD",
+        "sample_id": "TCGA-CG-5732-01",
+        "seconds": 1.3,
+        "top1_match": true,
+        "top3": [
+          "STAD",
+          "COAD",
+          "READ"
+        ],
+        "top3_match": true,
+        "top_code": "STAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "STAD",
+          "READ",
+          "COAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "STAD",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "STAD",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "STAD",
+        "sample_id": "TCGA-BR-8295-01",
+        "seconds": 1.35,
+        "top1_match": true,
+        "top3": [
+          "STAD",
+          "READ",
+          "COAD"
+        ],
+        "top3_match": true,
+        "top_code": "STAD",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "READ",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "READ",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "STAD",
+        "sample_id": "TCGA-BR-7959-01",
+        "seconds": 1.31,
+        "top1_match": false,
+        "top3": [
+          "READ",
+          "COAD",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "READ",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "TGCT",
+          "UCS",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "TGCT",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "TGCT",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "TGCT",
+        "sample_id": "TCGA-XE-A8H4-01",
+        "seconds": 19.61,
+        "top1_match": true,
+        "top3": [
+          "TGCT",
+          "UCS",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "TGCT",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "TGCT",
+          "UCS",
+          "THYM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "TGCT",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "TGCT",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "TGCT",
+        "sample_id": "TCGA-2G-AAG0-01",
+        "seconds": 19.72,
+        "top1_match": true,
+        "top3": [
+          "TGCT",
+          "UCS",
+          "THYM"
+        ],
+        "top3_match": true,
+        "top_code": "TGCT",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "TGCT",
+          "DLBC",
+          "SARC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "TGCT",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "TGCT",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "TGCT",
+        "sample_id": "TCGA-2G-AAFY-01",
+        "seconds": 19.65,
+        "top1_match": true,
+        "top3": [
+          "TGCT",
+          "DLBC",
+          "SARC"
+        ],
+        "top3_match": true,
+        "top_code": "TGCT",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "TGCT",
+          "DLBC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "TGCT",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "TGCT",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "TGCT",
+        "sample_id": "TCGA-ZM-AA0B-01",
+        "seconds": 19.89,
+        "top1_match": true,
+        "top3": [
+          "TGCT",
+          "DLBC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "TGCT",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "TGCT",
+          "UCS",
+          "LAML"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "TGCT",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "TGCT",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "TGCT",
+        "sample_id": "TCGA-XE-A9SE-01",
+        "seconds": 19.44,
+        "top1_match": true,
+        "top3": [
+          "TGCT",
+          "UCS",
+          "LAML"
+        ],
+        "top3_match": true,
+        "top_code": "TGCT",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THCA",
+          "KIRP",
+          "KIRC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THCA",
+        "sample_id": "TCGA-EM-A4FU-01",
+        "seconds": 19.74,
+        "top1_match": true,
+        "top3": [
+          "THCA",
+          "KIRP",
+          "KIRC"
+        ],
+        "top3_match": true,
+        "top_code": "THCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THCA",
+          "SARC",
+          "BRCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THCA",
+        "sample_id": "TCGA-EL-A3CM-01",
+        "seconds": 19.75,
+        "top1_match": true,
+        "top3": [
+          "THCA",
+          "SARC",
+          "BRCA"
+        ],
+        "top3_match": true,
+        "top_code": "THCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THCA",
+          "CHOL",
+          "KIRP"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THCA",
+        "sample_id": "TCGA-FY-A3NN-01",
+        "seconds": 19.58,
+        "top1_match": true,
+        "top3": [
+          "THCA",
+          "CHOL",
+          "KIRP"
+        ],
+        "top3_match": true,
+        "top_code": "THCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THCA",
+          "KIRP",
+          "SARC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THCA",
+        "sample_id": "TCGA-DJ-A4UP-01",
+        "seconds": 19.34,
+        "top1_match": true,
+        "top3": [
+          "THCA",
+          "KIRP",
+          "SARC"
+        ],
+        "top3_match": true,
+        "top_code": "THCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THCA",
+          "DLBC",
+          "SARC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THCA",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THCA",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THCA",
+        "sample_id": "TCGA-BJ-A0Z3-01",
+        "seconds": 19.64,
+        "top1_match": true,
+        "top3": [
+          "THCA",
+          "DLBC",
+          "SARC"
+        ],
+        "top3_match": true,
+        "top_code": "THCA",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THYM",
+          "CESC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THYM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THYM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THYM",
+        "sample_id": "TCGA-X7-A8M4-01",
+        "seconds": 0.81,
+        "top1_match": true,
+        "top3": [
+          "THYM",
+          "CESC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "THYM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THYM",
+          "ESCA",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THYM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THYM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THYM",
+        "sample_id": "TCGA-XU-AAY0-01",
+        "seconds": 0.8,
+        "top1_match": true,
+        "top3": [
+          "THYM",
+          "ESCA",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "THYM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "LUSC",
+          "ESCA",
+          "CESC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "LUSC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "LUSC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "THYM",
+        "sample_id": "TCGA-5G-A9ZZ-01",
+        "seconds": 1.32,
+        "top1_match": false,
+        "top3": [
+          "LUSC",
+          "ESCA",
+          "CESC"
+        ],
+        "top3_match": false,
+        "top_code": "LUSC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THYM",
+          "LUSC",
+          "DLBC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THYM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THYM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THYM",
+        "sample_id": "TCGA-XU-A930-01",
+        "seconds": 19.45,
+        "top1_match": true,
+        "top3": [
+          "THYM",
+          "LUSC",
+          "DLBC"
+        ],
+        "top3_match": true,
+        "top_code": "THYM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "THYM",
+          "DLBC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "THYM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "THYM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "THYM",
+        "sample_id": "TCGA-4X-A9FB-01",
+        "seconds": 0.85,
+        "top1_match": true,
+        "top3": [
+          "THYM",
+          "DLBC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "THYM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "SKCM"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "UCEC",
+        "sample_id": "TCGA-AX-A3FZ-01",
+        "seconds": 19.88,
+        "top1_match": false,
+        "top3": [
+          "UCS",
+          "SARC",
+          "SKCM"
+        ],
+        "top3_match": false,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCEC",
+          "KIRC",
+          "CESC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCEC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCEC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCEC",
+        "sample_id": "TCGA-AJ-A2QM-01",
+        "seconds": 19.64,
+        "top1_match": true,
+        "top3": [
+          "UCEC",
+          "KIRC",
+          "CESC"
+        ],
+        "top3_match": true,
+        "top_code": "UCEC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCEC",
+          "DLBC",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCEC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCEC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCEC",
+        "sample_id": "TCGA-DF-A2KU-01",
+        "seconds": 19.46,
+        "top1_match": true,
+        "top3": [
+          "UCEC",
+          "DLBC",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "UCEC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": false,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "HNSC"
+        ],
+        "broad_top3_match": false,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": false,
+        "expected_code": "UCEC",
+        "sample_id": "TCGA-EY-A1GO-01",
+        "seconds": 20.13,
+        "top1_match": false,
+        "top3": [
+          "UCS",
+          "SARC",
+          "HNSC"
+        ],
+        "top3_match": false,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCEC",
+          "OV",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCEC",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCEC",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCEC",
+        "sample_id": "TCGA-EY-A5W2-01",
+        "seconds": 19.84,
+        "top1_match": true,
+        "top3": [
+          "UCEC",
+          "OV",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "UCEC",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "UCEC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCS",
+        "sample_id": "TCGA-NF-A4X2-01",
+        "seconds": 20.15,
+        "top1_match": true,
+        "top3": [
+          "UCS",
+          "SARC",
+          "UCEC"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "TGCT"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCS",
+        "sample_id": "TCGA-N9-A4Q3-01",
+        "seconds": 20.45,
+        "top1_match": true,
+        "top3": [
+          "UCS",
+          "SARC",
+          "TGCT"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "ESCA"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCS",
+        "sample_id": "TCGA-NA-A5I1-01",
+        "seconds": 21.25,
+        "top1_match": true,
+        "top3": [
+          "UCS",
+          "SARC",
+          "ESCA"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "TGCT"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCS",
+        "sample_id": "TCGA-N5-A4RV-01",
+        "seconds": 21.1,
+        "top1_match": true,
+        "top3": [
+          "UCS",
+          "SARC",
+          "TGCT"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UCS",
+          "SARC",
+          "OV"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UCS",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UCS",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UCS",
+        "sample_id": "TCGA-NF-A5CP-01",
+        "seconds": 21.35,
+        "top1_match": true,
+        "top3": [
+          "UCS",
+          "SARC",
+          "OV"
+        ],
+        "top3_match": true,
+        "top_code": "UCS",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UVM",
+          "SKCM",
+          "HNSC"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UVM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UVM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UVM",
+        "sample_id": "TCGA-VD-AA8M-01",
+        "seconds": 1.4,
+        "top1_match": true,
+        "top3": [
+          "UVM",
+          "SKCM",
+          "HNSC"
+        ],
+        "top3_match": true,
+        "top_code": "UVM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UVM",
+          "SKCM",
+          "UCS"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UVM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UVM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UVM",
+        "sample_id": "TCGA-VD-A8KI-01",
+        "seconds": 1.38,
+        "top1_match": true,
+        "top3": [
+          "UVM",
+          "SKCM",
+          "UCS"
+        ],
+        "top3_match": true,
+        "top_code": "UVM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UVM",
+          "SKCM",
+          "STAD"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UVM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UVM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UVM",
+        "sample_id": "TCGA-V4-A9EC-01",
+        "seconds": 1.36,
+        "top1_match": true,
+        "top3": [
+          "UVM",
+          "SKCM",
+          "STAD"
+        ],
+        "top3_match": true,
+        "top_code": "UVM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UVM",
+          "SKCM",
+          "GBM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UVM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UVM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UVM",
+        "sample_id": "TCGA-YZ-A980-01",
+        "seconds": 1.46,
+        "top1_match": true,
+        "top3": [
+          "UVM",
+          "SKCM",
+          "GBM"
+        ],
+        "top3_match": true,
+        "top_code": "UVM",
+        "top_support": 1.0
+      },
+      {
+        "broad_top1_match": true,
+        "broad_top3": [
+          "UVM",
+          "SKCM",
+          "THYM"
+        ],
+        "broad_top3_match": true,
+        "broad_top_code": "UVM",
+        "broad_top_support": 1.0,
+        "consolidated_cancer_type": "UVM",
+        "consolidated_selected_by": "primary_expression_match",
+        "consolidated_top1_match": true,
+        "expected_code": "UVM",
+        "sample_id": "TCGA-WC-A87U-01",
+        "seconds": 1.41,
+        "top1_match": true,
+        "top3": [
+          "UVM",
+          "SKCM",
+          "THYM"
+        ],
+        "top3_match": true,
+        "top_code": "UVM",
+        "top_support": 1.0
+      }
+    ],
+    "summary": {
+      "layer_breakdown": {
+        "broad_top1_accuracy": 0.7937,
+        "broad_top1_ci_95": [
+          0.7312,
+          0.8562
+        ],
+        "broad_top3_accuracy": 0.9313,
+        "broad_top3_ci_95": [
+          0.8875,
+          0.9688
+        ],
+        "consolidated_top1_accuracy": 0.725,
+        "consolidated_top1_ci_95": [
+          0.6562,
+          0.7937
+        ],
+        "delta_consolidated_vs_broad_top1": -0.0688,
+        "flip_counts": {
+          "both_correct": 116,
+          "both_wrong": 33,
+          "broad_correct_consolidated_wrong": 11,
+          "broad_wrong_consolidated_correct": 0
+        }
+      },
+      "n_samples": 160,
+      "per_selector": {
+        "local_expression_reference": {
+          "n": 10,
+          "top1_accuracy": 0.0
+        },
+        "primary_expression_match": {
+          "n": 148,
+          "top1_accuracy": 0.7838
+        },
+        "rare_marker": {
+          "n": 2,
+          "top1_accuracy": 0.0
+        }
+      },
+      "top1_accuracy": 0.7937,
+      "top1_ci_95": [
+        0.7312,
+        0.8562
+      ],
+      "top3_accuracy": 0.9313,
+      "top3_ci_95": [
+        0.8875,
+        0.9688
+      ]
+    }
+  },
+  "trufflepig_version": "1.3.0"
+}

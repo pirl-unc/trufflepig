@@ -271,25 +271,25 @@ _THERAPY_PLOT_LABELS = {
 # Map essential tissue labels to nTPM column names
 _ESSENTIAL_TISSUE_COLS = {
     "brain": [
-        "nTPM_cerebral_cortex",
-        "nTPM_cerebellum",
-        "nTPM_basal_ganglia",
-        "nTPM_hippocampal_formation",
-        "nTPM_amygdala",
-        "nTPM_midbrain",
-        "nTPM_hypothalamus",
-        "nTPM_spinal_cord",
-        "nTPM_choroid_plexus",
+        "cerebral_cortex_nTPM",
+        "cerebellum_nTPM",
+        "basal_ganglia_nTPM",
+        "hippocampal_formation_nTPM",
+        "amygdala_nTPM",
+        "midbrain_nTPM",
+        "hypothalamus_nTPM",
+        "spinal_cord_nTPM",
+        "choroid_plexus_nTPM",
     ],
-    "heart": ["nTPM_heart_muscle"],
-    "liver": ["nTPM_liver"],
-    "lung": ["nTPM_lung"],
-    "kidney": ["nTPM_kidney"],
-    "bone_marrow": ["nTPM_bone_marrow"],
-    "spleen": ["nTPM_spleen"],
-    "pancreas": ["nTPM_pancreas"],
-    "colon": ["nTPM_colon"],
-    "stomach": ["nTPM_stomach"],
+    "heart": ["heart_muscle_nTPM"],
+    "liver": ["liver_nTPM"],
+    "lung": ["lung_nTPM"],
+    "kidney": ["kidney_nTPM"],
+    "bone_marrow": ["bone_marrow_nTPM"],
+    "spleen": ["spleen_nTPM"],
+    "pancreas": ["pancreas_nTPM"],
+    "colon": ["colon_nTPM"],
+    "stomach": ["stomach_nTPM"],
 }
 
 
@@ -532,8 +532,8 @@ def plot_therapy_target_tissues(
 
     # Load normal tissue expression
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    ntpm_cols = sorted([c for c in ref.columns if c.startswith("nTPM_")])
-    tissue_labels = [c.replace("nTPM_", "").replace("_", " ") for c in ntpm_cols]
+    ntpm_cols = sorted([c for c in ref.columns if c.endswith("_nTPM")])
+    tissue_labels = [c.removesuffix("_nTPM").replace("_", " ") for c in ntpm_cols]
     ref_by_id = ref.drop_duplicates(subset="Ensembl_Gene_ID").set_index(
         "Ensembl_Gene_ID"
     )
@@ -957,7 +957,7 @@ def plot_geneset_vs_vital_tissues(
         if sym not in sample_by_symbol or tpm > sample_by_symbol[sym]:
             sample_by_symbol[sym] = tpm
 
-    # For tissue groups like "brain" that span several nTPM_* columns,
+    # For tissue groups like "brain" that span several *_nTPM columns,
     # use the MAX — any single CNS region with high expression is a
     # toxicity concern, no need to average it out.
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
@@ -1173,7 +1173,7 @@ def plot_ctas_vs_cancer_type_detail(
     Each row is one CTA gene. Each row plots, on a single log TPM axis:
 
         - sample TPM ................ large blue filled circle + label
-        - TCGA cohort median ........ orange diamond (cancer_type's FPKM_*
+        - TCGA cohort median ........ orange diamond (cancer_type's *_TPM
                                       column, treated as TPM-equivalent)
         - tissue-of-origin normal ... green square (nTPM for the normal
                                       tissue mapped from cancer_type via
@@ -1224,11 +1224,11 @@ def plot_ctas_vs_cancer_type_detail(
 
     cancer_code = resolve_cancer_type(cancer_type)
     ref = pan_cancer_expression(technical_rna_normalize=True)
-    cancer_col = f"FPKM_{cancer_code}"
+    cancer_col = f"{cancer_code}_TPM"
     if cancer_col not in ref.columns:
         raise ValueError(
             f"Unknown cancer_type {cancer_type!r} → code {cancer_code!r} "
-            f"has no FPKM column in the reference."
+            f"has no TCGA cohort TPM column in the reference."
         )
 
     # CTAs as Ensembl IDs + display symbols.
@@ -1260,8 +1260,8 @@ def plot_ctas_vs_cancer_type_detail(
         "Ensembl_Gene_ID"
     )
     origin_tissue = CANCER_TO_TISSUE.get(cancer_code)
-    origin_col = f"nTPM_{origin_tissue}" if origin_tissue else None
-    testis_col = "nTPM_testis" if "nTPM_testis" in ref_by_id.columns else None
+    origin_col = f"{origin_tissue}_nTPM" if origin_tissue else None
+    testis_col = "testis_nTPM" if "testis_nTPM" in ref_by_id.columns else None
 
     # Vital-tissue columns minus testis (testis is treated separately as
     # the "expected" CTA baseline, not a toxicity concern).

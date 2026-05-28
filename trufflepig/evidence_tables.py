@@ -227,10 +227,7 @@ def _subtype_medians_lookup() -> dict[tuple[str, str], dict[str, float]]:
     """
     from .reference import subtype_deconvolved_expression
 
-    sub_df = subtype_deconvolved_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    sub_df = subtype_deconvolved_expression(technical_rna_normalize=True)
     if sub_df is None or sub_df.empty:
         return {}
     out: dict[tuple[str, str], dict[str, float]] = {}
@@ -292,7 +289,7 @@ def build_candidate_evidence_block(
         cached = pan_dict_cache.get(code)
         if cached is not None:
             return cached
-        col = f"FPKM_{code}"
+        col = f"{code}_TPM"
         if col not in pan.columns:
             pan_dict_cache[code] = {}
             return {}
