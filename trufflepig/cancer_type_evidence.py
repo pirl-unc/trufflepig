@@ -1,19 +1,35 @@
 """Cancer-type evidence selection.
 
 Each row is one cancer-type hypothesis with the same feature columns:
-broad RNA support, related broad-context support, RNA marker support,
-fine-reference support, and direct-fusion support.  Evidence from different
-sources accumulates on the same row instead of becoming separate control-flow
-branches.
+primary expression-reference support, related expression-context support,
+RNA marker support, exact-reference support, and direct-fusion support.
+Evidence from different sources accumulates on the same row instead of
+becoming separate control-flow branches.
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Mapping
 
 import numpy as np
+
+_LOGGER = logging.getLogger(__name__)
+
+# Source-class rank used as the tie-breaker when two evidence kinds compute
+# identical (class_rank, strength). Higher = preferred. The numeric values are
+# arbitrary; only their relative order matters. Keep this list in sync with
+# every selected_by string that calls consider_for_report_label.
+_SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
+    "direct_fusion": 6,
+    "fine_reference": 5,
+    "local_expression_reference": 4,
+    "tumor_label_refinement": 3,
+    "rare_marker": 2,
+    "primary_expression_match": 1,
+}
 
 _SQUAMOUS_CONTEXT_CODES = frozenset({"HNSC", "LUSC", "ESCA", "CESC", "THYM"})
 _SALIVARY_CODES = frozenset({"ADCC", "ACINIC"})
@@ -53,6 +69,15 @@ _LOCAL_REFERENCE_MIN_LOG2_VS_PAN = 1.0
 _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT = 0.45
 _LOCAL_REFERENCE_MIN_MARKER_FRACTION = 0.45
 _LOCAL_REFERENCE_MIN_BURDEN_RATIO = 0.10
+# Anchor used to turn the burden ratio into a [0,1] score in the
+# local-reference support computation. ``burden_support = min(burden_ratio
+# / _ANCHOR, 1.0)`` saturates at this burden ratio — chosen empirically
+# such that a panel hitting ~35% of its expected reference burden scores
+# 1.0 on the burden term, leaving the remaining headroom for marker
+# fraction and context support. Independent of the *blocker* threshold
+# above (``_MIN_BURDEN_RATIO = 0.10``), which only gates whether the
+# panel fires at all.
+_LOCAL_REFERENCE_BURDEN_SCORE_ANCHOR = 0.35
 _LOCAL_REFERENCE_MIN_SUPPORT = 0.65
 _LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare", "salivary"})
 _LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY = {
@@ -76,6 +101,7 @@ class CancerTypeEvidence:
     """Accumulated evidence for one cancer type."""
 
     cancer_type: str
+    expression_reference_cancer_type: str = ""
     reference_cancer_type: str = ""
     broad_rna_support: float = 0.0
     broad_rna_rank: int | None = None
@@ -99,7 +125,9 @@ class CancerTypeEvidence:
     caveat: str = ""
     source: str = ""
     details: dict[str, Any] = field(default_factory=dict)
-    _selection_priority: tuple[int, float] = field(default=(0, 0.0), repr=False)
+    selection_priority: tuple[int, float, int] = field(
+        default=(0, 0.0, 0), repr=False
+    )
 
     def add_source(self, source: str) -> None:
         if source and source not in self.evidence_sources:
@@ -114,18 +142,30 @@ class CancerTypeEvidence:
         priority: tuple[int, float],
     ) -> None:
         self.report_label_candidate = True
-        self.label_status = "blocked"
-        self.label_basis = selected_by
-        if can_select and priority > self._selection_priority:
+        # Append a stable tie-break rank so two evidence kinds that compute
+        # identical (class_rank, strength) resolve in a documented order
+        # instead of falling back to dict-insertion order.
+        tiebreak = _SELECTED_BY_TIEBREAK_RANK.get(selected_by, 0)
+        full_priority = (priority[0], priority[1], tiebreak)
+        if can_select and full_priority > self.selection_priority:
             self.can_select_report_label = True
             self.blocking_reasons = ()
             self.selected_by = selected_by
             self.label_status = "selected"
-            self._selection_priority = priority
+            self.label_basis = selected_by
+            self.selection_priority = full_priority
         elif not self.can_select_report_label and blocking_reasons:
+            self.label_status = "blocked"
+            self.label_basis = selected_by
             self.blocking_reasons = tuple(blocking_reasons)
 
     def public_dict(self) -> dict[str, Any]:
+        expression_reference = (
+            self.expression_reference_cancer_type
+            or self.reference_cancer_type
+            or self.cancer_type
+        )
+        coarse_context = self.reference_cancer_type or expression_reference
         metrics = {
             "broad_rna_support": round(float(self.broad_rna_support), 4),
             "related_context_support": round(float(self.related_context_support), 4),
@@ -138,12 +178,17 @@ class CancerTypeEvidence:
         }
         row = {
             "cancer_type": self.cancer_type,
-            "reference_cancer_type": self.reference_cancer_type,
+            "inferred_cancer_type": self.cancer_type,
+            "expression_reference_cancer_type": expression_reference,
+            # Back-compat alias for existing report/therapy code.
+            "reference_cancer_type": coarse_context,
+            "coarse_expression_context_cancer_type": coarse_context,
             "evidence_sources": list(self.evidence_sources),
             "selected_by": self.selected_by,
+            "selection_method": _selection_method_label(self.selected_by),
             "label_decision": {
                 "status": self.label_status,
-                "basis": self.selected_by or self.label_basis,
+                "basis": _selection_method_label(self.selected_by or self.label_basis),
                 "reasons": list(self.blocking_reasons),
             },
             "report_label_candidate": bool(self.report_label_candidate),
@@ -177,6 +222,26 @@ class FineReferenceSpec:
 
 @dataclass(frozen=True)
 class RareRnaPolicy:
+    """Per-cancer-type policy for the rare-RNA-marker selector.
+
+    The ``effective_context`` quantity consumed by the marker/context
+    score is ``context_support`` unless ``top_is_context`` and
+    ``top_context_promotes_to_full`` are both True, in which case it
+    saturates to 1.0. Saturation makes "the broad classifier's top
+    pick is one of my compatible contexts" enough on its own — this
+    is the load-bearing semantic for NUTM (squamous-top fully
+    supports the NUT-carcinoma promotion) and for salivary entities
+    (their compatible contexts are HNSC, which the broad classifier
+    is expected to pick on these samples). It is also the reason the
+    *default* policy can promote on top-context alone: marker support
+    contributes ``marker_weight * marker_support`` and the saturated
+    context contributes ``context_weight``, summing past
+    ``min_marker_context_support = 0.75`` when both are strong.
+    Flip ``top_context_promotes_to_full=False`` to require real
+    context support (i.e. the broad classifier must have spread
+    support across the cohort, not just put it at rank 1).
+    """
+
     marker_weight: float = 0.40
     context_weight: float = 0.45
     top_context_weight: float = 0.0
@@ -184,6 +249,18 @@ class RareRnaPolicy:
     min_related_context_support: float = 0.60
     require_top_context: bool = False
     required_top_context_codes: frozenset[str] = frozenset()
+    top_context_promotes_to_full: bool = True
+
+    def effective_context_support(
+        self,
+        *,
+        top_is_context: bool,
+        related_context_support: float,
+    ) -> float:
+        """Return the context-support value consumed by the marker score."""
+        if top_is_context and self.top_context_promotes_to_full:
+            return max(related_context_support, 1.0)
+        return related_context_support
 
     def context_passes(
         self,
@@ -230,8 +307,8 @@ _FINE_REFERENCE_SPECS = (
         },
         min_fine_reference_support=0.70,
         basis=(
-            "broad RNA call is sarcoma-like and TARGET osteosarcoma "
-            "reference markers show an osteogenic tumor program"
+            "primary expression-reference match is sarcoma-like and TARGET "
+            "osteosarcoma reference markers show an osteogenic tumor program"
         ),
     ),
 )
@@ -267,11 +344,18 @@ def _clean(value: Any) -> str:
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         result = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return float(default)
     if result != result:
         return float(default)
     return result
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
 
 
 def _safe_bool(value: object, default: bool = False) -> bool:
@@ -288,6 +372,21 @@ def _split_semicolon(value: object) -> list[str]:
     return [part.strip() for part in text.split(";") if part.strip()]
 
 
+def _selection_method_label(selected_by: str) -> str:
+    # One distinct display label per selector — debugging from the JSON
+    # output should not require cross-referencing ``evidence_sources`` to
+    # tell which of ``local_expression_reference`` vs ``fine_reference``
+    # actually fired (both previously rendered as ``exact_expression_reference``).
+    return {
+        "primary_expression_match": "primary_expression_match",
+        "tumor_label_refinement": "tumor_label_refinement",
+        "local_expression_reference": "local_expression_reference",
+        "fine_reference": "fine_reference",
+        "rare_marker": "rna_marker_with_expression_context",
+        "direct_fusion": "direct_fusion",
+    }.get(selected_by, selected_by)
+
+
 def _candidate_rows(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
     return [dict(row) for row in (analysis.get("candidate_trace") or [])]
 
@@ -297,7 +396,7 @@ def _candidate_support_by_code(analysis: Mapping[str, Any]) -> dict[str, float]:
     for row in _candidate_rows(analysis):
         code = _clean(row.get("code"))
         if code:
-            out[code] = max(out.get(code, 0.0), _safe_float(row.get("support_norm")))
+            out[code] = max(out.get(code, 0.0), _safe_float(row.get("support_fraction_of_top")))
     return out
 
 
@@ -322,30 +421,53 @@ def _hypothesis(
 def _rare_rules_by_id() -> dict[str, dict[str, Any]]:
     try:
         from .rare_inference import rare_cancer_rna_surrogate_rules_df
-
-        df = rare_cancer_rna_surrogate_rules_df().fillna("")
-        return {
-            _clean(row.get("rule_id")): dict(row)
-            for _, row in df.iterrows()
-            if _clean(row.get("rule_id"))
-        }
-    except Exception:
+    except ImportError:
+        _LOGGER.warning(
+            "rare_cancer_rna_surrogate_rules_df is unavailable; rare-marker "
+            "evidence will be empty",
+            exc_info=True,
+        )
         return {}
+    try:
+        df = rare_cancer_rna_surrogate_rules_df().fillna("")
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "rare_cancer_rna_surrogate_rules_df failed to load; rare-marker "
+            "evidence will be empty",
+            exc_info=True,
+        )
+        return {}
+    return {
+        _clean(row.get("rule_id")): dict(row)
+        for _, row in df.iterrows()
+        if _clean(row.get("rule_id"))
+    }
 
 
 @lru_cache(maxsize=1)
 def _registry_by_code() -> dict[str, dict[str, Any]]:
     try:
         from pirlygenes.gene_sets_cancer import cancer_type_registry
-
-        df = cancer_type_registry().fillna("")
-        return {
-            _clean(row.get("code")): dict(row)
-            for _, row in df.iterrows()
-            if _clean(row.get("code"))
-        }
-    except Exception:
+    except ImportError:
+        _LOGGER.warning(
+            "pirlygenes.gene_sets_cancer.cancer_type_registry is unavailable; "
+            "registry lookups will be empty",
+            exc_info=True,
+        )
         return {}
+    try:
+        df = cancer_type_registry().fillna("")
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "cancer_type_registry failed to load; registry lookups will be empty",
+            exc_info=True,
+        )
+        return {}
+    return {
+        _clean(row.get("code")): dict(row)
+        for _, row in df.iterrows()
+        if _clean(row.get("code"))
+    }
 
 
 def _local_reference_context_codes(
@@ -359,121 +481,264 @@ def _local_reference_context_codes(
     return tuple(_LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY.get(family, ()))
 
 
-@lru_cache(maxsize=1)
-def _local_expression_reference_panels() -> dict[str, dict[str, Any]]:
+@lru_cache(maxsize=32)
+def _local_expression_reference_panels(
+    compatible_contexts: tuple[str, ...] = (),
+) -> dict[str, dict[str, Any]]:
     """Build marker panels for exact non-TCGA expression references.
 
-    The selector uses these panels for future exact references such as MM,
-    CLL, ALL, or pediatric/fine sarcoma cohorts. The broad RNA classifier
-    still provides the coarse context; this table only decides whether an
-    exact local cohort is a better report label within that context.
+    Observed pirlygenes cancer references and trufflepig deconvolved
+    references both contribute here. Deconvolved references are preferred
+    when both exist for a code because they represent tumor-cell expression;
+    observed references fill in codes that do not have a deconvolved artifact.
+    The broad RNA classifier still provides the coarse context.
+
+    Tests that monkeypatch ``subtype_deconvolved_expression`` or
+    ``cancer_reference_expression`` should call
+    ``_local_expression_reference_panels.cache_clear()`` first (and again
+    after the test) — the cache key only includes ``compatible_contexts``,
+    so a patched underlying frame is not seen otherwise.
     """
     try:
-        from .reference import pan_cancer_expression, subtype_deconvolved_expression
-        from .tumor_purity import _compile_excluded_gene_matcher
-
-        sub = subtype_deconvolved_expression(technical_rna_normalize=True)
-        if sub is None or sub.empty:
-            return {}
-        subtype_values = (
-            sub.get("subtype").fillna("").astype(str).map(_clean)
-            if "subtype" in sub.columns
-            else ""
+        from .reference import (
+            cancer_reference_expression,
+            pan_cancer_expression,
+            subtype_deconvolved_expression,
         )
-        sub = sub[subtype_values == ""].copy()
-        if sub.empty:
-            return {}
+        from .tumor_purity import _compile_excluded_gene_matcher
+    except ImportError:
+        _LOGGER.warning(
+            "trufflepig.reference / tumor_purity imports failed; local "
+            "expression reference panels will be empty",
+            exc_info=True,
+        )
+        return {}
 
+    try:
         pan = (
             pan_cancer_expression(technical_rna_normalize=True)
             .drop_duplicates(subset="Symbol")
             .set_index("Symbol")
         )
-        cohort_cols = [col for col in pan.columns if str(col).endswith("_TPM")]
-        if not cohort_cols:
-            return {}
-        pan_median = pan[cohort_cols].astype(float).median(axis=1)
-        is_excluded = _compile_excluded_gene_matcher()
-        registry = _registry_by_code()
-        panels: dict[str, dict[str, Any]] = {}
-        for code_value, group in sub.groupby("cancer_code"):
-            code = _clean(code_value)
-            if not code:
-                continue
-            registry_row = registry.get(code, {})
-            family = _clean(registry_row.get("family")).lower()
-            if family in _LOCAL_REFERENCE_SKIP_FAMILIES:
-                continue
-            context_codes = _local_reference_context_codes(code, registry_row)
-            if not context_codes:
-                continue
-            ref = (
-                group.groupby("symbol", as_index=False)["tumor_tpm_median"]
-                .median()
-                .reset_index(drop=True)
-            )
-            ranked: list[tuple[float, float, float, str]] = []
-            ref_by_symbol: dict[str, float] = {}
-            for _, row in ref.iterrows():
-                symbol = _clean(row.get("symbol"))
-                if not symbol or is_excluded(symbol):
-                    continue
-                value = _safe_float(row.get("tumor_tpm_median"))
-                if value < _LOCAL_REFERENCE_MIN_TPM:
-                    continue
-                base = _safe_float(pan_median.get(symbol), default=0.1)
-                log2_vs_pan = float(np.log2((value + 1.0) / (base + 1.0)))
-                if log2_vs_pan < _LOCAL_REFERENCE_MIN_LOG2_VS_PAN:
-                    continue
-                ref_by_symbol[symbol] = value
-                ranked.append((log2_vs_pan, value, -len(symbol), symbol))
-            if not ranked:
-                continue
-            ranked.sort(key=lambda item: (-item[0], -item[1], item[3]))
-            markers = tuple(
-                symbol
-                for _log2, _value, _length, symbol in ranked[
-                    :_LOCAL_REFERENCE_TOP_MARKERS
-                ]
-            )
-            panels[code] = {
-                "markers": markers,
-                "ref_medians": ref_by_symbol,
-                "context_codes": context_codes,
-                "family": _clean(registry_row.get("family")),
-                "primary_tissue": _clean(registry_row.get("primary_tissue")),
-                "source_cohort": _clean(registry_row.get("source_cohort")),
-            }
-        return panels
-    except Exception:
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "pan_cancer_expression failed to load; local expression "
+            "reference panels will be empty",
+            exc_info=True,
+        )
         return {}
+
+    cohort_cols = [col for col in pan.columns if str(col).endswith("_TPM")]
+    if not cohort_cols:
+        return {}
+    pan_median = pan[cohort_cols].astype(float).median(axis=1)
+    is_excluded = _compile_excluded_gene_matcher()
+    registry = _registry_by_code()
+    compatible_context_set = {
+        _clean(context) for context in compatible_contexts if _clean(context)
+    }
+    eligible_codes: set[str] = set()
+    for code, row in registry.items():
+        family = _clean(row.get("family")).lower()
+        if family in _LOCAL_REFERENCE_SKIP_FAMILIES:
+            continue
+        context_codes = _local_reference_context_codes(code, row)
+        if not context_codes:
+            continue
+        if compatible_context_set and not (
+            set(context_codes) & compatible_context_set
+        ):
+            continue
+        eligible_codes.add(code)
+    if compatible_context_set and not eligible_codes:
+        return {}
+
+    panels: dict[str, dict[str, Any]] = {}
+
+    def add_panel(
+        *,
+        code_value: Any,
+        ref: Any,
+        value_col: str,
+        symbol_col: str,
+        reference_kind: str,
+        source_label: str,
+        priority: int,
+    ) -> None:
+        code = _clean(code_value)
+        if not code:
+            return
+        registry_row = registry.get(code, {})
+        family = _clean(registry_row.get("family")).lower()
+        if family in _LOCAL_REFERENCE_SKIP_FAMILIES:
+            return
+        context_codes = _local_reference_context_codes(code, registry_row)
+        if not context_codes:
+            return
+        ref = (
+            ref.groupby(symbol_col, as_index=False)[value_col]
+            .median()
+            .reset_index(drop=True)
+        )
+        ranked: list[tuple[float, float, float, str]] = []
+        ref_by_symbol: dict[str, float] = {}
+        for _, row in ref.iterrows():
+            symbol = _clean(row.get(symbol_col))
+            if not symbol or is_excluded(symbol):
+                continue
+            value = _safe_float(row.get(value_col))
+            if value < _LOCAL_REFERENCE_MIN_TPM:
+                continue
+            base = _safe_float(pan_median.get(symbol), default=0.1)
+            log2_vs_pan = float(np.log2((value + 1.0) / (base + 1.0)))
+            if log2_vs_pan < _LOCAL_REFERENCE_MIN_LOG2_VS_PAN:
+                continue
+            ref_by_symbol[symbol] = value
+            ranked.append((log2_vs_pan, value, -len(symbol), symbol))
+        if not ranked:
+            return
+        ranked.sort(key=lambda item: (-item[0], -item[1], item[3]))
+        markers = tuple(
+            symbol
+            for _log2, _value, _length, symbol in ranked[
+                :_LOCAL_REFERENCE_TOP_MARKERS
+            ]
+        )
+        old = panels.get(code)
+        if old is not None and int(old.get("_priority", 0)) > priority:
+            return
+        panels[code] = {
+            "markers": markers,
+            "ref_medians": ref_by_symbol,
+            "context_codes": context_codes,
+            "family": _clean(registry_row.get("family")),
+            "primary_tissue": _clean(registry_row.get("primary_tissue")),
+            "source_cohort": source_label,
+            "reference_kind": reference_kind,
+            "_priority": priority,
+        }
+
+    try:
+        observed = cancer_reference_expression(
+            cancer_types=tuple(sorted(eligible_codes)) if eligible_codes else None,
+            normalize="tpm_clean",
+            format="long",
+            include_provenance=True,
+        )
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "cancer_reference_expression failed to load; observed-cohort "
+            "panels will be skipped",
+            exc_info=True,
+        )
+        observed = None
+    if observed is not None and not observed.empty:
+        if "normalization" in observed.columns:
+            observed = observed[
+                observed["normalization"].astype(str).str.lower().eq("tpm_clean")
+            ].copy()
+        for code_value, group in observed.groupby("cancer_code"):
+            cohorts: list[str] = []
+            if "source_cohort" in group.columns:
+                cohorts = [
+                    _clean(value)
+                    for value in group["source_cohort"].dropna().unique()
+                    if _clean(value)
+                ]
+            add_panel(
+                code_value=code_value,
+                ref=group,
+                value_col="expression",
+                symbol_col="Symbol",
+                reference_kind="observed_bulk_reference",
+                source_label=", ".join(sorted(cohorts)) or "pirlygenes",
+                priority=1,
+            )
+
+    try:
+        sub = subtype_deconvolved_expression(technical_rna_normalize=True)
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "subtype_deconvolved_expression failed to load; deconvolved "
+            "panels will be skipped",
+            exc_info=True,
+        )
+        sub = None
+    if sub is not None and not sub.empty:
+        if eligible_codes and "cancer_code" in sub.columns:
+            sub = sub[
+                sub["cancer_code"].astype(str).str.upper().isin(eligible_codes)
+            ].copy()
+        if "subtype" in sub.columns:
+            subtype_values = (
+                sub["subtype"].fillna("").astype(str).map(_clean)
+            )
+            sub = sub[subtype_values == ""].copy()
+        # When the dataframe lacks a ``subtype`` column at all, treat
+        # every row as having empty subtype (the historical fallback
+        # tried ``sub[scalar_bool]`` which silently mis-indexed).
+        for code_value, group in sub.groupby("cancer_code"):
+            cohorts = []
+            if "source_cohort" in group.columns:
+                cohorts = [
+                    _clean(value)
+                    for value in group["source_cohort"].dropna().unique()
+                    if _clean(value)
+                ]
+            add_panel(
+                code_value=code_value,
+                ref=group,
+                value_col="tumor_tpm_median",
+                symbol_col="symbol",
+                reference_kind="deconvolved_tumor_reference",
+                source_label=", ".join(sorted(cohorts)) or "trufflepig",
+                priority=2,
+            )
+
+    for panel in panels.values():
+        panel.pop("_priority", None)
+    return panels
 
 
 @lru_cache(maxsize=None)
 def _reference_medians(reference_code: str) -> dict[str, float]:
     try:
         from .reference import subtype_deconvolved_expression
-
-        df = subtype_deconvolved_expression()
-        if df is None or df.empty:
-            return {}
-        if "cancer_code" in df.columns:
-            df = df[df["cancer_code"].astype(str).str.upper() == reference_code.upper()]
-        if df.empty:
-            return {}
-        if df["symbol"].duplicated().any():
-            df = (
-                df.groupby("symbol", as_index=False)["tumor_tpm_median"]
-                .median()
-                .reset_index(drop=True)
-            )
-        return {
-            str(row["symbol"]): _safe_float(row.get("tumor_tpm_median"))
-            for _, row in df.iterrows()
-            if _clean(row.get("symbol"))
-        }
-    except Exception:
+    except ImportError:
+        _LOGGER.warning(
+            "trufflepig.reference is unavailable; %s reference medians "
+            "will be empty",
+            reference_code,
+            exc_info=True,
+        )
         return {}
+    try:
+        df = subtype_deconvolved_expression()
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "subtype_deconvolved_expression failed to load; %s reference "
+            "medians will be empty",
+            reference_code,
+            exc_info=True,
+        )
+        return {}
+    if df is None or df.empty:
+        return {}
+    if "cancer_code" in df.columns:
+        df = df[df["cancer_code"].astype(str).str.upper() == reference_code.upper()]
+    if df.empty:
+        return {}
+    if df["symbol"].duplicated().any():
+        df = (
+            df.groupby("symbol", as_index=False)["tumor_tpm_median"]
+            .median()
+            .reset_index(drop=True)
+        )
+    return {
+        str(row["symbol"]): _safe_float(row.get("tumor_tpm_median"))
+        for _, row in df.iterrows()
+        if _clean(row.get("symbol"))
+    }
 
 
 def _marker_fraction_against_reference(
@@ -581,15 +846,24 @@ def _add_broad_rna_features(
         code = _clean(row.get("code"))
         if not code:
             continue
-        support = _safe_float(row.get("support_norm"))
+        support = _safe_float(row.get("support_fraction_of_top"))
         hypothesis = _hypothesis(hypotheses, code)
         hypothesis.add_source("broad_rna")
+        hypothesis.expression_reference_cancer_type = code
         hypothesis.reference_cancer_type = code
         hypothesis.broad_rna_support = max(hypothesis.broad_rna_support, support)
         hypothesis.broad_rna_rank = rank
         hypothesis.details.update(dict(row))
         hypothesis.details.pop("code", None)
-        hypothesis.details["support_norm"] = round(support, 4)
+        hypothesis.details["support_fraction_of_top"] = round(support, 4)
+        if rank == 1:
+            hypothesis.basis = hypothesis.basis or "top RNA expression-reference match"
+            hypothesis.consider_for_report_label(
+                selected_by="primary_expression_match",
+                can_select=True,
+                blocking_reasons=(),
+                priority=(0, support),
+            )
 
 
 def _family_marker_support(row: Mapping[str, Any]) -> float:
@@ -616,7 +890,11 @@ def _add_tumor_label_refinement_features(
         return
 
     top_code = _clean(top.get("code"))
-    top_support = _safe_float(top.get("support_norm"), default=1.0)
+    # Default 0.0 for missing ``support_fraction_of_top`` — the original default of
+    # 1.0 silently treated a missing-field background candidate as fully
+    # supported, which would have permitted refinement promotion in
+    # degenerate traces where the top row was missing its support entry.
+    top_support = _safe_float(top.get("support_fraction_of_top"), default=0.0)
     top_signature = _safe_float(top.get("signature_score"))
     if not top_code or top_support <= 0 or top_signature <= 0:
         return
@@ -627,9 +905,11 @@ def _add_tumor_label_refinement_features(
         code = _clean(row.get("code"))
         if not code or _is_background_like_candidate(row):
             continue
-        support = _safe_float(row.get("support_norm"))
+        support = _safe_float(row.get("support_fraction_of_top"))
         signature = _safe_float(row.get("signature_score"))
-        signature_ratio = signature / top_signature if top_signature > 0 else 0.0
+        # ``top_signature > 0`` is guaranteed by the outer guard above —
+        # the conditional is kept defensive but is always-true here.
+        signature_ratio = signature / top_signature
         family_support = _family_marker_support(row)
         if support < _TUMOR_LABEL_MIN_SUPPORT:
             continue
@@ -650,12 +930,14 @@ def _add_tumor_label_refinement_features(
         return
 
     code = _clean(best.get("code"))
-    support = _safe_float(best.get("support_norm"))
+    support = _safe_float(best.get("support_fraction_of_top"))
     signature = _safe_float(best.get("signature_score"))
-    signature_ratio = signature / top_signature if top_signature > 0 else 0.0
+    # ``top_signature > 0`` is guaranteed by the outer guard at line 854.
+    signature_ratio = signature / top_signature
     family_support = _family_marker_support(best)
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("tumor_label_refinement")
+    hypothesis.expression_reference_cancer_type = code
     hypothesis.reference_cancer_type = code
     hypothesis.related_context_code = top_code
     hypothesis.related_context_support = max(
@@ -678,8 +960,8 @@ def _add_tumor_label_refinement_features(
         {
             "competing_background_code": top_code,
             "competing_background_family": _clean(top.get("family_label")),
-            "competing_background_support_norm": round(float(top_support), 4),
-            "tumor_label_support_norm": round(float(support), 4),
+            "competing_background_support_fraction_of_top": round(float(top_support), 4),
+            "tumor_label_support_fraction_of_top": round(float(support), 4),
             "tumor_label_signature_ratio": round(float(signature_ratio), 4),
             "tumor_label_family": _clean(best.get("family_label")),
             "tumor_label_family_support": round(float(family_support), 4),
@@ -753,6 +1035,7 @@ def _add_fine_reference_features(
 
     hypothesis = _hypothesis(hypotheses, spec.cancer_type)
     hypothesis.add_source("fine_reference")
+    hypothesis.expression_reference_cancer_type = spec.reference_code
     hypothesis.reference_cancer_type = spec.reference_cancer_type
     hypothesis.related_context_code = spec.reference_cancer_type
     hypothesis.related_context_support = max(
@@ -767,8 +1050,8 @@ def _add_fine_reference_features(
     hypothesis.basis = hypothesis.basis or spec.basis
     hypothesis.details.update(
         {
-            "parent_support_norm": round(float(context_support), 4),
-            f"{spec.reference_cancer_type.lower()}_support_norm": round(
+            "parent_support_fraction_of_top": round(float(context_support), 4),
+            f"{spec.reference_cancer_type.lower()}_support_fraction_of_top": round(
                 float(context_support),
                 4,
             ),
@@ -807,6 +1090,13 @@ def _add_local_expression_reference_features(
     if not support_by_code or not top:
         return
 
+    # Always request the unfiltered panel set so the lru_cache hits a
+    # single ``()`` key. The earlier code passed ``tuple(sorted(support_by_code))``
+    # as an early-skip optimization, but ``support_by_code`` varies per
+    # sample, which thrashed the cache and rebuilt the panels for every
+    # analyzed sample. The consumer below filters by each panel's own
+    # ``context_codes`` vs the live ``support_by_code``, so semantically
+    # we lose nothing by building all panels once.
     panels = _local_expression_reference_panels()
     if not panels:
         return
@@ -824,6 +1114,14 @@ def _add_local_expression_reference_features(
             default=0.0,
         )
         context_is_top = top in context_codes
+        matched_context = (
+            top
+            if context_is_top
+            else max(
+                context_codes,
+                key=lambda context_code: support_by_code.get(context_code, 0.0),
+            )
+        )
         markers = tuple(panel.get("markers") or ())
         ref_medians = dict(panel.get("ref_medians") or {})
         marker_fraction, burden_ratio, marker_details = _local_reference_marker_support(
@@ -833,7 +1131,7 @@ def _add_local_expression_reference_features(
         )
         if marker_fraction <= 0 and burden_ratio <= 0:
             continue
-        burden_support = min(burden_ratio / 0.35, 1.0)
+        burden_support = min(burden_ratio / _LOCAL_REFERENCE_BURDEN_SCORE_ANCHOR, 1.0)
         local_support = (
             0.40 * context_support
             + 0.35 * marker_fraction
@@ -842,7 +1140,7 @@ def _add_local_expression_reference_features(
         blockers: list[str] = []
         if not context_is_top:
             blockers.append(
-                "broad RNA context is not the top compatible context "
+                "expression-reference context is not the top compatible context "
                 f"({', '.join(context_codes)})"
             )
         if context_support < _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT:
@@ -872,17 +1170,25 @@ def _add_local_expression_reference_features(
 
         hypothesis = _hypothesis(hypotheses, code)
         hypothesis.add_source("local_expression_reference")
+        hypothesis.expression_reference_cancer_type = (
+            hypothesis.expression_reference_cancer_type or code
+        )
         hypothesis.reference_cancer_type = hypothesis.reference_cancer_type or (
-            context_codes[0] if context_codes else top
+            matched_context or top
         )
         hypothesis.related_context_code = ",".join(context_codes)
         hypothesis.related_context_support = max(
             hypothesis.related_context_support,
             context_support,
         )
-        hypothesis.related_context_is_top = (
-            hypothesis.related_context_is_top or context_is_top
-        )
+        # ``related_context_is_top`` reflects the *best* panel — the one
+        # whose ``local_support`` becomes the hypothesis-level strength.
+        # OR-accumulating would let a passing-but-weaker panel's True
+        # leak forward to a stronger panel whose context isn't top
+        # (silently inflating the reader's confidence about which
+        # context backed the call).
+        if local_support > hypothesis.fine_reference_support:
+            hypothesis.related_context_is_top = context_is_top
         hypothesis.fine_reference_support = max(
             hypothesis.fine_reference_support,
             local_support,
@@ -894,6 +1200,7 @@ def _add_local_expression_reference_features(
         hypothesis.details.update(
             {
                 "local_reference_context_codes": list(context_codes),
+                "local_reference_matched_context": matched_context,
                 "local_reference_context_is_top": context_is_top,
                 "local_reference_strength": round(float(local_support), 4),
                 "local_reference_marker_fraction": round(
@@ -907,6 +1214,7 @@ def _add_local_expression_reference_features(
                 "local_reference_family": panel.get("family") or "",
                 "local_reference_primary_tissue": panel.get("primary_tissue") or "",
                 "local_reference_source_cohort": panel.get("source_cohort") or "",
+                "local_reference_kind": panel.get("reference_kind") or "",
                 "top_markers": marker_details[:8],
             }
         )
@@ -922,6 +1230,46 @@ def _rare_rna_policy(code: str) -> RareRnaPolicy:
     return _RARE_RNA_POLICIES.get(code, _DEFAULT_RARE_RNA_POLICY)
 
 
+def _rare_marker_support_status(
+    finding: Mapping[str, Any],
+    rule: Mapping[str, Any],
+) -> tuple[bool, int, int, int]:
+    support_genes = list(finding.get("support_genes") or [])
+    missing_support_genes = list(finding.get("missing_support_genes") or [])
+    min_support = _safe_int(
+        finding.get("min_support_genes"),
+        _safe_int(rule.get("min_support_genes"), 0),
+    )
+    required_count = _safe_int(
+        finding.get("required_support_gene_count"),
+        len(support_genes) + len(missing_support_genes),
+    )
+    support_count = _safe_int(finding.get("support_gene_count"), len(support_genes))
+    if "support_pass" in finding:
+        support_pass = _safe_bool(finding.get("support_pass"), default=False)
+    else:
+        support_pass = support_count >= min_support
+    return support_pass, support_count, min_support, required_count
+
+
+def _rare_marker_expression_support(
+    finding: Mapping[str, Any],
+    *,
+    support_count: int,
+    min_support: int,
+    required_count: int,
+) -> float:
+    primary_tpm = _safe_float(finding.get("surrogate_tpm"))
+    threshold = max(_safe_float(finding.get("threshold_tpm")), 1e-9)
+    primary_support = min(primary_tpm / threshold, 1.0)
+    if required_count <= 0:
+        return primary_support
+    threshold_support = min(support_count / max(min_support, 1), 1.0)
+    breadth_support = min(support_count / max(required_count, 1), 1.0)
+    co_marker_support = 0.70 * threshold_support + 0.30 * breadth_support
+    return float(0.75 * primary_support + 0.25 * co_marker_support)
+
+
 def _add_rare_marker_features(
     hypotheses: dict[str, CancerTypeEvidence],
     finding: Mapping[str, Any],
@@ -931,10 +1279,13 @@ def _add_rare_marker_features(
     rule_id = _clean(finding.get("rule_id"))
     if not code or not rule_id:
         return
-    if finding.get("exclusion_genes_observed") or finding.get("missing_support_genes"):
-        return
 
     rule = _rare_rules_by_id().get(rule_id, {})
+    support_pass, support_count, min_support, required_count = (
+        _rare_marker_support_status(finding, rule)
+    )
+    if finding.get("exclusion_genes_observed") or not support_pass:
+        return
     rule_promotes = _safe_bool(rule.get("promote_report_scope"), default=True)
     context_codes = set(_split_semicolon(rule.get("context_codes")))
     support_by_code = _candidate_support_by_code(analysis)
@@ -944,12 +1295,18 @@ def _add_rare_marker_features(
         default=0.0,
     )
     top_is_context = bool(top and top in context_codes)
-    primary_tpm = _safe_float(finding.get("surrogate_tpm"))
-    threshold = max(_safe_float(finding.get("threshold_tpm")), 1e-9)
-    marker_support = min(primary_tpm / threshold, 1.0)
+    marker_support = _rare_marker_expression_support(
+        finding,
+        support_count=support_count,
+        min_support=min_support,
+        required_count=required_count,
+    )
 
     policy = _rare_rna_policy(code)
-    effective_context = max(context_support, float(top_is_context))
+    effective_context = policy.effective_context_support(
+        top_is_context=top_is_context,
+        related_context_support=context_support,
+    )
     marker_context_support = (
         policy.marker_weight * marker_support
         + policy.context_weight * effective_context
@@ -966,9 +1323,9 @@ def _add_rare_marker_features(
     if not context_passes:
         if context_codes:
             allowed = ", ".join(sorted(context_codes))
-            blockers.append(f"broad RNA context is not one of {allowed}")
+            blockers.append(f"expression-reference context is not one of {allowed}")
         else:
-            blockers.append("broad RNA context does not support this marker")
+            blockers.append("expression-reference context does not support this marker")
     if marker_context_support < policy.min_marker_context_support:
         blockers.append(
             "marker/context support "
@@ -978,9 +1335,15 @@ def _add_rare_marker_features(
 
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("rare_marker")
+    hypothesis.expression_reference_cancer_type = (
+        hypothesis.expression_reference_cancer_type or top
+    )
     hypothesis.reference_cancer_type = hypothesis.reference_cancer_type or top
+    # Use comma delimiter to match the local-reference path at line 1138 —
+    # the field is a multi-context list and downstream consumers should not
+    # need to handle two different separators based on which selector fired.
     hypothesis.related_context_code = (
-        ";".join(sorted(context_codes)) if context_codes else hypothesis.related_context_code
+        ",".join(sorted(context_codes)) if context_codes else hypothesis.related_context_code
     )
     hypothesis.related_context_support = max(
         hypothesis.related_context_support,
@@ -1002,8 +1365,13 @@ def _add_rare_marker_features(
             "surrogate_tpm": finding.get("surrogate_tpm"),
             "threshold_tpm": finding.get("threshold_tpm"),
             "support_genes": list(finding.get("support_genes") or []),
+            "missing_support_genes": list(finding.get("missing_support_genes") or []),
+            "support_gene_count": support_count,
+            "min_support_genes": min_support,
+            "required_support_gene_count": required_count,
+            "support_pass": support_pass,
             "context_codes": sorted(context_codes),
-            "context_support_norm": round(float(context_support), 4),
+            "context_support_fraction_of_top": round(float(context_support), 4),
             "top_reference_cancer_type": top,
             "top_is_context": top_is_context,
             "marker_context_support": round(float(marker_context_support), 4),
@@ -1027,6 +1395,9 @@ def _add_direct_fusion_features(
         return
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("direct_fusion")
+    hypothesis.expression_reference_cancer_type = (
+        hypothesis.expression_reference_cancer_type or _top_code(analysis)
+    )
     hypothesis.reference_cancer_type = hypothesis.reference_cancer_type or _top_code(analysis)
     hypothesis.direct_fusion_support = 1.0
     hypothesis.basis = hypothesis.basis or fusion_scope_inference.get("basis") or ""
@@ -1051,13 +1422,24 @@ def _add_direct_fusion_features(
     )
 
 
-def _public_evidence_sort_key(evidence: CancerTypeEvidence) -> tuple[int, int, int, float, str]:
-    class_rank, strength = evidence._selection_priority
+def _public_evidence_sort_key(evidence: CancerTypeEvidence):
+    """Sort key for the public evidence list — highest-priority first,
+    *ascending* cancer_type for deterministic tie-break.
+
+    The negation pattern lets the caller use plain ``sorted(...)``
+    (ascending) so the alphabetical-tie field stays in natural
+    ascending order. Mirrors ``_selectable_sort_key`` in
+    ``select_report_scope_from_evidence`` — both must agree so the
+    "selected" hypothesis matches the top of the evidence list on
+    ties.
+    """
+    class_rank, strength, tiebreak = evidence.selection_priority
     return (
-        1 if evidence.can_select_report_label else 0,
-        1 if evidence.report_label_candidate else 0,
-        class_rank,
-        strength,
+        -(1 if evidence.can_select_report_label else 0),
+        -(1 if evidence.report_label_candidate else 0),
+        -class_rank,
+        -strength,
+        -tiebreak,
         evidence.cancer_type,
     )
 
@@ -1072,10 +1454,21 @@ def select_report_scope_from_evidence(
     """Build cancer-type hypotheses and return the selected report label."""
     try:
         from .common import build_sample_tpm_by_symbol
-
-        sample_tpm_by_symbol = build_sample_tpm_by_symbol(df_expr)
-    except Exception:
-        sample_tpm_by_symbol = {}
+    except ImportError:
+        _LOGGER.warning(
+            "trufflepig.common is unavailable; sample TPM lookup will be empty",
+            exc_info=True,
+        )
+        sample_tpm_by_symbol: Mapping[str, float] = {}
+    else:
+        try:
+            sample_tpm_by_symbol = build_sample_tpm_by_symbol(df_expr)
+        except (KeyError, ValueError, TypeError):
+            _LOGGER.warning(
+                "build_sample_tpm_by_symbol failed; sample TPM lookup will be empty",
+                exc_info=True,
+            )
+            sample_tpm_by_symbol = {}
 
     hypotheses: dict[str, CancerTypeEvidence] = {}
     _add_broad_rna_features(hypotheses, analysis)
@@ -1100,16 +1493,39 @@ def select_report_scope_from_evidence(
     selectable = [row for row in rows if row.can_select_report_label]
     selected = None
     if selectable:
-        selectable.sort(key=lambda row: row._selection_priority, reverse=True)
+        # Tie-break: highest selection_priority first (class_rank, then
+        # strength, then tiebreak slot), then *ascending* cancer_type
+        # alphabetical for determinism. The previous form
+        # ``sort((priority, cancer_type), reverse=True)`` flipped both
+        # fields, producing Z-before-A on ties (e.g. UCS over THCA at
+        # equal priority) — surprising and undocumented.
+        def _selectable_sort_key(row):
+            cls, strength, tb = row.selection_priority
+            return (-cls, -strength, -tb, row.cancer_type)
+
+        selectable.sort(key=_selectable_sort_key)
         selected = selectable[0]
+
+    primary_context = _top_code(analysis)
+    primary_context_support = _candidate_support_by_code(analysis).get(
+        primary_context,
+        0.0,
+    )
 
     return {
         "selected": selected.public_dict() if selected is not None else None,
         "evidence": [
             row.public_dict()
-            for row in sorted(rows, key=_public_evidence_sort_key, reverse=True)
+            for row in sorted(rows, key=_public_evidence_sort_key)
         ],
-        "top_reference_cancer_type": _top_code(analysis),
+        "primary_expression_context": {
+            "cancer_type": primary_context,
+            "support": round(float(primary_context_support), 4),
+        }
+        if primary_context
+        else None,
+        # Back-compat alias for older report code/tests.
+        "top_reference_cancer_type": primary_context,
     }
 
 

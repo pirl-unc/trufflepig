@@ -10,7 +10,6 @@ keeps symbol-level deconvolved references behind explicit accessors.
 from __future__ import annotations
 
 from functools import lru_cache
-from inspect import signature
 
 import pandas as pd
 
@@ -30,17 +29,22 @@ _HEME_TUMOR_UP_MATCHED_NORMAL_PATH = (
 )
 _DECONV_VALUE_COLS = ("tumor_tpm_median", "tumor_tpm_q1", "tumor_tpm_q3")
 _SUBTYPE_GROUP_COLS = ("cancer_code", "subtype")
-_PIRLYGENES_PAN_PARAMS = signature(_pirlygenes.pan_cancer_expression).parameters
-_PIRLYGENES_PAN_HAS_NORMALIZATION = "normalization" in _PIRLYGENES_PAN_PARAMS
-_PIRLYGENES_PAN_HAS_NORMALIZE = "normalize" in _PIRLYGENES_PAN_PARAMS
-_PIRLYGENES_VERSION = tuple(
-    int(part)
-    for part in str(getattr(_pirlygenes, "__version__", "0")).split(".")[:2]
-    if part.isdigit()
-)
-_PIRLYGENES_PAN_HAS_NORMALIZE_PRESETS = (
-    _PIRLYGENES_PAN_HAS_NORMALIZE and _PIRLYGENES_VERSION >= (5, 2)
-)
+_CANCER_REFERENCE_EMPTY_COLUMNS = [
+    "Ensembl_Gene_ID",
+    "Symbol",
+    "cancer_code",
+    "source_cohort",
+    "source_project",
+    "source_version",
+    "n_samples",
+    "n_detected",
+    "processing_pipeline",
+    "notes",
+    "normalization",
+    "expression",
+    "q1",
+    "q3",
+]
 
 
 def _parse_pan_value_column(col: str) -> tuple[str, int] | None:
@@ -114,6 +118,11 @@ def _standardize_pan_cancer_columns(df: pd.DataFrame) -> pd.DataFrame:
     for target in ordered_targets:
         _priority, source, _position = selected[target]
         columns[target] = df[source]
+    # Analysis-facing aliases (`*_TPM`, `*_nTPM`) intentionally shadow the
+    # "raw" semantics they had under pirlygenes 5.1 — they now point at the
+    # technical-RNA-clean columns so every analysis path sees the same
+    # sanitized values. Callers that need raw must read `*_TPM_raw` /
+    # `*_nTPM_raw` explicitly.
     for target in ordered_targets:
         if target.endswith("_TPM_clean"):
             alias = target.removesuffix("_clean")
@@ -265,41 +274,22 @@ def _apply_trufflepig_pan_normalize(
 def _load_pan_cancer_from_pirlygenes(
     *,
     genes_tuple,
-    normalize,
-    log_transform: bool,
-    technical_rna_normalize: bool,
     remove_noncoding: bool,
 ) -> pd.DataFrame:
-    del log_transform
-    del technical_rna_normalize
-    if _PIRLYGENES_PAN_HAS_NORMALIZE_PRESETS:
-        if remove_noncoding:
-            return _pirlygenes.pan_cancer_expression(
-                genes=genes_tuple,
-                normalize=["tpm", "tpm_clean"],
-                technical_rna_normalize=True,
-                remove_noncoding=True,
-                renormalize_to_million=True,
-            )
+    # Trufflepig pins pirlygenes>=5.2,<6 (see pyproject.toml), which provides
+    # the entity-first ``normalize=["tpm", "tpm_clean"]`` preset and clean
+    # TPM columns by default. Earlier pirlygenes APIs are not supported.
+    if remove_noncoding:
         return _pirlygenes.pan_cancer_expression(
             genes=genes_tuple,
             normalize=["tpm", "tpm_clean"],
+            technical_rna_normalize=True,
+            remove_noncoding=True,
+            renormalize_to_million=True,
         )
-
-    if _PIRLYGENES_PAN_HAS_NORMALIZATION:
-        return _pirlygenes.pan_cancer_expression(
-            genes=genes_tuple,
-            normalization="clean_tpm",
-            remove_noncoding=remove_noncoding,
-        )
-
     return _pirlygenes.pan_cancer_expression(
         genes=genes_tuple,
-        normalize=None,
-        log_transform=False,
-        technical_rna_normalize=True,
-        remove_noncoding=remove_noncoding,
-        renormalize_to_million=True,
+        normalize=["tpm", "tpm_clean"],
     )
 
 
@@ -309,7 +299,6 @@ def _pan_cancer_cache_key(
     log_transform,
     technical_rna_normalize,
     remove_noncoding,
-    renormalize_to_million,
 ) -> tuple:
     genes_tuple = None if genes is None else tuple(genes)
     genes_key = (
@@ -323,7 +312,6 @@ def _pan_cancer_cache_key(
         bool(log_transform),
         bool(technical_rna_normalize),
         bool(remove_noncoding),
-        bool(renormalize_to_million),
     )
     return cache_key, genes_tuple
 
@@ -331,21 +319,15 @@ def _pan_cancer_cache_key(
 def tcga_deconvolved_expression(
     technical_rna_normalize: bool = False,
     remove_noncoding: bool = False,
-    renormalize_to_million: bool = True,
 ) -> pd.DataFrame:
     """Per-(gene, TCGA code) tumor-only TPM medians from offline deconv.
 
     The current bundled artifact includes ``Ensembl_Gene_ID`` when it can be
     recovered unambiguously from the source reference. Historical rows for
     duplicated symbols remain symbol-keyed until the offline generator is rerun
-    with the new ID-preserving schema. Trufflepig exposes the artifact on the
-    standard TPM-1e6 footing by default.
+    with the new ID-preserving schema. Trufflepig always exposes the artifact
+    on the standard TPM-1e6 footing.
     """
-    if not renormalize_to_million:
-        raise ValueError(
-            "trufflepig exposes normalized TPM-scale references only; "
-            "renormalize_to_million=False is no longer supported"
-        )
     df = _tcga_deconvolved_expression_cached().copy()
     df, _ = _pirlygenes.normalize_expression(
         df,
@@ -373,19 +355,12 @@ def tcga_deconvolved_expression(
 def subtype_deconvolved_expression(
     technical_rna_normalize: bool = False,
     remove_noncoding: bool = False,
-    renormalize_to_million: bool = True,
 ) -> pd.DataFrame:
     """Per-(cancer_code, subtype, symbol) tumor-only TPM medians.
 
-    Trufflepig surface flips ``renormalize_to_million`` to ``True`` so
-    each (cancer_code, subtype) group is on the standard TPM-1e6
-    footing. Trufflepig no longer exposes the native bundled scale.
+    Each (cancer_code, subtype) group is renormalized to the standard
+    TPM-1e6 footing — trufflepig does not expose the native bundled scale.
     """
-    if not renormalize_to_million:
-        raise ValueError(
-            "trufflepig exposes normalized TPM-scale references only; "
-            "renormalize_to_million=False is no longer supported"
-        )
     df = _subtype_deconvolved_expression_cached().copy()
     df, _ = _pirlygenes.normalize_expression(
         df,
@@ -410,13 +385,69 @@ def subtype_deconvolved_expression(
     return df
 
 
+def cancer_reference_expression(
+    cancer_types=None,
+    genes=None,
+    normalize: str | list[str] | tuple[str, ...] = "tpm_clean",
+    *,
+    format: str = "long",
+    include_provenance: bool = True,
+) -> pd.DataFrame:
+    """Observed non-TCGA tumor expression references from pirlygenes.
+
+    This is distinct from trufflepig's deconvolved tumor-cell references.
+    The default view is observed cohort clean TPM, source-preserving, and
+    suitable for expression matching or fallback priors when no deconvolved
+    tumor reference exists.
+    """
+    accessor = getattr(_pirlygenes, "cancer_reference_expression", None)
+    if accessor is None:
+        if format == "long":
+            return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
+        return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
+
+    df = accessor(
+        cancer_types=cancer_types,
+        genes=genes,
+        normalize=normalize,
+        format=format,
+        include_provenance=include_provenance,
+    ).copy()
+    modes = (
+        {str(mode).lower() for mode in normalize}
+        if isinstance(normalize, (list, tuple, set))
+        else {str(normalize).lower()}
+    )
+    clean_requested = bool(modes & {"tpm_clean", "clean_tpm"})
+    if clean_requested and not df.empty:
+        if format == "long":
+            clean_rows = (
+                df["normalization"].astype(str).str.lower().eq("tpm_clean")
+                if "normalization" in df.columns
+                else pd.Series(True, index=df.index)
+            )
+            value_cols = [col for col in ("expression", "q1", "q3") if col in df.columns]
+            assert_clean_tpm(
+                df.loc[clean_rows],
+                value_cols=value_cols,
+                context="cancer_reference_expression",
+            )
+        else:
+            value_cols = [col for col in df.columns if str(col).endswith("_TPM_clean")]
+            assert_clean_tpm(
+                df,
+                value_cols=value_cols,
+                context="cancer_reference_expression",
+            )
+    return df
+
+
 def pan_cancer_expression(
     genes=None,
     normalize=None,
     log_transform: bool = False,
     technical_rna_normalize: bool = False,
     remove_noncoding: bool = False,
-    renormalize_to_million: bool = True,
 ) -> pd.DataFrame:
     """Expression across 50 normal tissues (nTPM) and 33 TCGA cancer types.
 
@@ -426,18 +457,12 @@ def pan_cancer_expression(
     retained as ``*_TPM_clean`` / ``*_nTPM_clean``, and the analysis-facing
     ``*_TPM`` / ``*_nTPM`` aliases always point at the clean values.
     """
-    if not renormalize_to_million:
-        raise ValueError(
-            "trufflepig exposes normalized TPM-scale references only; "
-            "renormalize_to_million=False is no longer supported"
-        )
     cache_key, genes_tuple = _pan_cancer_cache_key(
         genes,
         normalize,
         log_transform,
         technical_rna_normalize,
         remove_noncoding,
-        True,
     )
     cached = _PAN_CANCER_CACHE.get(cache_key)
     if cached is not None:
@@ -445,9 +470,6 @@ def pan_cancer_expression(
 
     df = _load_pan_cancer_from_pirlygenes(
         genes_tuple=genes_tuple,
-        normalize=normalize,
-        log_transform=log_transform,
-        technical_rna_normalize=technical_rna_normalize,
         remove_noncoding=remove_noncoding,
     )
     df = _standardize_pan_cancer_columns(df)
@@ -458,10 +480,9 @@ def pan_cancer_expression(
             "pirlygenes pan_cancer_expression did not provide clean TPM columns; "
             "trufflepig requires *_TPM_clean/*_nTPM_clean for analysis"
         )
-    clean_cols = clean_companion_cols + _analysis_value_cols(df)
     assert_clean_tpm(
         df,
-        value_cols=clean_cols,
+        value_cols=clean_companion_cols,
         context="pan_cancer_expression",
     )
     _PAN_CANCER_CACHE[cache_key] = df

@@ -89,17 +89,11 @@ def subtype_signature_panels(
     # cohorts via log2 ratios. The trufflepig reference surface already
     # renormalizes subtype and pan-cancer cohorts to a common per-million
     # footing before this comparison.
-    sub_df = subtype_deconvolved_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    sub_df = subtype_deconvolved_expression(technical_rna_normalize=True)
     if sub_df is None or sub_df.empty:
         return {}
 
-    pan = pan_cancer_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    pan = pan_cancer_expression(technical_rna_normalize=True)
     pan = pan.drop_duplicates(subset="Symbol").set_index("Symbol")
     cohort_cols = [c for c in pan.columns if c.endswith("_TPM")]
     if not cohort_cols:

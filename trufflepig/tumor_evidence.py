@@ -1,13 +1,12 @@
 # Licensed under the Apache License, Version 2.0
 """Unified tumor-evidence scoring (#149 synthesis).
 
-Every tumor-evidence channel Step-0 computes — CTA re-expression,
-oncofetal reactivation, coordinated proliferation, Warburg /
-glycolysis, hypoxia, cancer-type-specific tumor-up hits, DDR
-activation — each produces a normalised 0..1 score. Scores are
-summed into a combined ``aggregate_score`` that the cancer-hint
-logic consumes as a single number instead of a chain of isolated
-threshold checks.
+Every tumor-evidence channel the tissue-composition screen computes — CTA
+re-expression, oncofetal reactivation, coordinated proliferation, Warburg /
+glycolysis, hypoxia, cancer-type-specific tumor-up hits, DDR activation —
+produces a normalised 0..1 score. Scores are summed into a combined
+``aggregate_score`` that the cancer-hint logic consumes as a single number
+instead of a chain of isolated threshold checks.
 
 The aggregate is deliberately additive (not thresholded-OR): a
 sample with five channels at 0.3 each (total 1.5) is as confident

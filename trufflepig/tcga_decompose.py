@@ -309,7 +309,7 @@ def known_cancer_candidate_row(df_gene_expr: pd.DataFrame, cancer_code: str) -> 
         "winning_subtype": lineage.get("winning_subtype"),
         "support_score": 1.0,
         "support_geomean": 1.0,
-        "support_norm": 1.0,
+        "support_fraction_of_top": 1.0,
         "purity_result": purity_result,
     }
 

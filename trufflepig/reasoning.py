@@ -12,14 +12,14 @@ Design intent:
   dependencies on upstream analysis dicts.
 - Rules are ordered as a list (data, not code) so ordering changes
   are configurational, not edits-to-decision-logic.
-- Steps accumulate: Step-1 analysis reads Step-0 signals + fresh
-  Step-1 fields; Step-2 reads Step-0 + Step-1 + Step-2.
+- Named analysis stages accumulate: later stages read the tissue-composition
+  screen, cancer-type candidates, purity estimates, and decomposition evidence.
 - Every step has the same ``cancer_hint / reasoning_trace`` contract
   so downstream code that only needs the hint doesn't care which
   step produced the call.
 
-For now this module implements the Step-0 rule set; Step-1 through
-Step-6 are planned follow-ups. The framework is ready to extend.
+For now this module implements the tissue-composition rule set. The
+framework is ready to extend to later named analysis stages.
 """
 
 from __future__ import annotations
@@ -49,11 +49,11 @@ _PROLIFERATION_OVERRIDES_NORMAL_LOG2 = 6.0
 
 @dataclass(frozen=True)
 class DerivedFlags:
-    """Precomputed boolean derivations used by Step-0 reasoning rules.
+    """Precomputed boolean derivations used by tissue-composition rules.
 
     Populated by :func:`compute_derived_flags` once from the
     :class:`TissueCompositionSignal` fields so rules don't re-derive
-    them. Typed, immutable, and part of the Step-0 contract (unlike
+    them. Typed, immutable, and part of the tissue-composition contract (unlike
     the earlier hack of attaching private attributes to the signal).
     """
 
@@ -70,7 +70,7 @@ class DerivedFlags:
     cta_soft: bool = False
     oncofetal_soft: bool = False
     type_specific_soft: bool = False
-    # Cached correlation margin (top HPA ρ − top TCGA ρ).
+    # Cached correlation margin (top HPA rho - top cancer-reference rho).
     correlation_margin: float = 0.0
 
     @property
@@ -126,7 +126,7 @@ def rule(name: str, *, structural: bool = False):
 
 
 def compute_derived_flags(signal) -> DerivedFlags:
-    """Pre-compute the Step-0 derived booleans from raw signal fields.
+    """Pre-compute tissue-composition derived booleans from raw signal fields.
 
     Single source of truth for the evidence-channel thresholds — rules
     read from the returned flags rather than re-deriving. Structural-
@@ -161,7 +161,7 @@ def compute_derived_flags(signal) -> DerivedFlags:
     )
 
 
-# ---- Step-0 rules ----
+# ---- Tissue-composition rules ----
 #
 # Each rule is a pure function of (signal, flags) → RuleOutcome | None.
 # The @rule decorator stamps a descriptive name + the structural flag
@@ -191,7 +191,7 @@ def tumor_marker_overrides_ambiguity(s, f) -> Optional[RuleOutcome]:
 @rule("lymphoid-tissue-tumor-indistinguishable", structural=True)
 def lymphoid_tissue_ambiguity(s, f) -> Optional[RuleOutcome]:
     """Normal lymphoid tissue and lymphoid malignancy are indistinguishable
-    by bulk-RNA correlation — the TCGA DLBC reference is itself >90%
+    by bulk-RNA correlation — the DLBC cancer reference is itself >90%
     lymphoid. Flag the ambiguity; downstream analysis proceeds under
     the tumor-sample prior."""
     if not f.lymphoid_ambiguity:
@@ -248,8 +248,8 @@ def near_exact_normal_reference_match(s, f) -> Optional[RuleOutcome]:
     This handles pure normal references and normal-like input samples. Some
     HPA tissues physiologically express genes that also appear in CTA,
     oncofetal, glycolysis, or tumor-up panels. When the sample is almost an
-    exact normal-tissue profile and that match beats every TCGA cohort by a
-    large margin, those expression channels should not turn the sample into a
+    exact normal-tissue profile and that match beats every cancer reference by
+    a large margin, those expression channels should not turn the sample into a
     confident cancer call. Lymphoid and mesenchymal structural-ambiguity rules
     run before this rule, so those tissues still surface as possibly tumor.
     """
@@ -352,14 +352,18 @@ def weak_healthy_lean(s, f) -> Optional[RuleOutcome]:
     return None
 
 
-@rule("tcga-dominant-correlation")
-def tcga_dominant_correlation(s, f) -> Optional[RuleOutcome]:
+@rule("cancer-reference-dominant-correlation")
+def cancer_reference_dominant_correlation(s, f) -> Optional[RuleOutcome]:
     """Default: neither strong proliferation nor healthy margin fires —
-    correlation favours the TCGA reference → tumor-consistent."""
+    correlation favours the cancer reference -> tumor-consistent."""
     return RuleOutcome(
         hint="tumor-consistent",
-        rule_name=tcga_dominant_correlation.rule_name,
+        rule_name=cancer_reference_dominant_correlation.rule_name,
     )
+
+
+# Back-compat alias for older tests/callers.
+tcga_dominant_correlation = cancer_reference_dominant_correlation
 
 
 # ---- Helpers ----
@@ -368,7 +372,7 @@ def tcga_dominant_correlation(s, f) -> Optional[RuleOutcome]:
 def _top_pair_rationale(s) -> str:
     h = s.top_normal_tissues[0][0] if s.top_normal_tissues else "-"
     t = s.top_tcga_cohorts[0][0] if s.top_tcga_cohorts else "-"
-    return f"top_HPA={h} vs top_TCGA={t}"
+    return f"top_HPA={h} vs top_cancer_reference={t}"
 
 
 def _tumor_marker_reasons(s, f: DerivedFlags) -> list[str]:
@@ -397,7 +401,7 @@ STEP0_RULES: list[Step0Rule] = [
     confident_healthy_tissue,
     healthy_with_soft_tumor_signal,
     weak_healthy_lean,
-    tcga_dominant_correlation,
+    cancer_reference_dominant_correlation,
 ]
 
 
@@ -408,7 +412,7 @@ def run_step0_rules(
 ) -> tuple[RuleOutcome, list[str]]:
     """Apply rules in order. Return (first-fire outcome, trace).
 
-    ``flags`` holds the pre-computed Step-0 derivations; when omitted
+    ``flags`` holds the pre-computed tissue-composition derivations; when omitted
     it is computed from ``signal``. ``rules`` defaults to
     :data:`STEP0_RULES` but can be overridden for unit tests that
     want to reorder or subset the rule list.
@@ -437,10 +441,9 @@ class AnalysisState:
     """Accumulating typed container for step outputs.
 
     Rules and downstream analyses read whichever step fields they
-    need. ``step0`` is the Step-0 tissue-composition signal;
-    ``step1``..``step6`` will be populated as the pipeline runs
-    (Step-1 cancer candidates, Step-2 purity, Step-3 decomposition,
-    etc.). A step that hasn't run yet is ``None`` — rules that
+    need. ``step0`` is the tissue-composition signal; later slots will be
+    populated by named stages such as cancer-type candidates, purity, and
+    decomposition. A stage that hasn't run yet is ``None`` — rules that
     depend on it must check before reading.
 
     For now only step0 is typed through; the other slots are kept

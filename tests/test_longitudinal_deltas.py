@@ -69,7 +69,7 @@ SUMMARY_B = """# Summary: sample_B
 - Different library prep.
 """
 
-EVIDENCE_A = """### Therapy-state context
+EVIDENCE_A = """### Pathway and Treatment-State Signals
 
 **MAPK EGFR signaling** — active. Active signaling: up-panel geomean 3.50x cohort
 
@@ -86,7 +86,7 @@ EVIDENCE_A = """### Therapy-state context
 ### Cancer-Testis Antigens (Vaccination Targets)
 """
 
-EVIDENCE_B = """### Therapy-state context
+EVIDENCE_B = """### Pathway and Treatment-State Signals
 
 **MAPK EGFR signaling** — suppressed. up-panel geomean 0.70x cohort
 
@@ -208,7 +208,7 @@ def test_compute_pairwise_deltas_emits_typed_observations(tmp_path):
 
 def test_compute_pairwise_deltas_clears_axis_when_dropped(tmp_path):
     dir_a = _write_sample(tmp_path / "a", "a", SUMMARY_A, EVIDENCE_A)
-    # B has no Therapy-state context section at all
+    # B has no Pathway and Treatment-State Signals section at all
     dir_b = _write_sample(
         tmp_path / "b", "b", SUMMARY_B,
         "## Some Other Section\n\nNo therapy-state context here.\n",
@@ -324,7 +324,7 @@ def test_cli_compare_emits_deltas_json(tmp_path):
 def test_parse_response_axes_handles_unicode_multiplication_sign():
     """Real evidence.md uses `×` (U+00D7); ASCII `x` is a test convenience."""
     evidence = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — active. up-panel geomean 3.50× cohort\n\n"
         "**IFN response** — active. up-panel geomean 2.00× cohort, "
         "down-panel 0.30×\n\n"
@@ -343,7 +343,7 @@ def test_parse_response_axes_terminates_on_h2_h1_or_hr():
     otherwise bleed lines into the previous axis's note.
     """
     evidence = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
         "## Top candidate therapies\n\n"
         "- **EVERYTHING** — should be after the section ended (TPM 100x)\n"
@@ -358,7 +358,7 @@ def test_parse_response_axes_terminates_on_h2_h1_or_hr():
 def test_parse_response_axes_normalizes_state_vocabulary():
     """Free-form state phrases collapse to a controlled set so equality holds."""
     evidence = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — Active signaling. up-panel geomean 3.5x cohort\n\n"
         "**IFN response** — mixed signal; partial agreement. up-panel geomean 1.5x cohort\n\n"
         "**ER signaling** — Suppressed: up-panel geomean 0.20x cohort\n\n"
@@ -374,7 +374,7 @@ def test_response_axis_same_state_same_fold_is_unchanged(tmp_path):
     """An axis with identical state + fold across samples is `unchanged`."""
     summary = SUMMARY_A.replace("sample_A", "sample_X")
     evidence = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
         "### End\n"
     )
@@ -398,12 +398,12 @@ def test_response_axis_state_change_suppresses_magnitude(tmp_path):
     """Active → suppressed leaves magnitude empty (up_fold semantics flip)."""
     summary = SUMMARY_A.replace("sample_A", "sample_X")
     evidence_a = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — active. up-panel geomean 3.50x cohort\n\n"
         "### End\n"
     )
     evidence_b = (
-        "### Therapy-state context\n\n"
+        "### Pathway and Treatment-State Signals\n\n"
         "**MAPK EGFR signaling** — suppressed. up-panel geomean 0.40x cohort\n\n"
         "### End\n"
     )

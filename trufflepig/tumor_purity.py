@@ -132,6 +132,15 @@ _HOST_SITE_BACKGROUND_TISSUES = {
 
 # Broad-family signature panels loaded from data/cancer-family-panels.csv.
 # The CSV is the source of truth; this dict is a view built once on import.
+#
+# Note: trufflepig/family_extensions.py defines extension panels for
+# cohorts the CSV does not yet cover (BRCA, BLCA, LUAD, OV, UCEC, etc.)
+# but those are NOT wired in here — wiring them flat into this dict
+# regresses family_specificity 17× across all rows (each new panel
+# competes in the (top - second) / top formula). The correct path is
+# a tiered scoring redesign (see docs/CANCER_CALL_DECISION_FLOW.md
+# Stages 2-4 + pirlygenes #266). Until then, the extension data
+# stays as design documentation, not active scoring input.
 _CANCER_FAMILY_PANELS = cancer_family_panels()
 
 _CANCER_FAMILY_BY_CODE = {
@@ -252,7 +261,7 @@ TUMOR_PURITY_PARAMETERS = {
         "within_family_gain": 0.65,
         "non_family_penalty": 0.85,
         "min_factor": 0.05,
-        "support_norm_floor": 0.05,
+        "support_fraction_of_top_floor": 0.05,
         "signature_stability_floor": 0.2,
         "family_display_fraction": 0.4,
         "candidate_panel_min_score": 0.05,
@@ -1327,6 +1336,9 @@ _BROAD_PURITY_REFERENCE_FALLBACKS = {
     # cohort; keep the direct Python API aligned with that behavior.
     "OS": "SARC",
 }
+_BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES = frozenset(
+    {"pan_cancer", "parent_pan_cancer"}
+)
 
 
 def _broad_purity_fallback_code(code):
@@ -1341,6 +1353,13 @@ def _has_direct_purity_markers(cancer_code):
     return bool(
         LINEAGE_GENES.get(cancer_code)
         or _select_tumor_specific_genes(cancer_code, n=1)
+    )
+
+
+def _use_estimate_component(reference_expression_source, stromal_genes) -> bool:
+    """Whether ESTIMATE is compatible with the active expression reference."""
+    return bool(stromal_genes) and (
+        reference_expression_source in _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES
     )
 
 
@@ -1588,7 +1607,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
         sig_lower=sig_lower,
         sig_upper=sig_upper,
         estimate_purity=estimate_purity
-        if stromal_genes and reference_expression_source == "pan_cancer"
+        if _use_estimate_component(reference_expression_source, stromal_genes)
         else None,
         lineage_purity=lineage_purity,
         lineage_lower=lineage_lower,
@@ -3004,7 +3023,7 @@ def _candidate_raw_support(row, family_params):
         float(row.get("signature_score") or 0.0)
         * max(
             float(row.get("purity_estimate") or 0.0),
-            family_params["support_norm_floor"],
+            family_params["support_fraction_of_top_floor"],
         )
         * float(row.get("lineage_support_factor") or 1.0)
     )
@@ -3016,7 +3035,7 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
         float(row.get("signature_score") or 0.0),
         max(
             float(row.get("purity_estimate") or 0.0),
-            family_params["support_norm_floor"],
+            family_params["support_fraction_of_top_floor"],
         ),
         float(row.get("lineage_support_factor") or 1.0),
         max(
@@ -3035,13 +3054,13 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
 
 
 def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
-    """Let strong Step-0 context suspend an orphan cancer-type penalty.
+    """Let strong tissue-composition context suspend an orphan cancer-type penalty.
 
     BLCA, CHOL, LIHC, PAAD, etc. do not belong to the broad family panels.
     They can therefore be penalized below a family-coded competitor even when
-    the direct cancer evidence and the coarse TCGA/normal-tissue read agree.
+    the direct cancer evidence and the coarse cancer-reference/normal-tissue read agree.
     This rescue is intentionally restricted to unconstrained auto-detection:
-    it only considers the Step-0 top TCGA cohort, requires that cohort to be
+    it only considers the top cancer-reference cohort, requires that cohort to be
     an orphan candidate, and requires either matching normal-tissue context or
     clear raw-signal dominance.
     """
@@ -3114,12 +3133,12 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     context_basis = "normal_tissue_match" if tissue_matches else "raw_signal_dominance"
     if tissue_matches:
         rescue_message = (
-            f"Step-0 TCGA correlation and expected normal-tissue context support {coarse_code}; "
+            f"Tissue composition screen and expected normal-tissue context support {coarse_code}; "
             "suspending the orphan family penalty for the auto-detected call."
         )
     else:
         rescue_message = (
-            f"Step-0 TCGA correlation and direct cancer evidence support {coarse_code}; "
+            f"Tissue composition screen and direct cancer evidence support {coarse_code}; "
             "suspending the orphan family penalty for the auto-detected call."
         )
 
@@ -3361,7 +3380,7 @@ def rank_cancer_type_candidates(
             family_factor = 1.0
         support_factors = (
             signature_score,
-            max(purity_estimate, family_params["support_norm_floor"]),
+            max(purity_estimate, family_params["support_fraction_of_top_floor"]),
             lineage_support_factor,
             max(signature_stability, family_params["signature_stability_floor"]),
             max(family_factor, family_params["min_factor"]),
@@ -3492,9 +3511,15 @@ def rank_cancer_type_candidates(
         rows = _apply_normal_tissue_tiebreaker(rows, sample_tpm)
     rows = _promote_same_family_alternatives(rows)
 
+    # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
+    # all candidates). The top candidate always has 1.0; the runner-up's
+    # value reads as "fraction of the leader's RNA support". Not a
+    # probability, not a sum-to-one share — purely relative-to-top scaling
+    # so downstream consumers can compare candidates without re-fetching
+    # the absolute geomean scale.
     max_support = max((row["support_score"] for row in rows), default=0.0)
     for row in rows:
-        row["support_norm"] = (
+        row["support_fraction_of_top"] = (
             float(row["support_score"] / max_support) if max_support > 0 else 0.0
         )
 
@@ -3671,7 +3696,7 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     # normalized to the best candidate so the bar plots read as relative
     # support rather than tiny raw support products.
     top_cancers = [
-        (row["code"], row.get("support_norm", 0.0)) for row in candidate_trace[:5]
+        (row["code"], row.get("support_fraction_of_top", 0.0)) for row in candidate_trace[:5]
     ]
     top_cancers_raw_support = [
         (row["code"], row["support_score"]) for row in candidate_trace[:5]
@@ -4148,7 +4173,7 @@ def plot_cancer_type_hypotheses(analysis, save_to_filename=None, save_dpi=300):
         ("Purity", "purity_estimate"),
         ("Lineage", "lineage_detection_fraction"),
         ("Family", "family_factor"),
-        ("Overall", "support_norm"),
+        ("Overall", "support_fraction_of_top"),
     ]
     factor_values = []
     for code in codes:
@@ -4156,7 +4181,7 @@ def plot_cancer_type_hypotheses(analysis, save_to_filename=None, save_dpi=300):
         values = []
         for _label, key in factor_specs:
             value = row.get(key)
-            if value is None and key == "support_norm":
+            if value is None and key == "support_fraction_of_top":
                 value = dict(top_cancers).get(code, 0.0)
             try:
                 value = float(value)

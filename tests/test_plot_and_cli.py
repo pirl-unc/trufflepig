@@ -983,7 +983,7 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
 
     text = (tmp_path / "coad-targets.md").read_text()
     assert "## Tumor context for interpretation" in text
-    assert "## Therapy landscape at a glance" in text
+    assert "## Therapy Prioritization at a Glance" in text
     assert (
         "provisional between **COAD (Colon Adenocarcinoma)** and **READ (Rectum Adenocarcinoma)**"
         in text
@@ -1146,14 +1146,14 @@ def test_generate_target_report_filters_unreliable_rows_from_headlines(tmp_path)
         "candidate_trace": [
             {
                 "code": "COAD",
-                "support_norm": 1.0,
+                "support_fraction_of_top": 1.0,
                 "support_score": 0.4,
                 "signature_score": 0.82,
                 "lineage_concordance": 0.76,
             },
             {
                 "code": "READ",
-                "support_norm": 0.7,
+                "support_fraction_of_top": 0.7,
                 "support_score": 0.28,
                 "signature_score": 0.79,
                 "lineage_concordance": 0.74,
@@ -1190,7 +1190,7 @@ def test_generate_target_report_filters_unreliable_rows_from_headlines(tmp_path)
     )
 
     text = (tmp_path / "filtered-targets.md").read_text()
-    context_section = text.split("## Therapy landscape at a glance", 1)[1].split(
+    context_section = text.split("## Therapy Prioritization at a Glance", 1)[1].split(
         "##", 1
     )[0]
     assert "GOOD1" in context_section

@@ -22,6 +22,7 @@ from pirlygenes.gene_sets_cancer import (
     housekeeping_gene_ids, is_extended_housekeeping_symbol, CTA_gene_id_to_name, therapy_target_gene_id_to_name, cancer_surfaceome_gene_id_to_name,
 )
 from trufflepig.reference import (
+    cancer_reference_expression,
     pan_cancer_expression,
     subtype_deconvolved_expression,
     tcga_deconvolved_expression,
@@ -91,11 +92,46 @@ def _deconvolved_tumor_tpm_reference(code: str) -> tuple[dict[str, float], str]:
     if not code_text:
         return {}, ""
 
+    def lookup_codes() -> tuple[str, ...]:
+        codes = [code_text]
+        try:
+            from trufflepig.analyze import expression_reference_options
+
+            for record in expression_reference_options(
+                code_text,
+                include_fallback=False,
+            ):
+                if record.source_kind != "deconvolved_tumor_reference":
+                    continue
+                for value in (record.source_code, record.reference_code):
+                    candidate = str(value or "").strip().upper()
+                    if candidate:
+                        codes.append(candidate)
+        except Exception:
+            pass
+        return tuple(dict.fromkeys(codes))
+
+    candidate_codes = set(lookup_codes())
+
+    def source_label(frame, default: str) -> str:
+        if "source_cohort" not in frame.columns:
+            return default
+        cohorts = sorted(
+            {
+                str(value).strip()
+                for value in frame["source_cohort"].dropna().unique()
+                if str(value).strip()
+            }
+        )
+        if not cohorts:
+            return default
+        return default + ":" + ",".join(cohorts[:3])
+
     try:
         tcga = tcga_deconvolved_expression()
         if "cancer_code" in tcga.columns:
             sub = tcga[
-                tcga["cancer_code"].astype(str).str.upper().eq(code_text)
+                tcga["cancer_code"].astype(str).str.upper().isin(candidate_codes)
             ].copy()
             if not sub.empty:
                 values = (
@@ -104,7 +140,10 @@ def _deconvolved_tumor_tpm_reference(code: str) -> tuple[dict[str, float], str]:
                     .astype(float)
                     .to_dict()
                 )
-                return {str(k): float(v) for k, v in values.items()}, "tcga_deconvolved"
+                return (
+                    {str(k): float(v) for k, v in values.items()},
+                    source_label(sub, "tcga_deconvolved"),
+                )
     except Exception:
         pass
 
@@ -112,26 +151,90 @@ def _deconvolved_tumor_tpm_reference(code: str) -> tuple[dict[str, float], str]:
         subtype = subtype_deconvolved_expression()
         if "cancer_code" in subtype.columns:
             sub = subtype[
-                subtype["cancer_code"].astype(str).str.upper().eq(code_text)
+                subtype["cancer_code"].astype(str).str.upper().isin(candidate_codes)
             ].copy()
         else:
             sub = subtype.iloc[0:0].copy()
         if sub.empty and "subtype" in subtype.columns:
             sub = subtype[
-                subtype["subtype"].fillna("").astype(str).str.upper().eq(code_text)
+                subtype["subtype"]
+                .fillna("")
+                .astype(str)
+                .str.upper()
+                .isin(candidate_codes)
             ].copy()
         if not sub.empty:
             values = (
                 sub.groupby("symbol", dropna=False)["tumor_tpm_median"]
                 .median()
-                .astype(float)
-                .to_dict()
+                    .astype(float)
+                    .to_dict()
             )
-            return {str(k): float(v) for k, v in values.items()}, "subtype_deconvolved"
+            return (
+                {str(k): float(v) for k, v in values.items()},
+                source_label(sub, "subtype_deconvolved"),
+            )
     except Exception:
         pass
 
     return {}, ""
+
+
+@lru_cache(maxsize=128)
+def _observed_bulk_tpm_reference(code: str) -> tuple[dict[str, float], str]:
+    """Return observed clean-TPM cohort medians for an exact cancer code."""
+    code_text = str(code or "").strip().upper()
+    if not code_text:
+        return {}, ""
+    try:
+        df = cancer_reference_expression(
+            cancer_types=code_text,
+            normalize="tpm_clean",
+            format="long",
+            include_provenance=True,
+        )
+    except Exception:
+        return {}, ""
+    if df is None or df.empty:
+        return {}, ""
+    if "normalization" in df.columns:
+        df = df[df["normalization"].astype(str).str.lower().eq("tpm_clean")].copy()
+    if df.empty or "Symbol" not in df.columns or "expression" not in df.columns:
+        return {}, ""
+    values = (
+        df.groupby("Symbol", dropna=False)["expression"]
+        .median()
+        .astype(float)
+        .to_dict()
+    )
+    source = "observed_bulk_reference"
+    if "source_cohort" in df.columns:
+        cohorts = sorted(
+            {
+                str(value).strip()
+                for value in df["source_cohort"].dropna().unique()
+                if str(value).strip()
+            }
+        )
+        if cohorts:
+            source = "observed_bulk_reference:" + ",".join(cohorts[:3])
+    return {str(k): float(v) for k, v in values.items()}, source
+
+
+@lru_cache(maxsize=128)
+def _exact_expression_tpm_reference(code: str) -> tuple[dict[str, float], str, str]:
+    """Return the best exact expression reference for a report code.
+
+    Deconvolved tumor-cell references are preferred. Observed clean-TPM
+    pirlygenes references are used when no deconvolved artifact exists.
+    """
+    values, source = _deconvolved_tumor_tpm_reference(code)
+    if values:
+        return values, source, "deconvolved_tumor_reference"
+    values, source = _observed_bulk_tpm_reference(code)
+    if values:
+        return values, source, "observed_bulk_reference"
+    return {}, "", ""
 
 # #128: tissue-breadth thresholds for the "broadly-expressed" flag and
 # the breadth-floor baseline used by the robust attribution algorithm.
@@ -548,7 +651,7 @@ def estimate_tumor_expression_ranges(
     expression_reference_code = resolve_cancer_type(
         expression_reference_type or cancer_type
     )
-    exact_ref_tpm, exact_ref_source = _deconvolved_tumor_tpm_reference(
+    exact_ref_tpm, exact_ref_source, exact_ref_kind = _exact_expression_tpm_reference(
         expression_reference_code
     )
     epithelial_context = cancer_code in EPITHELIAL_MATCHED_NORMAL_TISSUE
@@ -966,6 +1069,7 @@ def estimate_tumor_expression_ranges(
         cohort_prior_tpm = 0.0
         tcga_tumor_fold = 0.0
         expression_reference_source = "pan_cancer_deconvolved"
+        expression_reference_kind = "deconvolved_tumor_reference"
         expression_reference_used = cancer_code
         # Raw cohort median TPM in HK-normalized space (before TME
         # deconvolution). Kept separate so a downstream renderer can
@@ -977,6 +1081,7 @@ def estimate_tumor_expression_ranges(
         tcga_cohort_tpm_raw = None  # None = gene not in ref (not_measurable)
         if symbol in exact_ref_tpm:
             expression_reference_source = exact_ref_source
+            expression_reference_kind = exact_ref_kind
             expression_reference_used = expression_reference_code
             cohort_prior_tpm = max(0.0, float(exact_ref_tpm.get(symbol, 0.0)))
             tcga_tumor_fold = cohort_prior_tpm / sample_hk_median
@@ -1535,6 +1640,10 @@ def estimate_tumor_expression_ranges(
                 "cohort_prior_tpm": round(cohort_prior_tpm, 2),
                 "expression_reference_code": expression_reference_used,
                 "expression_reference_source": expression_reference_source,
+                "expression_reference_kind": expression_reference_kind,
+                "expression_reference_is_tumor_cell_estimate": (
+                    expression_reference_kind == "deconvolved_tumor_reference"
+                ),
                 "tme_only_tpm": round(tme_only_tpm, 2),
                 "matched_normal_tpm": round(mn_tpm, 2),
                 "matched_normal_tissue": matched_normal_tissue or "",
@@ -1657,7 +1766,13 @@ def estimate_tumor_expression_ranges(
                 if vs_tcga is not None and not math.isinf(vs_tcga)
                 else vs_tcga,
                 "tcga_ref_state": tcga_ref_state,
+                "reference_ref_state": tcga_ref_state,
                 "tcga_cohort_median_tpm": (
+                    round(tcga_cohort_tpm_raw, 3)
+                    if tcga_cohort_tpm_raw is not None
+                    else None
+                ),
+                "reference_cohort_median_tpm": (
                     round(tcga_cohort_tpm_raw, 3)
                     if tcga_cohort_tpm_raw is not None
                     else None
@@ -1684,6 +1799,12 @@ def estimate_tumor_expression_ranges(
         result = result.sort_values("median_est", ascending=False).reset_index(
             drop=True
         )
+    # Stash the set of symbols actually present in the input file (regardless
+    # of expression level) so downstream renderers can distinguish
+    # "below detection (measured as ~0)" from "not in input file" — the two
+    # have very different clinical meaning (the former is a real negative for
+    # the target; the latter is a coverage gap that needs investigation).
+    result.attrs["sample_input_symbols"] = set(sample_raw)
     return result
 
 
@@ -2329,7 +2450,7 @@ def plot_tumor_expression_ranges(
                 ax_pct.text(
                     0.5,
                     i,
-                    "0 in TCGA",
+                    "0 in reference",
                     fontsize=base_font - 2,
                     color="gray",
                     ha="center",
@@ -2355,7 +2476,7 @@ def plot_tumor_expression_ranges(
                 ax_pct.text(
                     0.5,
                     i,
-                    f"absent in TCGA {cancer_code}",
+                    f"absent in {cancer_code} reference",
                     fontsize=base_font - 2,
                     color="white",
                     fontweight="bold",
@@ -2380,8 +2501,8 @@ def plot_tumor_expression_ranges(
         ax_pct.set_xscale("log")
         ax_pct.axvline(1.0, color="black", linestyle="--", alpha=0.4, linewidth=1)
         ax_pct.set_yticks([])
-        ax_pct.set_xlabel(f"vs {cancer_code} median", fontsize=base_font)
-        ax_pct.set_title(f"vs {cancer_code}", fontsize=base_font, color="gray")
+        ax_pct.set_xlabel(f"vs {cancer_code} reference median", fontsize=base_font)
+        ax_pct.set_title(f"vs {cancer_code} reference", fontsize=base_font, color="gray")
         ax_pct.set_ylim(-0.5, len(sub) - 0.5)
         ax_pct.grid(axis="x", alpha=0.15)
 

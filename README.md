@@ -51,6 +51,43 @@ PDF) lives under `analyze/`. The empty sibling directories are the
 seam for per-stage extraction (trufflepig#2–#14); once stages start
 writing their own records, `analyze/` shrinks.
 
+### Analysis stages
+
+The reports follow these named stages:
+
+1. **Expression QC** loads the input expression file, maps gene identifiers,
+   checks TPM scale, and removes technical RNA from clean TPM used downstream.
+   Outputs: clean expression table and QC warnings.
+2. **RNA Prep and Preservation** infers library prep, preservation,
+   degradation, and assay caveats that affect confidence and expression
+   interpretation. Outputs: prep/preservation calls, degradation flags, and
+   widened uncertainty when needed.
+3. **Tissue Composition Screen** compares the sample with normal tissues and
+   cancer-expression references before the cancer-type call; it also adds
+   tumor-evidence signals such as proliferation, CTA/oncofetal markers, and
+   tumor-up markers. Outputs: healthy/tumor hint, top normal matches, and top
+   cancer-reference matches.
+4. **Cancer-Type Evidence** combines expression-reference matching,
+   rare-marker/fusion evidence, exact local references, and registry
+   relationships into one cancer-type call. Outputs: inferred cancer type,
+   expression reference used for cohort math, and alternate hypotheses.
+5. **Tumor Purity and Coarse Composition** estimates tumor fraction and broad
+   non-tumor compartments such as immune, stromal, epithelial matched normal,
+   and other background components. Outputs: purity interval and fitted
+   compartment fractions.
+6. **Subtype and Background Refinements** refines the coarse composition with
+   activated background states such as CAF/TAM/Treg/MDSC and matched-normal
+   compartments. Outputs: immune/stromal infiltration, subtype/background
+   adjustments, and matched-normal splits used before target ranking.
+7. **Tumor-Attributed Expression** subtracts fitted non-tumor signal and
+   estimates how much observed expression is likely tumor-cell derived.
+   Outputs: tumor-source TPM ranges, attribution flags, and confidence tiers.
+8. **Therapy Prioritization** ranks actionable targets and pathway states
+   using tumor-attributed expression, indication curation, antigen-presentation
+   status, immune/background attribution, and pathway/treatment-state signals.
+   Outputs: therapy shortlist, target tables, pathway/treatment-state evidence,
+   and caveats.
+
 Common pass-through flags: `--hla-types`, `--fusions`, `--alterations`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,
 `--met-site`, `--decomposition-templates`, `--output-image-prefix`,
@@ -80,6 +117,32 @@ trufflepig cancers         # browse the cancer-type registry
 trufflepig cancers --family sarcoma --details
 trufflepig plot-cancer-cohorts --output-prefix /tmp/cohort
 ```
+
+Expression references use one contract internally:
+
+1. All analysis references are clean TPM. Raw TPM is only used in the
+   early expression-QC stage.
+2. Direct references keep their gene key explicit: pirlygenes observed
+   cohorts and pan-cancer references are keyed by Ensembl ID + symbol;
+   trufflepig subtype-deconvolved references are symbol-only because the
+   source deconvolution artifacts are symbol-level.
+3. Cancer-type context distinguishes the cancer label from the expression
+   reference. If a registry code has no exact expression cohort,
+   trufflepig records the compatible parent, curated, or family fallback
+   used for cohort math.
+4. The registry-completeness tests require every cancer type to have an
+   effective expression reference and verify the normalization/gene-key
+   contract for those references.
+5. Cancer types without a direct expression cohort also have a compact
+   literature-backed RNA signature tied to that related reference context.
+   These signatures can add marker evidence, but they are not treated as
+   replacement expression cohorts.
+6. Every registry tumor type is placed in a small ontology record with
+   its parent/family, effective expression reference, expected high RNA
+   markers, and expected low contrast markers. Reports use those markers
+   as a sanity check on the inferred cancer type; expected-low genes are
+   review prompts, not standalone exclusions, because high values can
+   come from immune, stromal, or mixed-lineage background.
 
 ### Web UI
 

@@ -30,12 +30,10 @@ scoring module surfaces that chain explicitly, so readers see
 
 rather than having to reconstruct it from per-gene TPM tables.
 
-Five-step attribution flow placement: this is a **step 3/4** layer.
-Step 1 (SampleContext) covers library prep / preservation; step 2
-handles coarse TME decomposition; step 3 refines TME subtype / state;
-step 4 adjusts tumor values before claiming. Therapy-response adds
-to step 4 by explaining *why* a tumor gene is high or low independent
-of TME mis-attribution.
+Attribution flow placement: this sits after RNA prep and preservation, tumor
+purity / coarse composition, and subtype/background refinement. Therapy-response
+explains *why* a tumor gene is high or low independent of TME
+mis-attribution.
 """
 
 from __future__ import annotations

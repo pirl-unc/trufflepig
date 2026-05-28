@@ -1,4 +1,4 @@
-"""Tests for the Step-0 reasoning rules as standalone pure functions.
+"""Tests for the tissue-composition reasoning rules as standalone pure functions.
 
 Each rule in :mod:`pirlygenes.reasoning` takes a
 ``TissueCompositionSignal`` and a pre-computed :class:`DerivedFlags`,
@@ -20,7 +20,7 @@ from trufflepig.reasoning import (
     mesenchymal_tissue_ambiguity,
     near_exact_normal_reference_match,
     run_step0_rules,
-    tcga_dominant_correlation,
+    cancer_reference_dominant_correlation,
     tumor_marker_overrides_ambiguity,
     weak_healthy_lean,
 )
@@ -236,7 +236,7 @@ def test_healthy_with_soft_tumor_signal_demotes_on_soft_cta():
     assert "CTA_soft" in out.rationale
 
 
-# ---------- weak_healthy_lean / tcga_dominant_correlation ----------
+# ---------- weak_healthy_lean / cancer_reference_dominant_correlation ----------
 
 
 def test_weak_healthy_lean_fires_on_weak_margin():
@@ -250,10 +250,10 @@ def test_weak_healthy_lean_fires_on_weak_margin():
     assert out.hint == "possibly-tumor"
 
 
-def test_tcga_dominant_correlation_is_unconditional_default():
+def test_cancer_reference_dominant_correlation_is_unconditional_default():
     s = _make_signal()
     f = _flags(s)
-    out = tcga_dominant_correlation(s, f)
+    out = cancer_reference_dominant_correlation(s, f)
     assert out is not None
     assert out.hint == "tumor-consistent"
 
@@ -272,12 +272,12 @@ def test_run_step0_rules_picks_first_match():
 
 
 def test_run_step0_rules_falls_to_default_when_nothing_else_matches():
-    """Rule runner reaches the TCGA-dominant default when no earlier
+    """Rule runner reaches the cancer-reference-dominant default when no earlier
     rule fires."""
     s = _make_signal()  # no tumor evidence, no ambiguity, no healthy margin
     f = _flags(s)
     outcome, trace = run_step0_rules(s, f)
-    assert outcome.rule_name == "tcga-dominant-correlation"
+    assert outcome.rule_name == "cancer-reference-dominant-correlation"
     assert outcome.hint == "tumor-consistent"
 
 
@@ -290,7 +290,7 @@ def test_run_step0_rules_accepts_custom_rule_order():
     custom_order = [
         lymphoid_tissue_ambiguity,
         tumor_marker_overrides_ambiguity,
-        tcga_dominant_correlation,
+        cancer_reference_dominant_correlation,
     ]
     outcome, trace = run_step0_rules(s, f, rules=custom_order)
     assert outcome.rule_name == "lymphoid-tissue-tumor-indistinguishable"

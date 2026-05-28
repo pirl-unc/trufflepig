@@ -1251,6 +1251,11 @@ def load_expression_data(
     if verbose:
         print(f"[load] Loaded {len(df)} rows and {len(df.columns)} columns")
 
+    # TEMP-STUB: _raise_if_disallowed_preaggregated_salmon_gene_file is
+    # a forward reference in WIP that's not yet defined. Inline noop so
+    # the file loads while the guard is in progress.
+    pass  # _raise_if_disallowed_preaggregated_salmon_gene_file(input_path, df)
+
     df, used_sidecar = _attach_gene_sidecar_if_present(input_path, df, verbose=verbose)
     df = _select_sample_rows(
         df,

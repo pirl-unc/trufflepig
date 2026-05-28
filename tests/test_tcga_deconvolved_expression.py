@@ -77,7 +77,6 @@ def test_pan_cancer_wrapper_overrides_pirlygenes_default_to_tpm(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(gsc, "_PIRLYGENES_PAN_HAS_NORMALIZE_PRESETS", True)
     monkeypatch.setattr(
         gsc._pirlygenes,
         "pan_cancer_expression",
@@ -111,7 +110,10 @@ def test_pan_cancer_expression_rejects_legacy_unit_prefix_columns():
 
 
 def test_pan_cancer_expression_rejects_native_scale_opt_out():
-    with pytest.raises(ValueError, match="normalized TPM-scale"):
+    # The native-scale opt-out (``renormalize_to_million=False``) was removed
+    # in the cancer-type-evidence consolidation pass — callers can no longer
+    # request native-scale data from any trufflepig reference accessor.
+    with pytest.raises(TypeError):
         gsc.pan_cancer_expression(renormalize_to_million=False)
 
 
@@ -137,7 +139,6 @@ def test_pan_cancer_expression_gene_filter_preserves_reference_scale(monkeypatch
             }
         )
 
-    monkeypatch.setattr(gsc, "_PIRLYGENES_PAN_HAS_NORMALIZE_PRESETS", True)
     monkeypatch.setattr(
         gsc._pirlygenes,
         "pan_cancer_expression",
@@ -148,6 +149,45 @@ def test_pan_cancer_expression_gene_filter_preserves_reference_scale(monkeypatch
         assert df.loc[0, "PRAD_TPM_raw"] == pytest.approx(12_345.0)
         assert df.loc[0, "PRAD_TPM_clean"] == pytest.approx(23_456.0)
         assert df.loc[0, "PRAD_TPM"] == pytest.approx(23_456.0)
+    finally:
+        gsc._PAN_CANCER_CACHE.clear()
+
+
+def test_pan_cancer_expression_percentile_validates_clean_tpm_only(monkeypatch):
+    import pandas as pd
+
+    gsc._PAN_CANCER_CACHE.clear()
+
+    def fake_pan_cancer_expression(**kwargs):
+        return pd.DataFrame(
+            {
+                "Ensembl_Gene_ID": ["ENSG00000142515", "ENSG00000211459"],
+                "Symbol": ["KLK3", "MT-RNR1"],
+                "PRAD_TPM": [100.0, 0.0],
+                "PRAD_TPM_clean": [100.0, 0.0],
+            }
+        )
+
+    def fake_percentile_rank_expression(df, *, value_cols):
+        out = df.copy()
+        for col in value_cols:
+            out[col] = [1.0, 0.5]
+        return out, {"method": "fake"}
+
+    monkeypatch.setattr(
+        gsc._pirlygenes,
+        "pan_cancer_expression",
+        fake_pan_cancer_expression,
+    )
+    monkeypatch.setattr(
+        gsc._pirlygenes,
+        "percentile_rank_expression",
+        fake_percentile_rank_expression,
+    )
+    try:
+        df = gsc.pan_cancer_expression(normalize="percentile")
+        assert df.loc[df["Symbol"].eq("MT-RNR1"), "PRAD_TPM"].iloc[0] == 0.5
+        assert df.loc[df["Symbol"].eq("MT-RNR1"), "PRAD_TPM_clean"].iloc[0] == 0.0
     finally:
         gsc._PAN_CANCER_CACHE.clear()
 
@@ -200,7 +240,7 @@ def test_deconvolved_renormalization_preserves_quantile_order(monkeypatch):
 
 
 def test_tcga_deconvolved_expression_rejects_native_scale_opt_out():
-    with pytest.raises(ValueError, match="normalized TPM-scale"):
+    with pytest.raises(TypeError):
         gsc.tcga_deconvolved_expression(renormalize_to_million=False)
 
 
@@ -263,7 +303,7 @@ def test_subtype_deconvolved_expression_renormalizes_per_group_by_default():
 
 
 def test_subtype_deconvolved_expression_rejects_native_scale_opt_out():
-    with pytest.raises(ValueError, match="normalized TPM-scale"):
+    with pytest.raises(TypeError):
         gsc.subtype_deconvolved_expression(renormalize_to_million=False)
 
 

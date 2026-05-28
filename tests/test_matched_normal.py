@@ -280,7 +280,7 @@ def test_lineage_override_rejects_large_upward_jump(monkeypatch):
                 "code": "PRAD",
                 "signature_score": 0.7,
                 "purity_estimate": 0.2,
-                "support_norm": 1.0,
+                "support_fraction_of_top": 1.0,
                 "purity_result": {
                     "overall_estimate": 0.2,
                     "overall_lower": 0.1,

@@ -94,6 +94,9 @@ def _evaluate_rna_rule(rule, sample_tpm: dict[str, float], top_codes: list[str])
         "support_genes": support_genes,
         "missing_support_genes": missing_support,
         "support_pass": support_pass,
+        "support_gene_count": len(support_genes),
+        "required_support_gene_count": len(required_support),
+        "min_support_genes": min_support,
         "absent_genes_confirmed": absent_confirmed,
         "absent_genes_unconfirmed": absent_unconfirmed,
         "exclusion_genes_observed": exclusion_observed,
@@ -121,6 +124,9 @@ class RareCancerRnaInference:
     missing_support_genes: tuple[str, ...] = ()
     exclusion_genes_observed: tuple[str, ...] = ()
     absent_genes_confirmed: tuple[str, ...] = ()
+    support_pass: bool = True
+    min_support_genes: int = 0
+    required_support_gene_count: int = 0
     promote_report_scope: bool = True
 
     def public_dict(self) -> dict[str, Any]:
@@ -134,6 +140,10 @@ class RareCancerRnaInference:
             "confidence": self.confidence,
             "support_genes": list(self.support_genes),
             "missing_support_genes": list(self.missing_support_genes),
+            "support_pass": bool(self.support_pass),
+            "support_gene_count": len(self.support_genes),
+            "min_support_genes": int(self.min_support_genes),
+            "required_support_gene_count": int(self.required_support_gene_count),
             "exclusion_genes_observed": list(self.exclusion_genes_observed),
             "absent_genes_confirmed": list(self.absent_genes_confirmed),
             "basis": self.basis,
@@ -148,7 +158,19 @@ def rare_cancer_rna_surrogate_rules_df():
     """Return the curated rare-cancer RNA-surrogate rule table."""
     from pirlygenes.load_dataset import get_data
 
-    return get_data("rare-cancer-rna-surrogates")
+    base = get_data("rare-cancer-rna-surrogates")
+    from .literature_signatures import literature_signature_rules_df
+
+    overlay = literature_signature_rules_df()
+    if overlay.empty:
+        return base
+    import pandas as pd
+
+    return (
+        pd.concat([base, overlay], ignore_index=True, sort=False)
+        .drop_duplicates(subset=["rule_id"], keep="first")
+        .reset_index(drop=True)
+    )
 
 
 def rare_cancer_fusion_rules_df():
@@ -368,7 +390,7 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
         from .common import build_sample_tpm_by_symbol
 
         sample_tpm = build_sample_tpm_by_symbol(df_expr)
-    except Exception:
+    except (ImportError, KeyError, ValueError, TypeError):
         return []
 
     candidate_trace = analysis.get("candidate_trace") or []
@@ -404,6 +426,9 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
                 missing_support_genes=tuple(evidence["missing_support_genes"]),
                 exclusion_genes_observed=tuple(evidence["exclusion_genes_observed"]),
                 absent_genes_confirmed=tuple(evidence["absent_genes_confirmed"]),
+                support_pass=bool(evidence["support_pass"]),
+                min_support_genes=int(evidence["min_support_genes"]),
+                required_support_gene_count=int(evidence["required_support_gene_count"]),
                 promote_report_scope=False,
             ).public_dict()
         )

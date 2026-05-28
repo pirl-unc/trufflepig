@@ -484,6 +484,52 @@ def _select_pan_reference_genes(n_genes_per_type=6, n_genes_per_normal=None):
     if cache_key in _pan_reference_gene_cache:
         return _pan_reference_gene_cache[cache_key]
 
+    # Disk cache: the entire computation depends only on the pirlygenes
+    # cohort matrix (fixed per package version), so the per-subprocess
+    # ~10–20 min cost — iterating 70 cohort cols + 50 normal-tissue cols
+    # and computing median/quantile/MAD over a 20k-gene × 119-column
+    # DataFrame for each — can be amortized across runs by pickling.
+    # First subprocess pays the cost, every subsequent subprocess loads
+    # from disk in <1s. Cache key includes the pirlygenes version so
+    # an upgrade invalidates correctly.
+    import os as _os
+    import pickle as _pickle
+    from pathlib import Path as _Path
+    try:
+        import pirlygenes as _pirlygenes
+        _pirlygenes_version = str(_pirlygenes.__version__)
+    except Exception:  # noqa: BLE001
+        _pirlygenes_version = "unknown"
+    try:
+        from .version import __version__ as _trufflepig_version
+    except Exception:  # noqa: BLE001
+        _trufflepig_version = "unknown"
+    # Cache key includes BOTH versions so any change in either side's
+    # logic invalidates correctly. Without trufflepig's version, a
+    # change to ``_select_pan_reference_genes`` (e.g. modified scoring
+    # weights) without a pirlygenes bump would silently serve stale
+    # data from the cache.
+    _cache_root = _Path(
+        _os.environ.get("XDG_CACHE_HOME") or str(_Path.home() / ".cache")
+    ) / "trufflepig"
+    _disk_cache_path = (
+        _cache_root
+        / (
+            f"pan_reference_genes-"
+            f"pirlygenes-{_pirlygenes_version}-"
+            f"trufflepig-{_trufflepig_version}-"
+            f"{n_genes_per_type}-{n_genes_per_normal}.pkl"
+        )
+    )
+    if _disk_cache_path.exists():
+        try:
+            with _disk_cache_path.open("rb") as _f:
+                result = _pickle.load(_f)
+            _pan_reference_gene_cache[cache_key] = result
+            return result
+        except Exception:  # noqa: BLE001 — fall through to recompute on any cache error
+            pass
+
     ref = pan_cancer_expression(technical_rna_normalize=True)
     cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
     ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
@@ -567,6 +613,18 @@ def _select_pan_reference_genes(n_genes_per_type=6, n_genes_per_normal=None):
 
     result = (ref_filtered, metadata)
     _pan_reference_gene_cache[cache_key] = result
+    # Persist to disk for subsequent subprocesses. Best-effort: write to a
+    # temp file and rename atomically so a crash mid-write doesn't leave a
+    # corrupt cache. Failures here are non-fatal — the next subprocess
+    # just recomputes.
+    try:
+        _cache_root.mkdir(parents=True, exist_ok=True)
+        _tmp = _disk_cache_path.with_suffix(_disk_cache_path.suffix + ".tmp")
+        with _tmp.open("wb") as _f:
+            _pickle.dump(result, _f, protocol=_pickle.HIGHEST_PROTOCOL)
+        _tmp.replace(_disk_cache_path)
+    except Exception:  # noqa: BLE001
+        pass
     return result
 
 
@@ -1036,7 +1094,7 @@ def _hierarchy_feature_vector(
         site_features = [0.0 for _ in site_labels]
 
     support_features = [
-        float(trace_by_code.get(code, {}).get("support_norm", 0.0))
+        float(trace_by_code.get(code, {}).get("support_fraction_of_top", 0.0))
         for code in candidate_codes
     ]
     best_purity = (

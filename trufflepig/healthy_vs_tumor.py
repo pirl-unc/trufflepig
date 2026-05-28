@@ -4,7 +4,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Step-0 tissue-composition + cancer-hint gate (#149, refined).
+"""Tissue-composition screen + cancer-hint gate (#149, refined).
 
 Runs BEFORE cancer-type classification. Produces the coarsest
 possible reading of "what kind of tissue is this, and is there a
@@ -19,7 +19,7 @@ Output:
 - ``top_normal_tissues``: the three HPA normal-tissue columns that
   best correlate with the sample's log-TPM profile, each with a
   Spearman rho.
-- ``top_tcga_cohorts``: the three TCGA cohorts that best correlate.
+- ``top_tcga_cohorts``: the three cancer-reference cohorts that best correlate.
 - ``proliferation_log2_mean``: geomean on log-TPM of the public
   mitotic proliferation panel returned by
   ``proliferation_panel_gene_names()``.
@@ -52,6 +52,10 @@ from .tumor_evidence import (
 from .reasoning import DerivedFlags, compute_derived_flags, run_step0_rules
 
 
+# One-shot warning flag for NaN-input log2 coercion. Set on first hit
+# so subsequent samples in the same process don't spam the log.
+_NAN_LOG2_WARNED = False
+
 _MIN_REFERENCE_GENES = 2000
 
 # Coordinate cell-cycle / mitosis panel — sourced from the public API
@@ -63,17 +67,17 @@ _PROLIFERATION_PANEL = tuple(proliferation_panel_gene_names())
 _PROLIFERATION_HIGH_LOG2 = 4.5  # panel mean > this → "tumor-consistent"
 _PROLIFERATION_QUIET_LOG2 = 3.5  # panel mean < this → proliferation quiet
 
-# The margin by which the top HPA tissue must beat the top TCGA cohort
-# correlation before we nudge toward "healthy-dominant". In combination
-# with the proliferation panel.
+# The margin by which the top HPA tissue must beat the top cancer-reference
+# correlation before we nudge toward "healthy-dominant". In combination with
+# the proliferation panel.
 _HPA_MARGIN_STRONG = 0.05
 _HPA_MARGIN_WEAK = 0.02
 
 # Lymphoid-tissue normals whose expression profile is structurally
-# indistinguishable from lymphoid malignancy by bulk RNA — the TCGA
-# DLBC reference is itself >90% lymph-node tissue + the malignant
+# indistinguishable from lymphoid malignancy by bulk RNA — the DLBC
+# cancer reference is itself >90% lymph-node tissue + the malignant
 # clone, so correlation alone can't separate them. When the top HPA
-# match falls in this set AND the top TCGA match is a heme-lymphoid
+# match falls in this set AND the top cancer reference is a heme-lymphoid
 # cancer, we always flag as "possibly-tumor" regardless of
 # proliferation (germinal centers + bone marrow are normally
 # cycling) and regardless of correlation margin.
@@ -179,7 +183,7 @@ _ONCOFETAL_PER_GENE_MIN_TPM = 3.0
 _ONCOFETAL_STRONG_COUNT = 2  # stricter than CTA since the panel is smaller
 
 # Cancer-type-specific tumor-up-vs-matched-normal panel. Built from
-# :func:`tumor_up_vs_matched_normal`. When Step-0's top TCGA match
+# :func:`tumor_up_vs_matched_normal`. When the top cancer-reference match
 # aligns with a sample expressing several of that cohort's private
 # tumor-up markers, that's independent type-specific tumor evidence.
 _TUMOR_UP_PANEL_PER_GENE_MIN_TPM = 3.0
@@ -201,17 +205,17 @@ _CTA_STRONG_SUM_TPM = 30.0
 
 @dataclass
 class TissueCompositionSignal:
-    """Step-0 coarse reading of tissue composition + cancer hint.
+    """Coarse reading of tissue composition + cancer hint.
 
     ``cancer_hint`` is one of:
 
     - ``"tumor-consistent"`` — proliferation panel is clearly active
-      OR TCGA cohort correlation exceeds HPA tissue correlation by
+      OR cancer-reference correlation exceeds HPA tissue correlation by
       more than the margin (typical primary tumor).
     - ``"possibly-tumor"`` — proliferation panel is not loud AND HPA
-      correlation is close to TCGA; could be tumor or normal.
+      correlation is close to the cancer reference; could be tumor or normal.
     - ``"healthy-dominant"`` — proliferation panel is quiet AND HPA
-      correlation clearly exceeds TCGA.
+      correlation clearly exceeds the cancer reference.
 
     This is a coarse hint designed to be refined downstream, not a
     final classification.
@@ -224,10 +228,10 @@ class TissueCompositionSignal:
     cancer_hint: str = "tumor-consistent"
     n_reference_genes: int = 0
     verdict: str = ""
-    # True when the top HPA / top TCGA pair is structurally
+    # True when the top HPA / top cancer-reference pair is structurally
     # indistinguishable by bulk RNA (lymphoid normal vs heme-lymphoid
     # cancer). Downstream tumor-evidence gates should NOT suppress
-    # the Step-0 banner in this case — the "purity" estimate on a
+    # the tissue-composition banner in this case — the "purity" estimate on a
     # normal lymphoid sample is spurious anchor.
     structural_ambiguity: bool = False
     # CTA panel as positive tumor evidence (zero in non-reproductive
@@ -245,7 +249,7 @@ class TissueCompositionSignal:
     oncofetal_count_above_threshold: int = 0
     oncofetal_top_hits: list[tuple[str, float]] = field(default_factory=list)
     # Cancer-type-specific tumor-up-vs-matched-normal panel hits.
-    # Keyed on the top Step-0 TCGA cohort — if that cohort has a
+    # Keyed on the top cancer-reference cohort — if that cohort has a
     # specific tumor-up panel (PRAD: OTOP1/ANKRD34C; OV: CLDN6;
     # KIRC: CD70, GAGE1; STAD: CT45A9/DAZ1) and the sample expresses
     # hits from it, that's cancer-type-specific positive evidence.
@@ -262,7 +266,7 @@ class TissueCompositionSignal:
     reasoning_trace: list[str] = field(default_factory=list)
 
     def synthesis(self) -> str:
-        """Single-spot narrative of all Step-0 evidence.
+        """Single-spot narrative of all tissue-composition evidence.
 
         Enumerates the top tissue / top cohort / all tumor-evidence
         channels + aggregate + the rule trace that drove the
@@ -306,7 +310,7 @@ class TissueCompositionSignal:
             )
         return (
             f"Top normal-tissue matches: {tissues}. "
-            f"Top TCGA cohorts: {cohorts}. "
+            f"Top cancer-reference matches: {cohorts}. "
             f"Proliferation panel {self.proliferation_log2_mean:.1f} log2-TPM "
             f"(of {self.proliferation_genes_observed}/{len(_PROLIFERATION_PANEL)} "
             f"genes observed).{cta_clause}{oncofetal_clause} "
@@ -320,18 +324,18 @@ class TissueCompositionSignal:
     ) -> str | None:
         """Terse banner for the brief — shown for every non-tumor-consistent hint.
 
-        Propagates the Step-0 coarse reading forward so a clinician
+        Propagates the tissue-composition reading forward so a clinician
         reading the brief sees the tissue context and the cancer-hint
-        confidence up front rather than just the downstream TCGA label.
+        confidence up front rather than just the downstream cancer label.
 
-        When ``purity`` (Step 2) and/or ``signature_score`` (Step 1)
+        When tumor purity and/or cancer-type signature score
         are supplied, corroborating tumor evidence can suppress the
         banner: we don't want to shout "composition ambiguous" on a
-        sample that has a solid lineage-matched TCGA cohort at moderate
+        sample that has a solid lineage-matched cancer reference at moderate
         purity. The healthy-dominant banner has a higher bar to
         suppress than the possibly-tumor banner — it takes strong
         evidence (purity ≥ 0.5 AND signature ≥ 0.75) to override a
-        confident Step-0 healthy call.
+        confident healthy-tissue signal.
         """
         if self.cancer_hint == "tumor-consistent":
             return None
@@ -369,9 +373,9 @@ class TissueCompositionSignal:
         cohort_rho = self.top_tcga_cohorts[0][1] if self.top_tcga_cohorts else 0.0
         if self.cancer_hint == "healthy-dominant":
             return (
-                f"**Step-0 hint: healthy tissue dominant.** Sample profile "
+                f"**Tissue composition hint: healthy tissue dominant.** Sample profile "
                 f"correlates with normal **{tissue_name}** (ρ={rho:.2f}) more "
-                f"than any TCGA cohort (best {cohort} ρ={cohort_rho:.2f}); "
+                f"than any cancer reference (best {cohort} ρ={cohort_rho:.2f}); "
                 f"proliferation panel quiet "
                 f"({self.proliferation_log2_mean:.1f} log2-TPM). Downstream "
                 f"cancer-type call is soft-confidence."
@@ -395,9 +399,9 @@ class TissueCompositionSignal:
             )
             if any(tag in tissue_lc for tag in lymphoid_tissues):
                 return (
-                    f"**Step-0 hint: structural ambiguity (lymphoid).** Top "
+                    f"**Tissue composition hint: structural ambiguity (lymphoid).** Top "
                     f"normal match is **{tissue_name}** (ρ={rho:.2f}); top "
-                    f"TCGA match is {cohort} (ρ={cohort_rho:.2f}). Normal "
+                    f"cancer-reference match is {cohort} (ρ={cohort_rho:.2f}). Normal "
                     f"lymphoid tissue and lymphoid malignancy are indist-"
                     f"inguishable by bulk-RNA correlation. Proceeding with "
                     f"the {cohort}-specific downstream analysis under the "
@@ -406,9 +410,9 @@ class TissueCompositionSignal:
                     f"is unreliable in this regime."
                 )
             return (
-                f"**Step-0 hint: structural ambiguity (mesenchymal).** Top "
-                f"normal match is **{tissue_name}** (ρ={rho:.2f}); top TCGA "
-                f"match is {cohort} (ρ={cohort_rho:.2f}). Well-differentiated "
+                f"**Tissue composition hint: structural ambiguity (mesenchymal).** Top "
+                f"normal match is **{tissue_name}** (ρ={rho:.2f}); top cancer-"
+                f"reference match is {cohort} (ρ={cohort_rho:.2f}). Well-differentiated "
                 f"sarcomas share a mesenchymal expression program with "
                 f"normal smooth muscle / adipose / muscle / myometrium, so "
                 f"bulk-RNA correlation cannot cleanly distinguish tumor "
@@ -418,8 +422,8 @@ class TissueCompositionSignal:
                 f"below as the primary tumor-evidence channels."
             )
         return (
-            f"**Step-0 hint: composition ambiguous.** Top normal-tissue match "
-            f"is **{tissue_name}** (ρ={rho:.2f}); top TCGA match is {cohort} "
+            f"**Tissue composition hint: composition ambiguous.** Top normal-tissue match "
+            f"is **{tissue_name}** (ρ={rho:.2f}); top cancer-reference match is {cohort} "
             f"(ρ={cohort_rho:.2f}). Could be normal tissue or a low-purity "
             f"tumor — the downstream cancer call is soft-confidence pending "
             f"lineage / purity / therapy-axis evidence."
@@ -519,7 +523,7 @@ def _type_specific_tumor_up_signal(
 ) -> list[tuple[str, float]]:
     """Return hits from the cancer-type-specific tumor-up panel.
 
-    For the top-matching TCGA cohort, looks up the curated tumor-up
+    For the top-matching cancer-reference cohort, looks up the curated tumor-up
     vs matched-normal panel (genes ≥ 10-fold up in this cancer,
     low across all HPA normal tissues). Returns the sample's hits
     above ``_TUMOR_UP_PANEL_PER_GENE_MIN_TPM``.
@@ -566,7 +570,7 @@ def _cta_panel_signal(
 
 
 def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
-    """Race the sample against HPA-normal-tissue and TCGA-cohort columns.
+    """Race the sample against normal-tissue and cancer-reference columns.
 
     Returns the top-3 matches on each side + proliferation-panel
     geomean + a coarse cancer-hint call. Intended as the first step
@@ -599,12 +603,12 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
 
     cta_sum_tpm, cta_count, cta_top_hits = _cta_panel_signal(sample_by_symbol)
     oncofetal_count, oncofetal_top_hits = _oncofetal_panel_signal(sample_by_symbol)
-    # Compute top-TCGA code for the type-specific tumor-up lookup.
+    # Compute the top cancer-reference code for the type-specific tumor-up lookup.
     # Done before the full top_matches pass because it only needs
     # the best match — cheaper than the full rank.
     _top_tcga_for_panel = ""
     if shared_symbols and len(shared_symbols) >= _MIN_REFERENCE_GENES:
-        # We'll fill this properly below after computing top_tcga;
+        # We'll fill this properly below after computing the top cancer reference;
         # delay the type-specific lookup until after.
         pass
 
@@ -626,7 +630,26 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
             oncofetal_top_hits=oncofetal_top_hits,
         )
 
-    sample_log = np.log2(np.array([sample_by_symbol[s] + 1.0 for s in shared_symbols]))
+    # ``nan_to_num`` so missing-symbol → NaN values don't trigger
+    # ``RuntimeWarning: invalid value encountered in log2`` on the
+    # +1.0 ones. Matches the reference-vector handling on line 637.
+    # NaN reaching this point indicates an upstream symbol-mapping
+    # bug — warn once (then suppress) so it's visible without
+    # spamming the log of every subsequent sample.
+    _sample_vals = np.array([sample_by_symbol[s] for s in shared_symbols])
+    _nan_count = int(np.isnan(_sample_vals).sum()) if _sample_vals.size else 0
+    if _nan_count and not _NAN_LOG2_WARNED:
+        import warnings as _warnings
+        _warnings.warn(
+            f"healthy_vs_tumor: {_nan_count} of {_sample_vals.size} sample values "
+            "are NaN at log2 step; coerced to 0. NaN here suggests an upstream "
+            "symbol-mapping bug — investigate sample_by_symbol construction. "
+            "Further occurrences this process will be silent.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        globals()["_NAN_LOG2_WARNED"] = True
+    sample_log = np.log2(np.nan_to_num(_sample_vals) + 1.0)
 
     def _top_matches(cols: list[str], k: int = 3) -> list[tuple[str, float]]:
         scored = []
@@ -643,7 +666,7 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
     top_normal = _top_matches(hpa_cols, k=3)
     top_tcga = _top_matches(tcga_cols, k=3)
 
-    # Cancer-type-specific tumor-up panel: check the top TCGA cohort's
+    # Cancer-type-specific tumor-up panel: check the top cancer-reference cohort's
     # tumor-vs-matched-normal private markers against the sample.
     top_tcga_code = top_tcga[0][0].removesuffix("_TPM") if top_tcga else ""
     type_specific_hits = _type_specific_tumor_up_signal(
@@ -656,10 +679,18 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
     margin = best_normal_rho - best_tcga_rho
 
     # Structural-ambiguity override: when the top HPA match is a
-    # lymphoid normal AND the top TCGA match is a heme-lymphoid
+    # lymphoid normal AND the top cancer-reference match is a heme-lymphoid
     # cancer, bulk-RNA correlation cannot distinguish them. Always
     # flag as possibly-tumor so the downstream reader sees the
-    # ambiguity rather than a false tumor-consistent call.
+    # ambiguity rather than a false tumor-consistent call. Same for
+    # mesenchymal-normal × SARC. These tissue×cohort intersections
+    # encode genuine bulk-RNA blind spots — the only signals that
+    # could break the tie (clonal Ig/TCR rearrangement, somatic
+    # mutation context) are not accessed by this module. See the
+    # "Known limitations" section of ``docs/CALIBRATION.md`` for the
+    # 12 HPA tissues that consequently fall into ``tumor-like`` even
+    # though they're all normal — that is the *expected* output, not
+    # a calibration target to drive down at this layer.
     top_hpa_name = top_normal[0][0] if top_normal else ""
     top_tcga_name = top_tcga[0][0] if top_tcga else ""
     lymphoid_ambiguity = (
@@ -719,7 +750,7 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
         type_specific_hits=type_specific_hits,
         evidence=evidence,
     )
-    # Derive the Step-0 flags (lymphoid/mesenchymal ambiguity, strong/
+    # Derive the tissue-composition flags (lymphoid/mesenchymal ambiguity, strong/
     # soft tumor-evidence booleans, correlation margin) from the signal
     # fields + the ambiguity booleans that were computed upstream from
     # the raw tissue correlations.
@@ -746,20 +777,20 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
         verdict = (
             f"Healthy-dominant: best HPA "
             f"{top_normal[0][0].removesuffix('_nTPM')} ρ={best_normal_rho:.3f} "
-            f"beats best TCGA {top_tcga[0][0].removesuffix('_TPM') if top_tcga else '-'} "
+            f"beats best cancer reference {top_tcga[0][0].removesuffix('_TPM') if top_tcga else '-'} "
             f"ρ={best_tcga_rho:.3f} by {margin:+.3f}; proliferation "
             f"{prolif_log2:.1f} log2-TPM quiet."
         )
     elif cancer_hint == "possibly-tumor":
         verdict = (
             f"Composition ambiguous: HPA ρ={best_normal_rho:.3f} vs "
-            f"TCGA ρ={best_tcga_rho:.3f} (margin {margin:+.3f}); "
+            f"cancer-reference ρ={best_tcga_rho:.3f} (margin {margin:+.3f}); "
             f"proliferation {prolif_log2:.1f} log2-TPM moderate."
         )
     else:
         verdict = (
             f"Tumor-consistent: proliferation panel {prolif_log2:.1f} log2-TPM "
-            f"or TCGA ρ={best_tcga_rho:.3f} dominant vs HPA ρ={best_normal_rho:.3f}."
+            f"or cancer-reference ρ={best_tcga_rho:.3f} dominant vs HPA ρ={best_normal_rho:.3f}."
         )
 
     return TissueCompositionSignal(

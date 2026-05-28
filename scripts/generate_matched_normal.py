@@ -131,11 +131,75 @@ _EXCLUDED_PREFIXES = (
     "OR",
     "TAS2R",
     "TAS1R",
+    "HLA-",  # chr6p21 MHC class I/II — physiologic in lymphoid tissue
+)
+# Curated chr6p21 MHC-region symbols that are not caught by the ``HLA-`` prefix.
+# These genes are highly expressed across nearly all tissues but show up as
+# spurious "tumor-up" hits in lymphoid/myeloid panels because the matched-normal
+# bone-marrow/lymph-node tissue reference has a tighter distribution than the
+# tumor cohort median for these housekeeping-adjacent MHC-region genes. List
+# curated from HGNC MHC nomenclature (class I, II, III regions in
+# chr6:28-34Mb on GRCh38) — keep in sync with the empirically-flagged
+# artifacts in PR #41's review (PRRC2A, MSH5, SKIC2, EHMT2).
+_MHC_CHR6_SYMBOLS = frozenset(
+    {
+        # Class I region non-HLA
+        "MICA", "MICB", "MICC", "MICD", "MICE", "MICF", "MICG", "MR1",
+        "PSORS1C1", "PSORS1C2", "PSORS1C3",
+        "POU5F1", "TCF19", "CCHCR1", "CDSN", "STG", "PSORS1C4",
+        "MUC21", "MUC22", "FLOT1", "DDR1", "IER3",
+        "HCG2", "HCG4", "HCG9", "HCG11", "HCG17", "HCG18",
+        "HCG20", "HCG21", "HCG22", "HCG23", "HCG24", "HCG25", "HCG26", "HCG27",
+        "MICA-AS1", "MICA-AS3", "MICA-AS4", "MICB-DT", "MICB-DT2",
+        "ZNRD1", "ZNRD2",  # adjacent loci
+        # Class III region
+        "PRRC2A", "BAG6", "ATAD2L", "MSH5", "SKIC2", "SKIV2L",
+        "EHMT2", "CCHCR1", "ATF6B", "NEU1", "AIF1", "NCR3", "NCR3LG1",
+        "BTNL2", "LSM2", "GPANK1", "GPSM3", "RNF5", "AGPAT1", "RXRB",
+        "COL11A2", "NOTCH4", "AGER", "TAP1", "TAP2", "PSMB8", "PSMB9",
+        "TNF", "LTA", "LTB", "BRD2", "C2", "C4A", "C4B", "CFB",
+        "HSPA1A", "HSPA1B", "HSPA1L", "STK19", "NELFE",
+        "ATP6V1G2", "B3GALT4", "DDAH2", "DDX39B",
+        # Additional housekeeping-adjacent MHC genes that frequently appear
+        # as deconvolution artifacts when the bulk-vs-normal magnitudes are
+        # close.
+        "LY6G5B", "LY6G5C", "LY6G6C", "LY6G6D", "LY6G6E", "LY6G6F",
+        "VWA7", "VARS1", "EHMT2-AS1",
+        # Extended MHC (chr6:25-28.5Mb)
+        "TRIM27", "ZFP57", "HIST1H2BC",
+    }
+)
+# Explicit drop list for pseudogene/paralog symbols that survive the prefix
+# filter but represent multi-mapping reads of a more-canonical paralog (or
+# are otherwise unsuitable as tumor-up markers). Add to this list whenever
+# the regenerator surfaces a new technical artifact in matched-normal
+# panels.
+_EXCLUDED_PARALOG_SYMBOLS = frozenset(
+    {
+        "POLR2J2", "POLR2J3",       # paralogs of POLR2J
+        "EIF3CL",                    # paralog of EIF3C
+        "U2AF1L4", "U2AF1L5",       # paralogs of U2AF1
+        "LRRC37A2", "LRRC37A3",     # paralogs of LRRC37A
+        "ANKRD13D",                  # known multi-mapping artifact
+        "ARMH1",                     # known multi-mapping artifact
+        "MCRIP2",                    # paralog of MCRIP1
+        "LPCAT1",                    # multi-mapping artifact in heme bulk
+        "RHEX",                      # frequent artifact in LAML deconv
+        "GSX1",                      # spurious in DLBC/LAML deconv
+        "NAIP",                      # multi-paralog pseudogene-prone
+        "MAGEA9B",                   # paralog of MAGEA9 (paralog ambiguity)
+    }
 )
 _IMMUNE_TISSUES = ("bone_marrow", "spleen", "lymph_node", "tonsil", "appendix")
 _HEME_LYMPHOID_TISSUES = _IMMUNE_TISSUES + ("thymus",)
 _MUSCLE_TISSUES = ("smooth_muscle", "skeletal_muscle", "heart_muscle")
 _MAX_MATCHED_NORMAL_NTPM = 3.0
+# Tighten the "other tissue" filter so a candidate must dominate every
+# non-matched-normal tissue by at least 2x. The old bound of strictly less
+# than tumor_tpm let in chr6p21 MHC genes that are physiologic at 50-70 nTPM
+# across many tissues. 2x keeps real tumor-up markers and drops housekeeping
+# co-expression.
+_MAX_OTHER_TISSUE_FRACTION_OF_TUMOR = 0.5
 _SOURCE_ALIASES = {
     "NBL": "TARGET_NBL",
     "WILMS": "TARGET_WT",
@@ -149,6 +213,8 @@ def _panel_maps() -> tuple[dict[str, str], dict[str, str]]:
 def _exclusion_set(symbols) -> set[str]:
     exclude = set(housekeeping_gene_names()) | set(mitochondrial_gene_names())
     exclude |= _EXCLUDED_SYMBOLS
+    exclude |= _MHC_CHR6_SYMBOLS
+    exclude |= _EXCLUDED_PARALOG_SYMBOLS
     for sym in symbols:
         if not isinstance(sym, str):
             continue
@@ -222,11 +288,12 @@ def _solid_rows_for(
         joined["tumor_tpm"] / (joined["matched_normal_ntpm"] + 1.0)
     )
     max_other = joined[["max_immune_ntpm", "max_muscle_ntpm", "max_fat_ntpm"]].max(axis=1)
+    other_cap = _MAX_OTHER_TISSUE_FRACTION_OF_TUMOR * joined["tumor_tpm"]
     picks = joined[
         (joined["fold_change_vs_matched_normal"] >= 10)
         & (joined["tumor_tpm"] >= 5)
         & (joined["matched_normal_ntpm"] < _MAX_MATCHED_NORMAL_NTPM)
-        & (max_other < joined["tumor_tpm"])
+        & (max_other < other_cap)
         & (~joined.index.isin(exclude))
     ].sort_values("fold_change_vs_matched_normal", ascending=False).head(top_n)
 
@@ -279,11 +346,12 @@ def _heme_rows_for(
     joined["fold_change_vs_matched_normal"] = (
         joined["tumor_tpm"] / (joined["matched_normal_ntpm"] + 1.0)
     )
+    other_cap = _MAX_OTHER_TISSUE_FRACTION_OF_TUMOR * joined["tumor_tpm"]
     picks = joined[
         (joined["fold_change_vs_matched_normal"] >= 10)
         & (joined["tumor_tpm"] >= 5)
         & (joined["matched_normal_ntpm"] < _MAX_MATCHED_NORMAL_NTPM)
-        & (joined["max_non_lymphoid_ntpm"] < joined["tumor_tpm"])
+        & (joined["max_non_lymphoid_ntpm"] < other_cap)
         & (~joined.index.isin(exclude))
     ].sort_values("fold_change_vs_matched_normal", ascending=False).head(top_n)
 

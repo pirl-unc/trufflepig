@@ -12,7 +12,7 @@ right level without re-deriving parent/subtype rules locally.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from typing import Any, Mapping
 
@@ -22,6 +22,24 @@ def _clean(value: Any) -> str:
         return ""
     text = str(value).strip()
     return "" if text.lower() == "nan" else text
+
+
+@dataclass(frozen=True)
+class ExpressionReferenceRecord:
+    """One expression reference available for a registry cancer code."""
+
+    requested_code: str
+    reference_code: str
+    source_kind: str
+    source: str
+    normalization: str = "clean_tpm"
+    gene_key: str = "ensembl_symbol"
+    source_code: str = ""
+    direct: bool = True
+    fallback_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @lru_cache(maxsize=1)
@@ -40,12 +58,111 @@ def _registry_records() -> dict[str, dict[str, Any]]:
 
 
 @lru_cache(maxsize=1)
-def _exact_expression_sources() -> dict[str, frozenset[str]]:
-    sources_by_code: dict[str, set[str]] = {}
-    try:
-        from trufflepig.reference import (
-            subtype_deconvolved_expression, tcga_deconvolved_expression,
+def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenceRecord, ...]]:
+    records_by_code: dict[str, list[ExpressionReferenceRecord]] = {}
+    registry = _registry_records()
+    registry_codes = set(registry)
+    aliases = {
+        "BRCA_Her2": "BRCA_HER2",
+        "LUAD_STK11_KEAP1": "LUAD_STK11",
+        "LUAD_KRAS_STK11": "LUAD_STK11",
+        "BEATAML_APL": "LAML_APL",
+        "BEATAML_ELN_Adverse": "LAML_ELN_Adv",
+        "BEATAML_ELN_Favorable": "LAML_ELN_Fav",
+        "BEATAML_ELN_Intermediate": "LAML_ELN_Int",
+        "TARGET_AML": "LAML",
+        "TARGET_NBL": "NBL",
+        "TARGET_RT": "RT",
+        "TARGET_WT": "WILMS",
+    }
+
+    def canonical_code(value: Any) -> str:
+        text = _clean(value)
+        if not text:
+            return ""
+        if text in aliases:
+            return aliases[text]
+        try:
+            from pirlygenes.gene_sets_cancer import resolve_cancer_type
+
+            return _clean(resolve_cancer_type(text))
+        except Exception:
+            return text
+
+    def add(
+        code: Any,
+        *,
+        source_kind: str,
+        source: str,
+        gene_key: str,
+        source_code: str | None = None,
+    ) -> None:
+        canonical = canonical_code(code)
+        if not canonical or canonical not in registry_codes:
+            return
+        record = ExpressionReferenceRecord(
+            requested_code=canonical,
+            reference_code=canonical,
+            source_kind=source_kind,
+            source=source,
+            gene_key=gene_key,
+            source_code=_clean(source_code) or canonical,
+            direct=True,
         )
+        records_by_code.setdefault(canonical, []).append(record)
+
+    try:
+        from trufflepig.reference import pan_cancer_expression
+
+        pan = pan_cancer_expression(technical_rna_normalize=True)
+        for col in pan.columns:
+            col_text = str(col)
+            if not col_text.endswith("_TPM"):
+                continue
+            code = col_text.removesuffix("_TPM")
+            row = registry.get(code, {})
+            add(
+                code,
+                source_kind="observed_pan_cancer_reference",
+                source=_clean(row.get("source_cohort")) or "pan_cancer",
+                gene_key="ensembl_symbol",
+            )
+    except Exception:
+        pass
+
+    try:
+        from trufflepig.reference import cancer_reference_expression
+
+        observed = cancer_reference_expression(
+            normalize="tpm_clean",
+            format="long",
+            include_provenance=True,
+        )
+        if observed is not None and "cancer_code" in observed.columns:
+            for code, group in observed.groupby("cancer_code"):
+                code_text = _clean(code)
+                if not code_text:
+                    continue
+                if "source_cohort" in group.columns:
+                    values = {
+                        _clean(v)
+                        for v in group["source_cohort"].dropna().unique()
+                        if _clean(v)
+                    }
+                else:
+                    values = set()
+                for source in values or {"observed_bulk_reference"}:
+                    add(
+                        code_text,
+                        source_kind="observed_bulk_reference",
+                        source=source,
+                        gene_key="ensembl_symbol",
+                    )
+    except Exception:
+        pass
+
+    try:
+        from trufflepig.reference import tcga_deconvolved_expression
 
         tcga = tcga_deconvolved_expression()
         if tcga is not None and "cancer_code" in tcga.columns:
@@ -61,7 +178,19 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                     }
                 else:
                     values = set()
-                sources_by_code.setdefault(code_text, set()).update(values or {"TCGA"})
+                for source in values or {"TCGA"}:
+                        add(
+                            code_text,
+                            source_kind="deconvolved_tumor_reference",
+                            source=source,
+                            gene_key="ensembl_symbol",
+                            source_code=code_text,
+                        )
+    except Exception:
+        pass
+
+    try:
+        from trufflepig.reference import subtype_deconvolved_expression
 
         sub = subtype_deconvolved_expression()
         if sub is not None and "cancer_code" in sub.columns:
@@ -78,21 +207,21 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                 else:
                     values = set()
                 subtype_values = (
-                    group.get("subtype")
-                    .fillna("")
-                    .astype(str)
-                    .map(_clean)
+                    group.get("subtype").fillna("").astype(str).map(_clean)
                     if "subtype" in group.columns
                     else []
                 )
                 if all(not _clean(v) for v in subtype_values):
-                    sources_by_code.setdefault(code_text, set()).update(
-                        values or {"subtype_reference"}
-                    )
+                    for source in values or {"subtype_reference"}:
+                        add(
+                            code_text,
+                            source_kind="deconvolved_tumor_reference",
+                            source=source,
+                            gene_key="symbol_only",
+                            source_code=code_text,
+                        )
             if "subtype" in sub.columns:
-                for subtype, group in sub.dropna(subset=["subtype"]).groupby(
-                    "subtype"
-                ):
+                for subtype, group in sub.dropna(subset=["subtype"]).groupby("subtype"):
                     subtype_text = _clean(subtype)
                     if not subtype_text:
                         continue
@@ -104,12 +233,144 @@ def _exact_expression_sources() -> dict[str, frozenset[str]]:
                         }
                     else:
                         values = set()
-                    sources_by_code.setdefault(subtype_text, set()).update(
-                        values or {"subtype_reference"}
-                    )
+                    for source in values or {"subtype_reference"}:
+                        add(
+                            subtype_text,
+                            source_kind="deconvolved_tumor_reference",
+                            source=source,
+                            gene_key="symbol_only",
+                            source_code=subtype_text,
+                        )
     except Exception:
         pass
-    return {code: frozenset(sources) for code, sources in sources_by_code.items()}
+
+    out: dict[str, tuple[ExpressionReferenceRecord, ...]] = {}
+    for code, records in records_by_code.items():
+        unique = {}
+        for record in records:
+            key = (
+                record.reference_code,
+                record.source_kind,
+                record.source,
+                record.normalization,
+                record.gene_key,
+                record.source_code,
+                record.direct,
+            )
+            unique[key] = record
+        out[code] = tuple(
+            sorted(
+                unique.values(),
+                key=lambda record: (
+                    record.source_kind != "deconvolved_tumor_reference",
+                    record.source_kind,
+                    record.source,
+                ),
+            )
+        )
+    return out
+
+
+_REFERENCE_CODE_FALLBACKS: Mapping[str, tuple[str, ...]] = {
+    "NBL": ("NBL_MYCN_nonamp", "NBL_MYCN_amp"),
+    "PCN": ("MM",),
+}
+
+_REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
+    "carcinoma-breast": ("BRCA",),
+    "carcinoma-head-neck": ("HNSC",),
+    "carcinoma-lung": ("LUAD", "LUSC"),
+    "endocrine": ("THCA", "PCPG", "ACC"),
+    "heme-bcell": ("DLBC", "CLL", "B_ALL"),
+    "heme-myeloid": ("LAML",),
+    "heme-plasma": ("MM",),
+    "heme-tcell": ("T_ALL",),
+    "net": ("SCLC", "PANNET", "LUAD"),
+    "pediatric-cns": ("MBL", "GBM", "LGG"),
+    "pediatric-net": ("NBL_MYCN_nonamp", "NBL_MYCN_amp"),
+    "pediatric-soft": ("SARC",),
+    "salivary": ("HNSC",),
+    "sarcoma": ("SARC",),
+}
+
+
+def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
+    code_text = _clean(code)
+    row = _registry_records().get(code_text, {})
+    candidates: list[tuple[str, str]] = []
+    parent = _clean(row.get("parent_code"))
+    if parent:
+        candidates.append((parent, "registry parent"))
+    for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
+        candidates.append((fallback, "curated code fallback"))
+    family = _clean(row.get("family")).lower()
+    for fallback in _REFERENCE_FAMILY_FALLBACKS.get(family, ()):
+        candidates.append((fallback, f"{family} family fallback"))
+
+    seen = set()
+    out = []
+    for candidate, reason in candidates:
+        candidate = _clean(candidate)
+        if candidate and candidate != code_text and candidate not in seen:
+            seen.add(candidate)
+            out.append((candidate, reason))
+    return tuple(out)
+
+
+def expression_reference_options(
+    code: str | None,
+    *,
+    include_fallback: bool = True,
+) -> tuple[ExpressionReferenceRecord, ...]:
+    code_text = _clean(code)
+    if not code_text:
+        return ()
+    direct = _direct_expression_reference_records().get(code_text, ())
+    if direct or not include_fallback:
+        return direct
+    return _expression_reference_options_with_fallback(code_text, visited=frozenset())
+
+
+def _expression_reference_options_with_fallback(
+    code_text: str,
+    *,
+    visited: frozenset[str],
+) -> tuple[ExpressionReferenceRecord, ...]:
+    direct = _direct_expression_reference_records().get(code_text, ())
+    if direct:
+        return direct
+    if code_text in visited:
+        return ()
+    visited = visited | {code_text}
+    for candidate, reason in _fallback_candidates(code_text):
+        if candidate in visited:
+            continue
+        records = _direct_expression_reference_records().get(candidate, ())
+        if not records:
+            records = _expression_reference_options_with_fallback(
+                candidate,
+                visited=visited,
+            )
+        if records:
+            return tuple(
+                replace(
+                    record,
+                    requested_code=code_text,
+                    direct=False,
+                    fallback_reason=(
+                        f"{reason}; {record.fallback_reason}"
+                        if record.fallback_reason
+                        else reason
+                    ),
+                )
+                for record in records
+            )
+    return ()
+
+
+def effective_expression_reference(code: str | None) -> ExpressionReferenceRecord | None:
+    options = expression_reference_options(code, include_fallback=True)
+    return options[0] if options else None
 
 
 def registry_parent_code(code: str | None) -> str:
@@ -136,11 +397,12 @@ def cancer_type_context_label(code: str | None) -> str:
 
 
 def expression_reference_sources(code: str | None) -> tuple[str, ...]:
-    return tuple(sorted(_exact_expression_sources().get(_clean(code), ())))
+    records = expression_reference_options(code, include_fallback=False)
+    return tuple(sorted({record.source for record in records}))
 
 
 def has_expression_reference(code: str | None) -> bool:
-    return bool(expression_reference_sources(code))
+    return bool(expression_reference_options(code, include_fallback=True))
 
 
 @dataclass(frozen=True)
@@ -158,6 +420,11 @@ class CancerTypeContext:
     reference_has_expression_ref: bool = False
     fine_expression_sources: tuple[str, ...] = ()
     reference_expression_sources: tuple[str, ...] = ()
+    best_expression_source: str = ""
+    best_expression_source_kind: str = ""
+    best_expression_gene_key: str = ""
+    best_expression_direct: bool = False
+    best_expression_fallback_reason: str = ""
 
     def code_for(self, role: str) -> str:
         key = _clean(role).lower().replace("-", "_")
@@ -228,16 +495,22 @@ class CancerTypeContext:
             )
         if self.best_expression_code:
             if self.best_expression_code == self.report_code:
-                lines.append(
-                    "- **Best expression reference**: fine-grained expression data "
-                    "are available for the report label."
+                if self.best_expression_direct:
+                    lines.append(
+                        "- **Best expression reference**: expression data are "
+                        "available for the report label."
+                    )
+            else:
+                fallback_reason = (
+                    f" ({self.best_expression_fallback_reason})"
+                    if self.best_expression_fallback_reason
+                    else ""
                 )
-            elif self.uses_distinct_reference:
                 lines.append(
                     f"- **Best expression reference**: falls back to "
-                    f"{cancer_type_context_label(self.best_expression_code)} because an "
-                    "exact fine-grained expression cohort is not available to this "
-                    "analysis stage."
+                    f"{cancer_type_context_label(self.best_expression_code)}"
+                    f"{fallback_reason} because an exact expression cohort is not "
+                    "available for the report label."
                 )
         if self.fine_expression_available and self.uses_distinct_reference:
             lines.append(
@@ -265,12 +538,31 @@ def cancer_type_context_from_analysis(
     if not reference_code:
         reference_code = parent_code or report_code
 
-    report_sources = expression_reference_sources(report_code)
-    reference_sources = expression_reference_sources(reference_code)
-    if report_sources:
+    report_direct_options = expression_reference_options(
+        report_code, include_fallback=False
+    )
+    reference_direct_options = expression_reference_options(
+        reference_code, include_fallback=False
+    )
+    report_sources = tuple(sorted({record.source for record in report_direct_options}))
+    reference_sources = tuple(
+        sorted({record.source for record in reference_direct_options})
+    )
+    report_effective = effective_expression_reference(report_code)
+    reference_effective = effective_expression_reference(reference_code)
+    best_expression_record = None
+    if report_direct_options:
         best_expression_code = report_code
-    elif reference_sources:
+        best_expression_record = report_direct_options[0]
+    elif report_effective is not None:
+        best_expression_code = report_effective.reference_code
+        best_expression_record = report_effective
+    elif reference_direct_options:
         best_expression_code = reference_code
+        best_expression_record = reference_direct_options[0]
+    elif reference_effective is not None:
+        best_expression_code = reference_effective.reference_code
+        best_expression_record = reference_effective
     else:
         best_expression_code = reference_code or report_code
 
@@ -302,6 +594,21 @@ def cancer_type_context_from_analysis(
         reference_has_expression_ref=bool(reference_sources),
         fine_expression_sources=report_sources,
         reference_expression_sources=reference_sources,
+        best_expression_source=best_expression_record.source
+        if best_expression_record is not None
+        else "",
+        best_expression_source_kind=best_expression_record.source_kind
+        if best_expression_record is not None
+        else "",
+        best_expression_gene_key=best_expression_record.gene_key
+        if best_expression_record is not None
+        else "",
+        best_expression_direct=bool(
+            best_expression_record.direct if best_expression_record is not None else False
+        ),
+        best_expression_fallback_reason=best_expression_record.fallback_reason
+        if best_expression_record is not None
+        else "",
     )
 
 

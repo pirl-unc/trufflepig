@@ -789,7 +789,7 @@ def _fit_one_hypothesis(
             cancer_type=cancer_type,
             cancer_signature_score=float(candidate_row["signature_score"]),
             cancer_purity_score=float(candidate_row["purity_estimate"]),
-            cancer_support_score=float(candidate_row["support_norm"]),
+            cancer_support_score=float(candidate_row["support_fraction_of_top"]),
             template_tissue_score=1.0,
             template_origin_tissue_score=1.0,
             template_site_factor=1.0,
@@ -802,7 +802,7 @@ def _fit_one_hypothesis(
             marker_trace=pd.DataFrame(),
             gene_attribution=pd.DataFrame(),
             tme_background_hk={},
-            score=float(candidate_row["support_norm"]),
+            score=float(candidate_row["support_fraction_of_top"]),
             description=f"{cancer_type} — {TEMPLATES.get(template_name, {}).get('description', template_name)}",
             warnings=["No non-tumor components in template"],
             matched_normal_tissue=(
@@ -1020,7 +1020,7 @@ def _fit_one_hypothesis(
         warnings.append("Primary tissue support exceeds metastatic-site support")
 
     fit_score = 1.0 / (1.0 + residual)
-    cancer_support = float(candidate_row["support_norm"])
+    cancer_support = float(candidate_row["support_fraction_of_top"])
     score = (
         fit_score
         * (scoring["fit_score_base"] + scoring["fit_score_gain"] * cancer_support)

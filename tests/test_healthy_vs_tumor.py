@@ -1,4 +1,4 @@
-"""Tests for the Step-0 tissue-composition + cancer-hint gate (#149).
+"""Tests for the tissue-composition + cancer-hint gate (#149).
 
 Uses the shipped HPA nTPM + TCGA TPM reference to construct synthetic
 samples (pure-tissue + pure-tumor) and asserts the top-3 matches and

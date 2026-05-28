@@ -100,7 +100,7 @@ def apply_sample_context_to_purity(analysis: dict[str, Any], sample_context) -> 
     """Widen purity CI according to the upstream sample context.
 
     Returns ``True`` when the analysis dict was modified. This makes the
-    Step-0 -> purity information flow explicit and unit-testable.
+    sample-context -> purity information flow explicit and unit-testable.
     """
     if sample_context is None or "purity" not in analysis:
         return False

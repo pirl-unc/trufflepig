@@ -169,7 +169,7 @@ def test_summary_uses_generic_text_for_orphan_context_rescue():
         "competing_code": "ESCA",
         "context_basis": "raw_signal_dominance",
         "message": (
-            "Step-0 TCGA correlation and direct cancer evidence support BLCA; "
+            "Tissue composition screen and direct cancer evidence support BLCA; "
             "suspending the orphan family penalty for the auto-detected call."
         ),
     }
@@ -251,7 +251,8 @@ def test_summary_marks_supplied_cancer_type_rna_concordance():
     )
 
     assert (
-        "**RNA classifier check:** broad RNA context is concordant with supplied "
+        "**RNA classifier check:** expression-reference context is concordant "
+        "with supplied "
         "PRAD (Prostate Adenocarcinoma)"
     ) in md
     assert "nearest RNA alternatives: BLCA, COAD" in md
@@ -278,7 +279,7 @@ def test_summary_compares_registry_child_against_parent_reference():
         disease_state="",
     )
 
-    assert "broad RNA context is concordant at the parent level" in md
+    assert "expression-reference context is concordant at the parent level" in md
     assert "SARC (Sarcoma) is top" in md
     assert "refined report label remains SARC_SYN (Synovial Sarcoma)" in md
     assert "nearest RNA alternatives: BLCA" in md
@@ -304,9 +305,9 @@ def test_summary_marks_supplied_cancer_type_rna_discordance():
         disease_state="",
     )
 
-    assert "broad RNA context is discordant with supplied COAD" in md
+    assert "expression-reference context is discordant with supplied COAD" in md
     assert (
-        "top broad RNA candidate is SARC (Sarcoma) while "
+        "top expression-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
     assert "Keep the supplied label as the report label" in md
@@ -332,9 +333,9 @@ def test_summary_marks_supplied_cancer_type_rna_ambiguity():
         disease_state="",
     )
 
-    assert "broad RNA context is ambiguous against supplied COAD" in md
+    assert "expression-reference context is ambiguous against supplied COAD" in md
     assert (
-        "top broad RNA candidate is SARC (Sarcoma) while "
+        "top expression-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
 
@@ -363,7 +364,7 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     )
 
     assert "externally supplied OS (Osteosarcoma) sets the fine/report label" in md
-    assert "broad RNA context is SARC (Sarcoma)" in md
+    assert "expression-reference context is SARC (Sarcoma)" in md
     assert "sarcoma-family broad-context support for supplied OS (Osteosarcoma)" in md
     assert "does not independently resolve the refined label" in md
     assert "raw signature favors KIRC" not in md
@@ -431,7 +432,7 @@ def test_summary_does_not_list_rna_alternatives_for_supplied_label():
         disease_state="",
     )
 
-    assert "broad RNA context is concordant with supplied PRAD" in md
+    assert "expression-reference context is concordant with supplied PRAD" in md
     assert "**RNA alternatives:**" not in md
 
 
@@ -1086,7 +1087,7 @@ def test_actionable_is_longer_but_structured():
     for heading in [
         "Sample and confidence",
         "Cancer call and disease state",
-        "Therapy landscape",
+        "Therapy Prioritization",
     ]:
         assert heading in md, f"missing heading: {heading}"
     assert "model interval" in md

@@ -227,10 +227,7 @@ def _subtype_medians_lookup() -> dict[tuple[str, str], dict[str, float]]:
     """
     from .reference import subtype_deconvolved_expression
 
-    sub_df = subtype_deconvolved_expression(
-        technical_rna_normalize=True,
-        renormalize_to_million=True,
-    )
+    sub_df = subtype_deconvolved_expression(technical_rna_normalize=True)
     if sub_df is None or sub_df.empty:
         return {}
     out: dict[tuple[str, str], dict[str, float]] = {}

@@ -126,7 +126,7 @@ def filter_current_therapy_targets(targets_df):
             return targets_df.reset_index(drop=True)
         keep = [
             not therapy_filter_note(row)
-            for _, row in targets_df.iterrows()
+            for row in targets_df.to_dict("records")
         ]
         return targets_df.loc[keep].reset_index(drop=True)
     except Exception:
@@ -441,6 +441,48 @@ def expression_independent_rna_context(expression_row) -> str:
         f"target RNA is context only (bulk {observed:.1f} TPM; "
         "it does not establish eligibility)"
     )
+
+
+def target_observation_state(sym, ranges_df) -> str:
+    """Three-state observation classifier for a target symbol.
+
+    Returns one of:
+      ``"below_detection"`` — symbol is in the input file but produced no
+          row in ``ranges_df`` (TPM below the ``< 0.01`` filter in
+          ``estimate_tumor_expression_ranges``). Clinically: a real negative.
+      ``"not_in_input"``   — symbol is *not* in the input file at all.
+          Clinically: a coverage gap, not biology.
+      ``"unknown"``        — input-symbol set was not attached to
+          ``ranges_df`` (legacy callers, malformed DataFrame). Conservative
+          fall-through that preserves the historical "not measured" label.
+    """
+    if not isinstance(sym, str) or sym in ("", "—"):
+        return "unknown"
+    input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")
+    if not input_syms:
+        return "unknown"
+    return "below_detection" if sym in input_syms else "not_in_input"
+
+
+def format_missing_observation_cell(state: str) -> str:
+    """Render the bulk-TPM cell for a target with no ``ranges_df`` row.
+
+    Mirrors the three states from :func:`target_observation_state`.
+    """
+    if state == "below_detection":
+        return "0.0 (below detection)"
+    if state == "not_in_input":
+        return "*not in input*"
+    return "*not measured*"
+
+
+def format_missing_observation_interp(state: str) -> str:
+    """Render the interpretation-cell phrase for a target with no row."""
+    if state == "below_detection":
+        return "below detection (bulk TPM ≈ 0)"
+    if state == "not_in_input":
+        return "gene symbol not present in input file (coverage gap)"
+    return "not measured"
 
 
 def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
@@ -1503,7 +1545,7 @@ def partition_tumor_core_rows(ranges_df, min_tumor_tpm=1.0):
         empty = eligible.iloc[0:0]
         return empty, empty, empty
 
-    statuses = [target_reliability_status(row) for _, row in eligible.iterrows()]
+    statuses = [target_reliability_status(row) for row in eligible.to_dict("records")]
     eligible["_report_reliability"] = statuses
     supported = eligible[eligible["_report_reliability"] == "supported"].copy()
     provisional = eligible[eligible["_report_reliability"] == "provisional"].copy()
@@ -1516,7 +1558,7 @@ def summarize_reliability_reasons(rows, top_n=3):
     if rows is None or len(rows) == 0:
         return ""
     counter = Counter()
-    for _, row in rows.iterrows():
+    for row in rows.to_dict("records"):
         counter.update(target_reliability_reasons(row))
     if not counter:
         return ""
@@ -1541,9 +1583,10 @@ def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
     tumor_tpm_by_symbol = analysis.get("tumor_tpm_by_symbol")
     if not tumor_tpm_by_symbol and ranges_df is not None:
         try:
+            from .common import ranges_records
             tumor_tpm_by_symbol = {
                 str(row["symbol"]): float(row.get("attr_tumor_tpm") or 0.0)
-                for _, row in ranges_df.iterrows()
+                for row in ranges_records(ranges_df)
                 if str(row.get("symbol") or "")
             }
         except Exception:

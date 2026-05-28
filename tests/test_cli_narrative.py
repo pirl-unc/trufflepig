@@ -37,7 +37,7 @@ def _base_analysis(**overrides):
             "overall_estimate": 0.6,
             "components": {"lineage": {"per_gene": []}},
         },
-        "candidate_trace": [{"code": "PRAD", "support_norm": 1.0}],
+        "candidate_trace": [{"code": "PRAD", "support_fraction_of_top": 1.0}],
         "fit_quality": {},
     }
     a.update(overrides)
@@ -234,7 +234,7 @@ def test_summarize_call_primary_template():
     analysis = _base_analysis(
         cancer_type="COAD",
         fit_quality={"label": "strong"},
-        candidate_trace=[{"code": "COAD", "support_norm": 1.0}],
+        candidate_trace=[{"code": "COAD", "support_fraction_of_top": 1.0}],
     )
     best = _mock_decomp_result(template="solid_primary")
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
