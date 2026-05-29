@@ -52,6 +52,7 @@ import pickle
 import sys
 import time
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -297,6 +298,94 @@ def _load_full_tcga_tpm(
     return df, sample_to_expected, sample_ids
 
 
+# ---------- subtype-aware code matching ----------
+#
+# The classifier may answer with a SUBTYPE code (e.g. "BRCA_LumB")
+# where the expected label is the PARENT cohort ("BRCA"). Treating
+# a subtype call as "wrong" against a parent label penalizes
+# clinically-MORE-specific answers. Likewise, when an expected
+# label is a subtype but the model returns the parent cohort,
+# the model picked the correct family — less specific but not
+# wrong (the classifier just didn't refine).
+#
+# These helpers use the pirlygenes ``cancer_type_registry`` to walk
+# parent_code chains, so the kinship logic stays in sync with the
+# registry rather than baking in pattern-matching on underscores
+# (some codes are multi-token like RMS_ARMS, LAML_ELN_Fav).
+
+
+@lru_cache(maxsize=1)
+def _registry_parent_map() -> dict[str, str]:
+    """Map ``cancer_code → parent_code`` (empty string when no parent)."""
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+    except ImportError:
+        return {}
+    df = cancer_type_registry().fillna("")
+    return {
+        str(row["code"]): str(row.get("parent_code") or "")
+        for _, row in df.iterrows()
+    }
+
+
+def _ancestors(code: str) -> list[str]:
+    """All ancestor codes up the parent chain (excludes ``code`` itself)."""
+    out: list[str] = []
+    parent_map = _registry_parent_map()
+    current = parent_map.get(code, "") if code else ""
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        out.append(current)
+        current = parent_map.get(current, "")
+    return out
+
+
+def _codes_match(observed: str, expected: str) -> tuple[bool, str]:
+    """Return ``(matched, kind)`` for a single observed-vs-expected call.
+
+    ``kind`` is one of:
+      - ``"exact"`` — strings are identical (current behavior).
+      - ``"subtype_of_expected"`` — observed is a strict subtype of
+        expected (e.g. observed="BRCA_LumB", expected="BRCA"). MORE
+        specific than the label; still correct.
+      - ``"parent_of_expected"`` — observed is a strict ancestor of
+        expected (e.g. observed="BRCA", expected="BRCA_LumB"). LESS
+        specific but in the correct family; counted as correct.
+      - ``"none"`` — different cancer types entirely; wrong.
+    """
+    if not observed or not expected:
+        return False, "none"
+    if observed == expected:
+        return True, "exact"
+    # Subtype of expected — observed's ancestors include expected.
+    if expected in _ancestors(observed):
+        return True, "subtype_of_expected"
+    # Parent of expected — observed appears in expected's ancestor chain.
+    if observed in _ancestors(expected):
+        return True, "parent_of_expected"
+    return False, "none"
+
+
+def _any_in_kin(codes: list[str], expected: str) -> tuple[bool, str]:
+    """Top-3 variant: return the best match across a list of codes.
+
+    The kind prefers ``exact`` over ``subtype_of_expected`` over
+    ``parent_of_expected`` over ``none`` so the headline ``kind`` for
+    a top-3 hit reflects the most specific agreement.
+    """
+    best_kind = "none"
+    rank = {"exact": 3, "subtype_of_expected": 2, "parent_of_expected": 1, "none": 0}
+    matched = False
+    for c in codes or []:
+        m, k = _codes_match(c, expected)
+        if m:
+            matched = True
+            if rank[k] > rank[best_kind]:
+                best_kind = k
+    return matched, best_kind
+
+
 def _classify_sample_for_worker(args: tuple[str, str]) -> dict[str, Any]:
     """Worker entry: classify a single TCGA sample by barcode.
 
@@ -327,9 +416,11 @@ def _classify_sample_for_worker(args: tuple[str, str]) -> dict[str, Any]:
         if str(expected_code).startswith("NORMAL:")
         else expected_code
     )
-    broad_top1 = broad_code == base_expected
-    broad_top3_hit = base_expected in broad_top3
-    consolidated_top1 = consolidated_code == base_expected
+    broad_top1, broad_top1_kind = _codes_match(broad_code, base_expected)
+    broad_top3_hit, broad_top3_kind = _any_in_kin(broad_top3, base_expected)
+    consolidated_top1, consolidated_top1_kind = _codes_match(
+        consolidated_code, base_expected
+    )
     return {
         "sample_id": sample_id,
         "expected_code": expected_code,
@@ -338,15 +429,20 @@ def _classify_sample_for_worker(args: tuple[str, str]) -> dict[str, Any]:
         "broad_top_support": round(float(summary["broad_top_support"]), 4),
         "broad_top3": broad_top3,
         "broad_top1_match": bool(broad_top1),
+        "broad_top1_match_kind": broad_top1_kind,
         "broad_top3_match": bool(broad_top3_hit),
+        "broad_top3_match_kind": broad_top3_kind,
         "consolidated_cancer_type": consolidated_code,
         "consolidated_selected_by": selected_by,
         "consolidated_top1_match": bool(consolidated_top1),
+        "consolidated_top1_match_kind": consolidated_top1_kind,
         "top_code": broad_code,
         "top_support": round(float(summary["broad_top_support"]), 4),
         "top3": broad_top3,
         "top1_match": bool(broad_top1),
+        "top1_match_kind": broad_top1_kind,
         "top3_match": bool(broad_top3_hit),
+        "top3_match_kind": broad_top3_kind,
         "status": "ok",
         "seconds": round(elapsed, 2),
     }
@@ -780,9 +876,11 @@ def _tcga_per_sample_track(
             broad_top3 = summary.get("broad_top3") or []
             consolidated_code = summary["consolidated_cancer_type"] or broad_code
             selected_by = summary.get("consolidated_selected_by") or ""
-            broad_top1 = broad_code == expected_code
-            broad_top3_hit = expected_code in broad_top3
-            consolidated_top1 = consolidated_code == expected_code
+            broad_top1, broad_top1_kind = _codes_match(broad_code, expected_code)
+            broad_top3_hit, broad_top3_kind = _any_in_kin(broad_top3, expected_code)
+            consolidated_top1, consolidated_top1_kind = _codes_match(
+                consolidated_code, expected_code
+            )
             per_cohort[expected_code]["n"] += 1
             per_cohort[expected_code]["broad_top1"] += int(broad_top1)
             per_cohort[expected_code]["broad_top3"] += int(broad_top3_hit)
@@ -807,10 +905,13 @@ def _tcga_per_sample_track(
                     "broad_top_support": round(float(summary["broad_top_support"]), 4),
                     "broad_top3": broad_top3,
                     "broad_top1_match": bool(broad_top1),
+                    "broad_top1_match_kind": broad_top1_kind,
                     "broad_top3_match": bool(broad_top3_hit),
+                    "broad_top3_match_kind": broad_top3_kind,
                     "consolidated_cancer_type": consolidated_code,
                     "consolidated_selected_by": selected_by,
                     "consolidated_top1_match": bool(consolidated_top1),
+                    "consolidated_top1_match_kind": consolidated_top1_kind,
                     # Back-compat aliases for older tooling reading the
                     # report (TSV consumers, baseline JSONs from before
                     # the per-step split).
@@ -818,7 +919,9 @@ def _tcga_per_sample_track(
                     "top_support": round(float(summary["broad_top_support"]), 4),
                     "top3": broad_top3,
                     "top1_match": bool(broad_top1),
+                    "top1_match_kind": broad_top1_kind,
                     "top3_match": bool(broad_top3_hit),
+                    "top3_match_kind": broad_top3_kind,
                     "seconds": round(elapsed, 2),
                 }
             )
