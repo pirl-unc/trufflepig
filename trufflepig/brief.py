@@ -1341,6 +1341,53 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     )
 
 
+def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
+    """Render the lineage-panel verdict as a follow-on context line
+    after the cancer-type basis. The panel is a tie-breaker, not a
+    primary determination, so this is additive: it appears whenever
+    ``summarize_evidence.top_score`` reaches a reportable bar
+    (>=0.5), even if the panel didn't promote a label.
+
+    Wiring point #3 from ``trufflepig.lineage_panels`` (see contract
+    block in lineage_panels.py). The line surfaces the panel name,
+    score, rationale, and — when applicable — whether the panel
+    promoted the report label or was held back by the broad
+    classifier.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    if not summary:
+        return None
+    try:
+        top_score = float(summary.get("top_score") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if top_score < 0.5:
+        return None
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel:
+        return None
+    rationale = str(summary.get("top_rationale") or "").strip()
+    promotion = summary.get("promotion") or {}
+    promoted = bool(promotion.get("promoted"))
+    promoted_code = str(promotion.get("code") or "").strip()
+    blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
+    if promoted and promoted_code:
+        promoted_clause = (
+            f" — promoted {promoted_code} as the report label"
+            if promoted_code == str(cancer_code or "").strip()
+            else f" — proposed {promoted_code} as the report label"
+        )
+    elif blockers:
+        promoted_clause = f" — recorded as evidence only ({blockers[0]})"
+    else:
+        promoted_clause = ""
+    rationale_clause = f": {rationale}" if rationale else ""
+    return (
+        f"**Lineage panel:** {top_panel} score "
+        f"{top_score:.2f}{rationale_clause}{promoted_clause}."
+    )
+
+
 def _fusion_pair_display(finding: dict) -> str:
     fusion = finding.get("fusion") or {}
     pair = str(fusion.get("pair") or "").strip()
@@ -2161,6 +2208,9 @@ def build_summary(
     call_punctuation = suffix or "."
     lines.append(f"**Cancer call:** {cancer_code} ({cancer_name}){call_punctuation}")
     lines.append(_cancer_type_basis_line(analysis, cancer_code))
+    panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
+    if panel_line:
+        lines.append(panel_line)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code, call_tier=call_tier)
     if rna_crosscheck:
         lines.append(rna_crosscheck)
@@ -2515,8 +2565,11 @@ def build_actionable(
         lines.append("\n" + inferred_site_line)
     basis_line = _cancer_type_basis_line(analysis, cancer_code)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code)
+    panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
     if basis_line:
         lines.append(f"\n{basis_line}")
+    if panel_line:
+        lines.append(f"\n{panel_line}")
     if rna_crosscheck:
         lines.append(f"\n{rna_crosscheck}")
     fusion_line = _fusion_evidence_line(analysis, cancer_code)

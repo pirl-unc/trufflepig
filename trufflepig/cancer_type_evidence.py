@@ -1283,7 +1283,7 @@ def _add_lineage_panel_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
     analysis: Mapping[str, Any],
-) -> None:
+) -> dict[str, Any] | None:
     """Evaluate ``trufflepig.lineage_panels`` against the sample and
     register hypotheses for any panel that clearly wins.
 
@@ -1296,12 +1296,22 @@ def _add_lineage_panel_features(
         between siblings),
       - panel's parent_cohort is a valid registry code.
 
+    Returns the ``summarize_evidence`` dict (with an extra
+    ``promotion`` block describing whether the panel actually
+    promoted a report-label hypothesis) whenever panels were
+    successfully evaluated, even if no panel cleared the promotion
+    gates. The caller can stash this on the
+    cancer_type_evidence return so downstream consumers (reports,
+    analysis-parameters.json) can render the panel verdict. Returns
+    ``None`` when evaluation was skipped (empty sample, missing
+    module, evaluator exception).
+
     See issue #42 and ``docs/CANCER_CALL_DECISION_FLOW.md`` for the
     design context. Failures are non-fatal — selector logs and
     returns; the broader cancer-type-evidence pipeline still runs.
     """
     if not sample_tpm_by_symbol:
-        return
+        return None
     try:
         from .lineage_panels import (
             LINEAGE_PANELS,
@@ -1312,7 +1322,7 @@ def _add_lineage_panel_features(
         _LOGGER.warning(
             "lineage_panels unavailable; skipping selector", exc_info=True
         )
-        return
+        return None
 
     # Sample-side HK median for normalization. Fall back to 1.0 if
     # the HK gene set is unavailable — better to score with naive
@@ -1338,25 +1348,50 @@ def _add_lineage_panel_features(
         evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_symbol, sample_hk_median)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("evaluate_panels failed; skipping selector", exc_info=True)
-        return
+        return None
 
-    summary = summarize_evidence(evidence)
+    summary = dict(summarize_evidence(evidence))
+    # Always stamp a promotion block on the summary so callers can
+    # tell why a panel did or didn't make it to a report-label
+    # hypothesis without re-deriving the gates.
+    summary.setdefault(
+        "promotion",
+        {
+            "promoted": False,
+            "code": None,
+            "blockers": [],
+        },
+    )
     top_score = float(summary.get("top_score") or 0.0)
     margin = float(summary.get("margin_over_second") or 0.0)
     top_panel = summary.get("top_panel")
     if not top_panel or top_score < _LINEAGE_PANEL_MIN_SCORE:
-        return
+        summary["promotion"]["blockers"].append(
+            f"top score {top_score:.2f} below threshold "
+            f"{_LINEAGE_PANEL_MIN_SCORE:.2f}"
+        )
+        return summary
     if margin < _LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND:
-        return
+        summary["promotion"]["blockers"].append(
+            f"margin over second {margin:.2f} below threshold "
+            f"{_LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND:.2f}"
+        )
+        return summary
 
     # Map panel back to its parent_cohort (the cancer code we'd
     # propose). Find the LineagePanel by name.
     panel = next((p for p in LINEAGE_PANELS if p.name == top_panel), None)
     if panel is None or not panel.parent_cohort:
-        return
+        summary["promotion"]["blockers"].append(
+            "winning panel has no parent_cohort mapping"
+        )
+        return summary
     code = _clean(panel.parent_cohort)
     if not code:
-        return
+        summary["promotion"]["blockers"].append(
+            "winning panel parent_cohort did not clean to a code"
+        )
+        return summary
 
     top_rationale = summary.get("top_rationale") or f"{top_panel} matched"
     hypothesis = _hypothesis(hypotheses, code)
@@ -1429,6 +1464,12 @@ def _add_lineage_panel_features(
         # selectors haven't fired.
         priority=(1, top_score),
     )
+    summary["promotion"] = {
+        "promoted": bool(can_promote),
+        "code": code,
+        "blockers": list(blockers),
+    }
+    return summary
 
 
 def _add_rare_marker_features(
@@ -1647,7 +1688,7 @@ def select_report_scope_from_evidence(
         sample_tpm_by_symbol,
         analysis,
     )
-    _add_lineage_panel_features(
+    lineage_panel_evidence = _add_lineage_panel_features(
         hypotheses,
         sample_tpm_by_symbol,
         analysis,
@@ -1692,6 +1733,10 @@ def select_report_scope_from_evidence(
         else None,
         # Back-compat alias for older report code/tests.
         "top_reference_cancer_type": primary_context,
+        # Wiring point #2 (lineage_panels.py contract): expose the
+        # panel verdict so analysis-parameters.json and report
+        # rendering can surface it without re-running the evaluator.
+        "lineage_panel_evidence": lineage_panel_evidence,
     }
 
 

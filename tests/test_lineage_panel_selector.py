@@ -137,3 +137,105 @@ def test_full_pipeline_includes_lineage_panel_in_evidence():
     result = cte.select_report_scope_from_evidence(df_expr, analysis)
     assert "evidence" in result
     assert isinstance(result["evidence"], list)
+    # Wiring point #2: lineage_panel_evidence must be a key in the
+    # returned dict (value may be None when sample TPM is empty).
+    assert "lineage_panel_evidence" in result
+
+
+def test_selector_returns_summary_with_promotion_block():
+    """When evaluation succeeds, _add_lineage_panel_features returns
+    a summary dict with a ``promotion`` block describing why the
+    panel did or didn't promote a label."""
+    hyps: dict = {}
+    summary = cte._add_lineage_panel_features(
+        hyps,
+        {"ACTB": 100.0, "GAPDH": 100.0, "B2M": 100.0},
+        _empty_analysis(),
+    )
+    if summary is None:
+        return  # selector early-returned (no panel hit threshold)
+    assert "promotion" in summary
+    promotion = summary["promotion"]
+    assert "promoted" in promotion
+    assert "blockers" in promotion
+
+
+def test_basis_line_renders_panel_when_summary_present():
+    """``brief._lineage_panel_evidence_line`` must surface the panel
+    verdict whenever ``analysis['lineage_panel_evidence']`` has a
+    top_score >= 0.5. Pins wiring point #3 (report rendering)."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.78,
+            "top_rationale": "high-markers strong, low-markers compliant",
+            "margin_over_second": 0.30,
+            "promotion": {
+                "promoted": False,
+                "code": "BRCA",
+                "blockers": [
+                    "broad RNA classifier is confident (clean top-1)",
+                ],
+            },
+        }
+    }
+    line = brief._lineage_panel_evidence_line(analysis, "BRCA")
+    assert line is not None
+    assert "BRCA_BASAL" in line
+    assert "0.78" in line
+    assert "high-markers" in line
+    # Non-promoted summary should be flagged as evidence-only.
+    assert "evidence only" in line
+
+
+def test_basis_line_renders_panel_when_promoted():
+    """When the panel actually promoted the report label, the line
+    notes that explicitly."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.78,
+            "top_rationale": "high-markers strong",
+            "margin_over_second": 0.30,
+            "promotion": {
+                "promoted": True,
+                "code": "BRCA",
+                "blockers": [],
+            },
+        }
+    }
+    line = brief._lineage_panel_evidence_line(analysis, "BRCA")
+    assert line is not None
+    assert "promoted BRCA" in line
+
+
+def test_basis_line_skips_panel_below_threshold():
+    """A panel verdict below the 0.5 reporting bar is suppressed."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.30,
+            "top_rationale": "weak",
+            "promotion": {"promoted": False, "code": None, "blockers": []},
+        }
+    }
+    assert brief._lineage_panel_evidence_line(analysis, "BRCA") is None
+
+
+def test_basis_line_skips_panel_when_no_evidence():
+    """When analysis has no lineage_panel_evidence, return None."""
+    from trufflepig import brief
+
+    assert brief._lineage_panel_evidence_line({}, "BRCA") is None
+    assert (
+        brief._lineage_panel_evidence_line(
+            {"lineage_panel_evidence": None}, "BRCA"
+        )
+        is None
+    )
