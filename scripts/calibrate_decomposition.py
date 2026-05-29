@@ -876,9 +876,11 @@ def _tcga_per_sample_track(
             broad_top3 = summary.get("broad_top3") or []
             consolidated_code = summary["consolidated_cancer_type"] or broad_code
             selected_by = summary.get("consolidated_selected_by") or ""
-            broad_top1 = broad_code == expected_code
-            broad_top3_hit = expected_code in broad_top3
-            consolidated_top1 = consolidated_code == expected_code
+            broad_top1, broad_top1_kind = _codes_match(broad_code, expected_code)
+            broad_top3_hit, broad_top3_kind = _any_in_kin(broad_top3, expected_code)
+            consolidated_top1, consolidated_top1_kind = _codes_match(
+                consolidated_code, expected_code
+            )
             per_cohort[expected_code]["n"] += 1
             per_cohort[expected_code]["broad_top1"] += int(broad_top1)
             per_cohort[expected_code]["broad_top3"] += int(broad_top3_hit)
@@ -903,10 +905,13 @@ def _tcga_per_sample_track(
                     "broad_top_support": round(float(summary["broad_top_support"]), 4),
                     "broad_top3": broad_top3,
                     "broad_top1_match": bool(broad_top1),
+                    "broad_top1_match_kind": broad_top1_kind,
                     "broad_top3_match": bool(broad_top3_hit),
+                    "broad_top3_match_kind": broad_top3_kind,
                     "consolidated_cancer_type": consolidated_code,
                     "consolidated_selected_by": selected_by,
                     "consolidated_top1_match": bool(consolidated_top1),
+                    "consolidated_top1_match_kind": consolidated_top1_kind,
                     # Back-compat aliases for older tooling reading the
                     # report (TSV consumers, baseline JSONs from before
                     # the per-step split).
@@ -914,7 +919,9 @@ def _tcga_per_sample_track(
                     "top_support": round(float(summary["broad_top_support"]), 4),
                     "top3": broad_top3,
                     "top1_match": bool(broad_top1),
+                    "top1_match_kind": broad_top1_kind,
                     "top3_match": bool(broad_top3_hit),
+                    "top3_match_kind": broad_top3_kind,
                     "seconds": round(elapsed, 2),
                 }
             )
