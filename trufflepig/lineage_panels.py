@@ -176,27 +176,6 @@ def _cohort_hk(cohort: str) -> float:
     return _cohort_hk_medians().get(cohort, 1.0) or 1.0
 
 
-@lru_cache(maxsize=1)
-def _symbol_to_gene_id() -> dict[str, str]:
-    """Process-wide ``HGNC symbol → versionless Ensembl ID`` map,
-    derived from pirlygenes' canonical Ensembl table. Used to resolve
-    panel-marker symbols to the gene IDs we look up by internally.
-    Returns ``{}`` when pirlygenes is unavailable; callers should
-    treat a missing symbol as a no-op for that marker.
-    """
-    try:
-        from pirlygenes.gene_ids import find_gene_id_by_name_from_ensembl
-    except ImportError:
-        return {}
-    # We don't enumerate the full ensembl table here (too large) —
-    # each panel resolves its own symbols lazily via the cached
-    # `_panel_symbol_to_gene_id` helper below, which delegates to
-    # this function only for the symbols it actually uses.
-    # The empty dict is intentional: it forces callers through the
-    # symbol-by-symbol fallback path.
-    return {}
-
-
 @lru_cache(maxsize=512)
 def _panel_symbol_to_gene_id(symbol: str) -> str:
     """Resolve a single HGNC symbol to a versionless Ensembl ID.
