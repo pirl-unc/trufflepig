@@ -1419,10 +1419,21 @@ def _add_lineage_panel_features(
     #       set the panel can't promote (BRCA_LUMINAL firing on a UCEC
     #       sample because FOXA1+GATA3 overlap is the classic failure;
     #       it cost ~12% consolidated top-1 on TCGA-160 in early testing).
-    #   (b) The broad classifier must be UNCERTAIN — either the
-    #       top-1/top-2 support ratio is close (<1.3 = runner-up is
-    #       within ~77% of leader) OR the fit_quality is "ambiguous"
-    #       or "weak". A clean broad win is left alone.
+    #   (b) One of:
+    #       * SAME-FAMILY REFINEMENT — ``code``'s family matches the broad
+    #         top-1's family. This covers BRCA → BRCA_BASAL refinement and
+    #         is always safe because we're picking a sub-label within a
+    #         family the broad classifier already chose.
+    #       * BROAD EXPLICITLY UNCERTAIN — ``fit_quality.label`` is "weak"
+    #         or "ambiguous". This is the cross-family case (e.g. CHOL vs
+    #         LIHC for a hepatic-margin sample) that the panel exists to
+    #         help with.
+    #
+    #   An earlier version also fired on a close top-1/top-2 support
+    #   ratio (<1.30), but that fired on sibling-subtype draws like
+    #   SKCM vs UVM (both melanocytic) where the family IS settled —
+    #   it just enabled cross-family overrides (SKCM → BRCA) the user
+    #   explicitly didn't want. Drop the ratio path.
     #
     # If neither gate passes, the selector still records the panel
     # evidence in details so reports / downstream confidence can surface
@@ -1436,23 +1447,35 @@ def _add_lineage_panel_features(
     if isinstance(fit_quality, Mapping):
         fit_label = str(fit_quality.get("label") or "").strip().lower()
     broad_uncertain = fit_label in {"weak", "ambiguous"}
-    if not broad_uncertain and len(trace) >= 2:
-        top_support = float(trace[0].get("support_score") or trace[0].get("support_fraction_of_top") or 0.0)
-        runner = float(trace[1].get("support_score") or trace[1].get("support_fraction_of_top") or 0.0)
-        if top_support > 0 and (top_support / max(runner, 1e-9)) < 1.30:
-            broad_uncertain = True
 
-    can_promote = bool(in_broad_top and broad_uncertain)
+    broad_top_family = ""
+    if trace:
+        broad_top_family = _clean(trace[0].get("family_label")).lower()
+        if not broad_top_family:
+            broad_top_row = _registry_by_code().get(_clean(trace[0].get("code")))
+            if broad_top_row:
+                broad_top_family = _clean(broad_top_row.get("family")).lower()
+    proposed_family = ""
+    proposed_row = _registry_by_code().get(code)
+    if proposed_row:
+        proposed_family = _clean(proposed_row.get("family")).lower()
+    same_family = bool(
+        broad_top_family and proposed_family and broad_top_family == proposed_family
+    )
+
+    can_promote = bool(in_broad_top and (same_family or broad_uncertain))
     blockers: list[str] = []
     if not in_broad_top:
         blockers.append(
             f"{code} is not in the top-5 broad RNA candidates "
             "(lineage panel is tie-breaker only, not promoter)"
         )
-    elif not broad_uncertain:
+    elif not (same_family or broad_uncertain):
         blockers.append(
-            "broad RNA classifier is confident (clean top-1) — "
-            "lineage panel records evidence but does not override"
+            f"broad top-1 family ({broad_top_family or 'unknown'}) "
+            f"differs from panel family ({proposed_family or 'unknown'}) "
+            "and broad classifier is confident — lineage panel records "
+            "evidence but does not cross-family override"
         )
     hypothesis.consider_for_report_label(
         selected_by="lineage_panel",
