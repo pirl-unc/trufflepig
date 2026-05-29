@@ -150,6 +150,47 @@ def build_sample_tpm_by_symbol(df_gene_expr):
 _build_sample_tpm_by_symbol = build_sample_tpm_by_symbol
 
 
+def build_sample_tpm_by_gene_id(df_gene_expr):
+    """Return ``{versionless_ensembl_id: max_TPM}`` from already-clean
+    sample expression.
+
+    Mirrors :func:`build_sample_tpm_by_symbol` but keeps the canonical
+    Ensembl ID as the dict key. Internal lookups should prefer this
+    over the symbol-keyed variant — the symbol-keyed form remains for
+    surfaces that already curate by HGNC name.
+    """
+    from .plot_data_helpers import _strip_ensembl_version
+    from trufflepig.clean_tpm import assert_clean_tpm
+
+    with without_dataframe_attrs(df_gene_expr):
+        gene_id_col, _gene_name_col = guess_gene_cols(df_gene_expr)
+        gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)
+
+        tpm_col = (
+            "TPM"
+            if "TPM" in df_gene_expr.columns
+            else next((c for c in df_gene_expr.columns if c.lower() == "tpm"), None)
+        )
+        if tpm_col is None:
+            raise KeyError(
+                f"No TPM column found. Columns: {list(df_gene_expr.columns)}"
+            )
+        assert_clean_tpm(
+            df_gene_expr,
+            value_cols=[tpm_col],
+            label_col=_gene_name_col,
+            id_col=gene_id_col,
+            context="analysis sample expression",
+        )
+        tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
+        valid = gene_ids.notna() & gene_ids.str.len().gt(0) & tpms.notna()
+        return dict(
+            pd.DataFrame({"gene_id": gene_ids[valid], "tpm": tpms[valid]})
+            .groupby("gene_id")["tpm"]
+            .max()
+        )
+
+
 # -------------------- ranges_df accessors --------------------
 #
 # Profiling identified ``for _, row in ranges_df.iterrows()`` as the

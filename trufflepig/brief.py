@@ -1341,12 +1341,20 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     )
 
 
+# Lineage panels below this score don't earn a brief.md line. Mirrors
+# the cancer_type_evidence selector's _LINEAGE_PANEL_MIN_SCORE (0.60)
+# but stays lower so high-confidence-but-below-promotion panels still
+# get reported as evidence.
+_LINEAGE_PANEL_BRIEF_MIN_SCORE = 0.5
+
+
 def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     """Render the lineage-panel verdict as a follow-on context line
     after the cancer-type basis. The panel is a tie-breaker, not a
     primary determination, so this is additive: it appears whenever
     ``summarize_evidence.top_score`` reaches a reportable bar
-    (>=0.5), even if the panel didn't promote a label.
+    (``_LINEAGE_PANEL_BRIEF_MIN_SCORE``), even if the panel didn't
+    promote a label.
 
     Wiring point #3 from ``trufflepig.lineage_panels`` (see contract
     block in lineage_panels.py). The line surfaces the panel name,
@@ -1361,7 +1369,7 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         top_score = float(summary.get("top_score") or 0.0)
     except (TypeError, ValueError):
         return None
-    if top_score < 0.5:
+    if top_score < _LINEAGE_PANEL_BRIEF_MIN_SCORE:
         return None
     top_panel = str(summary.get("top_panel") or "").strip()
     if not top_panel:
@@ -1386,6 +1394,96 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         f"**Lineage panel:** {top_panel} score "
         f"{top_score:.2f}{rationale_clause}{promoted_clause}."
     )
+
+
+# Human-readable subtype-program annotations keyed by the panel name.
+# Panels capture biology — the panel's transcriptional program has
+# therapy / pathway implications worth surfacing even when the broad
+# call stays at the parent label. Each entry is one short sentence
+# describing what the program implies (NOT clinical advice).
+_LINEAGE_PANEL_PROGRAM_NOTES: dict[str, str] = {
+    "BRCA_BASAL": (
+        "basal-like breast program (KRT5/KRT14 cytokeratins, FOXC1, low ER/PR/HER2). "
+        "Associated with triple-negative biology, BRCA1/HRD signatures, and PD-L1 candidacy"
+    ),
+    "BRCA_LUMINAL": (
+        "luminal breast program (ESR1, PGR, FOXA1, GATA3). "
+        "Hormone-receptor-positive biology; anti-estrogen therapy context"
+    ),
+    "ESCA_SQUAMOUS": (
+        "squamous esophageal program (TP63, SOX2, keratins). "
+        "Distinct from adenocarcinoma; chemoradiation-sensitive context"
+    ),
+    "BLCA_LUMINAL": (
+        "luminal urothelial program (FOXA1, GATA3, PPARG, UPK1A/UPK2). "
+        "Less chemo-sensitive than basal MIBC; FGFR3 alterations enriched"
+    ),
+    "BLCA_BASAL": (
+        "basal-like muscle-invasive bladder program (KRT5/KRT14/KRT6A, S100P, low FOXA1/GATA3). "
+        "More chemo-sensitive than luminal MIBC; squamous-like differentiation"
+    ),
+    "HNSC": (
+        "head-and-neck squamous program (keratins, p63, SOX2). "
+        "HPV status independently informative"
+    ),
+    "LIHC": (
+        "hepatocyte program (albumin synthesis, drug-metabolism enzymes). "
+        "Beware DDI from preserved hepatic clearance"
+    ),
+    "PAAD": (
+        "pancreatic ductal program (KRT19, MUC1, CDX2-negative). "
+        "Stromal-dominant tumor microenvironment context"
+    ),
+    "CHOL": (
+        "biliary epithelial program (KRT19, CFTR, MUC5AC). "
+        "Distinct from hepatocellular biology; FGFR2 fusions enriched"
+    ),
+    "UCEC": (
+        "endometrial Müllerian program (PAX8, ESR1, FOXA2). "
+        "Hormone-receptor context overlapping with luminal breast"
+    ),
+    "MESO": (
+        "mesothelial program (MSLN, WT1, CALB2). "
+        "Mesothelin is a therapy target; BAP1 loss enriched"
+    ),
+    "ACC": (
+        "adrenocortical steroidogenic program (CYP11A1/CYP17A1, NR5A1/SF1, STAR). "
+        "Active cortisol/aldosterone biology; mitotane sensitivity context"
+    ),
+    "THYM": (
+        "thymic-epithelial program (AIRE, FOXN1, PSMB11). "
+        "Paraneoplastic autoimmune context; checkpoint-inhibitor caution"
+    ),
+}
+
+
+def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optional[str]:
+    """Surface the lineage panel's transcriptional-program implication
+    as a separate "**Subtype signal:**" line. Distinct from the
+    raw evidence line: the evidence line says "what the panel scored";
+    this line says "what that biological program implies".
+
+    Fires whenever the panel evidence is present at reporting score
+    AND we have a curated program note for the top panel. Does NOT
+    second-guess the cancer call — it adds biology, never therapy
+    decisions.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    if not summary:
+        return None
+    try:
+        top_score = float(summary.get("top_score") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if top_score < _LINEAGE_PANEL_BRIEF_MIN_SCORE:
+        return None
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel:
+        return None
+    note = _LINEAGE_PANEL_PROGRAM_NOTES.get(top_panel)
+    if not note:
+        return None
+    return f"**Subtype signal:** {top_panel} pattern detected — {note}."
 
 
 def _fusion_pair_display(finding: dict) -> str:
@@ -2211,6 +2309,9 @@ def build_summary(
     panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
     if panel_line:
         lines.append(panel_line)
+    subtype_line = _lineage_panel_subtype_reasoning_line(analysis, cancer_code)
+    if subtype_line:
+        lines.append(subtype_line)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code, call_tier=call_tier)
     if rna_crosscheck:
         lines.append(rna_crosscheck)
@@ -2566,10 +2667,13 @@ def build_actionable(
     basis_line = _cancer_type_basis_line(analysis, cancer_code)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code)
     panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
+    subtype_line = _lineage_panel_subtype_reasoning_line(analysis, cancer_code)
     if basis_line:
         lines.append(f"\n{basis_line}")
     if panel_line:
         lines.append(f"\n{panel_line}")
+    if subtype_line:
+        lines.append(f"\n{subtype_line}")
     if rna_crosscheck:
         lines.append(f"\n{rna_crosscheck}")
     fusion_line = _fusion_evidence_line(analysis, cancer_code)

@@ -117,10 +117,24 @@ class PanelEvidence:
 
 
 # ---------- cohort lookup (cached) ----------
+#
+# Cohort-median tables are keyed by ``(cohort, gene_id)`` — internal
+# lookups go through Ensembl IDs to match the rest of trufflepig's
+# ID-first contract (see common.py / cancer_type_evidence.py for
+# the consistent pattern). LineagePanel definitions remain
+# symbol-friendly because curating by HGNC name is what biologists
+# read; the symbol → ID resolution happens once per panel via
+# ``_panel_symbol_to_gene_id``.
+
+
+def _strip_ensembl_version(value: Any) -> str:
+    s = str(value or "").strip()
+    return s.split(".", 1)[0] if s else s
+
 
 @lru_cache(maxsize=1)
-def _cohort_medians() -> dict[tuple[str, str], float]:
-    """Map (cohort_code, symbol) → cohort median expression in clean TPM.
+def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
+    """Map ``(cohort_code, versionless_gene_id) → median TPM_clean``.
 
     Cached because cancer_reference_expression is ~2M rows. The lookup
     table itself is ~70 cohorts × 20k genes ≈ 1.4M entries — a single
@@ -130,10 +144,13 @@ def _cohort_medians() -> dict[tuple[str, str], float]:
 
     df = cancer_reference_expression()
     df = df[df["normalization"] == "TPM_clean"]
-    return {
-        (str(row.cancer_code), str(row.Symbol)): float(row.expression)
-        for row in df.itertuples()
-    }
+    out: dict[tuple[str, str], float] = {}
+    for row in df.itertuples():
+        gid = _strip_ensembl_version(getattr(row, "Ensembl_Gene_ID", None))
+        if not gid:
+            continue
+        out[(str(row.cancer_code), gid)] = float(row.expression)
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -149,23 +166,86 @@ def _cohort_hk_medians() -> dict[str, float]:
     return {str(k): float(v) for k, v in hk.groupby("cancer_code")["expression"].median().items()}
 
 
-def _cohort_median(cohort: str, symbol: str) -> float | None:
-    val = _cohort_medians().get((cohort, symbol))
-    return None if val is None else val
+def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:
+    if not gene_id:
+        return None
+    return _cohort_medians_by_gene_id().get((cohort, gene_id))
 
 
 def _cohort_hk(cohort: str) -> float:
     return _cohort_hk_medians().get(cohort, 1.0) or 1.0
 
 
+@lru_cache(maxsize=1)
+def _symbol_to_gene_id() -> dict[str, str]:
+    """Process-wide ``HGNC symbol → versionless Ensembl ID`` map,
+    derived from pirlygenes' canonical Ensembl table. Used to resolve
+    panel-marker symbols to the gene IDs we look up by internally.
+    Returns ``{}`` when pirlygenes is unavailable; callers should
+    treat a missing symbol as a no-op for that marker.
+    """
+    try:
+        from pirlygenes.gene_ids import find_gene_id_by_name_from_ensembl
+    except ImportError:
+        return {}
+    # We don't enumerate the full ensembl table here (too large) —
+    # each panel resolves its own symbols lazily via the cached
+    # `_panel_symbol_to_gene_id` helper below, which delegates to
+    # this function only for the symbols it actually uses.
+    # The empty dict is intentional: it forces callers through the
+    # symbol-by-symbol fallback path.
+    return {}
+
+
+@lru_cache(maxsize=512)
+def _panel_symbol_to_gene_id(symbol: str) -> str:
+    """Resolve a single HGNC symbol to a versionless Ensembl ID.
+
+    Cached per symbol so each marker is looked up once per process
+    regardless of how many panels mention it. Returns ``""`` if the
+    symbol can't be resolved (pirlygenes unavailable, unmapped name).
+    """
+    s = str(symbol or "").strip()
+    if not s:
+        return ""
+    try:
+        from pirlygenes.gene_ids import find_gene_id_by_name_from_ensembl
+    except ImportError:
+        return ""
+    try:
+        gid = find_gene_id_by_name_from_ensembl(s)
+    except Exception:  # noqa: BLE001
+        return ""
+    return _strip_ensembl_version(gid) if gid else ""
+
+
+def _resolve_marker_ids(symbols: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """For each symbol in ``symbols``, return ``(symbol, gene_id)``;
+    drop symbols that don't resolve. Kept as a tuple so panels can
+    cache it.
+    """
+    out: list[tuple[str, str]] = []
+    for sym in symbols:
+        gid = _panel_symbol_to_gene_id(sym)
+        if gid:
+            out.append((sym, gid))
+    return tuple(out)
+
+
 # ---------- the one scoring function ----------
 
 def score_panel(
     panel: LineagePanel,
-    sample_tpm: Mapping[str, float],
+    sample_tpm_by_gene_id: Mapping[str, float],
     sample_hk_median: float,
 ) -> PanelEvidence:
     """Evaluate one panel against one sample.
+
+    ``sample_tpm_by_gene_id`` is a ``{versionless_ensembl_id: TPM}``
+    mapping; the panel's own marker symbols are resolved to gene IDs
+    once and looked up against it. Symbols with no Ensembl mapping
+    are silently dropped (cannot be evaluated). Rationale strings
+    still carry the HGNC symbol because that's what biologists read.
 
     ``sample_hk_median`` is the sample's own housekeeping median
     (computed once per sample upstream and passed in — keeps this
@@ -174,14 +254,20 @@ def score_panel(
 
     cohort_hk = _cohort_hk(panel.parent_cohort)
 
+    def _sample(gid: str) -> float:
+        return float(sample_tpm_by_gene_id.get(gid, 0.0))
+
+    obligate_pairs = _resolve_marker_ids(panel.obligate)
+    high_pairs = _resolve_marker_ids(panel.high_markers)
+
     # Obligate gate — cheap rejection
     obligate_failures: list[tuple[str, float, float]] = []
-    for sym in panel.obligate:
-        cohort_val = _cohort_median(panel.parent_cohort, sym)
+    for sym, gid in obligate_pairs:
+        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
         if cohort_val is None:
             continue
         cohort_hk_ratio = cohort_val / cohort_hk
-        sample_hk_ratio = sample_tpm.get(sym, 0.0) / sample_hk_median
+        sample_hk_ratio = _sample(gid) / sample_hk_median
         required = 0.5 * cohort_hk_ratio
         if sample_hk_ratio < required:
             obligate_failures.append((sym, sample_hk_ratio, required))
@@ -205,23 +291,30 @@ def score_panel(
     # Positive markers — HK-normalized vs cohort
     high_hits: list[tuple[str, float, float]] = []
     high_misses: list[tuple[str, float, float]] = []
-    for sym in panel.high_markers:
-        cohort_val = _cohort_median(panel.parent_cohort, sym)
+    for sym, gid in high_pairs:
+        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
+        obs_tpm = _sample(gid)
         if cohort_val is None:
-            high_misses.append((sym, sample_tpm.get(sym, 0.0), 0.0))
+            high_misses.append((sym, obs_tpm, 0.0))
             continue
-        sample_hk_ratio = sample_tpm.get(sym, 0.0) / sample_hk_median
+        sample_hk_ratio = obs_tpm / sample_hk_median
         cohort_hk_ratio = cohort_val / cohort_hk
         if sample_hk_ratio >= 0.5 * cohort_hk_ratio:
-            high_hits.append((sym, sample_tpm.get(sym, 0.0), cohort_val))
+            high_hits.append((sym, obs_tpm, cohort_val))
         else:
-            high_misses.append((sym, sample_tpm.get(sym, 0.0), cohort_val))
+            high_misses.append((sym, obs_tpm, cohort_val))
 
     # Negative markers — absolute TPM threshold (interpretable near zero)
     low_passes: list[tuple[str, float, float]] = []
     low_violations: list[tuple[str, float, float]] = []
     for sym, cap in panel.low_markers:
-        obs = sample_tpm.get(sym, 0.0)
+        gid = _panel_symbol_to_gene_id(sym)
+        if not gid:
+            # Can't evaluate this marker — treat as pass-through so a
+            # symbol with no Ensembl mapping doesn't artificially fail
+            # a panel.
+            continue
+        obs = _sample(gid)
         if obs < cap:
             low_passes.append((sym, obs, cap))
         else:
@@ -264,7 +357,7 @@ def score_panel(
 
 def evaluate_panels(
     panels: tuple[LineagePanel, ...],
-    sample_tpm: Mapping[str, float],
+    sample_tpm_by_gene_id: Mapping[str, float],
     sample_hk_median: float,
 ) -> tuple[PanelEvidence, ...]:
     """Score every panel; return evidence sorted by score (highest first).
@@ -273,7 +366,9 @@ def evaluate_panels(
     reasoning (confidence, report rationale, conflicting-call detection)
     needs to see misses as well as hits.
     """
-    evidence = tuple(score_panel(p, sample_tpm, sample_hk_median) for p in panels)
+    evidence = tuple(
+        score_panel(p, sample_tpm_by_gene_id, sample_hk_median) for p in panels
+    )
     return tuple(sorted(evidence, key=lambda e: -e.score))
 
 

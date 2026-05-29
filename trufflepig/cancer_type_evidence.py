@@ -40,6 +40,11 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
 _LINEAGE_PANEL_MIN_SCORE = 0.60
 _LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND = 0.20
 
+# How many evaluated panels to record in ``lineage_panel_all`` for
+# downstream rendering / debugging. Mirrors the broad-top-5 cap
+# used by other selectors so reports stay scannable.
+_LINEAGE_PANEL_ALL_LIMIT = 5
+
 _SQUAMOUS_CONTEXT_CODES = frozenset({"HNSC", "LUSC", "ESCA", "CESC", "THYM"})
 _SALIVARY_CODES = frozenset({"ADCC", "ACINIC"})
 _OS_OSTEOGENIC_MARKERS = (
@@ -477,6 +482,34 @@ def _registry_by_code() -> dict[str, dict[str, Any]]:
         for _, row in df.iterrows()
         if _clean(row.get("code"))
     }
+
+
+@lru_cache(maxsize=1)
+def _hk_normalization_gene_ids() -> frozenset[str]:
+    """Versionless Ensembl IDs of pirlygenes housekeeping genes.
+    Computed once per process — every sample shares the same HK gene
+    set so there is no point in re-deriving it inside
+    ``_add_lineage_panel_features``.
+
+    Returns ``frozenset()`` when pirlygenes is unavailable; callers
+    should fall back to a naive normalization (e.g.
+    ``sample_hk_median=1.0``).
+    """
+    try:
+        from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+    except ImportError:
+        return frozenset()
+    try:
+        ids = set(housekeeping_gene_ids())
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    out: set[str] = set()
+    for gid in ids:
+        s = str(gid or "").strip()
+        if not s:
+            continue
+        out.add(s.split(".", 1)[0])
+    return frozenset(out)
 
 
 def _local_reference_context_codes(
@@ -1283,6 +1316,8 @@ def _add_lineage_panel_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
     analysis: Mapping[str, Any],
+    *,
+    sample_tpm_by_gene_id: Mapping[str, float] | None = None,
 ) -> dict[str, Any] | None:
     """Evaluate ``trufflepig.lineage_panels`` against the sample and
     register hypotheses for any panel that clearly wins.
@@ -1306,17 +1341,26 @@ def _add_lineage_panel_features(
     ``None`` when evaluation was skipped (empty sample, missing
     module, evaluator exception).
 
+    Graceful degradation: when ``pirlygenes`` or the pan-cancer
+    expression frame is unavailable, HK normalization falls back to
+    ``sample_hk_median=1.0`` and the family-aware gate falls back to
+    requiring ``fit_quality.label in {"weak", "ambiguous"}``
+    (``_registry_by_code()`` returns ``{}`` so ``same_family`` is
+    always False). This degrades panel sensitivity but keeps the
+    rest of the consolidator running — preferred over crashing.
+
     See issue #42 and ``docs/CANCER_CALL_DECISION_FLOW.md`` for the
     design context. Failures are non-fatal — selector logs and
     returns; the broader cancer-type-evidence pipeline still runs.
     """
-    if not sample_tpm_by_symbol:
+    if not sample_tpm_by_symbol and not sample_tpm_by_gene_id:
         return None
     try:
         from .lineage_panels import (
             LINEAGE_PANELS,
             evaluate_panels,
             summarize_evidence,
+            _panel_symbol_to_gene_id,
         )
     except ImportError:
         _LOGGER.warning(
@@ -1324,44 +1368,47 @@ def _add_lineage_panel_features(
         )
         return None
 
-    # Sample-side HK median for normalization. Fall back to 1.0 if
-    # the HK gene set is unavailable — better to score with naive
-    # normalization than skip the whole selector.
-    try:
-        from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
-        from .reference import pan_cancer_expression
-        hk_ids = set(housekeeping_gene_ids())
-        ref_syms = set(
-            pan_cancer_expression()
-            .loc[lambda d: d["Ensembl_Gene_ID"].isin(hk_ids), "Symbol"]
-            .unique()
-        )
+    # Internal lookups go through gene_id. If the caller didn't pre-
+    # compute the ID-keyed view (the existing main.py path passes
+    # only sample_tpm_by_symbol), build it on the fly by resolving
+    # each symbol once via the panel-marker cache. Both views are
+    # equivalent for our purposes; the ID-keyed view is what
+    # ``evaluate_panels`` actually consumes.
+    if sample_tpm_by_gene_id is None or not sample_tpm_by_gene_id:
+        sample_tpm_by_gene_id = {}
+        for sym, tpm in sample_tpm_by_symbol.items():
+            gid = _panel_symbol_to_gene_id(sym)
+            if not gid:
+                continue
+            existing = sample_tpm_by_gene_id.get(gid)
+            if existing is None or float(tpm) > existing:
+                sample_tpm_by_gene_id[gid] = float(tpm)
+
+    # Sample-side HK median for normalization. HK genes are pulled
+    # directly by ID from the cached set so the symbol → ID step is
+    # skipped entirely for the normalization path.
+    hk_ids = _hk_normalization_gene_ids()
+    if hk_ids:
         hk_vals = [
-            sample_tpm_by_symbol.get(s, 0.0) for s in ref_syms
-            if sample_tpm_by_symbol.get(s, 0.0) > 0
+            sample_tpm_by_gene_id.get(g, 0.0) for g in hk_ids
+            if sample_tpm_by_gene_id.get(g, 0.0) > 0
         ]
         sample_hk_median = float(np.median(hk_vals)) if hk_vals else 1.0
-    except Exception:  # noqa: BLE001
+    else:
         sample_hk_median = 1.0
 
     try:
-        evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_symbol, sample_hk_median)
+        evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_gene_id, sample_hk_median)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("evaluate_panels failed; skipping selector", exc_info=True)
         return None
 
     summary = dict(summarize_evidence(evidence))
-    # Always stamp a promotion block on the summary so callers can
-    # tell why a panel did or didn't make it to a report-label
-    # hypothesis without re-deriving the gates.
-    summary.setdefault(
-        "promotion",
-        {
-            "promoted": False,
-            "code": None,
-            "blockers": [],
-        },
-    )
+    # Initialize the promotion block once — every return path below
+    # rewrites it (either with the appropriate blocker string for an
+    # early-return reason, or with the final can_promote verdict at
+    # the bottom). No setdefault dance needed.
+    summary["promotion"] = {"promoted": False, "code": None, "blockers": []}
     top_score = float(summary.get("top_score") or 0.0)
     margin = float(summary.get("margin_over_second") or 0.0)
     top_panel = summary.get("top_panel")
@@ -1396,6 +1443,13 @@ def _add_lineage_panel_features(
     top_rationale = summary.get("top_rationale") or f"{top_panel} matched"
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("lineage_panel")
+    # ``basis`` is set ONLY when no prior selector has stamped one. A
+    # higher-priority selector (fine_reference, local_expression_reference)
+    # that fired earlier already owns the rationale string used in the
+    # report; lineage_panel piggybacks its own narrative via the
+    # ``lineage_panel_*`` keys in ``details`` (rendered separately by
+    # brief.py). This avoids the panel narrative clobbering a more
+    # specific selector's basis line.
     hypothesis.basis = hypothesis.basis or (
         f"lineage-panel discriminator: {top_rationale}"
     )
@@ -1407,7 +1461,7 @@ def _add_lineage_panel_features(
             "lineage_panel_rationale": top_rationale,
             "lineage_panel_all": [
                 {"name": e.panel_name, "score": round(e.score, 4)}
-                for e in evidence[:5]
+                for e in evidence[:_LINEAGE_PANEL_ALL_LIMIT]
             ],
         }
     )
@@ -1448,20 +1502,33 @@ def _add_lineage_panel_features(
         fit_label = str(fit_quality.get("label") or "").strip().lower()
     broad_uncertain = fit_label in {"weak", "ambiguous"}
 
-    broad_top_family = ""
-    if trace:
-        broad_top_family = _clean(trace[0].get("family_label")).lower()
-        if not broad_top_family:
-            broad_top_row = _registry_by_code().get(_clean(trace[0].get("code")))
-            if broad_top_row:
-                broad_top_family = _clean(broad_top_row.get("family")).lower()
-    proposed_family = ""
-    proposed_row = _registry_by_code().get(code)
-    if proposed_row:
-        proposed_family = _clean(proposed_row.get("family")).lower()
-    same_family = bool(
-        broad_top_family and proposed_family and broad_top_family == proposed_family
-    )
+    # Same-family check: derive family strictly from the registry for
+    # BOTH codes so the taxonomy is consistent. trace[0].family_label
+    # comes from tumor_purity's internal grouping (e.g. "breast",
+    # "MELANOCYTIC") and is NOT comparable to the registry's family
+    # column ("carcinoma-breast", "melanoma"). A direct-code-match
+    # shortcut handles the common case (panel.parent_cohort == broad
+    # top-1, e.g. BRCA_BASAL → BRCA when broad called BRCA).
+    broad_top_code = _clean(trace[0].get("code")) if trace else ""
+    if broad_top_code and broad_top_code == code:
+        same_family = True
+        broad_top_family = proposed_family = "<same-code>"
+    else:
+        registry = _registry_by_code()
+        broad_top_family = ""
+        if broad_top_code:
+            broad_row = registry.get(broad_top_code)
+            if broad_row:
+                broad_top_family = _clean(broad_row.get("family")).lower()
+        proposed_row = registry.get(code)
+        proposed_family = (
+            _clean(proposed_row.get("family")).lower() if proposed_row else ""
+        )
+        same_family = bool(
+            broad_top_family
+            and proposed_family
+            and broad_top_family == proposed_family
+        )
 
     can_promote = bool(in_broad_top and (same_family or broad_uncertain))
     blockers: list[str] = []
@@ -1678,13 +1745,14 @@ def select_report_scope_from_evidence(
 ) -> dict[str, Any]:
     """Build cancer-type hypotheses and return the selected report label."""
     try:
-        from .common import build_sample_tpm_by_symbol
+        from .common import build_sample_tpm_by_symbol, build_sample_tpm_by_gene_id
     except ImportError:
         _LOGGER.warning(
             "trufflepig.common is unavailable; sample TPM lookup will be empty",
             exc_info=True,
         )
         sample_tpm_by_symbol: Mapping[str, float] = {}
+        sample_tpm_by_gene_id: Mapping[str, float] = {}
     else:
         try:
             sample_tpm_by_symbol = build_sample_tpm_by_symbol(df_expr)
@@ -1694,6 +1762,14 @@ def select_report_scope_from_evidence(
                 exc_info=True,
             )
             sample_tpm_by_symbol = {}
+        try:
+            sample_tpm_by_gene_id = build_sample_tpm_by_gene_id(df_expr)
+        except (KeyError, ValueError, TypeError):
+            _LOGGER.warning(
+                "build_sample_tpm_by_gene_id failed; ID lookup will be empty",
+                exc_info=True,
+            )
+            sample_tpm_by_gene_id = {}
 
     hypotheses: dict[str, CancerTypeEvidence] = {}
     _add_broad_rna_features(hypotheses, analysis)
@@ -1715,6 +1791,7 @@ def select_report_scope_from_evidence(
         hypotheses,
         sample_tpm_by_symbol,
         analysis,
+        sample_tpm_by_gene_id=sample_tpm_by_gene_id,
     )
     for finding in rare_marker_hypotheses or []:
         _add_rare_marker_features(hypotheses, finding, analysis)

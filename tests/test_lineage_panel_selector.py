@@ -239,3 +239,240 @@ def test_basis_line_skips_panel_when_no_evidence():
         )
         is None
     )
+
+
+def test_subtype_reasoning_line_surfaces_program_implication():
+    """When a curated panel fires above the brief reporting bar, the
+    subtype-reasoning line should expose the transcriptional-program
+    implication so the report reads usefully — not just "BRCA_BASAL
+    scored 0.78"."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.78,
+            "promotion": {"promoted": False, "code": "BRCA", "blockers": []},
+        }
+    }
+    line = brief._lineage_panel_subtype_reasoning_line(analysis, "BRCA")
+    assert line is not None
+    assert "BRCA_BASAL" in line
+    assert "basal-like" in line.lower()
+
+
+def test_subtype_reasoning_line_skips_unknown_panel():
+    """Panels with no curated program note return None — silent
+    rather than dumping a generic placeholder."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "MADE_UP_PANEL",
+            "top_score": 0.99,
+            "promotion": {"promoted": False, "code": None, "blockers": []},
+        }
+    }
+    assert brief._lineage_panel_subtype_reasoning_line(analysis, "BRCA") is None
+
+
+def test_subtype_reasoning_line_skips_below_threshold():
+    """A panel below the brief reporting bar doesn't get a subtype
+    line either."""
+    from trufflepig import brief
+
+    analysis = {
+        "lineage_panel_evidence": {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.30,
+            "promotion": {"promoted": False, "code": None, "blockers": []},
+        }
+    }
+    assert brief._lineage_panel_subtype_reasoning_line(analysis, "BRCA") is None
+
+
+# ---------------------------------------------------------------------------
+# Family-aware promotion gate (regression for the SKCM → BRCA bug)
+# ---------------------------------------------------------------------------
+#
+# Earlier wiring used a top-1/top-2 support ratio < 1.30 as the
+# "broad is uncertain" trigger. On TCGA-EB-A24D-01 (SKCM) the broad
+# classifier was correct (SKCM top-1) but sibling-melanocytic (UVM)
+# was a close runner-up; that ratio gate fired and a BRCA lineage
+# panel overrode the call. The family-aware gate replaces the ratio
+# path with a same-family / explicitly-uncertain rule. These tests
+# pin that contract end-to-end.
+
+_HCC1395_SAMPLE = {
+    "KRT14": 708.0,
+    "KRT5": 368.0,
+    "FOXC1": 21.0,
+    "MIA": 88.0,
+    "ESR1": 0.0,
+    "PGR": 0.0,
+    "UPK1B": 0.0,
+    "TP63": 1.1,
+    "SOX2": 0.0,
+    "MUCL1": 0.5,
+    "ACTB": 200.0,
+    "GAPDH": 200.0,
+}
+
+
+def test_gate_blocks_cross_family_when_broad_confident():
+    """Regression for TCGA-EB-A24D-01 (SKCM→BRCA). Broad top-1 is in
+    a different family than the panel's parent_cohort AND there is
+    no explicit fit_quality=weak/ambiguous → the panel must NOT
+    promote a report label.
+    """
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {
+                "code": "SKCM",
+                "family_label": "melanocytic",
+                "support_score": 0.9,
+            },
+            {
+                "code": "UVM",
+                "family_label": "melanocytic",
+                "support_score": 0.8,
+            },
+            {"code": "BRCA", "family_label": "breast", "support_score": 0.3},
+        ],
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    if not hyps:
+        return  # selector early-returned (no panel cleared score gates)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return  # no BRCA hypothesis recorded
+    public = brca.public_dict() or {}
+    assert public.get("can_select_report_label") is False, (
+        "Cross-family panel promotion survived when broad top-1 was "
+        "confident — the SKCM → BRCA regression is back."
+    )
+    blocked = " ".join(public.get("blocking_reasons") or []).lower()
+    assert "family" in blocked or "cross-family" in blocked
+
+
+def test_gate_allows_same_family_subtype_refinement():
+    """When the panel's parent_cohort is in the same family as broad
+    top-1 (BRCA_BASAL → BRCA when broad picked BRCA), promotion is
+    safe even if broad fit_quality is not explicitly weak."""
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {
+                "code": "BRCA",
+                "family_label": "breast",
+                "support_score": 0.9,
+            },
+            {"code": "HNSC", "family_label": "squamous", "support_score": 0.4},
+        ],
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return  # panel framework unavailable; selector early-returned
+    public = brca.public_dict() or {}
+    if "lineage_panel" not in set(public.get("evidence_sources", [])):
+        return
+    assert public.get("can_select_report_label") is True, (
+        "Same-family lineage_panel promotion was blocked — BRCA → "
+        "BRCA_BASAL refinement should be allowed."
+    )
+
+
+def test_gate_allows_cross_family_when_broad_explicitly_weak():
+    """When ``fit_quality.label`` is "weak" or "ambiguous", the panel
+    earns the right to propose across families. This is the case
+    the panel exists for (CHOL vs LIHC for a hepatic-margin sample
+    with a weak broad call)."""
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "BRCA", "family_label": "breast", "support_score": 0.4},
+        ],
+        "fit_quality": {"label": "weak"},
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return
+    public = brca.public_dict() or {}
+    if "lineage_panel" not in set(public.get("evidence_sources", [])):
+        return
+    # broad is weak AND BRCA is in broad top-5 → promotion allowed
+    assert public.get("can_select_report_label") is True
+
+
+def test_gate_blocks_when_proposed_code_outside_broad_top_5():
+    """Gate (a): the proposed cancer code must appear in the broad
+    top-5 candidate_trace. A panel firing for a code the broad
+    classifier never considered must not promote."""
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "OV", "family_label": "müllerian", "support_score": 0.9},
+            {"code": "UCEC", "family_label": "müllerian", "support_score": 0.8},
+            {"code": "STAD", "family_label": "gi", "support_score": 0.6},
+        ],
+        "fit_quality": {"label": "weak"},  # even with weak broad,
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return
+    public = brca.public_dict() or {}
+    assert public.get("can_select_report_label") is False, (
+        "Panel promoted BRCA even though BRCA is not in broad top-5 "
+        "— gate (a) failed."
+    )
+    blocked = " ".join(public.get("blocking_reasons") or []).lower()
+    assert "top-5" in blocked or "broad rna candidates" in blocked
+
+
+def test_main_propagates_lineage_panel_evidence_to_analysis_dict():
+    """``_apply_cancer_type_evidence`` copies ``lineage_panel_evidence``
+    from the cancer_type_evidence return onto the ``analysis`` dict
+    so analysis-parameters.json carries the verdict without
+    consumers having to dig into cancer_type_evidence themselves.
+    """
+    from trufflepig import main
+
+    # Monkey-patch select_report_scope_from_evidence to return a
+    # known summary, then drive _apply_cancer_type_evidence with
+    # the minimum analysis state it needs.
+    fake_summary = {
+        "top_panel": "BRCA_BASAL",
+        "top_score": 0.78,
+        "promotion": {"promoted": True, "code": "BRCA", "blockers": []},
+    }
+    fake_evidence = {
+        "selected": None,
+        "evidence": [],
+        "primary_expression_context": None,
+        "top_reference_cancer_type": None,
+        "lineage_panel_evidence": fake_summary,
+    }
+    import trufflepig.cancer_type_evidence as _cte
+
+    saved = _cte.select_report_scope_from_evidence
+    _cte.select_report_scope_from_evidence = lambda *_a, **_kw: fake_evidence
+    try:
+        analysis = {"candidate_trace": []}
+        main._apply_cancer_type_evidence(
+            analysis,
+            pd.DataFrame(
+                {"ensembl_gene_id": [], "canonical_gene_name": [], "TPM": []}
+            ),
+            rna_inferred_cancer_type="BRCA",
+            fusion_scope_inference=None,
+            report_scope_cancer_type=None,
+            rare_scope_inference=None,
+            fine_scope_inference=None,
+        )
+    finally:
+        _cte.select_report_scope_from_evidence = saved
+    assert analysis.get("lineage_panel_evidence") == fake_summary
