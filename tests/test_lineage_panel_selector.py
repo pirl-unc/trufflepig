@@ -356,10 +356,11 @@ def test_gate_blocks_cross_family_when_broad_confident():
     assert "family" in blocked or "cross-family" in blocked
 
 
-def test_gate_allows_same_family_subtype_refinement():
-    """When the panel's parent_cohort is in the same family as broad
-    top-1 (BRCA_BASAL → BRCA when broad picked BRCA), promotion is
-    safe even if broad fit_quality is not explicitly weak."""
+def test_gate_allows_same_code_reinforcement():
+    """When the panel's parent_cohort EQUALS the broad top-1
+    (BRCA_BASAL → BRCA when broad picked BRCA), promotion is safe:
+    the cancer call doesn't change, the panel just contributes the
+    subtype/program detail recorded in ``details``."""
     hyps: dict = {}
     analysis = {
         "candidate_trace": [
@@ -379,8 +380,53 @@ def test_gate_allows_same_family_subtype_refinement():
     if "lineage_panel" not in set(public.get("evidence_sources", [])):
         return
     assert public.get("can_select_report_label") is True, (
-        "Same-family lineage_panel promotion was blocked — BRCA → "
-        "BRCA_BASAL refinement should be allowed."
+        "Same-code lineage_panel reinforcement was blocked — BRCA "
+        "panel firing on a sample broad already called BRCA should be "
+        "allowed (the call doesn't change, the subtype detail goes "
+        "into details)."
+    )
+
+
+def test_gate_blocks_cross_code_same_family_when_broad_confident():
+    """Regression for TCGA-D7-6524-01 (STAD→PAAD): broad confidently
+    called STAD, but the PAAD lineage panel scored high enough to
+    propose PAAD. STAD and PAAD are both ``carcinoma-gi`` family,
+    so the old same-family gate let it through. The same-code gate
+    blocks it: PAAD ≠ STAD, broad isn't explicitly weak → no
+    promotion.
+    """
+    hyps: dict = {}
+
+    # Sample with strong pancreatic ductal markers (PAAD panel will
+    # likely score high) but broad called STAD.
+    sample = {
+        "KRT19": 600.0,
+        "MUC1": 400.0,
+        "EPCAM": 300.0,
+        "CDH1": 200.0,
+        "CFTR": 50.0,
+        "ALB": 5.0,
+        "AFP": 1.0,
+        "ACTB": 200.0,
+        "GAPDH": 200.0,
+    }
+    analysis = {
+        "candidate_trace": [
+            {"code": "STAD", "family_label": "carcinoma-gi", "support_score": 0.9},
+            {"code": "PAAD", "family_label": "carcinoma-gi", "support_score": 0.7},
+            {"code": "COAD", "family_label": "carcinoma-gi", "support_score": 0.5},
+        ],
+    }
+    cte._add_lineage_panel_features(hyps, sample, analysis)
+    paad = hyps.get("PAAD")
+    if paad is None:
+        return  # PAAD panel didn't fire above threshold; fine
+    public = paad.public_dict() or {}
+    if "lineage_panel" not in set(public.get("evidence_sources", [])):
+        return
+    assert public.get("can_select_report_label") is False, (
+        "Cross-cancer-within-family panel promotion survived when "
+        "broad was confident — STAD → PAAD regression is back."
     )
 
 

@@ -1474,20 +1474,25 @@ def _add_lineage_panel_features(
     #       sample because FOXA1+GATA3 overlap is the classic failure;
     #       it cost ~12% consolidated top-1 on TCGA-160 in early testing).
     #   (b) One of:
-    #       * SAME-FAMILY REFINEMENT — ``code``'s family matches the broad
-    #         top-1's family. This covers BRCA → BRCA_BASAL refinement and
-    #         is always safe because we're picking a sub-label within a
-    #         family the broad classifier already chose.
+    #       * SAME-CODE REINFORCEMENT — ``code`` equals the broad top-1.
+    #         The cancer call doesn't change; the panel's contribution
+    #         is the subtype/program detail recorded in ``details``
+    #         (rendered via the brief.py subtype-signal line).
     #       * BROAD EXPLICITLY UNCERTAIN — ``fit_quality.label`` is "weak"
-    #         or "ambiguous". This is the cross-family case (e.g. CHOL vs
-    #         LIHC for a hepatic-margin sample) that the panel exists to
-    #         help with.
+    #         or "ambiguous". The only condition under which a panel
+    #         may CHANGE the cancer code: broad has told us it doesn't
+    #         trust its own call.
     #
-    #   An earlier version also fired on a close top-1/top-2 support
-    #   ratio (<1.30), but that fired on sibling-subtype draws like
-    #   SKCM vs UVM (both melanocytic) where the family IS settled —
-    #   it just enabled cross-family overrides (SKCM → BRCA) the user
-    #   explicitly didn't want. Drop the ratio path.
+    #   Two earlier iterations were tried and rejected:
+    #     - Top-1/top-2 support ratio < 1.30. Fired on sibling-subtype
+    #       draws (SKCM vs UVM, both melanocytic) where the family IS
+    #       settled — it just enabled cross-family overrides (SKCM →
+    #       BRCA) the user explicitly didn't want.
+    #     - Same-family (registry ``family`` column matches). Within a
+    #       family, panels can still be too similar — STAD and PAAD are
+    #       both ``carcinoma-gi``, and the PAAD panel scored high on a
+    #       broad-confident STAD sample (TCGA-D7-6524-01), flipping the
+    #       call to PAAD. Family-only check is not specific enough.
     #
     # If neither gate passes, the selector still records the panel
     # evidence in details so reports / downstream confidence can surface
@@ -1502,47 +1507,22 @@ def _add_lineage_panel_features(
         fit_label = str(fit_quality.get("label") or "").strip().lower()
     broad_uncertain = fit_label in {"weak", "ambiguous"}
 
-    # Same-family check: derive family strictly from the registry for
-    # BOTH codes so the taxonomy is consistent. trace[0].family_label
-    # comes from tumor_purity's internal grouping (e.g. "breast",
-    # "MELANOCYTIC") and is NOT comparable to the registry's family
-    # column ("carcinoma-breast", "melanoma"). A direct-code-match
-    # shortcut handles the common case (panel.parent_cohort == broad
-    # top-1, e.g. BRCA_BASAL → BRCA when broad called BRCA).
     broad_top_code = _clean(trace[0].get("code")) if trace else ""
-    if broad_top_code and broad_top_code == code:
-        same_family = True
-        broad_top_family = proposed_family = "<same-code>"
-    else:
-        registry = _registry_by_code()
-        broad_top_family = ""
-        if broad_top_code:
-            broad_row = registry.get(broad_top_code)
-            if broad_row:
-                broad_top_family = _clean(broad_row.get("family")).lower()
-        proposed_row = registry.get(code)
-        proposed_family = (
-            _clean(proposed_row.get("family")).lower() if proposed_row else ""
-        )
-        same_family = bool(
-            broad_top_family
-            and proposed_family
-            and broad_top_family == proposed_family
-        )
+    same_code = bool(broad_top_code and broad_top_code == code)
 
-    can_promote = bool(in_broad_top and (same_family or broad_uncertain))
+    can_promote = bool(in_broad_top and (same_code or broad_uncertain))
     blockers: list[str] = []
     if not in_broad_top:
         blockers.append(
             f"{code} is not in the top-5 broad RNA candidates "
             "(lineage panel is tie-breaker only, not promoter)"
         )
-    elif not (same_family or broad_uncertain):
+    elif not (same_code or broad_uncertain):
         blockers.append(
-            f"broad top-1 family ({broad_top_family or 'unknown'}) "
-            f"differs from panel family ({proposed_family or 'unknown'}) "
-            "and broad classifier is confident — lineage panel records "
-            "evidence but does not cross-family override"
+            f"broad top-1 ({broad_top_code or 'unknown'}) differs from "
+            f"panel parent_cohort ({code}) and broad classifier is "
+            "confident — lineage panel records evidence but does not "
+            "override (would have crossed cancers within the family)"
         )
     hypothesis.consider_for_report_label(
         selected_by="lineage_panel",
