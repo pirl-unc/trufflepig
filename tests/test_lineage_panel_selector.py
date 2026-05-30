@@ -614,6 +614,62 @@ def test_id_path_and_symbol_path_produce_equivalent_scores():
     )
 
 
+def test_same_code_reinforcement_uses_class_rank_2():
+    """When the panel agrees with broad top-1 (same-code reinforcement),
+    the hypothesis is registered at class_rank=2 so it can defend the
+    correct broad call against an aggressive local_expression_reference
+    promotion to a different code (the LIHC→HEPB / PCPG→NBL pattern).
+
+    Reads ``selection_priority`` directly off the CancerTypeEvidence
+    object rather than ``public_dict()`` (which doesn't expose it).
+    """
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "BRCA", "support_score": 0.9},
+            {"code": "HNSC", "support_score": 0.4},
+        ],
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return
+    if "lineage_panel" not in brca.evidence_sources:
+        return
+    cls, _strength, _tb = brca.selection_priority
+    assert cls == 2, (
+        f"Same-code reinforcement should be class_rank=2 so it can "
+        f"compete with local_expression_reference (class 2); got class={cls}"
+    )
+
+
+def test_cross_code_uncertainty_stays_at_class_rank_1():
+    """Cross-code panel promotion (broad explicitly weak) stays at
+    class_rank=1 — does NOT compete with fine_reference / LEX. This
+    preserves the "augment uncertainty, don't override" contract for
+    the cross-code path.
+    """
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "HNSC", "support_score": 0.4},
+            {"code": "BRCA", "support_score": 0.3},
+        ],
+        "fit_quality": {"label": "weak"},
+    }
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    if brca is None:
+        return
+    if "lineage_panel" not in brca.evidence_sources:
+        return
+    cls, _strength, _tb = brca.selection_priority
+    assert cls == 1, (
+        f"Cross-code promotion (broad weak) should stay at class_rank=1; "
+        f"got class={cls}"
+    )
+
+
 def test_unresolvable_low_marker_counts_as_violation_not_pass_through():
     """Pessimistic handling: an unresolvable low_marker symbol must
     be treated as a violation (pessimistic), not silently skipped.

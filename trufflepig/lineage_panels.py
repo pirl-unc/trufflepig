@@ -632,6 +632,65 @@ _THYM_PANEL = LineagePanel(
     ),
 )
 
+_PCPG_PANEL = LineagePanel(
+    name="PCPG",
+    parent_cohort="PCPG",
+    # Mature adrenal-medulla chromaffin / extra-adrenal paraganglion
+    # program. CHGA / SYN1 are pan-neuroendocrine; PNMT (phenylethanolamine
+    # N-methyltransferase) is what distinguishes adult adrenal medulla
+    # (PCPG) from immature neural-crest tumors (NBL). TH / DBH / NPY
+    # are catecholamine-pathway enzymes.
+    high_markers=("CHGA", "SYN1", "PNMT", "TH", "DBH", "NPY", "CHGB"),
+    low_markers=(
+        ("ALB", 5.0),      # not hepatocyte (otherwise → LIHC override)
+        ("KRT19", 30.0),   # not ductal
+        ("MUC1", 30.0),
+        ("CDX2", 5.0),     # not GI
+        ("PHOX2B", 30.0),  # NBL master TF — should be LOW in mature PCPG
+        ("LIN28B", 5.0),   # fetal marker, NBL-associated
+        ("MYCN", 5.0),     # NBL amplification context
+    ),
+    # PNMT is the canonical mature-adrenal-medulla marker. Without it,
+    # the sample isn't expressing the chromaffin program — extra-adrenal
+    # paragangliomas may lack PNMT (they're noradrenergic), so we use
+    # CHGA as the obligate to keep PGL within scope; PNMT still scores
+    # as a positive marker when present.
+    obligate=("CHGA",),
+    description="Pheochromocytoma / paraganglioma — adrenal-medulla chromaffin",
+    references=("Burnichon 2017 Nat Rev Endocrinol", "Fishbein 2017 Cancer Cell"),
+    program_note=(
+        "neuroendocrine chromaffin program (CHGA, SYN1, PNMT, TH, DBH). "
+        "Adrenergic biology, catecholamine secretion context; SDHx/RET/VHL "
+        "germline mutations enriched, especially in PGL"
+    ),
+)
+
+_LUAD_PANEL = LineagePanel(
+    name="LUAD",
+    parent_cohort="LUAD",
+    # Alveolar adenocarcinoma program. NKX2-1 (TTF1) is the master TF
+    # for distal-lung epithelium and is the canonical lineage discriminator
+    # vs squamous (LUSC), GI adeno (STAD/PAAD), and mesothelial (MESO).
+    high_markers=("SFTPC", "SFTPA1", "SFTPA2", "SFTPB", "NAPSA", "NKX2-1"),
+    low_markers=(
+        ("KRT5", 30.0),    # not squamous
+        ("KRT14", 30.0),
+        ("TP63", 30.0),
+        ("CDX2", 5.0),     # not GI
+        ("MUC2", 5.0),     # not mucinous GI
+        ("MUCL1", 1.0),    # not mammary
+        ("MSLN", 30.0),    # not mesothelial (otherwise → MESO)
+    ),
+    obligate=("NKX2-1",),  # alveolar epithelial master TF
+    description="Lung adenocarcinoma — alveolar epithelium",
+    references=("Travis 2015 WHO classification", "Yatabe 2002 Am J Surg Pathol"),
+    program_note=(
+        "alveolar adenocarcinoma program (TTF1/NKX2-1, surfactant proteins, NAPSA). "
+        "EGFR/KRAS/ALK-driven biology context; distinct from squamous (TP63-high) "
+        "and mucinous (MUC2/CDX2) lung tumors"
+    ),
+)
+
 _BLCA_BASAL_PANEL = LineagePanel(
     name="BLCA_BASAL",
     parent_cohort="BLCA",
@@ -670,6 +729,8 @@ LINEAGE_PANELS: tuple[LineagePanel, ...] = (
     _MESO_PANEL,
     _ACC_PANEL,
     _THYM_PANEL,
+    _PCPG_PANEL,
+    _LUAD_PANEL,
 )
 
 

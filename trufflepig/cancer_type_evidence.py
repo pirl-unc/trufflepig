@@ -1538,15 +1538,25 @@ def _add_lineage_panel_features(
             "confident — the lineage panel reading is noted but the "
             "broad call is preserved"
         )
+    # Class-rank policy:
+    #   - SAME-CODE REINFORCEMENT (panel agrees with broad top-1) →
+    #     class 2. This lets the panel DEFEND a correct broad call
+    #     against an aggressive local_expression_reference promotion
+    #     to a different code (the LIHC→HEPB / PCPG→NBL pattern
+    #     observed on TCGA-160). Same-code reinforcement is safe to
+    #     elevate because it cannot change the cancer code — it only
+    #     blocks other selectors from changing it.
+    #   - CROSS-CODE PROMOTION (panel proposes a different code via
+    #     fit_quality=weak/ambiguous) → class 1. The panel still
+    #     competes with rare_marker and primary_expression_match, but
+    #     fine_reference and local_expression_reference (which use
+    #     class 2) still win when they have stronger support.
+    class_rank = 2 if same_code else 1
     hypothesis.consider_for_report_label(
         selected_by="lineage_panel",
         can_select=can_promote,
         blocking_reasons=blockers,
-        # class_rank 1: never beats fine_reference (class 2) or
-        # local_expression_reference (class 2). lineage_panel only wins
-        # when the broad classifier is genuinely tied AND those higher
-        # selectors haven't fired.
-        priority=(1, top_score),
+        priority=(class_rank, top_score),
     )
     summary["promotion"] = {
         "promoted": bool(can_promote),
