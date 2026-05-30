@@ -92,7 +92,11 @@ def test_selector_proposes_parent_cohort_not_panel_name():
     assert public.get("lineage_panel_top") == "BRCA_BASAL"
     assert public.get("lineage_panel_score", 0) >= 0.60
     rationale = (public.get("lineage_panel_rationale") or "").lower()
-    assert "high-markers" in rationale or "rationale" in rationale
+    assert (
+        "required markers" in rationale
+        or "negative markers" in rationale
+        or "in cohort range" in rationale
+    )
 
 
 def test_selector_is_robust_to_lineage_panels_import_failure(monkeypatch):
@@ -170,13 +174,13 @@ def test_basis_line_renders_panel_when_summary_present():
         "lineage_panel_evidence": {
             "top_panel": "BRCA_BASAL",
             "top_score": 0.78,
-            "top_rationale": "high-markers strong, low-markers compliant",
+            "top_rationale": "5/5 required markers in cohort range; 5/5 negative markers below threshold",
             "margin_over_second": 0.30,
             "promotion": {
                 "promoted": False,
                 "code": "BRCA",
                 "blockers": [
-                    "broad RNA classifier is confident (clean top-1)",
+                    "broad classifier is confident — broad call preserved",
                 ],
             },
         }
@@ -185,9 +189,9 @@ def test_basis_line_renders_panel_when_summary_present():
     assert line is not None
     assert "BRCA_BASAL" in line
     assert "0.78" in line
-    assert "high-markers" in line
-    # Non-promoted summary should be flagged as evidence-only.
-    assert "evidence only" in line
+    assert "required markers" in line
+    # Non-promoted summary should be flagged as "noted, did not change the call".
+    assert "noted, did not change the call" in line
 
 
 def test_basis_line_renders_panel_when_promoted():
@@ -199,7 +203,7 @@ def test_basis_line_renders_panel_when_promoted():
         "lineage_panel_evidence": {
             "top_panel": "BRCA_BASAL",
             "top_score": 0.78,
-            "top_rationale": "high-markers strong",
+            "top_rationale": "5/5 required markers in cohort range",
             "margin_over_second": 0.30,
             "promotion": {
                 "promoted": True,
@@ -210,7 +214,8 @@ def test_basis_line_renders_panel_when_promoted():
     }
     line = brief._lineage_panel_evidence_line(analysis, "BRCA")
     assert line is not None
-    assert "promoted BRCA" in line
+    # "supports the BRCA call" when promoted_code == cancer_code.
+    assert "supports the BRCA call" in line
 
 
 def test_basis_line_skips_panel_below_threshold():
@@ -242,16 +247,20 @@ def test_basis_line_skips_panel_when_no_evidence():
 
 
 def test_subtype_reasoning_line_surfaces_program_implication():
-    """When a curated panel fires above the brief reporting bar, the
-    subtype-reasoning line should expose the transcriptional-program
-    implication so the report reads usefully — not just "BRCA_BASAL
-    scored 0.78"."""
+    """When a panel with a curated ``program_note`` fires above the
+    brief reporting bar, the subtype line should expose the
+    biological note so the report reads usefully — not just
+    "BRCA_BASAL scored 0.78".
+    """
     from trufflepig import brief
 
     analysis = {
         "lineage_panel_evidence": {
             "top_panel": "BRCA_BASAL",
             "top_score": 0.78,
+            "top_panel_program_note": (
+                "basal-like breast program (KRT5/KRT14, FOXC1, low ER/PR)."
+            ),
             "promotion": {"promoted": False, "code": "BRCA", "blockers": []},
         }
     }
@@ -259,10 +268,14 @@ def test_subtype_reasoning_line_surfaces_program_implication():
     assert line is not None
     assert "BRCA_BASAL" in line
     assert "basal-like" in line.lower()
+    # The line should NOT call the reader's attention with robotic
+    # "pattern detected" framing — single source of truth is the
+    # panel's program_note read verbatim.
+    assert "pattern detected" not in line.lower()
 
 
-def test_subtype_reasoning_line_skips_unknown_panel():
-    """Panels with no curated program note return None — silent
+def test_subtype_reasoning_line_skips_panel_without_note():
+    """Panels with no curated ``program_note`` return None — silent
     rather than dumping a generic placeholder."""
     from trufflepig import brief
 
@@ -270,6 +283,7 @@ def test_subtype_reasoning_line_skips_unknown_panel():
         "lineage_panel_evidence": {
             "top_panel": "MADE_UP_PANEL",
             "top_score": 0.99,
+            # no top_panel_program_note
             "promotion": {"promoted": False, "code": None, "blockers": []},
         }
     }
@@ -278,17 +292,39 @@ def test_subtype_reasoning_line_skips_unknown_panel():
 
 def test_subtype_reasoning_line_skips_below_threshold():
     """A panel below the brief reporting bar doesn't get a subtype
-    line either."""
+    line either, even if it has a program_note."""
     from trufflepig import brief
 
     analysis = {
         "lineage_panel_evidence": {
             "top_panel": "BRCA_BASAL",
             "top_score": 0.30,
+            "top_panel_program_note": "basal-like breast program",
             "promotion": {"promoted": False, "code": None, "blockers": []},
         }
     }
     assert brief._lineage_panel_subtype_reasoning_line(analysis, "BRCA") is None
+
+
+def test_program_note_on_panel_is_single_source_of_truth():
+    """Pin: every panel in LINEAGE_PANELS that needs a subtype line
+    must carry its ``program_note`` directly. Catches the
+    "added a panel, forgot to update brief.py's dict" foot-gun by
+    ensuring brief.py reads ONLY from the panel.
+    """
+    from trufflepig.lineage_panels import LINEAGE_PANELS
+
+    panels_with_notes = [p for p in LINEAGE_PANELS if p.program_note]
+    # All current panels carry a note (sanity check the curation).
+    assert len(panels_with_notes) == len(LINEAGE_PANELS), (
+        "Some LINEAGE_PANELS lack a program_note — the report will "
+        "skip the subtype line for those panels: "
+        f"{[p.name for p in LINEAGE_PANELS if not p.program_note]}"
+    )
+    # Notes are short single-line strings (no newlines or huge text).
+    for p in panels_with_notes:
+        assert "\n" not in p.program_note, p.name
+        assert len(p.program_note) < 300, p.name
 
 
 # ---------------------------------------------------------------------------
@@ -319,10 +355,10 @@ _HCC1395_SAMPLE = {
 }
 
 
-def test_gate_blocks_cross_family_when_broad_confident():
-    """Regression for TCGA-EB-A24D-01 (SKCM→BRCA). Broad top-1 is in
-    a different family than the panel's parent_cohort AND there is
-    no explicit fit_quality=weak/ambiguous → the panel must NOT
+def test_gate_blocks_cross_code_when_broad_confident_skcm_brca():
+    """Regression for TCGA-EB-A24D-01 (SKCM→BRCA). Broad top-1 is a
+    different cancer code than the panel's parent_cohort AND there
+    is no explicit fit_quality=weak/ambiguous → the panel must NOT
     promote a report label.
     """
     hyps: dict = {}
@@ -330,30 +366,29 @@ def test_gate_blocks_cross_family_when_broad_confident():
         "candidate_trace": [
             {
                 "code": "SKCM",
-                "family_label": "melanocytic",
                 "support_score": 0.9,
             },
             {
                 "code": "UVM",
-                "family_label": "melanocytic",
                 "support_score": 0.8,
             },
-            {"code": "BRCA", "family_label": "breast", "support_score": 0.3},
+            {"code": "BRCA", "support_score": 0.3},
         ],
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     if not hyps:
-        return  # selector early-returned (no panel cleared score gates)
+        return  # selector early-returned (no panel cleared score thresholds)
     brca = hyps.get("BRCA")
     if brca is None:
         return  # no BRCA hypothesis recorded
     public = brca.public_dict() or {}
     assert public.get("can_select_report_label") is False, (
-        "Cross-family panel promotion survived when broad top-1 was "
+        "Cross-code panel promotion survived when broad top-1 was "
         "confident — the SKCM → BRCA regression is back."
     )
     blocked = " ".join(public.get("blocking_reasons") or []).lower()
-    assert "family" in blocked or "cross-family" in blocked
+    # Look for the actual blocker phrasing, not a substring coincidence.
+    assert "differs from" in blocked and "parent_cohort" in blocked
 
 
 def test_gate_allows_same_code_reinforcement():
@@ -479,17 +514,15 @@ def test_gate_blocks_when_proposed_code_outside_broad_top_5():
     assert "top-5" in blocked or "broad rna candidates" in blocked
 
 
-def test_main_propagates_lineage_panel_evidence_to_analysis_dict():
+def test_main_propagates_lineage_panel_evidence_to_analysis_dict(monkeypatch):
     """``_apply_cancer_type_evidence`` copies ``lineage_panel_evidence``
     from the cancer_type_evidence return onto the ``analysis`` dict
     so analysis-parameters.json carries the verdict without
     consumers having to dig into cancer_type_evidence themselves.
     """
     from trufflepig import main
+    import trufflepig.cancer_type_evidence as _cte
 
-    # Monkey-patch select_report_scope_from_evidence to return a
-    # known summary, then drive _apply_cancer_type_evidence with
-    # the minimum analysis state it needs.
     fake_summary = {
         "top_panel": "BRCA_BASAL",
         "top_score": 0.78,
@@ -502,23 +535,117 @@ def test_main_propagates_lineage_panel_evidence_to_analysis_dict():
         "top_reference_cancer_type": None,
         "lineage_panel_evidence": fake_summary,
     }
-    import trufflepig.cancer_type_evidence as _cte
-
-    saved = _cte.select_report_scope_from_evidence
-    _cte.select_report_scope_from_evidence = lambda *_a, **_kw: fake_evidence
-    try:
-        analysis = {"candidate_trace": []}
-        main._apply_cancer_type_evidence(
-            analysis,
-            pd.DataFrame(
-                {"ensembl_gene_id": [], "canonical_gene_name": [], "TPM": []}
-            ),
-            rna_inferred_cancer_type="BRCA",
-            fusion_scope_inference=None,
-            report_scope_cancer_type=None,
-            rare_scope_inference=None,
-            fine_scope_inference=None,
-        )
-    finally:
-        _cte.select_report_scope_from_evidence = saved
+    monkeypatch.setattr(
+        _cte,
+        "select_report_scope_from_evidence",
+        lambda *_a, **_kw: fake_evidence,
+    )
+    analysis = {"candidate_trace": []}
+    main._apply_cancer_type_evidence(
+        analysis,
+        pd.DataFrame(
+            {"ensembl_gene_id": [], "canonical_gene_name": [], "TPM": []}
+        ),
+        rna_inferred_cancer_type="BRCA",
+        fusion_scope_inference=None,
+        report_scope_cancer_type=None,
+        rare_scope_inference=None,
+        fine_scope_inference=None,
+    )
     assert analysis.get("lineage_panel_evidence") == fake_summary
+
+
+# ---------------------------------------------------------------------------
+# Gene-ID migration safety
+# ---------------------------------------------------------------------------
+
+
+def test_id_path_and_symbol_path_produce_equivalent_scores():
+    """The ID-keyed code path (the new default) and the symbol→ID
+    fallback path (used when callers only provide
+    ``sample_tpm_by_symbol``) MUST produce identical PanelEvidence
+    for the same sample. Pin equivalence so a future change to one
+    path can't silently drift from the other.
+    """
+    from trufflepig.lineage_panels import (
+        LINEAGE_PANELS,
+        evaluate_panels,
+    )
+    from trufflepig.common import panel_symbols_to_gene_ids
+
+    sample_by_symbol = dict(_HCC1395_SAMPLE)
+
+    # ID-keyed path: resolve symbols → IDs once, then call directly.
+    sym_to_id = panel_symbols_to_gene_ids(list(sample_by_symbol.keys()))
+    sample_by_id = {}
+    for sym, tpm in sample_by_symbol.items():
+        gid = sym_to_id.get(sym)
+        if not gid:
+            continue
+        if gid not in sample_by_id or tpm > sample_by_id[gid]:
+            sample_by_id[gid] = float(tpm)
+
+    if not sample_by_id:
+        return  # pirlygenes unavailable; nothing to compare
+
+    direct = evaluate_panels(LINEAGE_PANELS, sample_by_id, sample_hk_median=200.0)
+
+    # Symbol-fallback path: drive through the selector with sample_tpm_by_symbol
+    # only, letting it rebuild the ID view internally.
+    hyps: dict = {}
+    summary = cte._add_lineage_panel_features(
+        hyps,
+        sample_by_symbol,
+        {"candidate_trace": [{"code": "BRCA"}]},
+    )
+    if summary is None:
+        return
+
+    # Both paths' top_panel and top_score must match.
+    assert summary.get("top_panel") == direct[0].panel_name, (
+        f"ID-path picked {direct[0].panel_name}, symbol-fallback path "
+        f"picked {summary.get('top_panel')}"
+    )
+    direct_top_score = round(float(direct[0].score), 4)
+    summary_top_score = round(float(summary.get("top_score") or 0.0), 4)
+    assert direct_top_score == summary_top_score, (
+        f"ID path top_score {direct_top_score} != symbol fallback "
+        f"top_score {summary_top_score}"
+    )
+
+
+def test_unresolvable_low_marker_counts_as_violation_not_pass_through():
+    """Pessimistic handling: an unresolvable low_marker symbol must
+    be treated as a violation (pessimistic), not silently skipped.
+
+    Drives the scorer with a panel whose low_marker symbol is bogus
+    and confirms it lands in ``low_violations`` rather than
+    disappearing into ``low_passes``.
+    """
+    from trufflepig.lineage_panels import LineagePanel, score_panel
+
+    bogus_panel = LineagePanel(
+        name="TEST_BOGUS",
+        parent_cohort="BRCA",
+        high_markers=("KRT14",),
+        low_markers=(
+            ("ESR1", 5.0),  # resolvable, low in sample
+            ("NOT_A_REAL_GENE_SYMBOL_XYZ", 5.0),  # unresolvable
+        ),
+        obligate=("KRT14",),
+    )
+    # A sample that would pass real low_markers but the bogus one
+    # must still fail.
+    from trufflepig.common import panel_symbols_to_gene_ids
+
+    sym_to_id = panel_symbols_to_gene_ids(["KRT14", "ESR1"])
+    if not sym_to_id:
+        return  # pirlygenes unavailable; nothing to test
+    sample_by_id = {gid: 100.0 if sym == "KRT14" else 0.5 for sym, gid in sym_to_id.items()}
+
+    ev = score_panel(bogus_panel, sample_by_id, sample_hk_median=100.0)
+    bogus_violations = [v for v in ev.low_violations if v[0].startswith("NOT_A_REAL")]
+    assert bogus_violations, (
+        "Unresolvable low_marker was silently skipped instead of "
+        "counting as a violation. Pessimistic semantics broken."
+    )

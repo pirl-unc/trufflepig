@@ -1343,11 +1343,12 @@ def _add_lineage_panel_features(
 
     Graceful degradation: when ``pirlygenes`` or the pan-cancer
     expression frame is unavailable, HK normalization falls back to
-    ``sample_hk_median=1.0`` and the family-aware gate falls back to
+    ``sample_hk_median=1.0`` and the cross-code path falls back to
     requiring ``fit_quality.label in {"weak", "ambiguous"}``
-    (``_registry_by_code()`` returns ``{}`` so ``same_family`` is
-    always False). This degrades panel sensitivity but keeps the
-    rest of the consolidator running — preferred over crashing.
+    (the same-code shortcut still works since it only compares
+    string codes, not registry families). This degrades panel
+    sensitivity but keeps the rest of the consolidator running —
+    preferred over crashing.
 
     See issue #42 and ``docs/CANCER_CALL_DECISION_FLOW.md`` for the
     design context. Failures are non-fatal — selector logs and
@@ -1360,7 +1361,6 @@ def _add_lineage_panel_features(
             LINEAGE_PANELS,
             evaluate_panels,
             summarize_evidence,
-            _panel_symbol_to_gene_id,
         )
     except ImportError:
         _LOGGER.warning(
@@ -1370,19 +1370,26 @@ def _add_lineage_panel_features(
 
     # Internal lookups go through gene_id. If the caller didn't pre-
     # compute the ID-keyed view (the existing main.py path passes
-    # only sample_tpm_by_symbol), build it on the fly by resolving
-    # each symbol once via the panel-marker cache. Both views are
-    # equivalent for our purposes; the ID-keyed view is what
-    # ``evaluate_panels`` actually consumes.
+    # only sample_tpm_by_symbol), build it on the fly via the shared
+    # symbol→ID resolver in common.py. Both views are equivalent for
+    # our purposes; the ID-keyed view is what ``evaluate_panels``
+    # actually consumes.
     if sample_tpm_by_gene_id is None or not sample_tpm_by_gene_id:
-        sample_tpm_by_gene_id = {}
+        try:
+            from .common import panel_symbols_to_gene_ids
+        except ImportError:
+            return None
+        sym_to_id = panel_symbols_to_gene_ids(list(sample_tpm_by_symbol.keys()))
+        built: dict[str, float] = {}
         for sym, tpm in sample_tpm_by_symbol.items():
-            gid = _panel_symbol_to_gene_id(sym)
+            gid = sym_to_id.get(sym)
             if not gid:
                 continue
-            existing = sample_tpm_by_gene_id.get(gid)
-            if existing is None or float(tpm) > existing:
-                sample_tpm_by_gene_id[gid] = float(tpm)
+            existing = built.get(gid)
+            f_tpm = float(tpm)
+            if existing is None or f_tpm > existing:
+                built[gid] = f_tpm
+        sample_tpm_by_gene_id = built
 
     # Sample-side HK median for normalization. HK genes are pulled
     # directly by ID from the cached set so the symbol → ID step is
@@ -1440,6 +1447,12 @@ def _add_lineage_panel_features(
         )
         return summary
 
+    # Stamp the winning panel's biological program note onto the
+    # summary so brief.py can render the subtype line without
+    # importing LINEAGE_PANELS. Single source of truth: the note
+    # lives ONLY on LineagePanel.program_note.
+    summary["top_panel_program_note"] = str(getattr(panel, "program_note", "") or "")
+
     top_rationale = summary.get("top_rationale") or f"{top_panel} matched"
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("lineage_panel")
@@ -1451,7 +1464,7 @@ def _add_lineage_panel_features(
     # brief.py). This avoids the panel narrative clobbering a more
     # specific selector's basis line.
     hypothesis.basis = hypothesis.basis or (
-        f"lineage-panel discriminator: {top_rationale}"
+        f"lineage panel reading: {top_rationale}"
     )
     hypothesis.details.update(
         {
@@ -1514,15 +1527,16 @@ def _add_lineage_panel_features(
     blockers: list[str] = []
     if not in_broad_top:
         blockers.append(
-            f"{code} is not in the top-5 broad RNA candidates "
-            "(lineage panel is tie-breaker only, not promoter)"
+            f"{code} is not among the top-5 broad RNA candidates; "
+            "lineage panels only refine candidates the broad classifier "
+            "already considered"
         )
     elif not (same_code or broad_uncertain):
         blockers.append(
             f"broad top-1 ({broad_top_code or 'unknown'}) differs from "
-            f"panel parent_cohort ({code}) and broad classifier is "
-            "confident — lineage panel records evidence but does not "
-            "override (would have crossed cancers within the family)"
+            f"panel parent_cohort ({code}) and the broad classifier is "
+            "confident — the lineage panel reading is noted but the "
+            "broad call is preserved"
         )
     hypothesis.consider_for_report_label(
         selected_by="lineage_panel",

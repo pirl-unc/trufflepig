@@ -183,7 +183,11 @@ def build_sample_tpm_by_gene_id(df_gene_expr):
             context="analysis sample expression",
         )
         tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
-        valid = gene_ids.notna() & gene_ids.str.len().gt(0) & tpms.notna()
+        valid = (
+            gene_ids.notna()
+            & gene_ids.str.strip().str.len().gt(0)
+            & tpms.notna()
+        )
         return dict(
             pd.DataFrame({"gene_id": gene_ids[valid], "tpm": tpms[valid]})
             .groupby("gene_id")["tpm"]

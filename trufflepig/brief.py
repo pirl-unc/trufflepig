@@ -1381,12 +1381,12 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
     if promoted and promoted_code:
         promoted_clause = (
-            f" — promoted {promoted_code} as the report label"
+            f" — supports the {promoted_code} call"
             if promoted_code == str(cancer_code or "").strip()
-            else f" — proposed {promoted_code} as the report label"
+            else f" — proposes {promoted_code}"
         )
     elif blockers:
-        promoted_clause = f" — recorded as evidence only ({blockers[0]})"
+        promoted_clause = f" — noted, did not change the call ({blockers[0]})"
     else:
         promoted_clause = ""
     rationale_clause = f": {rationale}" if rationale else ""
@@ -1396,77 +1396,17 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     )
 
 
-# Human-readable subtype-program annotations keyed by the panel name.
-# Panels capture biology — the panel's transcriptional program has
-# therapy / pathway implications worth surfacing even when the broad
-# call stays at the parent label. Each entry is one short sentence
-# describing what the program implies (NOT clinical advice).
-_LINEAGE_PANEL_PROGRAM_NOTES: dict[str, str] = {
-    "BRCA_BASAL": (
-        "basal-like breast program (KRT5/KRT14 cytokeratins, FOXC1, low ER/PR/HER2). "
-        "Associated with triple-negative biology, BRCA1/HRD signatures, and PD-L1 candidacy"
-    ),
-    "BRCA_LUMINAL": (
-        "luminal breast program (ESR1, PGR, FOXA1, GATA3). "
-        "Hormone-receptor-positive biology; anti-estrogen therapy context"
-    ),
-    "ESCA_SQUAMOUS": (
-        "squamous esophageal program (TP63, SOX2, keratins). "
-        "Distinct from adenocarcinoma; chemoradiation-sensitive context"
-    ),
-    "BLCA_LUMINAL": (
-        "luminal urothelial program (FOXA1, GATA3, PPARG, UPK1A/UPK2). "
-        "Less chemo-sensitive than basal MIBC; FGFR3 alterations enriched"
-    ),
-    "BLCA_BASAL": (
-        "basal-like muscle-invasive bladder program (KRT5/KRT14/KRT6A, S100P, low FOXA1/GATA3). "
-        "More chemo-sensitive than luminal MIBC; squamous-like differentiation"
-    ),
-    "HNSC": (
-        "head-and-neck squamous program (keratins, p63, SOX2). "
-        "HPV status independently informative"
-    ),
-    "LIHC": (
-        "hepatocyte program (albumin synthesis, drug-metabolism enzymes). "
-        "Beware DDI from preserved hepatic clearance"
-    ),
-    "PAAD": (
-        "pancreatic ductal program (KRT19, MUC1, CDX2-negative). "
-        "Stromal-dominant tumor microenvironment context"
-    ),
-    "CHOL": (
-        "biliary epithelial program (KRT19, CFTR, MUC5AC). "
-        "Distinct from hepatocellular biology; FGFR2 fusions enriched"
-    ),
-    "UCEC": (
-        "endometrial Müllerian program (PAX8, ESR1, FOXA2). "
-        "Hormone-receptor context overlapping with luminal breast"
-    ),
-    "MESO": (
-        "mesothelial program (MSLN, WT1, CALB2). "
-        "Mesothelin is a therapy target; BAP1 loss enriched"
-    ),
-    "ACC": (
-        "adrenocortical steroidogenic program (CYP11A1/CYP17A1, NR5A1/SF1, STAR). "
-        "Active cortisol/aldosterone biology; mitotane sensitivity context"
-    ),
-    "THYM": (
-        "thymic-epithelial program (AIRE, FOXN1, PSMB11). "
-        "Paraneoplastic autoimmune context; checkpoint-inhibitor caution"
-    ),
-}
-
-
 def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optional[str]:
-    """Surface the lineage panel's transcriptional-program implication
-    as a separate "**Subtype signal:**" line. Distinct from the
-    raw evidence line: the evidence line says "what the panel scored";
-    this line says "what that biological program implies".
+    """Surface the lineage panel's transcriptional-program note as a
+    follow-on "**Subtype:**" line, separate from the raw evidence
+    line. The evidence line says "what the panel scored"; this line
+    says "what that biological program implies".
 
-    Fires whenever the panel evidence is present at reporting score
-    AND we have a curated program note for the top panel. Does NOT
-    second-guess the cancer call — it adds biology, never therapy
-    decisions.
+    The program note is read from
+    ``analysis['lineage_panel_evidence']['top_panel_program_note']``
+    — single source of truth, populated by the cancer_type_evidence
+    selector from the winning ``LineagePanel.program_note`` field.
+    Panels without a curated note simply skip this line.
     """
     summary = analysis.get("lineage_panel_evidence") or {}
     if not summary:
@@ -1480,10 +1420,10 @@ def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optiona
     top_panel = str(summary.get("top_panel") or "").strip()
     if not top_panel:
         return None
-    note = _LINEAGE_PANEL_PROGRAM_NOTES.get(top_panel)
+    note = str(summary.get("top_panel_program_note") or "").strip()
     if not note:
         return None
-    return f"**Subtype signal:** {top_panel} pattern detected — {note}."
+    return f"**Subtype:** {top_panel} — {note}."
 
 
 def _fusion_pair_display(finding: dict) -> str:
