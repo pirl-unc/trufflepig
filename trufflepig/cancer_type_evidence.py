@@ -1187,7 +1187,7 @@ def _add_local_expression_reference_features(
             )
         if context_support < _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT:
             blockers.append(
-                "compatible broad RNA support "
+                "compatible first-pass RNA support "
                 f"{context_support:.2f} is below "
                 f"{_LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT:.2f}"
             )
@@ -1527,16 +1527,16 @@ def _add_lineage_panel_features(
     blockers: list[str] = []
     if not in_broad_top:
         blockers.append(
-            f"{code} is not among the top-5 broad RNA candidates; "
-            "lineage panels only refine candidates the broad classifier "
-            "already considered"
+            f"{code} is not among the top-5 first-pass RNA candidates; "
+            "lineage panels only refine candidates the first-pass "
+            "classifier already considered"
         )
     elif not (same_code or broad_uncertain):
         blockers.append(
-            f"broad top-1 ({broad_top_code or 'unknown'}) differs from "
-            f"panel parent_cohort ({code}) and the broad classifier is "
-            "confident — the lineage panel reading is noted but the "
-            "broad call is preserved"
+            f"first-pass top-1 ({broad_top_code or 'unknown'}) differs "
+            f"from panel parent_cohort ({code}) and the first-pass "
+            "classifier is confident — the lineage panel reading is "
+            "noted but the first-pass call is preserved"
         )
     # Class-rank policy:
     #   - SAME-CODE REINFORCEMENT (panel agrees with broad top-1) →

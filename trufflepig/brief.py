@@ -262,8 +262,8 @@ def _broad_context_compatibility(top_code: str, supplied_code: str) -> str:
     supplied_group = _clinical_supergroup(supplied)
     if top_group and supplied_group and top_group == supplied_group:
         if top_group == "sarcoma/bone/soft-tissue":
-            return "sarcoma-family broad-context support"
-        return "same-family broad-context support"
+            return "sarcoma-family first-pass support"
+        return "same-family first-pass support"
     return ""
 
 
