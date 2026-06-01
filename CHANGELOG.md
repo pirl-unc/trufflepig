@@ -9,6 +9,109 @@ but this project does not version-tag releases yet — entries are grouped
 under the merging PR title and the date the breaking change landed on
 `main`.
 
+## Unreleased — lineage panels wiring (PR #44)
+
+### New surface
+
+- **`trufflepig.lineage_panels.LINEAGE_PANELS`** is wired into the
+  cancer-type evidence consolidator as a new selector
+  (`_add_lineage_panel_features`). The panel set covers 15 cohorts
+  (BRCA_BASAL, BRCA_LUMINAL, ESCA_SQUAMOUS, BLCA_LUMINAL,
+  BLCA_BASAL, HNSC, LIHC, PAAD, CHOL, UCEC, MESO, ACC, THYM,
+  PCPG, LUAD) with HGNC-symbol-curated `obligate` + `high_markers` +
+  `low_markers` triples. Internal lookups go through Ensembl
+  gene_ids; symbol → ID resolution flows through
+  `trufflepig.common.panel_symbols_to_gene_ids` (the single
+  Ensembl-lookup path).
+- **`LineagePanel.program_note`** (new field) carries a one-line
+  transcriptional-program note per panel — surfaced in the report
+  as the **`Subtype:`** follow-on line. Single source of truth:
+  add or edit notes on the panel itself, not in `brief.py`.
+- **`analysis["lineage_panel_evidence"]`** now appears on the
+  analysis dict when the panel selector ran. Carries
+  `top_panel`, `top_score`, `top_rationale`,
+  `top_panel_program_note`, `margin_over_second`, and a
+  `promotion` block describing whether the panel actually promoted
+  a report label or was held back. Lands in
+  `*-analysis-parameters.json`.
+- **Two new evidence lines in `*-brief.md` / `*-summary.md`**:
+  - **`Lineage panel:`** — the raw evidence reading (panel name,
+    score, rationale, "supports the X call" / "noted, did not
+    change the call (REASON)").
+  - **`Subtype:`** — the panel's `program_note` (basal-like
+    breast program, hepatocyte program, etc.).
+
+### Calibration metric rename (back-compat aliases shipped)
+
+- **`broad_*` → `first_pass_*`**, **`consolidated_*` → `final_call_*`**
+  across the calibration script's JSON / TSV output and the
+  bundled `docs/calibration-baseline.json`. The names now narrate
+  the pipeline: `first_pass` = the RNA classifier's initial guess,
+  `final_call` = the call after the evidence-weighting selectors
+  have weighed in. Affected keys (writer + baseline both):
+  `broad_top_code` → `first_pass_code`,
+  `broad_top_support` → `first_pass_support`,
+  `broad_top1_accuracy` → `first_pass_top1_accuracy`,
+  `broad_top3_accuracy` → `first_pass_top3_accuracy`,
+  `consolidated_cancer_type` → `final_call_cancer_type`,
+  `consolidated_top1_accuracy` → `final_call_top1_accuracy`,
+  `delta_consolidated_vs_broad_top1` →
+  `delta_final_call_vs_first_pass_top1`,
+  `broad_correct_consolidated_wrong` →
+  `first_pass_right_final_call_wrong`,
+  `broad_only_code_match_rate` → `first_pass_only_code_match_rate`,
+  `n_lifted_by_consolidation` → `n_lifted_by_final_call`,
+  and the per-sample matching variants.
+  *Migration:* the old keys are still emitted for one release
+  cycle via `_add_back_compat_aliases`. After the next release,
+  drop the back-compat helper. The blocker / rationale prose in
+  `cancer_type_evidence` and `brief.py` was also updated:
+  "broad RNA candidates" → "first-pass RNA candidates", etc.
+
+### Report quality / clinical readability
+
+- **Pessimistic handling for unresolvable panel markers.** A panel
+  marker symbol that can't be resolved to an Ensembl gene_id no
+  longer silently passes the check. Unresolvable obligate →
+  panel returns no-score with explicit rationale. Unresolvable
+  high_marker → high_misses. Unresolvable low_marker →
+  low_violations (the negative-marker check defaults to "presumed
+  expressed", the conservative choice). Each unresolvable marker
+  is logged exactly once per process.
+- **AI-slop wording audit.** The PanelEvidence rationale and the
+  lineage_panel blocker strings dropped robotic phrasing
+  (`obligate gate failed` → `required marker {sym} absent`,
+  `low-markers compliant` → `negative markers below threshold`,
+  `lineage-panel discriminator` → `lineage panel reading`,
+  `promoted X as the report label` → `supports the X call` /
+  `proposes X`, `recorded as evidence only` →
+  `noted, did not change the call`,
+  `**Subtype signal:** ... pattern detected` →
+  `**Subtype:** {panel} — {note}`).
+
+### Calibration
+
+Calibration on TCGA-160 + HPA-50 + Local-19 against
+`docs/calibration-baseline.json`:
+
+| Track | Baseline | This PR |
+|---|---|---|
+| TCGA-160 `first_pass_top1` | 79.37% | 79.4% (unchanged) |
+| TCGA-160 `first_pass_top3` | 93.13% | 93.1% (unchanged) |
+| **TCGA-160 `final_call_top1`** | **72.5%** | **76.9%** (+4.4 pp) |
+| `first_pass_right_final_call_wrong` | 11 | 4 |
+| **`lineage_panel` firings (TCGA)** | — | **13, 100% correct** |
+| HPA-50 healthy / tumor-like | 37 / 13 | 37 / 13 |
+| Local-19 code match | 100% | 100% |
+
+7 of 11 previously-misconsolidated samples now keep the correct
+first-pass call (4× LIHC, 1× CHOL, 2× PCPG) — the lineage_panel
+selector defends the first-pass call when its `parent_cohort`
+matches the first-pass top-1 (`class_rank=2`,
+"same-code reinforcement"). Cross-code promotion stays at
+`class_rank=1` so it cannot override a confident first-pass call.
+
+
 ## Unreleased — cancer-type evidence consolidation (PR #41)
 
 ### Breaking changes

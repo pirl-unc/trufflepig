@@ -73,6 +73,13 @@ class LineagePanel:
     description: str = ""
     references: tuple[str, ...] = ()
 
+    program_note: str = ""
+    """One short sentence describing the transcriptional program this
+    panel captures and its biological / therapy context. Surfaced in
+    report rendering as the "Subtype" follow-on line when the panel
+    fires above the brief reporting bar. Leave empty when there's
+    nothing useful to say — the report just omits the line."""
+
 
 @dataclass(frozen=True)
 class PanelEvidence:
@@ -117,23 +124,37 @@ class PanelEvidence:
 
 
 # ---------- cohort lookup (cached) ----------
+#
+# Cohort-median tables are keyed by ``(cohort, gene_id)`` — internal
+# lookups go through Ensembl IDs to match the rest of trufflepig's
+# ID-first contract (see common.py / cancer_type_evidence.py for
+# the consistent pattern). LineagePanel definitions remain
+# symbol-friendly because curating by HGNC name is what biologists
+# read; the symbol → ID resolution flows through the shared
+# ``trufflepig.common.panel_symbols_to_gene_ids`` resolver so there's
+# one Ensembl-lookup path in the whole codebase.
+
 
 @lru_cache(maxsize=1)
-def _cohort_medians() -> dict[tuple[str, str], float]:
-    """Map (cohort_code, symbol) → cohort median expression in clean TPM.
+def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
+    """Map ``(cohort_code, versionless_gene_id) → median TPM_clean``.
 
     Cached because cancer_reference_expression is ~2M rows. The lookup
     table itself is ~70 cohorts × 20k genes ≈ 1.4M entries — a single
     GroupBy at first use, hot lookup after.
     """
     from pirlygenes import cancer_reference_expression
+    from .common import _versionless_gene_id
 
     df = cancer_reference_expression()
     df = df[df["normalization"] == "TPM_clean"]
-    return {
-        (str(row.cancer_code), str(row.Symbol)): float(row.expression)
-        for row in df.itertuples()
-    }
+    out: dict[tuple[str, str], float] = {}
+    for row in df.itertuples():
+        gid = _versionless_gene_id(getattr(row, "Ensembl_Gene_ID", None))
+        if not gid:
+            continue
+        out[(str(row.cancer_code), gid)] = float(row.expression)
+    return out
 
 
 @lru_cache(maxsize=1)
@@ -149,23 +170,83 @@ def _cohort_hk_medians() -> dict[str, float]:
     return {str(k): float(v) for k, v in hk.groupby("cancer_code")["expression"].median().items()}
 
 
-def _cohort_median(cohort: str, symbol: str) -> float | None:
-    val = _cohort_medians().get((cohort, symbol))
-    return None if val is None else val
+def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:
+    if not gene_id:
+        return None
+    return _cohort_medians_by_gene_id().get((cohort, gene_id))
 
 
 def _cohort_hk(cohort: str) -> float:
     return _cohort_hk_medians().get(cohort, 1.0) or 1.0
 
 
+@lru_cache(maxsize=64)
+def _panel_marker_ids(panel: LineagePanel) -> dict[str, str]:
+    """Cache the panel's full marker → gene_id resolution. Computed
+    once per panel per process via the shared
+    ``trufflepig.common.panel_symbols_to_gene_ids`` resolver — the
+    only Ensembl-lookup path in the codebase.
+
+    Returns ``{symbol: gene_id}``; symbols that don't resolve are
+    omitted from the mapping. Callers should treat a missing symbol
+    as "this marker couldn't be evaluated" (NOT as "marker passed").
+    """
+    from .common import panel_symbols_to_gene_ids
+
+    syms: list[str] = []
+    syms.extend(panel.obligate)
+    syms.extend(panel.high_markers)
+    syms.extend(sym for sym, _ in panel.low_markers)
+    return panel_symbols_to_gene_ids(syms)
+
+
+# Single-fire warning per (panel, symbol) when a panel marker
+# fails to resolve — repeated firings would spam the log on every
+# sample. The lru_cache makes the warning idempotent without extra
+# bookkeeping.
+@lru_cache(maxsize=None)
+def _warn_unresolved_marker(panel_name: str, role: str, sym: str) -> None:
+    import logging
+
+    logging.getLogger(__name__).warning(
+        "lineage_panels: %s panel marker %s (%s) could not be resolved "
+        "to an Ensembl gene_id; the marker will be treated pessimistically",
+        panel_name,
+        sym,
+        role,
+    )
+
+
 # ---------- the one scoring function ----------
 
 def score_panel(
     panel: LineagePanel,
-    sample_tpm: Mapping[str, float],
+    sample_tpm_by_gene_id: Mapping[str, float],
     sample_hk_median: float,
 ) -> PanelEvidence:
     """Evaluate one panel against one sample.
+
+    ``sample_tpm_by_gene_id`` is a ``{versionless_ensembl_id: TPM}``
+    mapping; the panel's own marker symbols are resolved to gene IDs
+    via the cached ``_panel_marker_ids`` helper and looked up against
+    it. Rationale strings keep the HGNC symbol because that's what
+    biologists read.
+
+    Unresolvable symbols (pirlygenes unavailable, unmapped name) are
+    handled pessimistically so a registry hiccup never makes a panel
+    artificially STRONGER:
+
+      - Unresolvable obligate → returns a no-score PanelEvidence with
+        an obligate-not-evaluable rationale.
+      - Unresolvable high_marker → recorded as a miss (zero contribution
+        to the positive evidence count).
+      - Unresolvable low_marker → recorded as a violation (the
+        negative-marker check defaults to "presumed expressed" instead
+        of silently skipping the check, which is the conservative
+        choice for "this gene should be OFF" semantics).
+
+    Each unresolvable marker is logged exactly once per process via
+    ``_warn_unresolved_marker``.
 
     ``sample_hk_median`` is the sample's own housekeeping median
     (computed once per sample upstream and passed in — keeps this
@@ -173,15 +254,36 @@ def score_panel(
     """
 
     cohort_hk = _cohort_hk(panel.parent_cohort)
+    marker_ids = _panel_marker_ids(panel)
 
-    # Obligate gate — cheap rejection
+    def _sample(gid: str) -> float:
+        return float(sample_tpm_by_gene_id.get(gid, 0.0))
+
+    # Obligate check — required marker must clear cohort-normalized
+    # half-of-cohort-HK-ratio bar, otherwise the panel returns 0.
     obligate_failures: list[tuple[str, float, float]] = []
     for sym in panel.obligate:
-        cohort_val = _cohort_median(panel.parent_cohort, sym)
+        gid = marker_ids.get(sym)
+        if not gid:
+            _warn_unresolved_marker(panel.name, "obligate", sym)
+            return PanelEvidence(
+                panel_name=panel.name,
+                parent_cohort=panel.parent_cohort,
+                obligate_passed=False,
+                obligate_failures=((sym, 0.0, 0.0),),
+                high_hits=(), high_misses=(),
+                low_passes=(), low_violations=(),
+                score=0.0,
+                rationale=(
+                    f"{panel.name}: obligate marker {sym} could not be "
+                    "resolved to a gene_id — panel not scored"
+                ),
+            )
+        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
         if cohort_val is None:
             continue
         cohort_hk_ratio = cohort_val / cohort_hk
-        sample_hk_ratio = sample_tpm.get(sym, 0.0) / sample_hk_median
+        sample_hk_ratio = _sample(gid) / sample_hk_median
         required = 0.5 * cohort_hk_ratio
         if sample_hk_ratio < required:
             obligate_failures.append((sym, sample_hk_ratio, required))
@@ -197,8 +299,8 @@ def score_panel(
             low_passes=(), low_violations=(),
             score=0.0,
             rationale=(
-                f"{panel.name}: obligate gate failed — "
-                f"{sym} HK ratio {obs:.3f} < required {req:.3f}"
+                f"{panel.name}: required marker {sym} absent "
+                f"(HK ratio {obs:.3f} vs threshold {req:.3f})"
             ),
         )
 
@@ -206,22 +308,38 @@ def score_panel(
     high_hits: list[tuple[str, float, float]] = []
     high_misses: list[tuple[str, float, float]] = []
     for sym in panel.high_markers:
-        cohort_val = _cohort_median(panel.parent_cohort, sym)
-        if cohort_val is None:
-            high_misses.append((sym, sample_tpm.get(sym, 0.0), 0.0))
+        gid = marker_ids.get(sym)
+        if not gid:
+            _warn_unresolved_marker(panel.name, "high", sym)
+            # Pessimistic: count as a miss so an unresolved positive
+            # marker can't inflate the panel's score.
+            high_misses.append((sym, 0.0, 0.0))
             continue
-        sample_hk_ratio = sample_tpm.get(sym, 0.0) / sample_hk_median
+        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
+        obs_tpm = _sample(gid)
+        if cohort_val is None:
+            high_misses.append((sym, obs_tpm, 0.0))
+            continue
+        sample_hk_ratio = obs_tpm / sample_hk_median
         cohort_hk_ratio = cohort_val / cohort_hk
         if sample_hk_ratio >= 0.5 * cohort_hk_ratio:
-            high_hits.append((sym, sample_tpm.get(sym, 0.0), cohort_val))
+            high_hits.append((sym, obs_tpm, cohort_val))
         else:
-            high_misses.append((sym, sample_tpm.get(sym, 0.0), cohort_val))
+            high_misses.append((sym, obs_tpm, cohort_val))
 
     # Negative markers — absolute TPM threshold (interpretable near zero)
     low_passes: list[tuple[str, float, float]] = []
     low_violations: list[tuple[str, float, float]] = []
     for sym, cap in panel.low_markers:
-        obs = sample_tpm.get(sym, 0.0)
+        gid = marker_ids.get(sym)
+        if not gid:
+            _warn_unresolved_marker(panel.name, "low", sym)
+            # Pessimistic: count as a violation so an unresolved
+            # negative marker can't silently let a panel match a
+            # sample where that marker is in fact expressed.
+            low_violations.append((sym, float("nan"), cap))
+            continue
+        obs = _sample(gid)
         if obs < cap:
             low_passes.append((sym, obs, cap))
         else:
@@ -234,17 +352,22 @@ def score_panel(
     low_frac = len(low_passes) / low_total
     score = (high_frac ** 0.6) * (low_frac ** 0.4)
 
-    # Rationale — mirrors the basal-BRCA rescue text style
+    # Rationale — short, scannable, uses HGNC symbols since those are
+    # what readers recognize. Markers with no Ensembl mapping show as
+    # "(unresolved)" in the violation list so report readers can see
+    # the panel didn't ignore the marker — it failed it pessimistically.
     hit_summary = ", ".join(f"{s}={t:.0f}" for s, t, _ in high_hits[:4])
     if not hit_summary:
         hit_summary = "(none)"
     violation_phrase = ""
     if low_violations:
-        v = ", ".join(f"{s}={t:.0f}>{c:.0f}" for s, t, c in low_violations[:3])
+        def _v_str(s, t, c):
+            return f"{s}=unresolved" if t != t else f"{s}={t:.0f}>{c:.0f}"  # NaN check
+        v = ", ".join(_v_str(s, t, c) for s, t, c in low_violations[:3])
         violation_phrase = f"; low-marker violations: {v}"
     rationale = (
-        f"{panel.name}: {len(high_hits)}/{high_total} high-markers in cohort range "
-        f"({hit_summary}); {len(low_passes)}/{low_total} low-markers compliant"
+        f"{panel.name}: {len(high_hits)}/{high_total} required markers in cohort range "
+        f"({hit_summary}); {len(low_passes)}/{low_total} negative markers below threshold"
         f"{violation_phrase}"
     )
 
@@ -264,7 +387,7 @@ def score_panel(
 
 def evaluate_panels(
     panels: tuple[LineagePanel, ...],
-    sample_tpm: Mapping[str, float],
+    sample_tpm_by_gene_id: Mapping[str, float],
     sample_hk_median: float,
 ) -> tuple[PanelEvidence, ...]:
     """Score every panel; return evidence sorted by score (highest first).
@@ -273,7 +396,9 @@ def evaluate_panels(
     reasoning (confidence, report rationale, conflicting-call detection)
     needs to see misses as well as hits.
     """
-    evidence = tuple(score_panel(p, sample_tpm, sample_hk_median) for p in panels)
+    evidence = tuple(
+        score_panel(p, sample_tpm_by_gene_id, sample_hk_median) for p in panels
+    )
     return tuple(sorted(evidence, key=lambda e: -e.score))
 
 
@@ -296,6 +421,10 @@ _BRCA_BASAL = LineagePanel(
     obligate=("KRT14",),
     description="Basal-like / TNBC mammary",
     references=("Hoadley 2014 Cell", "Lehmann 2011 JCI", "Damrauer 2014 PNAS"),
+    program_note=(
+        "basal-like breast program (KRT5/KRT14 cytokeratins, FOXC1, low ER/PR/HER2). "
+        "Associated with triple-negative biology, BRCA1/HRD signatures, and PD-L1 candidacy"
+    ),
 )
 
 _BRCA_LUMINAL = LineagePanel(
@@ -310,6 +439,10 @@ _BRCA_LUMINAL = LineagePanel(
     obligate=("FOXA1",),
     description="Luminal A/B/HER2 mammary",
     references=("Perou 2000 Nature", "Sorlie 2001 PNAS"),
+    program_note=(
+        "luminal breast program (ESR1, PGR, FOXA1, GATA3). "
+        "Hormone-receptor-positive biology; anti-estrogen therapy context"
+    ),
 )
 
 _ESCA_SQUAMOUS = LineagePanel(
@@ -323,6 +456,10 @@ _ESCA_SQUAMOUS = LineagePanel(
     ),
     obligate=("TP63",),
     description="Esophageal squamous (TCGA-ESCA is ~70% squamous)",
+    program_note=(
+        "squamous esophageal program (TP63, SOX2, keratins). "
+        "Distinct from adenocarcinoma; chemoradiation-sensitive context"
+    ),
 )
 
 _BLCA_LUMINAL = LineagePanel(
@@ -337,6 +474,10 @@ _BLCA_LUMINAL = LineagePanel(
     obligate=("UPK1B",),
     description="Urothelial luminal (MIBC luminal subtype)",
     references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
+    program_note=(
+        "luminal urothelial program (FOXA1, GATA3, PPARG, UPK1A/UPK2). "
+        "Less chemo-sensitive than basal MIBC; FGFR3 alterations enriched"
+    ),
 )
 
 _HNSC_PANEL = LineagePanel(
@@ -351,6 +492,10 @@ _HNSC_PANEL = LineagePanel(
     ),
     obligate=("TP63",),
     description="Head & neck squamous",
+    program_note=(
+        "head-and-neck squamous program (keratins, p63, SOX2). "
+        "HPV status independently informative"
+    ),
 )
 
 _LIHC_PANEL = LineagePanel(
@@ -364,6 +509,10 @@ _LIHC_PANEL = LineagePanel(
     ),
     obligate=("ALB",),
     description="Hepatocellular carcinoma",
+    program_note=(
+        "hepatocyte program (albumin synthesis, drug-metabolism enzymes). "
+        "Be alert for drug-drug interactions from preserved hepatic clearance"
+    ),
 )
 
 _PAAD_PANEL = LineagePanel(
@@ -377,6 +526,190 @@ _PAAD_PANEL = LineagePanel(
     ),
     obligate=("KRT19",),
     description="Pancreatic ductal adenocarcinoma",
+    program_note=(
+        "pancreatic ductal program (KRT19, MUC1, CDX2-negative). "
+        "Stromal-dominant tumor microenvironment context"
+    ),
+)
+
+# --- Panels added to close TCGA-160 top-3 misses (issue #42) ---
+
+_CHOL_PANEL = LineagePanel(
+    name="CHOL",
+    parent_cohort="CHOL",
+    high_markers=("KRT19", "MUC1", "MUC5AC", "EPCAM", "CDH1", "CFTR"),
+    low_markers=(
+        ("ALB", 30.0),     # not hepatocyte (otherwise → LIHC)
+        ("AFP", 5.0),
+        ("CDX2", 30.0),    # not colorectal (otherwise → COAD/READ)
+        ("CDH17", 50.0),
+        ("VIL1", 50.0),
+    ),
+    obligate=("KRT19",),
+    description="Cholangiocarcinoma — biliary epithelium",
+    program_note=(
+        "biliary epithelial program (KRT19, CFTR, MUC5AC). "
+        "Distinct from hepatocellular biology; FGFR2 fusions enriched"
+    ),
+)
+
+_UCEC_PANEL = LineagePanel(
+    name="UCEC",
+    parent_cohort="UCEC",
+    high_markers=("PAX8", "ESR1", "PGR", "FOXA2", "HOXA10", "WT1"),
+    low_markers=(
+        ("VIM", 200.0),    # not mesenchymal-dominant (UCS shows VIM high)
+        ("KRT5", 50.0),    # not basal-squamous
+        ("KRT14", 50.0),
+        ("MUC16", 1.0),    # OV uses MUC16 (CA125); UCEC variable
+    ),
+    obligate=("PAX8",),
+    description="Endometrial adenocarcinoma — Müllerian glandular",
+    program_note=(
+        "endometrial Müllerian program (PAX8, ESR1, FOXA2). "
+        "Hormone-receptor context overlapping with luminal breast"
+    ),
+)
+
+_MESO_PANEL = LineagePanel(
+    name="MESO",
+    parent_cohort="MESO",
+    high_markers=("WT1", "MSLN", "CALB2", "UPK3B", "KRT5", "PDPN", "KRT8"),
+    low_markers=(
+        ("SFTPC", 5.0),    # not LUAD (alveolar surfactant)
+        ("NAPSA", 10.0),
+        ("CDX2", 5.0),     # not GI
+        ("FOXA1", 30.0),
+        ("MUCL1", 1.0),    # not mammary
+    ),
+    obligate=("MSLN",),    # mesothelin is the canonical mesothelial marker
+    description="Mesothelioma — mesothelium",
+    references=("Hassan 2014",),
+    program_note=(
+        "mesothelial program (MSLN, WT1, CALB2). "
+        "Mesothelin is a therapy target; BAP1 loss enriched"
+    ),
+)
+
+_ACC_PANEL = LineagePanel(
+    name="ACC",
+    parent_cohort="ACC",
+    high_markers=("CYP11A1", "CYP17A1", "CYP21A2", "STAR", "NR5A1", "INHA", "MC2R"),
+    low_markers=(
+        ("KRT5", 30.0),    # not squamous
+        ("KRT14", 30.0),
+        ("TP63", 30.0),
+        ("TG", 5.0),       # not thyroid (otherwise → THCA)
+        ("PAX8", 10.0),    # PAX8 is gyn/thyroid; low in ACC
+    ),
+    # NR5A1 (SF1) is the master TF for adrenocortical lineage. Without
+    # it, the sample isn't expressing the ACC program — dedifferentiated
+    # variants will fail this obligate, leaving no lineage panel hypothesis
+    # for ACC. That IS the correct honest-reporting outcome per issue #42.
+    obligate=("NR5A1",),
+    description="Adrenocortical carcinoma — cortical steroidogenic",
+    references=("Roden 2024",),
+    program_note=(
+        "adrenocortical steroidogenic program (CYP11A1/CYP17A1, NR5A1/SF1, STAR). "
+        "Active cortisol/aldosterone biology; mitotane sensitivity context"
+    ),
+)
+
+_THYM_PANEL = LineagePanel(
+    name="THYM",
+    parent_cohort="THYM",
+    high_markers=("AIRE", "FOXN1", "PSMB11", "PRSS16", "CCL25", "CHRNA1"),
+    low_markers=(
+        ("MUCL1", 1.0),    # not mammary
+        ("UPK1B", 1.0),    # not urothelial
+        ("FOXA1", 30.0),
+    ),
+    obligate=("FOXN1",),   # thymic epithelium master TF
+    description="Thymoma — thymic epithelium",
+    program_note=(
+        "thymic-epithelial program (AIRE, FOXN1, PSMB11). "
+        "Paraneoplastic autoimmune context; checkpoint-inhibitor caution"
+    ),
+)
+
+_PCPG_PANEL = LineagePanel(
+    name="PCPG",
+    parent_cohort="PCPG",
+    # Mature adrenal-medulla chromaffin / extra-adrenal paraganglion
+    # program. CHGA / SYN1 are pan-neuroendocrine; PNMT (phenylethanolamine
+    # N-methyltransferase) is what distinguishes adult adrenal medulla
+    # (PCPG) from immature neural-crest tumors (NBL). TH / DBH / NPY
+    # are catecholamine-pathway enzymes.
+    high_markers=("CHGA", "SYN1", "PNMT", "TH", "DBH", "NPY", "CHGB"),
+    low_markers=(
+        ("ALB", 5.0),      # not hepatocyte (otherwise → LIHC override)
+        ("KRT19", 30.0),   # not ductal
+        ("MUC1", 30.0),
+        ("CDX2", 5.0),     # not GI
+        ("PHOX2B", 30.0),  # NBL master TF — should be LOW in mature PCPG
+        ("LIN28B", 5.0),   # fetal marker, NBL-associated
+        ("MYCN", 5.0),     # NBL amplification context
+    ),
+    # PNMT is the canonical mature-adrenal-medulla marker. Without it,
+    # the sample isn't expressing the chromaffin program — extra-adrenal
+    # paragangliomas may lack PNMT (they're noradrenergic), so we use
+    # CHGA as the obligate to keep PGL within scope; PNMT still scores
+    # as a positive marker when present.
+    obligate=("CHGA",),
+    description="Pheochromocytoma / paraganglioma — adrenal-medulla chromaffin",
+    references=("Burnichon 2017 Nat Rev Endocrinol", "Fishbein 2017 Cancer Cell"),
+    program_note=(
+        "neuroendocrine chromaffin program (CHGA, SYN1, PNMT, TH, DBH). "
+        "Adrenergic biology, catecholamine secretion context; SDHx/RET/VHL "
+        "germline mutations enriched, especially in PGL"
+    ),
+)
+
+_LUAD_PANEL = LineagePanel(
+    name="LUAD",
+    parent_cohort="LUAD",
+    # Alveolar adenocarcinoma program. NKX2-1 (TTF1) is the master TF
+    # for distal-lung epithelium and is the canonical lineage discriminator
+    # vs squamous (LUSC), GI adeno (STAD/PAAD), and mesothelial (MESO).
+    high_markers=("SFTPC", "SFTPA1", "SFTPA2", "SFTPB", "NAPSA", "NKX2-1"),
+    low_markers=(
+        ("KRT5", 30.0),    # not squamous
+        ("KRT14", 30.0),
+        ("TP63", 30.0),
+        ("CDX2", 5.0),     # not GI
+        ("MUC2", 5.0),     # not mucinous GI
+        ("MUCL1", 1.0),    # not mammary
+        ("MSLN", 30.0),    # not mesothelial (otherwise → MESO)
+    ),
+    obligate=("NKX2-1",),  # alveolar epithelial master TF
+    description="Lung adenocarcinoma — alveolar epithelium",
+    references=("Travis 2015 WHO classification", "Yatabe 2002 Am J Surg Pathol"),
+    program_note=(
+        "alveolar adenocarcinoma program (TTF1/NKX2-1, surfactant proteins, NAPSA). "
+        "EGFR/KRAS/ALK-driven biology context; distinct from squamous (TP63-high) "
+        "and mucinous (MUC2/CDX2) lung tumors"
+    ),
+)
+
+_BLCA_BASAL_PANEL = LineagePanel(
+    name="BLCA_BASAL",
+    parent_cohort="BLCA",
+    # Basal MIBC retains partial uroplakin expression but loses the
+    # luminal urothelial differentiation; squamous-like keratins rise.
+    high_markers=("KRT5", "KRT14", "KRT6A", "UPK1B", "UPK2", "S100P"),
+    low_markers=(
+        ("MUCL1", 1.0),    # not mammary (otherwise → BRCA_BASAL)
+        ("SCGB2A2", 1.0),
+        ("FOXA1", 200.0),  # luminal urothelial has FOXA1/GATA3 very high
+        ("GATA3", 200.0),
+    ),
+    obligate=("UPK1B",),   # urothelial marker — distinguishes from BRCA_BASAL
+    description="Basal-like muscle-invasive bladder cancer",
+    references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
+    program_note=(
+        "basal-like muscle-invasive bladder program (KRT5/KRT14/KRT6A, S100P, low FOXA1/GATA3). "
+        "More chemo-sensitive than luminal MIBC; squamous-like differentiation"
+    ),
 )
 
 
@@ -387,9 +720,17 @@ LINEAGE_PANELS: tuple[LineagePanel, ...] = (
     _BRCA_LUMINAL,
     _ESCA_SQUAMOUS,
     _BLCA_LUMINAL,
+    _BLCA_BASAL_PANEL,
     _HNSC_PANEL,
     _LIHC_PANEL,
     _PAAD_PANEL,
+    _CHOL_PANEL,
+    _UCEC_PANEL,
+    _MESO_PANEL,
+    _ACC_PANEL,
+    _THYM_PANEL,
+    _PCPG_PANEL,
+    _LUAD_PANEL,
 )
 
 

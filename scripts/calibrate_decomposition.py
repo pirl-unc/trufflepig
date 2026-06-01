@@ -421,31 +421,65 @@ def _classify_sample_for_worker(args: tuple[str, str]) -> dict[str, Any]:
     consolidated_top1, consolidated_top1_kind = _codes_match(
         consolidated_code, base_expected
     )
-    return {
+    record = {
         "sample_id": sample_id,
         "expected_code": expected_code,
         "is_normal": str(expected_code).startswith("NORMAL:"),
-        "broad_top_code": broad_code,
-        "broad_top_support": round(float(summary["broad_top_support"]), 4),
-        "broad_top3": broad_top3,
-        "broad_top1_match": bool(broad_top1),
-        "broad_top1_match_kind": broad_top1_kind,
-        "broad_top3_match": bool(broad_top3_hit),
-        "broad_top3_match_kind": broad_top3_kind,
-        "consolidated_cancer_type": consolidated_code,
-        "consolidated_selected_by": selected_by,
-        "consolidated_top1_match": bool(consolidated_top1),
-        "consolidated_top1_match_kind": consolidated_top1_kind,
-        "top_code": broad_code,
-        "top_support": round(float(summary["broad_top_support"]), 4),
-        "top3": broad_top3,
-        "top1_match": bool(broad_top1),
-        "top1_match_kind": broad_top1_kind,
-        "top3_match": bool(broad_top3_hit),
-        "top3_match_kind": broad_top3_kind,
+        # New names: "first_pass" = the initial RNA classifier call;
+        # "final_call" = the evidence-weighted call after the
+        # consolidator has reviewed multiple selectors. The old
+        # "broad" / "consolidated" keys are still emitted (see
+        # _add_back_compat_aliases below) for one release cycle so
+        # external readers don't break.
+        "first_pass_code": broad_code,
+        "first_pass_support": round(float(summary["broad_top_support"]), 4),
+        "first_pass_top3": broad_top3,
+        "first_pass_top1_match": bool(broad_top1),
+        "first_pass_top1_match_kind": broad_top1_kind,
+        "first_pass_top3_match": bool(broad_top3_hit),
+        "first_pass_top3_match_kind": broad_top3_kind,
+        "final_call_cancer_type": consolidated_code,
+        "final_call_selected_by": selected_by,
+        "final_call_top1_match": bool(consolidated_top1),
+        "final_call_top1_match_kind": consolidated_top1_kind,
         "status": "ok",
         "seconds": round(elapsed, 2),
     }
+    _add_back_compat_aliases(record)
+    return record
+
+
+def _add_back_compat_aliases(record: dict[str, Any]) -> None:
+    """Stamp the previous-generation field names onto a per-sample
+    record so external readers built against the
+    ``broad_*`` / ``consolidated_*`` schema continue to work.
+
+    Drop this helper one release cycle after the rename has settled.
+    """
+    aliases = {
+        "broad_top_code": "first_pass_code",
+        "broad_top_support": "first_pass_support",
+        "broad_top3": "first_pass_top3",
+        "broad_top1_match": "first_pass_top1_match",
+        "broad_top1_match_kind": "first_pass_top1_match_kind",
+        "broad_top3_match": "first_pass_top3_match",
+        "broad_top3_match_kind": "first_pass_top3_match_kind",
+        "consolidated_cancer_type": "final_call_cancer_type",
+        "consolidated_selected_by": "final_call_selected_by",
+        "consolidated_top1_match": "final_call_top1_match",
+        "consolidated_top1_match_kind": "final_call_top1_match_kind",
+        # Older "top_*" aliases predate the broad/consolidated split.
+        "top_code": "first_pass_code",
+        "top_support": "first_pass_support",
+        "top3": "first_pass_top3",
+        "top1_match": "first_pass_top1_match",
+        "top1_match_kind": "first_pass_top1_match_kind",
+        "top3_match": "first_pass_top3_match",
+        "top3_match_kind": "first_pass_top3_match_kind",
+    }
+    for old_key, new_key in aliases.items():
+        if new_key in record:
+            record[old_key] = record[new_key]
 
 
 # Per-worker globals — populated by ``_init_worker`` so the heavy
@@ -563,15 +597,15 @@ def _summarise_full_tcga(per_sample: list[dict[str, Any]]) -> dict[str, Any]:
 
     def _bucket(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
         per_cohort: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"n": 0, "broad_top1": 0, "broad_top3": 0, "consolidated_top1": 0}
+            lambda: {"n": 0, "first_pass_top1": 0, "first_pass_top3": 0, "final_call_top1": 0}
         )
         for r in rows:
             code = str(r["expected_code"]).split(":", 1)[-1]
             per_cohort[code]["n"] += 1
-            per_cohort[code]["broad_top1"] += int(r.get("broad_top1_match"))
-            per_cohort[code]["broad_top3"] += int(r.get("broad_top3_match"))
-            per_cohort[code]["consolidated_top1"] += int(
-                r.get("consolidated_top1_match")
+            per_cohort[code]["first_pass_top1"] += int(r.get("first_pass_top1_match"))
+            per_cohort[code]["first_pass_top3"] += int(r.get("first_pass_top3_match"))
+            per_cohort[code]["final_call_top1"] += int(
+                r.get("final_call_top1_match")
             )
         return dict(per_cohort)
 
@@ -579,77 +613,105 @@ def _summarise_full_tcga(per_sample: list[dict[str, Any]]) -> dict[str, Any]:
     flip_counts = {
         "both_correct": 0,
         "both_wrong": 0,
-        "broad_correct_consolidated_wrong": 0,
-        "broad_wrong_consolidated_correct": 0,
+        "first_pass_right_final_call_wrong": 0,
+        "first_pass_wrong_final_call_right": 0,
     }
     per_selector: dict[str, dict[str, int]] = defaultdict(
         lambda: {"n": 0, "top1": 0}
     )
     for r in cancers:
-        b = r.get("broad_top1_match")
-        c = r.get("consolidated_top1_match")
+        b = r.get("first_pass_top1_match")
+        c = r.get("final_call_top1_match")
         if b and c:
             flip_counts["both_correct"] += 1
         elif not b and not c:
             flip_counts["both_wrong"] += 1
         elif b and not c:
-            flip_counts["broad_correct_consolidated_wrong"] += 1
+            flip_counts["first_pass_right_final_call_wrong"] += 1
         else:
-            flip_counts["broad_wrong_consolidated_correct"] += 1
-        selector = r.get("consolidated_selected_by") or "no_selection"
+            flip_counts["first_pass_wrong_final_call_right"] += 1
+        selector = r.get("final_call_selected_by") or "no_selection"
         per_selector[selector]["n"] += 1
         per_selector[selector]["top1"] += int(c)
+    # Back-compat aliases for the flip_counts keys (one release cycle).
+    flip_counts["broad_correct_consolidated_wrong"] = flip_counts[
+        "first_pass_right_final_call_wrong"
+    ]
+    flip_counts["broad_wrong_consolidated_correct"] = flip_counts[
+        "first_pass_wrong_final_call_right"
+    ]
 
     total_n = len(cancers)
-    total_broad_top1 = sum(c["broad_top1"] for c in per_cohort.values())
-    total_broad_top3 = sum(c["broad_top3"] for c in per_cohort.values())
-    total_consolidated_top1 = sum(c["consolidated_top1"] for c in per_cohort.values())
-    broad_top1_ci = _bootstrap_ci([r["broad_top1_match"] for r in cancers])
-    broad_top3_ci = _bootstrap_ci([r["broad_top3_match"] for r in cancers])
-    cons_top1_ci = _bootstrap_ci([r["consolidated_top1_match"] for r in cancers])
+    total_first_pass_top1 = sum(c["first_pass_top1"] for c in per_cohort.values())
+    total_first_pass_top3 = sum(c["first_pass_top3"] for c in per_cohort.values())
+    total_final_call_top1 = sum(c["final_call_top1"] for c in per_cohort.values())
+    first_pass_top1_ci = _bootstrap_ci([r["first_pass_top1_match"] for r in cancers])
+    first_pass_top3_ci = _bootstrap_ci([r["first_pass_top3_match"] for r in cancers])
+    final_call_top1_ci = _bootstrap_ci([r["final_call_top1_match"] for r in cancers])
+
+    def _per_cohort_row(stats: dict[str, int]) -> dict[str, Any]:
+        n = stats["n"]
+        row = {
+            "n": n,
+            "first_pass_top1_accuracy": (
+                round(stats["first_pass_top1"] / n, 4) if n else 0.0
+            ),
+            "first_pass_top3_accuracy": (
+                round(stats["first_pass_top3"] / n, 4) if n else 0.0
+            ),
+            "final_call_top1_accuracy": (
+                round(stats["final_call_top1"] / n, 4) if n else 0.0
+            ),
+        }
+        # Back-compat aliases (drop after one release cycle).
+        row["broad_top1_accuracy"] = row["first_pass_top1_accuracy"]
+        row["broad_top3_accuracy"] = row["first_pass_top3_accuracy"]
+        row["consolidated_top1_accuracy"] = row["final_call_top1_accuracy"]
+        return row
+
+    layer_breakdown = {
+        "first_pass_top1_accuracy": (
+            round(total_first_pass_top1 / total_n, 4) if total_n else 0.0
+        ),
+        "first_pass_top1_ci_95": first_pass_top1_ci,
+        "first_pass_top3_accuracy": (
+            round(total_first_pass_top3 / total_n, 4) if total_n else 0.0
+        ),
+        "first_pass_top3_ci_95": first_pass_top3_ci,
+        "final_call_top1_accuracy": (
+            round(total_final_call_top1 / total_n, 4) if total_n else 0.0
+        ),
+        "final_call_top1_ci_95": final_call_top1_ci,
+        "flip_counts": flip_counts,
+        "delta_final_call_vs_first_pass_top1": (
+            round((total_final_call_top1 - total_first_pass_top1) / total_n, 4)
+            if total_n
+            else 0.0
+        ),
+    }
+    # Back-compat aliases (drop after one release cycle).
+    layer_breakdown["broad_top1_accuracy"] = layer_breakdown["first_pass_top1_accuracy"]
+    layer_breakdown["broad_top1_ci_95"] = layer_breakdown["first_pass_top1_ci_95"]
+    layer_breakdown["broad_top3_accuracy"] = layer_breakdown["first_pass_top3_accuracy"]
+    layer_breakdown["broad_top3_ci_95"] = layer_breakdown["first_pass_top3_ci_95"]
+    layer_breakdown["consolidated_top1_accuracy"] = layer_breakdown[
+        "final_call_top1_accuracy"
+    ]
+    layer_breakdown["consolidated_top1_ci_95"] = layer_breakdown["final_call_top1_ci_95"]
+    layer_breakdown["delta_consolidated_vs_broad_top1"] = layer_breakdown[
+        "delta_final_call_vs_first_pass_top1"
+    ]
 
     return {
         "per_sample": per_sample,
         "per_cohort": {
-            code: {
-                "n": stats["n"],
-                "broad_top1_accuracy": (
-                    round(stats["broad_top1"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-                "broad_top3_accuracy": (
-                    round(stats["broad_top3"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-                "consolidated_top1_accuracy": (
-                    round(stats["consolidated_top1"] / stats["n"], 4)
-                    if stats["n"]
-                    else 0.0
-                ),
-            }
+            code: _per_cohort_row(stats)
             for code, stats in sorted(per_cohort.items())
         },
         "summary": {
             "n_evaluated": total_n,
             "n_normals_held_out": len(normals),
-            "layer_breakdown": {
-                "broad_top1_accuracy": (
-                    round(total_broad_top1 / total_n, 4) if total_n else 0.0
-                ),
-                "broad_top1_ci_95": broad_top1_ci,
-                "broad_top3_accuracy": (
-                    round(total_broad_top3 / total_n, 4) if total_n else 0.0
-                ),
-                "broad_top3_ci_95": broad_top3_ci,
-                "consolidated_top1_accuracy": (
-                    round(total_consolidated_top1 / total_n, 4) if total_n else 0.0
-                ),
-                "consolidated_top1_ci_95": cons_top1_ci,
-                "flip_counts": flip_counts,
-                "delta_consolidated_vs_broad_top1": (
-                    round((total_consolidated_top1 - total_broad_top1) / total_n, 4)
-                    if total_n
-                    else 0.0
-                ),
-            },
+            "layer_breakdown": layer_breakdown,
             "per_selector": {
                 name: {
                     "n": stats["n"],
@@ -836,18 +898,19 @@ def _tcga_per_sample_track(
 
     per_sample: list[dict[str, Any]] = []
     per_cohort: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"n": 0, "broad_top1": 0, "broad_top3": 0, "consolidated_top1": 0}
+        lambda: {"n": 0, "first_pass_top1": 0, "first_pass_top3": 0, "final_call_top1": 0}
     )
     # Per-selector breakdown: which evidence path picked the
-    # consolidated call (primary_expression_match / rare_marker /
+    # final call (primary_expression_match / rare_marker /
     # fine_reference / etc.). When a regression hits, this tells us
-    # whether the broad classifier or a specific selector misfired.
+    # whether the first-pass RNA classifier or a specific selector
+    # misfired.
     per_selector_counts: dict[str, dict[str, int]] = defaultdict(
         lambda: {"n": 0, "top1": 0}
     )
     flip_counts = {
-        "broad_correct_consolidated_wrong": 0,
-        "broad_wrong_consolidated_correct": 0,
+        "first_pass_right_final_call_wrong": 0,
+        "first_pass_wrong_final_call_right": 0,
         "both_correct": 0,
         "both_wrong": 0,
     }
@@ -882,9 +945,9 @@ def _tcga_per_sample_track(
                 consolidated_code, expected_code
             )
             per_cohort[expected_code]["n"] += 1
-            per_cohort[expected_code]["broad_top1"] += int(broad_top1)
-            per_cohort[expected_code]["broad_top3"] += int(broad_top3_hit)
-            per_cohort[expected_code]["consolidated_top1"] += int(consolidated_top1)
+            per_cohort[expected_code]["first_pass_top1"] += int(broad_top1)
+            per_cohort[expected_code]["first_pass_top3"] += int(broad_top3_hit)
+            per_cohort[expected_code]["final_call_top1"] += int(consolidated_top1)
             per_selector_counts[selected_by or "no_selection"]["n"] += 1
             per_selector_counts[selected_by or "no_selection"]["top1"] += int(
                 consolidated_top1
@@ -894,104 +957,122 @@ def _tcga_per_sample_track(
             elif not broad_top1 and not consolidated_top1:
                 flip_counts["both_wrong"] += 1
             elif broad_top1 and not consolidated_top1:
-                flip_counts["broad_correct_consolidated_wrong"] += 1
+                flip_counts["first_pass_right_final_call_wrong"] += 1
             else:
-                flip_counts["broad_wrong_consolidated_correct"] += 1
-            per_sample.append(
-                {
-                    "sample_id": sample_id,
-                    "expected_code": expected_code,
-                    "broad_top_code": broad_code,
-                    "broad_top_support": round(float(summary["broad_top_support"]), 4),
-                    "broad_top3": broad_top3,
-                    "broad_top1_match": bool(broad_top1),
-                    "broad_top1_match_kind": broad_top1_kind,
-                    "broad_top3_match": bool(broad_top3_hit),
-                    "broad_top3_match_kind": broad_top3_kind,
-                    "consolidated_cancer_type": consolidated_code,
-                    "consolidated_selected_by": selected_by,
-                    "consolidated_top1_match": bool(consolidated_top1),
-                    "consolidated_top1_match_kind": consolidated_top1_kind,
-                    # Back-compat aliases for older tooling reading the
-                    # report (TSV consumers, baseline JSONs from before
-                    # the per-step split).
-                    "top_code": broad_code,
-                    "top_support": round(float(summary["broad_top_support"]), 4),
-                    "top3": broad_top3,
-                    "top1_match": bool(broad_top1),
-                    "top1_match_kind": broad_top1_kind,
-                    "top3_match": bool(broad_top3_hit),
-                    "top3_match_kind": broad_top3_kind,
-                    "seconds": round(elapsed, 2),
-                }
-            )
+                flip_counts["first_pass_wrong_final_call_right"] += 1
+            row = {
+                "sample_id": sample_id,
+                "expected_code": expected_code,
+                "first_pass_code": broad_code,
+                "first_pass_support": round(float(summary["broad_top_support"]), 4),
+                "first_pass_top3": broad_top3,
+                "first_pass_top1_match": bool(broad_top1),
+                "first_pass_top1_match_kind": broad_top1_kind,
+                "first_pass_top3_match": bool(broad_top3_hit),
+                "first_pass_top3_match_kind": broad_top3_kind,
+                "final_call_cancer_type": consolidated_code,
+                "final_call_selected_by": selected_by,
+                "final_call_top1_match": bool(consolidated_top1),
+                "final_call_top1_match_kind": consolidated_top1_kind,
+                "seconds": round(elapsed, 2),
+            }
+            _add_back_compat_aliases(row)
+            per_sample.append(row)
             print(
                 f"[tcga] {expected_code}/{sample_id}: "
-                f"broad={broad_code} top3={broad_top3} "
-                f"consolidated={consolidated_code} ({selected_by or '-'}) "
-                f"broad_top1={broad_top1} cons_top1={consolidated_top1} "
+                f"first_pass={broad_code} top3={broad_top3} "
+                f"final_call={consolidated_code} ({selected_by or '-'}) "
+                f"first_pass_match={broad_top1} final_call_match={consolidated_top1} "
                 f"({elapsed:.1f}s)",
                 file=sys.stderr,
                 flush=True,
             )
 
     total_n = sum(c["n"] for c in per_cohort.values())
-    total_broad_top1 = sum(c["broad_top1"] for c in per_cohort.values())
-    total_broad_top3 = sum(c["broad_top3"] for c in per_cohort.values())
-    total_consolidated_top1 = sum(c["consolidated_top1"] for c in per_cohort.values())
-    broad_top1_ci = _bootstrap_ci([row["broad_top1_match"] for row in per_sample])
-    broad_top3_ci = _bootstrap_ci([row["broad_top3_match"] for row in per_sample])
-    cons_top1_ci = _bootstrap_ci(
-        [row["consolidated_top1_match"] for row in per_sample]
+    total_first_pass_top1 = sum(c["first_pass_top1"] for c in per_cohort.values())
+    total_first_pass_top3 = sum(c["first_pass_top3"] for c in per_cohort.values())
+    total_final_call_top1 = sum(c["final_call_top1"] for c in per_cohort.values())
+    first_pass_top1_ci = _bootstrap_ci(
+        [row["first_pass_top1_match"] for row in per_sample]
     )
+    first_pass_top3_ci = _bootstrap_ci(
+        [row["first_pass_top3_match"] for row in per_sample]
+    )
+    final_call_top1_ci = _bootstrap_ci(
+        [row["final_call_top1_match"] for row in per_sample]
+    )
+
+    def _per_cohort_row(stats: dict[str, int]) -> dict[str, Any]:
+        n = stats["n"]
+        row = {
+            "n": n,
+            "first_pass_top1_accuracy": (
+                round(stats["first_pass_top1"] / n, 4) if n else 0.0
+            ),
+            "first_pass_top3_accuracy": (
+                round(stats["first_pass_top3"] / n, 4) if n else 0.0
+            ),
+            "final_call_top1_accuracy": (
+                round(stats["final_call_top1"] / n, 4) if n else 0.0
+            ),
+        }
+        # Back-compat aliases (drop after one release cycle).
+        row["broad_top1_accuracy"] = row["first_pass_top1_accuracy"]
+        row["broad_top3_accuracy"] = row["first_pass_top3_accuracy"]
+        row["consolidated_top1_accuracy"] = row["final_call_top1_accuracy"]
+        row["top1_accuracy"] = row["first_pass_top1_accuracy"]
+        row["top3_accuracy"] = row["first_pass_top3_accuracy"]
+        return row
+
+    # Back-compat aliases for flip_counts.
+    flip_counts["broad_correct_consolidated_wrong"] = flip_counts[
+        "first_pass_right_final_call_wrong"
+    ]
+    flip_counts["broad_wrong_consolidated_correct"] = flip_counts[
+        "first_pass_wrong_final_call_right"
+    ]
+
+    layer_breakdown = {
+        "first_pass_top1_accuracy": (
+            round(total_first_pass_top1 / total_n, 4) if total_n else 0.0
+        ),
+        "first_pass_top1_ci_95": first_pass_top1_ci,
+        "first_pass_top3_accuracy": (
+            round(total_first_pass_top3 / total_n, 4) if total_n else 0.0
+        ),
+        "first_pass_top3_ci_95": first_pass_top3_ci,
+        "final_call_top1_accuracy": (
+            round(total_final_call_top1 / total_n, 4) if total_n else 0.0
+        ),
+        "final_call_top1_ci_95": final_call_top1_ci,
+        "flip_counts": dict(flip_counts),
+        "delta_final_call_vs_first_pass_top1": (
+            round((total_final_call_top1 - total_first_pass_top1) / total_n, 4)
+            if total_n
+            else 0.0
+        ),
+    }
+    # Back-compat aliases (drop after one release cycle).
+    layer_breakdown["broad_top1_accuracy"] = layer_breakdown["first_pass_top1_accuracy"]
+    layer_breakdown["broad_top1_ci_95"] = layer_breakdown["first_pass_top1_ci_95"]
+    layer_breakdown["broad_top3_accuracy"] = layer_breakdown["first_pass_top3_accuracy"]
+    layer_breakdown["broad_top3_ci_95"] = layer_breakdown["first_pass_top3_ci_95"]
+    layer_breakdown["consolidated_top1_accuracy"] = layer_breakdown[
+        "final_call_top1_accuracy"
+    ]
+    layer_breakdown["consolidated_top1_ci_95"] = layer_breakdown["final_call_top1_ci_95"]
+    layer_breakdown["delta_consolidated_vs_broad_top1"] = layer_breakdown[
+        "delta_final_call_vs_first_pass_top1"
+    ]
     return {
         "per_sample": per_sample,
         "per_cohort": {
-            code: {
-                "n": stats["n"],
-                "broad_top1_accuracy": (
-                    round(stats["broad_top1"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-                "broad_top3_accuracy": (
-                    round(stats["broad_top3"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-                "consolidated_top1_accuracy": (
-                    round(stats["consolidated_top1"] / stats["n"], 4)
-                    if stats["n"]
-                    else 0.0
-                ),
-                # Back-compat aliases.
-                "top1_accuracy": (
-                    round(stats["broad_top1"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-                "top3_accuracy": (
-                    round(stats["broad_top3"] / stats["n"], 4) if stats["n"] else 0.0
-                ),
-            }
+            code: _per_cohort_row(stats)
             for code, stats in sorted(per_cohort.items())
         },
         "summary": {
             "n_samples": total_n,
-            "layer_breakdown": {
-                "broad_top1_accuracy": (
-                    round(total_broad_top1 / total_n, 4) if total_n else 0.0
-                ),
-                "broad_top1_ci_95": broad_top1_ci,
-                "broad_top3_accuracy": (
-                    round(total_broad_top3 / total_n, 4) if total_n else 0.0
-                ),
-                "broad_top3_ci_95": broad_top3_ci,
-                "consolidated_top1_accuracy": (
-                    round(total_consolidated_top1 / total_n, 4) if total_n else 0.0
-                ),
-                "consolidated_top1_ci_95": cons_top1_ci,
-                "flip_counts": dict(flip_counts),
-                "delta_consolidated_vs_broad_top1": (
-                    round((total_consolidated_top1 - total_broad_top1) / total_n, 4)
-                    if total_n
-                    else 0.0
-                ),
-            },
+            "layer_breakdown": layer_breakdown,
             "per_selector": {
                 name: {
                     "n": stats["n"],
@@ -1003,13 +1084,13 @@ def _tcga_per_sample_track(
             },
             # Back-compat: older tooling reads these top-level keys.
             "top1_accuracy": (
-                round(total_broad_top1 / total_n, 4) if total_n else 0.0
+                round(total_first_pass_top1 / total_n, 4) if total_n else 0.0
             ),
-            "top1_ci_95": broad_top1_ci,
+            "top1_ci_95": first_pass_top1_ci,
             "top3_accuracy": (
-                round(total_broad_top3 / total_n, 4) if total_n else 0.0
+                round(total_first_pass_top3 / total_n, 4) if total_n else 0.0
             ),
-            "top3_ci_95": broad_top3_ci,
+            "top3_ci_95": first_pass_top3_ci,
         },
     }
 
@@ -1463,6 +1544,19 @@ def _local_no_override_track(
                 round(n_selector_match / n_total, 4) if n_total else None
             ),
             "layer_breakdown": {
+                "first_pass_only_code_match_rate": (
+                    round(n_broad_match / n_total, 4) if n_total else None
+                ),
+                "final_call_code_match_rate": (
+                    round(n_code_match / n_total, 4) if n_total else None
+                ),
+                "delta_final_call_vs_first_pass": (
+                    round((n_code_match - n_broad_match) / n_total, 4)
+                    if n_total
+                    else None
+                ),
+                "n_lifted_by_final_call": max(0, n_code_match - n_broad_match),
+                # Back-compat aliases (drop after one release cycle).
                 "broad_only_code_match_rate": (
                     round(n_broad_match / n_total, 4) if n_total else None
                 ),
@@ -1784,16 +1878,42 @@ def main(argv: list[str] | None = None) -> int:
         s = report[key]["summary"]
         layers = s.get("layer_breakdown") or {}
         n = s.get("n_samples") or s.get("n_evaluated")
+        first_pass_top1 = layers.get(
+            "first_pass_top1_accuracy",
+            layers.get("broad_top1_accuracy", s.get("top1_accuracy")),
+        )
+        first_pass_top3 = layers.get(
+            "first_pass_top3_accuracy",
+            layers.get("broad_top3_accuracy", s.get("top3_accuracy")),
+        )
+        final_call_top1 = layers.get(
+            "final_call_top1_accuracy",
+            layers.get("consolidated_top1_accuracy", s.get("top1_accuracy")),
+        )
+        delta = layers.get(
+            "delta_final_call_vs_first_pass_top1",
+            layers.get("delta_consolidated_vs_broad_top1", 0.0),
+        )
         print(
             f"[summary] {key}: n={n} "
-            f"broad_top1={layers.get('broad_top1_accuracy', s.get('top1_accuracy')):.3f} "
-            f"broad_top3={layers.get('broad_top3_accuracy', s.get('top3_accuracy')):.3f} "
-            f"consolidated_top1="
-            f"{layers.get('consolidated_top1_accuracy', s.get('top1_accuracy')):.3f} "
-            f"(Δ={layers.get('delta_consolidated_vs_broad_top1', 0.0):+.3f})"
+            f"first_pass_top1={first_pass_top1:.3f} "
+            f"first_pass_top3={first_pass_top3:.3f} "
+            f"final_call_top1={final_call_top1:.3f} "
+            f"(Δ={delta:+.3f})"
         )
         if layers.get("flip_counts"):
-            print(f"[summary] {key} flips: {layers['flip_counts']}")
+            # Filter out the back-compat duplicate keys for the
+            # console summary so the line stays scannable. The JSON
+            # output still carries both schemas for external readers.
+            flips_for_print = {
+                k: v
+                for k, v in layers["flip_counts"].items()
+                if k not in {
+                    "broad_correct_consolidated_wrong",
+                    "broad_wrong_consolidated_correct",
+                }
+            }
+            print(f"[summary] {key} flips: {flips_for_print}")
         if (s.get("per_selector") or {}):
             print(f"[summary] {key} per-selector: {s['per_selector']}")
     if "hpa_normal_baseline" in report:
@@ -1802,13 +1922,20 @@ def main(argv: list[str] | None = None) -> int:
     if "local_no_override" in report:
         s = report["local_no_override"]["summary"]
         layers = s.get("layer_breakdown") or {}
+        first_pass_only = layers.get(
+            "first_pass_only_code_match_rate",
+            layers.get("broad_only_code_match_rate"),
+        )
+        n_lifted = layers.get(
+            "n_lifted_by_final_call",
+            layers.get("n_lifted_by_consolidation", 0),
+        )
         print(
             f"[summary] Local no-override replay: "
             f"n={s['n_evaluated']} code_match={s['code_match_rate']} "
             f"full_match={s['full_match_rate']} "
-            f"broad_only={layers.get('broad_only_code_match_rate')} "
-            f"(consolidation lifted {layers.get('n_lifted_by_consolidation')} "
-            "samples)"
+            f"first_pass_only={first_pass_only} "
+            f"(final-call selectors lifted {n_lifted} samples)"
         )
         if (s.get("per_selector") or {}):
             print(f"[summary] Local per-selector: {s['per_selector']}")

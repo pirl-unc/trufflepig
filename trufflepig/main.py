@@ -4767,6 +4767,13 @@ def _apply_cancer_type_evidence(
         )
 
     analysis["cancer_type_evidence"] = cancer_type_evidence
+    # Wiring point #2: expose the lineage-panel verdict as a
+    # top-level analysis key so analysis-parameters.json carries
+    # it for debugging and downstream consumers that don't dig
+    # into cancer_type_evidence themselves.
+    panel_evidence = (cancer_type_evidence or {}).get("lineage_panel_evidence")
+    if panel_evidence is not None:
+        analysis["lineage_panel_evidence"] = panel_evidence
     selected_scope = (cancer_type_evidence or {}).get("selected")
     if selected_scope and selected_scope.get("cancer_type"):
         analysis["inferred_cancer_type"] = selected_scope["cancer_type"]

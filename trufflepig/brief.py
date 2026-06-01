@@ -262,8 +262,8 @@ def _broad_context_compatibility(top_code: str, supplied_code: str) -> str:
     supplied_group = _clinical_supergroup(supplied)
     if top_group and supplied_group and top_group == supplied_group:
         if top_group == "sarcoma/bone/soft-tissue":
-            return "sarcoma-family broad-context support"
-        return "same-family broad-context support"
+            return "sarcoma-family first-pass support"
+        return "same-family first-pass support"
     return ""
 
 
@@ -1341,6 +1341,91 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     )
 
 
+# Lineage panels below this score don't earn a brief.md line. Mirrors
+# the cancer_type_evidence selector's _LINEAGE_PANEL_MIN_SCORE (0.60)
+# but stays lower so high-confidence-but-below-promotion panels still
+# get reported as evidence.
+_LINEAGE_PANEL_BRIEF_MIN_SCORE = 0.5
+
+
+def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
+    """Render the lineage-panel verdict as a follow-on context line
+    after the cancer-type basis. The panel is a tie-breaker, not a
+    primary determination, so this is additive: it appears whenever
+    ``summarize_evidence.top_score`` reaches a reportable bar
+    (``_LINEAGE_PANEL_BRIEF_MIN_SCORE``), even if the panel didn't
+    promote a label.
+
+    Wiring point #3 from ``trufflepig.lineage_panels`` (see contract
+    block in lineage_panels.py). The line surfaces the panel name,
+    score, rationale, and — when applicable — whether the panel
+    promoted the report label or was held back by the broad
+    classifier.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    if not summary:
+        return None
+    try:
+        top_score = float(summary.get("top_score") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if top_score < _LINEAGE_PANEL_BRIEF_MIN_SCORE:
+        return None
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel:
+        return None
+    rationale = str(summary.get("top_rationale") or "").strip()
+    promotion = summary.get("promotion") or {}
+    promoted = bool(promotion.get("promoted"))
+    promoted_code = str(promotion.get("code") or "").strip()
+    blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
+    if promoted and promoted_code:
+        promoted_clause = (
+            f" — supports the {promoted_code} call"
+            if promoted_code == str(cancer_code or "").strip()
+            else f" — proposes {promoted_code}"
+        )
+    elif blockers:
+        promoted_clause = f" — noted, did not change the call ({blockers[0]})"
+    else:
+        promoted_clause = ""
+    rationale_clause = f": {rationale}" if rationale else ""
+    return (
+        f"**Lineage panel:** {top_panel} score "
+        f"{top_score:.2f}{rationale_clause}{promoted_clause}."
+    )
+
+
+def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optional[str]:
+    """Surface the lineage panel's transcriptional-program note as a
+    follow-on "**Subtype:**" line, separate from the raw evidence
+    line. The evidence line says "what the panel scored"; this line
+    says "what that biological program implies".
+
+    The program note is read from
+    ``analysis['lineage_panel_evidence']['top_panel_program_note']``
+    — single source of truth, populated by the cancer_type_evidence
+    selector from the winning ``LineagePanel.program_note`` field.
+    Panels without a curated note simply skip this line.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    if not summary:
+        return None
+    try:
+        top_score = float(summary.get("top_score") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if top_score < _LINEAGE_PANEL_BRIEF_MIN_SCORE:
+        return None
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel:
+        return None
+    note = str(summary.get("top_panel_program_note") or "").strip()
+    if not note:
+        return None
+    return f"**Subtype:** {top_panel} — {note}."
+
+
 def _fusion_pair_display(finding: dict) -> str:
     fusion = finding.get("fusion") or {}
     pair = str(fusion.get("pair") or "").strip()
@@ -2161,6 +2246,12 @@ def build_summary(
     call_punctuation = suffix or "."
     lines.append(f"**Cancer call:** {cancer_code} ({cancer_name}){call_punctuation}")
     lines.append(_cancer_type_basis_line(analysis, cancer_code))
+    panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
+    if panel_line:
+        lines.append(panel_line)
+    subtype_line = _lineage_panel_subtype_reasoning_line(analysis, cancer_code)
+    if subtype_line:
+        lines.append(subtype_line)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code, call_tier=call_tier)
     if rna_crosscheck:
         lines.append(rna_crosscheck)
@@ -2515,8 +2606,14 @@ def build_actionable(
         lines.append("\n" + inferred_site_line)
     basis_line = _cancer_type_basis_line(analysis, cancer_code)
     rna_crosscheck = _rna_crosscheck_line(analysis, cancer_code)
+    panel_line = _lineage_panel_evidence_line(analysis, cancer_code)
+    subtype_line = _lineage_panel_subtype_reasoning_line(analysis, cancer_code)
     if basis_line:
         lines.append(f"\n{basis_line}")
+    if panel_line:
+        lines.append(f"\n{panel_line}")
+    if subtype_line:
+        lines.append(f"\n{subtype_line}")
     if rna_crosscheck:
         lines.append(f"\n{rna_crosscheck}")
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
