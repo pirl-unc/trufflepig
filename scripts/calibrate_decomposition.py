@@ -1902,7 +1902,18 @@ def main(argv: list[str] | None = None) -> int:
             f"(Δ={delta:+.3f})"
         )
         if layers.get("flip_counts"):
-            print(f"[summary] {key} flips: {layers['flip_counts']}")
+            # Filter out the back-compat duplicate keys for the
+            # console summary so the line stays scannable. The JSON
+            # output still carries both schemas for external readers.
+            flips_for_print = {
+                k: v
+                for k, v in layers["flip_counts"].items()
+                if k not in {
+                    "broad_correct_consolidated_wrong",
+                    "broad_wrong_consolidated_correct",
+                }
+            }
+            print(f"[summary] {key} flips: {flips_for_print}")
         if (s.get("per_selector") or {}):
             print(f"[summary] {key} per-selector: {s['per_selector']}")
     if "hpa_normal_baseline" in report:
@@ -1911,13 +1922,20 @@ def main(argv: list[str] | None = None) -> int:
     if "local_no_override" in report:
         s = report["local_no_override"]["summary"]
         layers = s.get("layer_breakdown") or {}
+        first_pass_only = layers.get(
+            "first_pass_only_code_match_rate",
+            layers.get("broad_only_code_match_rate"),
+        )
+        n_lifted = layers.get(
+            "n_lifted_by_final_call",
+            layers.get("n_lifted_by_consolidation", 0),
+        )
         print(
             f"[summary] Local no-override replay: "
             f"n={s['n_evaluated']} code_match={s['code_match_rate']} "
             f"full_match={s['full_match_rate']} "
-            f"broad_only={layers.get('broad_only_code_match_rate')} "
-            f"(consolidation lifted {layers.get('n_lifted_by_consolidation')} "
-            "samples)"
+            f"first_pass_only={first_pass_only} "
+            f"(final-call selectors lifted {n_lifted} samples)"
         )
         if (s.get("per_selector") or {}):
             print(f"[summary] Local per-selector: {s['per_selector']}")
