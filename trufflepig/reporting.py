@@ -974,6 +974,208 @@ def clinical_maturity_summary(target_row, target_panel=None):
     return clinical_maturity_info(target_row, target_panel=target_panel)["summary"]
 
 
+# Controlled-vocab display labels for the leveled-up agent ``modality`` column
+# (issue #47). Permissive: any value not listed passes through verbatim so a new
+# pirlygenes modality renders sensibly without a trufflepig change.
+_AGENT_MODALITY_LABELS = {
+    "adc": "ADC",
+    "rlt": "radioligand (RLT)",
+    "radioligand": "radioligand (RLT)",
+    "tce": "T-cell engager",
+    "bispecific": "T-cell engager",
+    "car_t": "CAR-T",
+    "car-t": "CAR-T",
+    "car_nk": "CAR-NK",
+    "tcr_t": "TCR-T",
+    "tcr-t": "TCR-T",
+    "vaccine": "cancer vaccine",
+    "mab": "mAb",
+    "small_molecule": "small molecule",
+    "macrocycle": "macrocycle",
+    "degrader": "degrader",
+    "immunotoxin": "immunotoxin",
+    "oncolytic": "oncolytic virus",
+    "peptide": "peptide",
+}
+
+
+def _agent_field(target_row, *keys):
+    """First non-blank value among ``keys`` in a dict/Series-like target row."""
+    getter = getattr(target_row, "get", None)
+    for key in keys:
+        value = getter(key, "") if getter else (
+            target_row[key] if key in target_row else ""
+        )
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text and text.lower() not in {"nan", "none"}:
+            return text
+    return ""
+
+
+def _is_truthy_flag(value):
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def agent_metadata_clause(target_row) -> str:
+    """Render the leveled-up therapeutic-agent metadata into one compact clause.
+
+    Covers modality (+ payload/isotope/effector detail), route, approval
+    status/year/body, efficacy, key toxicities / boxed warning, and combination
+    use — the enriched ``therapeutic-agents`` schema planned in #47.
+
+    Every field is optional. Before pirlygenes ships those columns the curated
+    rows carry none of them, so this returns ``""`` and every caller's output is
+    byte-for-byte unchanged; the metadata surfaces automatically once the
+    columns exist.
+    """
+    bits: list[str] = []
+
+    modality = _AGENT_MODALITY_LABELS.get(
+        _agent_field(target_row, "modality", "modality_type").lower(),
+        _agent_field(target_row, "modality", "modality_type"),
+    )
+    detail = _agent_field(
+        target_row, "modality_detail", "payload", "isotope", "engaged_effector"
+    )
+    if modality:
+        bits.append(f"{modality} ({detail})" if detail else modality)
+    elif detail:
+        bits.append(detail)
+
+    route = _agent_field(target_row, "route", "route_of_administration")
+    if route:
+        bits.append(route)
+
+    status = _agent_field(target_row, "approval_status")
+    if status:
+        approval = status.replace("_", " ")
+        year = _agent_field(target_row, "approval_year")
+        body = _agent_field(target_row, "approving_body")
+        if year:
+            approval += f" {year}"
+        if body:
+            approval += f", {body}"
+        bits.append(approval)
+
+    efficacy = _agent_field(target_row, "efficacy", "response_rate", "orr")
+    if efficacy:
+        bits.append(f"efficacy {efficacy}")
+
+    toxicity = _agent_field(target_row, "key_toxicities", "toxicity")
+    if toxicity:
+        bits.append(f"key toxicities: {toxicity}")
+    if _is_truthy_flag(_agent_field(target_row, "boxed_warning")):
+        bits.append("boxed warning")
+
+    partners = _agent_field(target_row, "combination_partners", "combination")
+    if _is_truthy_flag(_agent_field(target_row, "combination_only")):
+        bits.append(
+            f"combination-only (with {partners})" if partners else "combination-only"
+        )
+    elif partners:
+        bits.append(f"combination with {partners}")
+
+    return "; ".join(bits)
+
+
+@lru_cache(maxsize=1)
+def cross_cancer_target_index() -> dict[str, tuple[dict, ...]]:
+    """Map ``symbol -> curated target rows across *all* cancer codes`` (#47).
+
+    The per-sample recommendation only pulls the sample cancer's curated panel,
+    so a gene that is a known, drugged target *in another indication* is invisible
+    when it lights up in a different tumor. This index lets the report cross-
+    reference the full ``cancer-key-genes`` target universe so an off-context
+    binder can be surfaced rather than dropped.
+    """
+    from pirlygenes import get_data
+
+    rows = get_data("cancer-key-genes")
+    rows = rows[rows["role"].astype(str) == "target"]
+    out: dict[str, list[dict]] = {}
+    for _, row in rows.iterrows():
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        out.setdefault(symbol, []).append(
+            {
+                "cancer_code": str(row.get("cancer_code") or "").strip(),
+                "agent": str(row.get("agent") or "").strip(),
+                "agent_class": str(row.get("agent_class") or "").strip(),
+                "phase": str(row.get("phase") or "").strip(),
+                "indication": str(row.get("indication") or "").strip(),
+            }
+        )
+    return {sym: tuple(entries) for sym, entries in out.items()}
+
+
+def _row_tumor_tpm(record) -> float:
+    getter = getattr(record, "get", None)
+
+    def field(key):
+        return getter(key) if getter else record[key] if key in record else None
+
+    for key in ("attr_tumor_tpm", "observed_tpm"):
+        value = field(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
+def offcontext_known_targets(
+    ranges_df,
+    panel_symbols,
+    *,
+    index=None,
+    min_tumor_tpm: float = 10.0,
+):
+    """Highly-expressed genes that are drugged targets in *another* indication
+    but absent from this sample's curated panel (#47 "surface when high").
+
+    Returns a list of ``{symbol, tumor_tpm, indications}`` sorted by tumor TPM,
+    where ``indications`` is the cross-cancer curated rows (agent / phase /
+    indication / cancer_code). ``panel_symbols`` are the symbols already on the
+    sample's curated panel (excluded). ``index`` defaults to
+    :func:`cross_cancer_target_index` and is injectable for testing.
+    """
+    if index is None:
+        index = cross_cancer_target_index()
+    panel = {str(s).strip().upper() for s in (panel_symbols or [])}
+
+    if hasattr(ranges_df, "to_dict"):
+        records = ranges_df.to_dict("records")
+    else:
+        records = list(ranges_df or [])
+
+    hits = []
+    seen: set[str] = set()
+    for record in records:
+        getter = getattr(record, "get", None)
+        symbol = str(
+            (getter("symbol") if getter else record.get("symbol")) or ""
+        ).strip().upper()
+        if not symbol or symbol in panel or symbol in seen:
+            continue
+        entries = index.get(symbol)
+        if not entries:
+            continue
+        tumor_tpm = _row_tumor_tpm(record)
+        if tumor_tpm < min_tumor_tpm:
+            continue
+        seen.add(symbol)
+        hits.append(
+            {"symbol": symbol, "tumor_tpm": tumor_tpm, "indications": entries}
+        )
+    hits.sort(key=lambda hit: hit["tumor_tpm"], reverse=True)
+    return hits
+
+
 _STANDARD_PATH_TEXT = re.compile(
     r"\b("
     r"standard(?:\s+of\s+care)?|standard\s+backbone|backbone|"

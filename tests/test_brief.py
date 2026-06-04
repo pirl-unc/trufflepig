@@ -365,7 +365,7 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
 
     assert "externally supplied OS (Osteosarcoma) sets the fine/report label" in md
     assert "expression-reference context is SARC (Sarcoma)" in md
-    assert "sarcoma-family broad-context support for supplied OS (Osteosarcoma)" in md
+    assert "sarcoma-family first-pass support for supplied OS (Osteosarcoma)" in md
     assert "does not independently resolve the refined label" in md
     assert "raw signature favors KIRC" not in md
     assert "confidence caveats" not in md
@@ -1095,6 +1095,43 @@ def test_actionable_is_longer_but_structured():
     assert "*-evidence.md*" in md or "`*-evidence.md`" in md, (
         "actionable should link to evidence.md as the target-table source"
     )
+
+
+def test_actionable_surfaces_offcontext_expressed_target():
+    # CLDN18 is a curated target for gastric/PAAD (zolbetuximab), NOT prostate.
+    # Highly expressed in a PRAD sample it should surface as an off-context lead
+    # rather than being dropped because it's off this cancer's panel (#47).
+    analysis = _make_analysis()
+    ranges_df = _make_ranges_df()
+    ranges_df = pd.concat(
+        [
+            ranges_df,
+            pd.DataFrame([{
+                "symbol": "CLDN18",
+                "observed_tpm": 120.0,
+                "attribution": {},
+                "attr_tumor_tpm": 110.0,
+                "attr_tumor_fraction": 0.92,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }]),
+        ],
+        ignore_index=True,
+    )
+    md = build_actionable(
+        analysis,
+        ranges_df,
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "Off-Context Expressed Targets" in md
+    assert "CLDN18" in md
+    # Names the off-context binder + that it's off-label here.
+    assert "zolbetuximab" in md
+    assert "not on this cancer's curated panel" in md
 
 
 def test_brief_normalizes_path_like_sample_id():
