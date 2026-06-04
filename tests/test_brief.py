@@ -342,11 +342,11 @@ def test_summary_marks_supplied_cancer_type_rna_ambiguity():
 
 def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     analysis = _make_analysis()
-    analysis["cancer_type"] = "OS"
+    analysis["cancer_type"] = "SARC_OS"
     analysis["cancer_name"] = "Osteosarcoma"
-    analysis["analysis_constraints"] = {"cancer_type": "OS"}
+    analysis["analysis_constraints"] = {"cancer_type": "SARC_OS"}
     analysis["cancer_type_source"] = "user-specified"
-    analysis["report_scope_cancer_type"] = "OS"
+    analysis["report_scope_cancer_type"] = "SARC_OS"
     analysis["reference_cancer_type"] = "SARC"
     analysis["candidate_trace"] = [
         {"code": "SARC", "support_geomean": 0.58},
@@ -359,7 +359,7 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     md = build_summary(
         analysis,
         ranges_df,
-        cancer_code="OS",
+        cancer_code="SARC_OS",
         disease_state="",
     )
 

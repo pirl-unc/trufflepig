@@ -552,8 +552,8 @@ def print_cancer_registry(
         if family_value.startswith("carcinoma-") or code in {"NUTM", "THYM"}:
             return "Carcinomas and epithelial tumors"
         if family_value in {"sarcoma", "pediatric-bone", "pediatric-soft"} or code in {
-            "CHOR",
-            "CHON",
+            "SARC_CHOR",
+            "SARC_CHON",
         }:
             return "Sarcoma, bone, and soft-tissue tumors"
         if family_value.startswith("heme-"):

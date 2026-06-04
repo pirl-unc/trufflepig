@@ -222,10 +222,10 @@ def test_registry_child_cancer_name_constrains_parent_cohort():
 def test_local_reference_only_cancer_label_becomes_report_scope():
     from trufflepig.main import _analysis_input_cancer_type
 
-    composition_scope, report_scope = _analysis_input_cancer_type("OS")
+    composition_scope, report_scope = _analysis_input_cancer_type("SARC_OS")
 
     assert composition_scope is None
-    assert report_scope == "OS"
+    assert report_scope == "SARC_OS"
 
 
 def test_nutm1_expression_can_infer_registry_only_report_scope():
@@ -260,7 +260,7 @@ def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
     )
 
     rules = rare_cancer_rna_surrogate_rules_df()
-    assert {"NUTM", "CHOR", "ACINIC"}.issubset(set(rules["cancer_code"]))
+    assert {"NUTM", "SARC_CHOR", "ACINIC"}.issubset(set(rules["cancer_code"]))
 
     tbxt_only = pd.DataFrame(
         {
@@ -280,7 +280,7 @@ def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
         tbxt_only,
         {"candidate_trace": [{"code": "SARC"}]},
     )
-    assert marker_prompts[0]["cancer_type"] == "CHOR"
+    assert marker_prompts[0]["cancer_type"] == "SARC_CHOR"
     assert marker_prompts[0]["surrogate"] == "TBXT"
     assert "KRT19" in marker_prompts[0]["missing_support_genes"]
 

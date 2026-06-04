@@ -72,7 +72,7 @@ _THERAPY_FILTER_RULES = (
         ),
     },
     {
-        "cancer_code": "OS",
+        "cancer_code": "SARC_OS",
         "symbol": "IGF1R",
         "agent_contains": "ganitumab",
         "indication_contains": ("os", "osteosarcoma"),

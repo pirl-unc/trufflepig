@@ -18,7 +18,7 @@ def _reference_by_symbol():
 def test_markerless_local_purity_reference_falls_back_to_broad_parent():
     ref_by_sym = _reference_by_symbol()
 
-    context = _resolve_purity_reference("OS", ref_by_sym)
+    context = _resolve_purity_reference("SARC_OS", ref_by_sym)
 
     assert context["reference_cancer_code"] == "SARC"
     assert context["reference_expression_source"] == "parent_pan_cancer"

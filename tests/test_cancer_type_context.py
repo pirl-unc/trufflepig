@@ -59,18 +59,18 @@ def test_context_defaults_refined_label_to_registry_parent_reference():
 def test_context_prefers_fine_expression_reference_when_available():
     context = cancer_type_context_from_analysis(
         {
-            "cancer_type": "OS",
+            "cancer_type": "SARC_OS",
             "reference_cancer_type": "SARC",
-            "report_scope_cancer_type": "OS",
-            "analysis_constraints": {"cancer_type": "OS"},
+            "report_scope_cancer_type": "SARC_OS",
+            "analysis_constraints": {"cancer_type": "SARC_OS"},
             "cancer_type_source": "user-specified",
         }
     )
 
-    assert context.code_for("report") == "OS"
+    assert context.code_for("report") == "SARC_OS"
     assert context.code_for("reference") == "SARC"
     assert context.report_has_expression_ref
-    assert context.code_for("expression") == "OS"
+    assert context.code_for("expression") == "SARC_OS"
     assert context.best_expression_source == "TREEHOUSE_POLYA_25_01"
     assert context.best_expression_gene_key == "symbol_only"
     assert context.best_expression_direct
@@ -139,20 +139,20 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
-            "OS",
-            "OS",
-            "deconvolved_tumor_reference",
+            "SARC_OS",
+            "SARC_OS",
+            "observed_bulk_reference",
             "TREEHOUSE_POLYA_25_01",
-            "symbol_only",
+            "ensembl_symbol",
             True,
             "",
         ),
         (
-            "CHOR",
-            "CHOR",
-            "deconvolved_tumor_reference",
-            "TREEHOUSE_RIBOD_25_01",
-            "symbol_only",
+            "SARC_CHOR",
+            "SARC_CHOR",
+            "observed_bulk_reference",
+            "GSE239531_VANOOST_2024",
+            "ensembl_symbol",
             True,
             "",
         ),
@@ -266,16 +266,16 @@ def test_expression_reference_options_canonicalize_source_codes():
             "SCLC_UCOLOGNE_2015",
             "symbol_only",
             False,
-            "net family fallback",
+            "neuroendocrine family fallback",
         ),
         (
-            "GCTB",
+            "SARC_GCTB",
             "SARC",
             "deconvolved_tumor_reference",
             "TCGA",
             "ensembl_symbol",
             False,
-            "sarcoma family fallback",
+            "registry parent",
         ),
     ],
 )
@@ -312,8 +312,8 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
             code: context_module.effective_expression_reference(code)
             for code in (
                 "PRAD",
-                "OS",
-                "CHOR",
+                "SARC_OS",
+                "SARC_CHOR",
                 "MM",
                 "PCN",
                 "NBL",
@@ -333,10 +333,10 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
 
     assert records["PRAD"] is not None
     assert records["PRAD"].reference_code == "PRAD"
-    assert records["OS"] is not None
-    assert records["OS"].source == "TREEHOUSE_POLYA_25_01"
-    assert records["CHOR"] is not None
-    assert records["CHOR"].source == "TREEHOUSE_RIBOD_25_01"
+    assert records["SARC_OS"] is not None
+    assert records["SARC_OS"].source == "TREEHOUSE_POLYA_25_01"
+    assert records["SARC_CHOR"] is not None
+    assert records["SARC_CHOR"].source == "TREEHOUSE_RIBOD_25_01"
     assert records["MM"] is not None
     assert records["MM"].source_kind == "observed_bulk_reference"
     assert records["PCN"] is not None

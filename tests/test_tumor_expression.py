@@ -313,7 +313,7 @@ def test_ranges_use_fine_deconvolved_expression_reference(monkeypatch):
     import trufflepig.plot_tumor_expr as mod
 
     def fake_deconvolved_reference(code):
-        if str(code).upper() == "OS":
+        if str(code).upper() == "SARC_OS":
             return {"PTK2": 123.0}, "subtype_deconvolved"
         return {}, ""
 
@@ -337,11 +337,11 @@ def test_ranges_use_fine_deconvolved_expression_reference(monkeypatch):
         df,
         "SARC",
         purity_result,
-        expression_reference_type="OS",
+        expression_reference_type="SARC_OS",
     )
     row = result[result["symbol"].eq("PTK2")].iloc[0]
     assert row["cohort_prior_tpm"] == 123.0
-    assert row["expression_reference_code"] == "OS"
+    assert row["expression_reference_code"] == "SARC_OS"
     assert row["expression_reference_source"] == "subtype_deconvolved"
 
 
@@ -360,7 +360,7 @@ def test_deconvolved_reference_preserves_source_cohort(monkeypatch):
         lambda: pd.DataFrame(
             [
                 {
-                    "cancer_code": "OS",
+                    "cancer_code": "SARC_OS",
                     "symbol": "RUNX2",
                     "source_cohort": "TREEHOUSE_POLYA_25_01",
                     "tumor_tpm_median": 25.0,
@@ -372,7 +372,7 @@ def test_deconvolved_reference_preserves_source_cohort(monkeypatch):
     mod._exact_expression_tpm_reference.cache_clear()
 
     try:
-        values, source = mod._deconvolved_tumor_tpm_reference("OS")
+        values, source = mod._deconvolved_tumor_tpm_reference("SARC_OS")
     finally:
         mod._deconvolved_tumor_tpm_reference.cache_clear()
         mod._exact_expression_tpm_reference.cache_clear()

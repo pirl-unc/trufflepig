@@ -298,9 +298,9 @@ class RareRnaPolicy:
 
 _FINE_REFERENCE_SPECS = (
     FineReferenceSpec(
-        cancer_type="OS",
+        cancer_type="SARC_OS",
         reference_cancer_type="SARC",
-        reference_code="OS",
+        reference_code="SARC_OS",
         marker_groups={
             "osteogenic": _OS_OSTEOGENIC_MARKERS,
             "matrix": _OS_MATRIX_MARKERS,

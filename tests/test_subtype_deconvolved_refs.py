@@ -44,7 +44,7 @@ def test_gse299759_chondrosarcoma_expression_ref_is_bundled():
     assert d is not None
 
     rows = d[
-        (d["cancer_code"] == "CHON")
+        (d["cancer_code"] == "SARC_CHON")
         & (d["source_cohort"] == "GSE299759_MEIJER_2026")
     ]
     assert not rows.empty
@@ -62,7 +62,7 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
 
     expected = {
         "RB": 15,
-        "CHOR": 3,
+        "SARC_CHOR": 3,
     }
     for code, n_samples in expected.items():
         rows = d[
@@ -76,6 +76,6 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
     assert rb.loc["CRX", "tumor_tpm_median"] > 25
     assert rb.loc["ARR3", "tumor_tpm_median"] > 5
 
-    chor = d[d["cancer_code"] == "CHOR"].set_index("symbol")
+    chor = d[d["cancer_code"] == "SARC_CHOR"].set_index("symbol")
     assert chor.loc["COL2A1", "tumor_tpm_median"] > 25
     assert chor.loc["ACAN", "tumor_tpm_median"] > 10

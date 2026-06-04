@@ -129,7 +129,7 @@ def test_resolver_os_vs_ddlps_bone_site_swaps_to_os():
         tumor_tpm_by_symbol={"MDM2": 877.0, "CDK4": 73.0},
     )
     assert result["status"] == "corrected", result
-    assert result["final_subtype"] == "OS"
+    assert result["final_subtype"] == "SARC_OS"
     assert "site_template" in result["reason"]
 
 
@@ -176,7 +176,7 @@ def test_resolver_ewing_fate1_nr0b1_confirms_ewing():
     """FATE1 + NR0B1 high with CD99 elevated → EWS-FLI1 signature
     active → confirms Ewing."""
     result = resolve_degenerate_subtype(
-        winning_subtype="EWS",
+        winning_subtype="SARC_EWS",
         tumor_tpm_by_symbol={
             "CD99": 500.0,  # activation gate
             "FATE1": 80.0,
@@ -185,18 +185,18 @@ def test_resolver_ewing_fate1_nr0b1_confirms_ewing():
         },
     )
     assert result["status"] == "confirmed"
-    assert result["final_subtype"] == "EWS"
+    assert result["final_subtype"] == "SARC_EWS"
 
 
 def test_resolver_ewing_pair_inactive_without_cd99():
     """If CD99 is silent, the small-blue-round-cell ambiguity isn't
     present and the pair shouldn't fire regardless of other genes."""
     result = resolve_degenerate_subtype(
-        winning_subtype="EWS",
+        winning_subtype="SARC_EWS",
         tumor_tpm_by_symbol={"CD99": 0.5, "FATE1": 80.0, "NR0B1": 50.0},
     )
     assert result["status"] == "pair_inactive"
-    assert result["final_subtype"] == "EWS"
+    assert result["final_subtype"] == "SARC_EWS"
 
 
 def test_resolver_dsrct_wt1_corrects_from_ewing():
@@ -204,7 +204,7 @@ def test_resolver_dsrct_wt1_corrects_from_ewing():
     silent (and CD99 is high to activate the pair), DSRCT is the
     real call."""
     result = resolve_degenerate_subtype(
-        winning_subtype="EWS",
+        winning_subtype="SARC_EWS",
         tumor_tpm_by_symbol={
             "CD99": 500.0,
             "FATE1": 0.0,
@@ -272,11 +272,11 @@ def test_resolver_no_fusion_panel_tpm_leaves_pair_inactive():
     activation signature requires gene expression, the resolver can't
     confirm activation → pair_inactive, classifier's pick stands."""
     result = resolve_degenerate_subtype(
-        winning_subtype="EWS",
+        winning_subtype="SARC_EWS",
         tumor_tpm_by_symbol=None,
     )
     assert result["status"] == "pair_inactive"
-    assert result["final_subtype"] == "EWS"
+    assert result["final_subtype"] == "SARC_EWS"
 
 
 # ── NUT carcinoma vs squamous — critical correctness case ──────────
@@ -364,7 +364,7 @@ def test_resolver_pair_selection_prefers_applicable_pair():
 
 
 def test_fusion_surrogate_genes_for_ewing():
-    hits = fusion_surrogate_genes_for("EWS")
+    hits = fusion_surrogate_genes_for("SARC_EWS")
     genes = {h["gene"] for h in hits}
     for required in ("FATE1", "NR0B1", "PHOX2B"):
         assert required in genes, f"EWS surrogate missing: {required}"
@@ -442,7 +442,7 @@ def test_brief_renders_corrected_subtype():
         summary
     )
     assert cancer_key_genes_lookup_for_analysis("SARC", analysis, ranges_df) == (
-        "OS",
+        "SARC_OS",
         None,
     )
     assert "MDM2 / CDK4 / FRS2 amplification" in summary, summary
@@ -532,7 +532,7 @@ def test_key_genes_lookup_switches_to_direct_os_panel():
         "SARC",
         analysis,
         ranges_df=ranges_df,
-    ) == ("OS", None)
+    ) == ("SARC_OS", None)
 
 
 def test_key_genes_lookup_matches_uppercase_parent_subtype_rows():

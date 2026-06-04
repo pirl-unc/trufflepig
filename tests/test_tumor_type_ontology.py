@@ -24,12 +24,12 @@ def test_every_registry_code_has_ontology_marker_expectations():
 
 
 def test_ontology_records_exact_expression_reference_and_markers_for_os():
-    entry = tumor_type_ontology_entry("OS")
+    entry = tumor_type_ontology_entry("SARC_OS")
 
     assert entry is not None
     # OS moved from `pediatric-bone` to the lineage-only `sarcoma` family (5.12).
     assert entry.family == "sarcoma"
-    assert entry.expression_reference_code == "OS"
+    assert entry.expression_reference_code == "SARC_OS"
     assert entry.expression_reference_direct
     assert {"RUNX2", "COL1A1", "ALPL"} <= set(entry.expected_high_genes)
     assert {"EPCAM", "PTPRC"} <= set(entry.expected_low_genes)

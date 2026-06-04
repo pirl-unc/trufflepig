@@ -1334,7 +1334,7 @@ _BROAD_PURITY_REFERENCE_FALLBACKS = {
     # marker panel yet. The CLI already treats OS as a refined report label
     # over the broad sarcoma reference when purity/decomposition need a broad
     # cohort; keep the direct Python API aligned with that behavior.
-    "OS": "SARC",
+    "SARC_OS": "SARC",
 }
 _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES = frozenset(
     {"pan_cancer", "parent_pan_cancer"}

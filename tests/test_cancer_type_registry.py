@@ -93,10 +93,10 @@ def test_registry_includes_pediatric():
     df = cancer_type_registry()
     codes = set(df["code"])
     for need in (
-        "OS",
-        "EWS",
-        "RMS_ERMS",
-        "RMS_ARMS",
+        "SARC_OS",
+        "SARC_EWS",
+        "SARC_RMS_ERMS",
+        "SARC_RMS_ARMS",
         "NBL",
         "WILMS",
         "RT",
@@ -118,7 +118,7 @@ def test_registry_includes_net_axis():
 def test_registry_includes_rare_entities():
     df = cancer_type_registry()
     codes = set(df["code"])
-    for need in ("NUTM", "ADCC", "MTC", "CHOR", "NPC"):
+    for need in ("NUTM", "ADCC", "MTC", "SARC_CHOR", "NPC"):
         assert need in codes, f"missing rare code: {need}"
 
 
@@ -168,8 +168,8 @@ def test_bone_tissue_returns_osteosarcoma_and_ewing():
     """Site-aware hypothesis: any sample suspected of bone origin
     should be able to enumerate OS + Ewing as candidates."""
     bone_cancers = set(cancer_types_by_tissue("bone"))
-    assert "OS" in bone_cancers
-    assert "EWS" in bone_cancers
+    assert "SARC_OS" in bone_cancers
+    assert "SARC_EWS" in bone_cancers
 
 
 def test_heme_myeloid_family_contains_laml_and_related():
@@ -250,14 +250,14 @@ def test_expanded_sarcomas_present():
         "SARC_MYXFIB",
         "SARC_SFT",
         "SARC_IMT",
-        "GCTB",
-        "ESS_LG",
-        "ESS_HG",
+        "SARC_GCTB",
+        "SARC_ESS_LG",
+        "SARC_ESS_HG",
         "SARC_LGFMS",
         "SARC_EMC",
         "SARC_PLEOLPS",
-        "RMS_PRMS",
-        "RMS_SSRMS",
+        "SARC_RMS_PRMS",
+        "SARC_RMS_SSRMS",
     }
     missing = required - codes
     assert not missing, f"expanded-sarcoma codes missing: {missing}"
@@ -303,7 +303,7 @@ def test_cancers_cli_uses_explicit_coverage_columns(capsys):
     assert "Lineage" in out
     assert "Normal" in out
     assert "Response" in out
-    assert "RMS_ARMS" in out
+    assert "SARC_RMS_ARMS" in out
     assert "Treehouse v25.01 PolyA" in out
     assert "| Code |" not in out
     assert "bm=" not in out
@@ -386,7 +386,7 @@ def test_gse299759_chondrosarcoma_expression_ref_is_bundled():
     assert d is not None
 
     rows = d[
-        (d["cancer_code"] == "CHON")
+        (d["cancer_code"] == "SARC_CHON")
         & (d["source_cohort"] == "GSE299759_MEIJER_2026")
     ]
     assert not rows.empty
@@ -404,7 +404,7 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
 
     expected = {
         "RB": 15,
-        "CHOR": 3,
+        "SARC_CHOR": 3,
     }
     for code, n_samples in expected.items():
         rows = d[
@@ -418,7 +418,7 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
     assert rb.loc["CRX", "tumor_tpm_median"] > 25
     assert rb.loc["ARR3", "tumor_tpm_median"] > 5
 
-    chor = d[d["cancer_code"] == "CHOR"].set_index("symbol")
+    chor = d[d["cancer_code"] == "SARC_CHOR"].set_index("symbol")
     assert chor.loc["COL2A1", "tumor_tpm_median"] > 25
     assert chor.loc["ACAN", "tumor_tpm_median"] > 10
 
