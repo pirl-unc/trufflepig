@@ -244,10 +244,20 @@ def _registry_family(code: Optional[str]) -> str:
     return "" if family.lower() == "nan" else family
 
 
+def _sarcoma_lineage_codes() -> frozenset:
+    # Derive sarcoma membership from pirlygenes' canonical, prefix-agnostic API
+    # rather than a hardcoded family set, so it survives the ongoing taxonomy /
+    # registry restructure (pirlygenes Phase C) without a trufflepig edit.
+    from pirlygenes.gene_sets_cancer import sarcoma_lineage_codes
+
+    return frozenset(sarcoma_lineage_codes())
+
+
 def _clinical_supergroup(code: Optional[str]) -> str:
-    family = _registry_family(code)
-    if family in {"sarcoma", "pediatric-bone", "pediatric-soft"}:
+    code_text = str(code or "").strip()
+    if code_text and code_text in _sarcoma_lineage_codes():
         return "sarcoma/bone/soft-tissue"
+    family = _registry_family(code)
     if family.startswith("carcinoma-"):
         return family
     return family

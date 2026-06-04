@@ -498,6 +498,8 @@ def print_cancer_registry(
             "heme-plasma": "plasma-cell malignancies",
             "heme-tcell": "T-cell malignancies",
             "melanoma": "melanoma",
+            "neuroendocrine": "neuroendocrine tumors",
+            "embryonal": "embryonal / blastemal tumors",
             "net": "neuroendocrine tumors",
             "pediatric-bone": "pediatric bone tumors",
             "pediatric-cns": "pediatric CNS tumors",
@@ -556,10 +558,12 @@ def print_cancer_registry(
             return "Sarcoma, bone, and soft-tissue tumors"
         if family_value.startswith("heme-"):
             return "Hematologic malignancies"
-        if family_value in {"net", "pediatric-net"}:
+        if family_value in {"neuroendocrine", "net", "pediatric-net"}:
             return "Neuroendocrine and neural-crest tumors"
         if family_value in {"cns", "pediatric-cns"}:
             return "CNS tumors"
+        if family_value in {"embryonal", "pediatric-embryonal"}:
+            return "Embryonal and blastemal tumors"
         if family_value.startswith("pediatric-"):
             return "Other pediatric solid tumors"
         if family_value == "endocrine":
@@ -578,11 +582,12 @@ def print_cancer_registry(
         "Hematologic malignancies": 2,
         "Neuroendocrine and neural-crest tumors": 3,
         "CNS tumors": 4,
-        "Other pediatric solid tumors": 5,
-        "Endocrine tumors": 6,
-        "Melanoma": 7,
-        "Germ-cell tumors": 8,
-        "Salivary tumors": 9,
+        "Embryonal and blastemal tumors": 5,
+        "Other pediatric solid tumors": 6,
+        "Endocrine tumors": 7,
+        "Melanoma": 8,
+        "Germ-cell tumors": 9,
+        "Salivary tumors": 10,
     }
 
     def _group_sort_key(group):

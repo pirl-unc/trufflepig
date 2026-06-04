@@ -182,7 +182,9 @@ def test_heme_myeloid_family_contains_laml_and_related():
 
 
 def test_net_family_contains_sclc_and_pannet():
-    net = set(cancer_types_in_family("net"))
+    # pirlygenes 5.12 lineage-only ontology renamed the `net` family to
+    # `neuroendocrine` (WHO Endocrine & Neuroendocrine 2022).
+    net = set(cancer_types_in_family("neuroendocrine"))
     assert "SCLC" in net
     assert "PANNET" in net
     assert "MEC" in net  # Merkel cell carcinoma
@@ -288,7 +290,8 @@ def test_subtype_key_maps_sarc_subtypes_to_key_genes_entries():
 def test_cancers_cli_uses_explicit_coverage_columns(capsys):
     from trufflepig.main import print_cancer_registry
 
-    print_cancer_registry(family="pediatric-soft")
+    # RMS_ARMS moved from the retired `pediatric-soft` family to `sarcoma` (5.12).
+    print_cancer_registry(family="sarcoma")
     out = capsys.readouterr().out
 
     assert "Clinical group: Sarcoma, bone, and soft-tissue tumors" in out
@@ -300,7 +303,6 @@ def test_cancers_cli_uses_explicit_coverage_columns(capsys):
     assert "Lineage" in out
     assert "Normal" in out
     assert "Response" in out
-    assert "Parent scopes:" not in out
     assert "RMS_ARMS" in out
     assert "Treehouse v25.01 PolyA" in out
     assert "| Code |" not in out
@@ -345,7 +347,8 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
     assert "TCGA/PAM50:BRCA_HER2" in out
     assert "no expr 0" in out
 
-    print_cancer_registry(family="pediatric-eye")
+    # RB moved from the retired `pediatric-eye` family to `embryonal` (5.12).
+    print_cancer_registry(family="embryonal")
     out = capsys.readouterr().out
 
     assert "Treehouse/RiboD:RB" in out

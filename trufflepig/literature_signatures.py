@@ -363,6 +363,34 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "PMID:29327709",
         "extraskeletal myxoid chondrosarcoma NR4A3-rearranged marker program",
     ),
+    LiteratureSignature(
+        "SARC_CIC",
+        ("SARC",),
+        ("ETV4", "ETV1", "ETV5", "WT1", "CCND2"),
+        "PMID:28765524",
+        "CIC-rearranged sarcoma CIC-DUX4 PEA3 (ETV) + WT1 target program",
+    ),
+    LiteratureSignature(
+        "SARC_BCOR",
+        ("SARC",),
+        ("BCOR", "CCNB3", "SATB2", "TLE1", "VIM"),
+        "PMID:22387997",
+        "BCOR-rearranged sarcoma BCOR/CCNB3 upregulation program",
+    ),
+    LiteratureSignature(
+        "SARC_MYOEP",
+        ("SARC",),
+        ("S100B", "SOX10", "KRT8", "KRT18", "GFAP"),
+        "curated_soft_tissue_myoepithelial_literature",
+        "soft-tissue myoepithelial keratin/S100/SOX10 program (EWSR1-POU5F1/PBX1)",
+    ),
+    LiteratureSignature(
+        "SARC_SMARCA4",
+        ("SARC",),
+        ("SOX2", "SALL4", "CD34", "MYC", "NES"),
+        "curated_smarca4_thoracic_sarcoma_literature",
+        "SMARCA4-deficient thoracic sarcoma SOX2/SALL4 dedifferentiation program (BRG1 loss)",
+    ),
 )
 
 

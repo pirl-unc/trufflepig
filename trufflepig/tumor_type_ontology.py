@@ -142,17 +142,19 @@ _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
     "RT": ("SMARCB1",),
 }
 
+# Keyed on pirlygenes' lineage-only family ontology (5.12+); ``carcinoma-*`` and
+# ``heme-*`` match on the family root. The old ``net`` / ``pediatric-*`` families
+# collapsed into ``neuroendocrine`` / ``sarcoma`` / ``cns`` / ``embryonal``.
 _FAMILY_LOW_GENES: Mapping[str, tuple[str, ...]] = {
     "carcinoma": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
+    "cns": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "embryonal": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
     "endocrine": ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT5", "KRT14"),
     "heme": ("EPCAM", "KRT8", "KRT18", "ACTA2", "DES", "MYOD1"),
-    "net": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
-    "pediatric-bone": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-cns": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-embryonal": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
-    "pediatric-net": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-soft": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "melanoma": ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT8", "KRT18"),
+    "neuroendocrine": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
     "sarcoma": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "thymic": ("EPCAM", "KRT8", "KRT18", "MYOD1", "MYOG", "DES"),
 }
 
 _DEFAULT_LOW_GENES = ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT8", "KRT18")
