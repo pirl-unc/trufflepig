@@ -81,13 +81,13 @@ def test_provenance_md_walks_the_five_steps():
         cancer_code="PRAD",
         sample_id="sample_X",
     )
-    # Each numbered step must appear.
+    # Each of the five attribution steps must render its section heading.
     for heading in [
-        "1. Library prep",
-        "2. Preservation",
-        "3. Coarse composition",
-        "4. Subtype refinements",
-        "5. Tumor-linked expression",
+        "## RNA Prep and Preservation",
+        "### Preservation and Degradation",
+        "## Tumor Purity and Coarse Composition",
+        "## Subtype and Background Refinements",
+        "## Tumor-Attributed Expression",
     ]:
         assert heading in md, f"missing step heading: {heading}"
     assert "RNA hybrid-capture" in md

@@ -105,6 +105,10 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "LAML_ELN_Adv": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
     "NBL_MYCN_amp": ("MYCN", "PHOX2B", "TH", "B4GALNT1", "ALK"),
     "NBL_MYCN_nonamp": ("PHOX2B", "TH", "B4GALNT1", "ALK"),
+    # Rectal NET (pirlygenes >=5.11): a top-level NET with no lineage panel
+    # or key-gene coverage upstream, so seed it with the pan-NET core shared
+    # by its midgut-NET sibling.
+    "REC_NET": ("CHGA", "SYP", "INSM1", "ENO2", "SSTR2"),
     "MBL": ("OTX2", "ATOH1", "SOX2", "MYC", "MYCN"),
     "CHOR": ("TBXT", "KRT8", "KRT18", "EPCAM", "COL2A1"),
     "ATRT": ("VIM", "SOX2", "NES", "LIN28A", "EPCAM"),

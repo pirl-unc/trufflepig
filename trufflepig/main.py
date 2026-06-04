@@ -307,6 +307,18 @@ def print_cancer_registry(
         code = str(value).strip()
         return canonical_code_by_upper.get(code.upper(), code)
 
+    def _source_cohort_values(frame):
+        # Deconvolved-expression frames may omit ``source_cohort`` (the TCGA
+        # deconvolved reference carries no per-cohort provenance), so guard
+        # the column rather than relying on a DataFrame ``.get`` default.
+        if "source_cohort" not in frame.columns:
+            return set()
+        return {
+            str(v)
+            for v in frame["source_cohort"].dropna().unique()
+            if str(v).strip()
+        }
+
     parent_by_code = {
         str(row["code"]).strip(): _parent
         for _, row in registry_df.iterrows()
@@ -316,21 +328,13 @@ def print_cancer_registry(
     if tcga_deconv is not None:
         for code, group_df in tcga_deconv.groupby("cancer_code"):
             code_s = _canonical_code(code)
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             expression_sources_by_code[code_s].update(sources)
             exact_expression_sources_by_code[code_s].update(sources)
     if sub_deconv is not None and "subtype" in sub_deconv.columns:
         for code, group_df in sub_deconv.groupby("cancer_code"):
             code_s = _canonical_code(code)
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             nonblank_subtype = group_df["subtype"].fillna("").astype(str).str.strip()
             if nonblank_subtype.eq("").all():
                 expression_sources_by_code[code_s].update(sources)
@@ -344,11 +348,7 @@ def print_cancer_registry(
             subtype_s = _canonical_code(subtype)
             if not subtype_s or subtype_s.lower() == "nan":
                 continue
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             expression_sources_by_code[subtype_s].update(sources)
             exact_expression_sources_by_code[subtype_s].update(sources)
             parent = parent_by_code.get(subtype_s, "")

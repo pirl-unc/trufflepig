@@ -207,31 +207,24 @@ def test_registry_has_source_cohort_column():
 
 
 def test_source_cohort_values_are_canonical():
-    """source_cohort should only take values from the canonical
-    cohort vocabulary — rejects typos like 'TCGA_BRCA' vs 'TCGA_XENA_TOIL'."""
+    """source_cohort should only take values from the canonical cohort
+    vocabulary — rejects typos like 'TCGA_BRCA' vs 'TREEHOUSE_POLYA_25_01'.
+
+    The canonical vocabulary is pirlygenes' own expression-reference manifest
+    (``available_cancer_expression_references``) so the allowlist tracks the
+    dependency instead of drifting as new cohorts are added. A handful of
+    non-expression values (curated literature, the pan-cancer Xena matrix,
+    blank) are not in that manifest and are allowed explicitly.
+    """
+    import pirlygenes as _pirlygenes
+
     df = cancer_type_registry()
-    valid = {
-        "",
-        "TCGA_XENA_TOIL",
-        "TCGA_BRCA_PAM50",
-        "TCGA_HNSC",
-        "TCGA_LUAD",
-        "BEATAML_OHSU_2022",
-        "TARGET_NBL_2018",
-        "TARGET_OS_2020",
-        "TARGET_RMS_2014",
-        "TARGET_WT_2015",
-        "TARGET_RT_2017",
-        "TARGET_ALL_2018",
-        "TARGET_UNSPECIFIED",
-        "TARGET_AML_2018",
-        "SCLC_UCOLOGNE_2015",
-        "MMRF_COMMPASS",
-        "ICGC",
-        "LITERATURE_CURATED",
-        "TREEHOUSE_v25.01",
-        "GSE118014_ALVAREZ_2018",
-    }
+    canonical = set(
+        _pirlygenes.available_cancer_expression_references()["source_cohort"]
+        .fillna("")
+        .astype(str)
+    )
+    valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
     present = set(df["source_cohort"].fillna("").astype(str).unique())
     unknown = present - valid
     assert not unknown, f"unknown source_cohort values: {unknown}"

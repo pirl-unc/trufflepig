@@ -77,15 +77,18 @@ def test_context_prefers_fine_expression_reference_when_available():
 
 
 def test_context_uses_documented_fallback_when_fine_expression_is_missing():
+    # ACINIC (acinic cell carcinoma) has no direct cohort of its own, so it
+    # still exercises the salivary-family fallback to HNSC. (ADCC gained its
+    # own cohort in pirlygenes >=5.11 and now resolves directly.)
     context = cancer_type_context_from_analysis(
         {
-            "cancer_type": "ADCC",
+            "cancer_type": "ACINIC",
             "reference_cancer_type": "HNSC",
-            "report_scope_cancer_type": "ADCC",
+            "report_scope_cancer_type": "ACINIC",
         }
     )
 
-    assert context.code_for("report") == "ADCC"
+    assert context.code_for("report") == "ACINIC"
     assert not context.report_has_expression_ref
     assert context.code_for("expression") == "HNSC"
     assert context.best_expression_source_kind == "deconvolved_tumor_reference"
@@ -94,7 +97,7 @@ def test_context_uses_documented_fallback_when_fine_expression_is_missing():
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():
-    context = cancer_type_context_from_analysis({"cancer_type": "ADCC"})
+    context = cancer_type_context_from_analysis({"cancer_type": "ACINIC"})
 
     lines = "\n".join(context.markdown_lines())
 
@@ -189,35 +192,66 @@ def test_expression_reference_options_canonicalize_source_codes():
             False,
             "registry parent",
         ),
+        # Types that gained their own cohort in pirlygenes >=5.11 and now
+        # resolve directly instead of falling back to a parent/family.
         (
             "NBL",
-            "NBL_MYCN_nonamp",
-            "deconvolved_tumor_reference",
+            "NBL",
+            "observed_bulk_reference",
             "TARGET_NBL_2018",
-            "symbol_only",
-            False,
-            "curated code fallback",
+            "ensembl_symbol",
+            True,
+            "",
         ),
         (
             "MBL_G3",
-            "MBL",
-            "deconvolved_tumor_reference",
-            "TREEHOUSE_POLYA_25_01",
-            "symbol_only",
-            False,
-            "registry parent",
+            "MBL_G3",
+            "observed_bulk_reference",
+            "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
+            "ensembl_symbol",
+            True,
+            "",
         ),
         (
             "SARC_ASPS",
-            "SARC",
-            "deconvolved_tumor_reference",
-            "TCGA",
+            "SARC_ASPS",
+            "observed_bulk_reference",
+            "TREEHOUSE_POLYA_25_01",
             "ensembl_symbol",
-            False,
-            "registry parent",
+            True,
+            "",
         ),
         (
             "ADCC",
+            "ADCC",
+            "observed_bulk_reference",
+            "GSE294016_BARTL_2025_SGC",
+            "ensembl_symbol",
+            True,
+            "",
+        ),
+        (
+            "MTC",
+            "MTC",
+            "observed_bulk_reference",
+            "GSE32662_PRINGLE_2012_MTC",
+            "ensembl_symbol",
+            True,
+            "",
+        ),
+        (
+            "LUNG_NET_LC",
+            "LUNG_NET_LC",
+            "observed_bulk_reference",
+            "DRMETRICS_ALCALA_2019_LNEN",
+            "ensembl_symbol",
+            True,
+            "",
+        ),
+        # Types that still fall back — keep each documented fallback branch
+        # under test now that ADCC/MTC/LUNG_NET_LC resolve directly.
+        (
+            "ACINIC",
             "HNSC",
             "deconvolved_tumor_reference",
             "TCGA",
@@ -226,22 +260,22 @@ def test_expression_reference_options_canonicalize_source_codes():
             "salivary family fallback",
         ),
         (
-            "MTC",
-            "THCA",
-            "deconvolved_tumor_reference",
-            "TCGA",
-            "ensembl_symbol",
-            False,
-            "endocrine family fallback",
-        ),
-        (
-            "LUNG_NET_LC",
+            "MEC",
             "SCLC",
             "deconvolved_tumor_reference",
             "SCLC_UCOLOGNE_2015",
             "symbol_only",
             False,
             "net family fallback",
+        ),
+        (
+            "GCTB",
+            "SARC",
+            "deconvolved_tumor_reference",
+            "TCGA",
+            "ensembl_symbol",
+            False,
+            "sarcoma family fallback",
         ),
     ],
 )
@@ -307,14 +341,16 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
     assert records["MM"].source_kind == "observed_bulk_reference"
     assert records["PCN"] is not None
     assert records["PCN"].reference_code == "MM"
+    # These four gained their own (non-pan) cohorts in pirlygenes >=5.11, so
+    # they resolve directly even when the pan-cancer reference is unavailable.
     assert records["NBL"] is not None
-    assert records["NBL"].reference_code == "NBL_MYCN_nonamp"
+    assert records["NBL"].reference_code == "NBL"
     assert records["ADCC"] is not None
-    assert records["ADCC"].reference_code == "HNSC"
+    assert records["ADCC"].reference_code == "ADCC"
     assert records["MTC"] is not None
-    assert records["MTC"].reference_code == "THCA"
+    assert records["MTC"].reference_code == "MTC"
     assert records["LUNG_NET_LC"] is not None
-    assert records["LUNG_NET_LC"].reference_code == "SCLC"
+    assert records["LUNG_NET_LC"].reference_code == "LUNG_NET_LC"
     assert any(record.source_code == "BRCA_Her2" for record in her2_records)
     assert any(record.source_code == "LUAD_KRAS_STK11" for record in stk11_records)
 
