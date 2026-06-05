@@ -126,6 +126,19 @@ def test_all_leaf_tissues_either_covered_or_documented():
         # back transparently.
         # Kidney composite for pediatric:
         "kidney_cns_soft",
+        # NCI-coverage expansion (pirlygenes 5.18) — new skin / GU / GI /
+        # CNS leaf tissues on bulk fallback until cell-type decomposition
+        # panels are curated (#46 follow-on).
+        "epidermis",
+        "vulva",
+        "vagina",
+        "penis",
+        "urethra",
+        "anal_canal",
+        "ependyma",
+        "sellar_suprasellar",
+        "pons_midline",
+        "pituitary",
     }
     uncovered = all_tissues - covered - _ACKNOWLEDGED_BULK_FALLBACK
     assert not uncovered, (

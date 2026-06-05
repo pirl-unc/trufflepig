@@ -5,9 +5,10 @@ pirlygenes' cancer-type taxonomy is under active restructure (Phase C):
 - 5.12 already moved `family` to lineage-only (OS/EWS/RMS -> sarcoma,
   NBL -> neuroendocrine, ATRT/MBL -> cns, WILMS/RB/HEPB/RT -> embryonal,
   `net` -> neuroendocrine, `rare` dissolved).
-- A large code-rename pass is still pending (OS -> SARC_OS, MEC -> NEC_MERKEL,
-  MID_NET -> NET_MIDGUT, NBL_MYCN_amp -> NBL_MYCNamp, ...), each keeping a
-  backward-compat alias in CANCER_TYPE_ALIASES.
+- 5.13 renamed the sarcoma atoms (OS -> SARC_OS, ...); 5.18 landed the
+  neuroendocrine/AML code-rename pass (MEC -> NEC_MERKEL, MID_NET -> NET_MIDGUT,
+  PANNET -> NET_PANCREAS, NBL_MYCN_amp -> NBL_MYCNamp, LAML_ELN_Adv ->
+  LAML_ELNadv, ...), each keeping a backward-compat alias in CANCER_TYPE_ALIASES.
 
 These guards turn a *silent* desync — a trufflepig curated key that no longer
 matches a registry code or family — into a loud failure that names the exact

@@ -240,8 +240,8 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
-            "LUNG_NET_LC",
-            "LUNG_NET_LC",
+            "NET_LUNG",
+            "NET_LUNG",
             "observed_bulk_reference",
             "DRMETRICS_ALCALA_2019_LNEN",
             "ensembl_symbol",
@@ -249,7 +249,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         # Types that still fall back — keep each documented fallback branch
-        # under test now that ADCC/MTC/LUNG_NET_LC resolve directly.
+        # under test now that ADCC/MTC/NET_LUNG resolve directly.
         (
             "ACINIC",
             "HNSC",
@@ -260,7 +260,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "salivary family fallback",
         ),
         (
-            "MEC",
+            "NEC_MERKEL",
             "SCLC",
             "deconvolved_tumor_reference",
             "SCLC_UCOLOGNE_2015",
@@ -319,7 +319,7 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
                 "NBL",
                 "ADCC",
                 "MTC",
-                "LUNG_NET_LC",
+                "NET_LUNG",
             )
         }
         her2_records = context_module.expression_reference_options(
@@ -349,8 +349,8 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
     assert records["ADCC"].reference_code == "ADCC"
     assert records["MTC"] is not None
     assert records["MTC"].reference_code == "MTC"
-    assert records["LUNG_NET_LC"] is not None
-    assert records["LUNG_NET_LC"].reference_code == "LUNG_NET_LC"
+    assert records["NET_LUNG"] is not None
+    assert records["NET_LUNG"].reference_code == "NET_LUNG"
     assert any(record.source_code == "BRCA_Her2" for record in her2_records)
     assert any(record.source_code == "LUAD_KRAS_STK11" for record in stk11_records)
 

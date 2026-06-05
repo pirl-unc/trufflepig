@@ -1229,6 +1229,7 @@ THERAPY_PATH_TIERS = frozenset(
         "approved_indication_matched",
         "approved_later_line",
         "late_clinical",
+        "investigational_biomarker_matched",
         "trial_follow_up",
         "preclinical",
         "off_label",
@@ -1239,7 +1240,11 @@ _THERAPY_PATH_RANK = {
     "approved_indication_matched": 1,
     "approved_later_line": 2,
     "late_clinical": 3,
-    "trial_follow_up": 4,
+    # Biomarker-matched investigational (e.g. HER2+ gallbladder trastuzumab,
+    # BRAF V600E craniopharyngioma): a phase-2 trial selected by a molecular
+    # match — preferred over a generic trial follow-up but still investigational.
+    "investigational_biomarker_matched": 4,
+    "trial_follow_up": 5,
     "preclinical": 6,
     "off_label": 7,
 }
@@ -1248,6 +1253,7 @@ _THERAPY_PATH_DEFAULT_NOTE = {
     "approved_indication_matched": "confirm clinical eligibility",
     "approved_later_line": "confirm prior therapies and indication-specific eligibility",
     "late_clinical": "not default standard",
+    "investigational_biomarker_matched": "confirm biomarker and trial eligibility",
     "trial_follow_up": "not default standard",
     "preclinical": "not a clinical recommendation",
     "off_label": "confirm rationale and alternatives",
@@ -1391,6 +1397,8 @@ def _therapy_path_context_for_tier(target_row, tier: str, note: str = "") -> str
         )
     elif tier == "late_clinical":
         prefix = "late-clinical follow-up"
+    elif tier == "investigational_biomarker_matched":
+        prefix = "biomarker-matched investigational pathway"
     elif tier == "trial_follow_up":
         prefix = "clinical-trial follow-up"
     elif tier == "preclinical":

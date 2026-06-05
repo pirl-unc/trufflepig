@@ -75,7 +75,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
     ),
     LiteratureSignature(
         "NBL",
-        ("NBL_MYCN_nonamp", "NBL_MYCN_amp"),
+        ("NBL_MYCNnonamp", "NBL_MYCNamp"),
         ("PHOX2B", "TH", "ALK", "MYCN", "B4GALNT1"),
         "curated_neuroblastoma_literature",
         "neuroblastoma sympathoadrenal/neuroblastic marker program",
@@ -167,21 +167,21 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "cutaneous T-cell lymphoma helper/T-cell activation marker program",
     ),
     LiteratureSignature(
-        "MID_NET",
+        "NET_MIDGUT",
         ("SCLC",),
         ("CHGA", "SYP", "INSM1", "SSTR2", "TPH1"),
         "PMID:26386079",
         "midgut neuroendocrine/carcinoid marker program",
     ),
     LiteratureSignature(
-        "LUNG_NET_LC",
+        "NET_LUNG",
         ("SCLC",),
         ("CHGA", "SYP", "INSM1", "SSTR2", "NKX2-1"),
         "PMID:26386079",
         "pulmonary carcinoid neuroendocrine marker program",
     ),
     LiteratureSignature(
-        "LUNG_NET_LCNEC",
+        "NEC_LUNG_LARGECELL",
         ("SCLC",),
         ("ASCL1", "NEUROD1", "INSM1", "CHGA", "SYP", "DLL3"),
         "PMID:33011388;PMID:26386079",
@@ -217,7 +217,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         confidence="low",
     ),
     LiteratureSignature(
-        "MEC",
+        "NEC_MERKEL",
         ("SCLC",),
         ("KRT20", "ATOH1", "CHGA", "SYP", "SOX2"),
         "curated_merkel_literature",
@@ -390,6 +390,110 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         ("SOX2", "SALL4", "CD34", "MYC", "NES"),
         "curated_smarca4_thoracic_sarcoma_literature",
         "SMARCA4-deficient thoracic sarcoma SOX2/SALL4 dedifferentiation program (BRG1 loss)",
+    ),
+    # --- NCI-coverage expansion (pirlygenes 5.18) ---------------------------
+    # New skin / GU / GI / CNS / pituitary leaf types lack their own cohorts;
+    # each borrows the nearest squamous / adeno / glial parent context and
+    # carries a compact lineage-marker program. parent_context_codes must
+    # include whatever effective_expression_reference() resolves to.
+    LiteratureSignature(
+        "ANSC",
+        ("CESC", "HNSC"),
+        ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+        "curated_pathology_literature",
+        "anal squamous cell carcinoma HPV-associated squamous program (p16/CDKN2A)",
+    ),
+    LiteratureSignature(
+        "BCC",
+        ("HNSC",),
+        ("PTCH1", "GLI1", "BCL2", "KRT5", "KRT14"),
+        "curated_pathology_literature",
+        "basal cell carcinoma Hedgehog (PTCH1/GLI1) + basaloid keratinocyte program",
+    ),
+    LiteratureSignature(
+        "cSCC",
+        ("HNSC",),
+        ("KRT5", "KRT14", "TP63", "SOX2", "EGFR"),
+        "curated_pathology_literature",
+        "cutaneous squamous cell carcinoma keratinocyte squamous program",
+    ),
+    LiteratureSignature(
+        "GBC",
+        ("CHOL", "PAAD"),
+        ("KRT7", "KRT19", "CEACAM5", "MUC1", "ERBB2"),
+        "curated_pathology_literature",
+        "gallbladder adenocarcinoma biliary epithelial program (KRT7/19, HER2)",
+    ),
+    LiteratureSignature(
+        "PENSCC",
+        ("CESC",),
+        ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+        "curated_pathology_literature",
+        "penile squamous cell carcinoma HPV-associated squamous program",
+    ),
+    LiteratureSignature(
+        "VSCC",
+        ("CESC",),
+        ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+        "curated_pathology_literature",
+        "vulvar squamous cell carcinoma squamous program (HPV / dVIN)",
+    ),
+    LiteratureSignature(
+        "VAGC",
+        ("CESC",),
+        ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+        "curated_pathology_literature",
+        "vaginal carcinoma HPV-associated squamous program",
+    ),
+    LiteratureSignature(
+        "URETH",
+        ("CESC", "BLCA"),
+        ("GATA3", "KRT7", "KRT5", "TP63", "UPK2"),
+        "curated_pathology_literature",
+        "urethral carcinoma mixed urothelial (GATA3/UPK2) and squamous program",
+    ),
+    LiteratureSignature(
+        "CRANIO",
+        ("LGG", "GBM"),
+        ("CTNNB1", "KRT8", "KRT18", "BRAF", "EPCAM"),
+        "curated_pathology_literature",
+        "craniopharyngioma epithelial program (CTNNB1 adamantinomatous / BRAF papillary)",
+    ),
+    LiteratureSignature(
+        "DIPG",
+        ("GBM", "LGG"),
+        ("PDGFRA", "OLIG2", "GFAP", "TP53", "EGFR"),
+        "curated_pathology_literature",
+        "diffuse midline glioma (H3K27M) glial program (PDGFRA/OLIG2)",
+    ),
+    LiteratureSignature(
+        "EPN",
+        ("GBM", "LGG"),
+        ("GFAP", "S100B", "CD99", "VIM", "NCAM1"),
+        "curated_pathology_literature",
+        "ependymoma glial/ependymal program (GFAP, ZFTA-RELA context)",
+    ),
+    LiteratureSignature(
+        "PITNET",
+        ("THCA", "PCPG", "ACC"),
+        ("CHGA", "SYP", "POU1F1", "PRL", "GH1"),
+        "curated_pathology_literature",
+        "pituitary neuroendocrine tumor anterior-pituitary hormone + NE program",
+    ),
+    # Müllerian / serous carcinomas resolving to the ovarian (OV) parent.
+    LiteratureSignature(
+        "FTC",
+        ("OV",),
+        ("PAX8", "WT1", "MUC16", "ESR1", "KRT7"),
+        "curated_pathology_literature",
+        "fallopian-tube high-grade serous carcinoma Müllerian program (PAX8/WT1)",
+    ),
+    LiteratureSignature(
+        "PPC",
+        ("OV",),
+        ("PAX8", "WT1", "MUC16", "ESR1", "KRT7"),
+        "curated_pathology_literature",
+        "primary peritoneal high-grade serous carcinoma Müllerian program (PAX8/WT1)",
     ),
 )
 

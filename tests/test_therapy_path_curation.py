@@ -50,6 +50,7 @@ def test_treatment_path_tier_is_phase_compatible():
         "approved_indication_matched": {"approved"},
         "approved_later_line": {"approved"},
         "late_clinical": {"phase_3"},
+        "investigational_biomarker_matched": {"phase_1", "phase_2"},
         "trial_follow_up": {"phase_1", "phase_2"},
         "preclinical": {"preclinical"},
         "off_label": {"off_label"},

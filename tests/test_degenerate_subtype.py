@@ -217,21 +217,21 @@ def test_resolver_dsrct_wt1_corrects_from_ewing():
 
 
 def test_resolver_pannet_vs_midnet_pancreas_site():
-    """NE markers present (activates pair) + pancreatic site → PANNET."""
+    """NE markers present (activates pair) + pancreatic site → NET_PANCREAS."""
     result = resolve_degenerate_subtype(
-        winning_subtype="MID_NET",
+        winning_subtype="NET_MIDGUT",
         site_template="primary_pancreas",
         tumor_tpm_by_symbol={"CHGA": 1200.0, "SYP": 80.0, "ENO2": 150.0},
     )
     assert result["status"] == "corrected"
-    assert result["final_subtype"] == "PANNET"
+    assert result["final_subtype"] == "NET_PANCREAS"
 
 
 def test_resolver_pannet_pair_inactive_without_ne_markers():
-    """A MID_NET pick on a sample with silent NE markers (CHGA/SYP/ENO2
+    """A NET_MIDGUT pick on a sample with silent NE markers (CHGA/SYP/ENO2
     all low) means the NE-axis ambiguity isn't present; skip the pair."""
     result = resolve_degenerate_subtype(
-        winning_subtype="MID_NET",
+        winning_subtype="NET_MIDGUT",
         site_template="primary_pancreas",
         tumor_tpm_by_symbol={"CHGA": 1.0, "SYP": 2.0, "ENO2": 5.0},
     )

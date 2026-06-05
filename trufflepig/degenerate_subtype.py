@@ -42,6 +42,7 @@ the full context, not any single gene in isolation.
 import logging
 from functools import lru_cache
 
+from pirlygenes.gene_sets_cancer import resolve_cancer_type
 from pirlygenes.load_dataset import get_data
 
 logger = logging.getLogger(__name__)
@@ -319,6 +320,13 @@ def resolve_degenerate_subtype(
         resolved = _resolve_fusion_surrogate(pair_row, tumor_tpm_by_symbol)
     elif rule == "marker_combo":
         resolved = _resolve_marker_combo(pair_row, tumor_tpm_by_symbol)
+
+    # The tiebreaker_mapping values can lag the canonical registry codes
+    # (pirlygenes #287 shipped renamed `members` but left stale codes like
+    # `PANNET`/`MID_NET` in the mapping). Canonicalize so a stale upstream
+    # mapping can't leak a dead code into the final call.
+    if resolved is not None:
+        resolved = resolve_cancer_type(resolved)
 
     if resolved is None:
         return {
