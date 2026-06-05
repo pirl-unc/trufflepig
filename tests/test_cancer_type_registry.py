@@ -111,7 +111,7 @@ def test_registry_includes_pediatric():
 def test_registry_includes_net_axis():
     df = cancer_type_registry()
     codes = set(df["code"])
-    for need in ("PANNET", "MID_NET", "LUNG_NET_LC", "SCLC", "MEC"):
+    for need in ("NET_PANCREAS", "NET_MIDGUT", "NET_LUNG", "SCLC", "NEC_MERKEL"):
         assert need in codes, f"missing NET code: {need}"
 
 
@@ -160,7 +160,7 @@ def test_laml_has_apl_and_eln_tiles():
     assert "LAML_APL" in subs
     # ELN2017 is the modern risk-stratification that gates transplant
     # vs chemo; must be representable as a subtype tile.
-    for eln in ("LAML_ELN_Fav", "LAML_ELN_Int", "LAML_ELN_Adv"):
+    for eln in ("LAML_ELNfav", "LAML_ELNint", "LAML_ELNadv"):
         assert eln in subs
 
 
@@ -186,8 +186,8 @@ def test_net_family_contains_sclc_and_pannet():
     # `neuroendocrine` (WHO Endocrine & Neuroendocrine 2022).
     net = set(cancer_types_in_family("neuroendocrine"))
     assert "SCLC" in net
-    assert "PANNET" in net
-    assert "MEC" in net  # Merkel cell carcinoma
+    assert "NET_PANCREAS" in net
+    assert "NEC_MERKEL" in net  # Merkel cell carcinoma
 
 
 def test_parent_codes_reference_registry_entries():

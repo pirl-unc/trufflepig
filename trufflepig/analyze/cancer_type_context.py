@@ -67,9 +67,9 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
         "LUAD_STK11_KEAP1": "LUAD_STK11",
         "LUAD_KRAS_STK11": "LUAD_STK11",
         "BEATAML_APL": "LAML_APL",
-        "BEATAML_ELN_Adverse": "LAML_ELN_Adv",
-        "BEATAML_ELN_Favorable": "LAML_ELN_Fav",
-        "BEATAML_ELN_Intermediate": "LAML_ELN_Int",
+        "BEATAML_ELN_Adverse": "LAML_ELNadv",
+        "BEATAML_ELN_Favorable": "LAML_ELNfav",
+        "BEATAML_ELN_Intermediate": "LAML_ELNint",
         "TARGET_AML": "LAML",
         "TARGET_NBL": "NBL",
         "TARGET_RT": "RT",
@@ -272,8 +272,17 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
 
 
 _REFERENCE_CODE_FALLBACKS: Mapping[str, tuple[str, ...]] = {
-    "NBL": ("NBL_MYCN_nonamp", "NBL_MYCN_amp"),
+    "NBL": ("NBL_MYCNnonamp", "NBL_MYCNamp"),
     "PCN": ("MM",),
+    # NCI-coverage expansion (pirlygenes 5.18): GI/CNS leaves whose family
+    # fallback would be a poor lineage match (anal SCC is squamous, not the
+    # GI-adeno bulk; gallbladder is biliary adeno; DIPG/EPN are glial, not
+    # the embryonal MBL the cns-family fallback resolves first).
+    "ANSC": ("CESC", "HNSC"),
+    "GBC": ("CHOL", "PAAD"),
+    "DIPG": ("GBM", "LGG"),
+    "EPN": ("GBM", "LGG"),
+    "CRANIO": ("LGG", "GBM"),
 }
 
 # Keyed on pirlygenes' lineage-only family ontology (5.12+): the old
@@ -283,13 +292,18 @@ _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "carcinoma-breast": ("BRCA",),
     "carcinoma-head-neck": ("HNSC",),
     "carcinoma-lung": ("LUAD", "LUSC"),
+    # Keratinocyte carcinomas (BCC, cSCC): nearest bulk squamous reference.
+    "carcinoma-skin": ("HNSC",),
+    # HPV-associated GU squamous carcinomas (VSCC, VAGC, PENSCC, URETH):
+    # cervical SCC is the closest cohort; urothelial as secondary.
+    "carcinoma-gu": ("CESC", "BLCA"),
     "cns": ("MBL", "GBM", "LGG"),
     "endocrine": ("THCA", "PCPG", "ACC"),
     "heme-bcell": ("DLBC", "CLL", "B_ALL"),
     "heme-myeloid": ("LAML",),
     "heme-plasma": ("MM",),
     "heme-tcell": ("T_ALL",),
-    "neuroendocrine": ("SCLC", "PANNET", "LUAD"),
+    "neuroendocrine": ("SCLC", "NET_PANCREAS", "LUAD"),
     "salivary": ("HNSC",),
     "sarcoma": ("SARC",),
 }

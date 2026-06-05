@@ -102,7 +102,7 @@ EXTENSION_FAMILY_PANELS: Mapping[str, tuple[str, ...]] = {
         "UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B",
         "KRT20", "GATA3", "FOXA1", "PPARG", "S100P",
     ),
-    # --- Neuroendocrine (NET, SCLC, MEC, NBL, PCPG, MTC) ---
+    # --- Neuroendocrine (NET, SCLC, Merkel, NBL, PCPG, MTC) ---
     "NEUROENDOCRINE": (
         "CHGA", "CHGB", "SYP", "INSM1", "NCAM1",
         "ASCL1", "NEUROD1", "SCG2", "ENO2", "RAB3A",
@@ -216,12 +216,12 @@ EXTENSION_CODE_TO_FAMILY: Mapping[str, str] = {
     "MTC": "NEUROENDOCRINE",  # medullary thyroid is C-cell NE
     "PCPG": "NEUROENDOCRINE",  # pheochromocytoma / paraganglioma
     # Neuroendocrine
-    "PANNET": "NEUROENDOCRINE",
-    "MID_NET": "NEUROENDOCRINE",
-    "LUNG_NET_LC": "NEUROENDOCRINE",
-    "LUNG_NET_LCNEC": "NEUROENDOCRINE",
+    "NET_PANCREAS": "NEUROENDOCRINE",
+    "NET_MIDGUT": "NEUROENDOCRINE",
+    "NET_LUNG": "NEUROENDOCRINE",
+    "NEC_LUNG_LARGECELL": "NEUROENDOCRINE",
     "SCLC": "NEUROENDOCRINE",
-    "MEC": "NEUROENDOCRINE",  # Merkel cell carcinoma
+    "NEC_MERKEL": "NEUROENDOCRINE",  # Merkel cell carcinoma
     # Germ cell
     "TGCT": "GERM_CELL",
     # Thymic (singleton, can't easily group)
@@ -312,11 +312,11 @@ LINEAGE_DISCRIMINATION_PANELS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
     },
     "NEUROENDOCRINE": {
         "SCLC": ("ASCL1", "INSM1", "CHGA", "SYP"),
-        "MEC": ("KRT20", "NEFM", "SOX2"),
-        "PANNET": ("PDX1", "NEUROD1", "INS", "GCG"),
-        "MID_NET": ("CDX2", "TPH1", "GCG"),
-        "LUNG_NET_LC": ("CHGA", "SYP", "NKX2-1"),
-        "LUNG_NET_LCNEC": ("ASCL1", "INSM1", "CHGA"),
+        "NEC_MERKEL": ("KRT20", "NEFM", "SOX2"),
+        "NET_PANCREAS": ("PDX1", "NEUROD1", "INS", "GCG"),
+        "NET_MIDGUT": ("CDX2", "TPH1", "GCG"),
+        "NET_LUNG": ("CHGA", "SYP", "NKX2-1"),
+        "NEC_LUNG_LARGECELL": ("ASCL1", "INSM1", "CHGA"),
         "MTC": ("CALCA", "CEACAM5", "ASCL1"),
         "PCPG": ("TH", "DBH", "PNMT", "CHGA"),
     },

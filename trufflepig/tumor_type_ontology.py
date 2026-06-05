@@ -100,15 +100,15 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "LUAD_EGFR": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "EGFR"),
     "LUAD_KRAS": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "KRAS"),
     "LUAD_STK11": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "STK11"),
-    "LAML_ELN_Fav": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
-    "LAML_ELN_Int": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
-    "LAML_ELN_Adv": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
-    "NBL_MYCN_amp": ("MYCN", "PHOX2B", "TH", "B4GALNT1", "ALK"),
-    "NBL_MYCN_nonamp": ("PHOX2B", "TH", "B4GALNT1", "ALK"),
+    "LAML_ELNfav": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
+    "LAML_ELNint": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
+    "LAML_ELNadv": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
+    "NBL_MYCNamp": ("MYCN", "PHOX2B", "TH", "B4GALNT1", "ALK"),
+    "NBL_MYCNnonamp": ("PHOX2B", "TH", "B4GALNT1", "ALK"),
     # Rectal NET (pirlygenes >=5.11): a top-level NET with no lineage panel
     # or key-gene coverage upstream, so seed it with the pan-NET core shared
     # by its midgut-NET sibling.
-    "REC_NET": ("CHGA", "SYP", "INSM1", "ENO2", "SSTR2"),
+    "NET_RECTAL": ("CHGA", "SYP", "INSM1", "ENO2", "SSTR2"),
     "MBL": ("OTX2", "ATOH1", "SOX2", "MYC", "MYCN"),
     "SARC_CHOR": ("TBXT", "KRT8", "KRT18", "EPCAM", "COL2A1"),
     "ATRT": ("VIM", "SOX2", "NES", "LIN28A", "EPCAM"),
@@ -130,6 +130,17 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "SARC_PLEOLPS": ("MDM2", "CDK4", "HMGA2", "PPARG", "VIM"),
     "SARC_RMS_PRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
     "SARC_RMS_SSRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
+    # NCI-coverage expansion (pirlygenes 5.18): minimal lineage-marker seeds
+    # for the new skin / GU / GI / CNS / pituitary leaf types. Lineage panels
+    # and biomarker/therapy curation land in the #46 follow-up.
+    "ANSC": ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+    "GBC": ("KRT7", "KRT19", "CEACAM5", "MUC1", "ERBB2"),
+    "PENSCC": ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+    "VSCC": ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+    "VAGC": ("KRT5", "KRT14", "TP63", "SOX2", "CDKN2A"),
+    "URETH": ("GATA3", "KRT7", "KRT5", "TP63", "UPK2"),
+    "CRANIO": ("CTNNB1", "KRT8", "KRT18", "BRAF", "EPCAM"),
+    "PITNET": ("CHGA", "SYP", "POU1F1", "PRL", "GH1"),
 }
 
 _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
@@ -138,7 +149,7 @@ _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
     "BRCA_HER2": ("ESR1", "PGR", "KRT5", "KRT14"),
     "BRCA_Basal": ("ESR1", "PGR", "ERBB2"),
     "HNSC_HPVneg": ("CDKN2A",),
-    "NBL_MYCN_nonamp": ("MYCN",),
+    "NBL_MYCNnonamp": ("MYCN",),
     "RT": ("SMARCB1",),
 }
 
