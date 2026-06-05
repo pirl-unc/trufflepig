@@ -1438,6 +1438,18 @@ def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optiona
     note = str(summary.get("top_panel_program_note") or "").strip()
     if not note:
         return None
+    # Only render a subtype program when the panel is consistent with the actual
+    # cancer call. A high-scoring panel that was held back by the broad
+    # classifier (e.g. a CHOL biliary panel under a PRAD call) must NOT be
+    # presented as the call's "subtype" — that reads as a contradiction. The
+    # evidence line still reports it as "noted, did not change the call".
+    promotion = summary.get("promotion") or {}
+    promoted_code = str(promotion.get("code") or "").strip()
+    call = str(cancer_code or "").strip()
+    if promotion.get("blockers"):
+        return None
+    if promotion.get("promoted") and promoted_code and promoted_code != call:
+        return None
     return f"**Subtype:** {top_panel} — {note}."
 
 

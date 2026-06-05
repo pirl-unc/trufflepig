@@ -7,9 +7,52 @@ from trufflepig.brief import (
     build_brief,
     build_summary,
     _format_therapy_bullet,
+    _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
 )
 from trufflepig.confidence import ConfidenceTier
+
+
+def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
+    return {
+        "lineage_panel_evidence": {
+            "top_score": 0.90,
+            "top_panel": top_panel,
+            "top_panel_program_note": "biliary epithelial program",
+            "promotion": {
+                "promoted": promoted,
+                "code": code,
+                "blockers": list(blockers),
+            },
+        }
+    }
+
+
+def test_subtype_line_suppressed_when_panel_blocked_against_call():
+    # A high-scoring CHOL panel that was held back under a PRAD call must not
+    # render as the call's "subtype" — that contradicts the cancer call.
+    analysis = _lineage_panel_evidence(
+        "CHOL", blockers=["CHOL is not among the top-5 first-pass RNA candidates"]
+    )
+    assert _lineage_panel_subtype_reasoning_line(analysis, "PRAD") is None
+
+
+def test_subtype_line_shown_when_panel_consistent_with_call():
+    # Promoted-and-adopted, or confirmed-without-blockers, both render.
+    promoted = _lineage_panel_evidence("CHOL", promoted=True, code="CHOL")
+    assert "**Subtype:** CHOL" in (
+        _lineage_panel_subtype_reasoning_line(promoted, "CHOL") or ""
+    )
+    confirmed = _lineage_panel_evidence("CHOL")
+    assert "**Subtype:** CHOL" in (
+        _lineage_panel_subtype_reasoning_line(confirmed, "CHOL") or ""
+    )
+
+
+def test_subtype_line_suppressed_when_panel_proposes_unadopted_label():
+    # Panel proposed a different label that wasn't adopted as the report scope.
+    analysis = _lineage_panel_evidence("CHOL", promoted=True, code="CHOL")
+    assert _lineage_panel_subtype_reasoning_line(analysis, "PRAD") is None
 
 
 def _make_analysis(
