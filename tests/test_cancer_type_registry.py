@@ -228,7 +228,10 @@ def test_source_cohort_values_are_canonical():
     )
     valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
     present = set(df["source_cohort"].fillna("").astype(str).unique())
-    unknown = present - valid
+    # COMPUTED_* are pirlygenes' computed aggregate cohorts (e.g. the SARC
+    # grand union COMPUTED_PAN_SARCOMA, Phase C.2) — a legitimate cohort
+    # category that isn't a single deposited dataset in the manifest.
+    unknown = {c for c in (present - valid) if not c.startswith("COMPUTED_")}
     assert not unknown, f"unknown source_cohort values: {unknown}"
 
 
@@ -335,7 +338,7 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
 
     assert "TCGA:SARC" in out
     assert "Treehouse:SARC_SYN" in out
-    assert "GEO:CHON" in out
+    assert "GEO:SARC_CHON" in out
     assert "GEO:SARC_DDLPS" in out
     assert "GEO GSE299759" in out
     assert "GEO GSE75885" in out

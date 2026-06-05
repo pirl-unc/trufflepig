@@ -134,14 +134,45 @@ def _standardize_pan_cancer_columns(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(columns, index=df.index).copy()
 
 
+def _canonicalize_cancer_code_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Resolve the ``cancer_code`` column through pirlygenes' alias resolver.
+
+    The bundled deconvolved artifacts predate pirlygenes' Phase-C code renames
+    (e.g. ``CHON``→``SARC_CHON``), so a sample looked up by its *new* registry
+    code would silently miss its subtype reference and fall back to broad SARC.
+    Canonicalizing on load — using the now-shipped ``CANCER_TYPE_ALIASES`` — keeps
+    the artifact correct without a regeneration and auto-absorbs future rename
+    waves. Codes with no alias (legacy cohort-name leakage like ``BEATAML`` /
+    ``TARGET_*``, a separate data-gen issue) are left unchanged. See #53.
+    """
+    if "cancer_code" not in df.columns:
+        return df
+    from pirlygenes.gene_sets_cancer import resolve_cancer_type
+
+    def _resolve(code: str) -> str:
+        try:
+            return resolve_cancer_type(code)
+        except Exception:
+            return code
+
+    uniques = df["cancer_code"].dropna().astype(str).unique()
+    mapping = {code: _resolve(code) for code in uniques}
+    df["cancer_code"] = df["cancer_code"].map(
+        lambda c: mapping.get(str(c), c) if pd.notna(c) else c
+    )
+    return df
+
+
 @lru_cache(maxsize=1)
 def _tcga_deconvolved_expression_cached() -> pd.DataFrame:
-    return pd.read_csv(_TCGA_DECONV_PATH, low_memory=False)
+    df = pd.read_csv(_TCGA_DECONV_PATH, low_memory=False)
+    return _canonicalize_cancer_code_column(df)
 
 
 @lru_cache(maxsize=1)
 def _subtype_deconvolved_expression_cached() -> pd.DataFrame:
-    return pd.read_csv(_SUBTYPE_DECONV_PATH, low_memory=False)
+    df = pd.read_csv(_SUBTYPE_DECONV_PATH, low_memory=False)
+    return _canonicalize_cancer_code_column(df)
 
 
 @lru_cache(maxsize=1)

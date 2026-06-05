@@ -363,10 +363,13 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
         disease_state="",
     )
 
-    assert "externally supplied OS (Osteosarcoma) sets the fine/report label" in md
-    assert "expression-reference context is SARC (Sarcoma)" in md
-    assert "sarcoma-family first-pass support for supplied OS (Osteosarcoma)" in md
-    assert "does not independently resolve the refined label" in md
+    # SARC_OS is now a registry child of SARC (5.13), so the brief recognizes
+    # the direct parent-child relationship ("concordant at the parent level")
+    # rather than the old same-family broad-context heuristic.
+    assert "externally supplied SARC_OS (Osteosarcoma) sets the fine/report label" in md
+    assert "SARC (Sarcoma) is used as the parent expression context" in md
+    assert "concordant at the parent level: SARC (Sarcoma) is top" in md
+    assert "refined report label remains SARC_OS (Osteosarcoma)" in md
     assert "raw signature favors KIRC" not in md
     assert "confidence caveats" not in md
 

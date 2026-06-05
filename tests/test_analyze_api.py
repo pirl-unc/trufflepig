@@ -224,7 +224,10 @@ def test_local_reference_only_cancer_label_becomes_report_scope():
 
     composition_scope, report_scope = _analysis_input_cancer_type("SARC_OS")
 
-    assert composition_scope is None
+    # OS is now the sarcoma subtype SARC_OS with SARC as its coarse parent
+    # (5.13 registry restructure), so composition scopes to SARC while the fine
+    # label still becomes the report scope.
+    assert composition_scope == "SARC"
     assert report_scope == "SARC_OS"
 
 

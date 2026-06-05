@@ -25,7 +25,8 @@ def test_pannet_registry_points_at_alvarez_cohort():
     row = reg[reg["code"] == "PANNET"].iloc[0]
     assert row["expression_source"] == "GEO"
     assert row["source_cohort"] == "GSE118014_ALVAREZ_2018"
-    assert row["family"] == "net"
+    # `net` family renamed to lineage-only `neuroendocrine` (pirlygenes 5.12).
+    assert row["family"] == "neuroendocrine"
     assert row["primary_tissue"] == "pancreas"
 
 
