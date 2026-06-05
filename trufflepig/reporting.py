@@ -1086,28 +1086,63 @@ def cross_cancer_target_index() -> dict[str, tuple[dict, ...]]:
 
     The per-sample recommendation only pulls the sample cancer's curated panel,
     so a gene that is a known, drugged target *in another indication* is invisible
-    when it lights up in a different tumor. This index lets the report cross-
-    reference the full ``cancer-key-genes`` target universe so an off-context
-    binder can be surfaced rather than dropped.
+    when it lights up in a different tumor. This index unions two sources so an
+    off-context binder is surfaced rather than dropped:
+
+    1. pirlygenes ``cancer-key-genes`` ``role=target`` rows — carry the specific
+       cancer_code an agent is curated against.
+    2. the trufflepig-owned therapeutic-agent registry (#52) — the full binder
+       universe (modality / approval / phase), including targets pirlygenes does
+       not curate against any cancer code (the Tier-D "invisible" genes from #47).
     """
     from pirlygenes import get_data
+    from .therapeutic_agents import agents_for_target, druggable_target_genes
 
     rows = get_data("cancer-key-genes")
     rows = rows[rows["role"].astype(str) == "target"]
     out: dict[str, list[dict]] = {}
+    seen: dict[str, set[str]] = {}
     for _, row in rows.iterrows():
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
             continue
+        agent = str(row.get("agent") or "").strip()
         out.setdefault(symbol, []).append(
             {
                 "cancer_code": str(row.get("cancer_code") or "").strip(),
-                "agent": str(row.get("agent") or "").strip(),
+                "agent": agent,
                 "agent_class": str(row.get("agent_class") or "").strip(),
                 "phase": str(row.get("phase") or "").strip(),
                 "indication": str(row.get("indication") or "").strip(),
+                "modality": "",
+                "approval": "",
+                "source": "key_genes",
             }
         )
+        seen.setdefault(symbol, set()).add(agent.lower())
+
+    # Union in the trufflepig therapeutic-agent registry. Each registry agent
+    # is keyed on its target gene symbol (cancer-agnostic), so it surfaces
+    # wherever the gene is expressed; dedupe against agents already named by
+    # the cancer-key-genes rows.
+    for gene in druggable_target_genes():
+        symbol = gene.strip().upper()
+        for agent in agents_for_target(gene):
+            if agent.agent.lower() in seen.get(symbol, set()):
+                continue
+            out.setdefault(symbol, []).append(
+                {
+                    "cancer_code": "",
+                    "agent": agent.agent,
+                    "agent_class": agent.modality_label,
+                    "phase": agent.highest_phase,
+                    "indication": agent.approved_indication or agent.indications,
+                    "modality": agent.modality,
+                    "approval": agent.approval_clause(),
+                    "source": "registry",
+                }
+            )
+            seen.setdefault(symbol, set()).add(agent.agent.lower())
     return {sym: tuple(entries) for sym, entries in out.items()}
 
 
