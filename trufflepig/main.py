@@ -6482,9 +6482,24 @@ def _generate_text_reports(
             f"score {float(inferred_site.get('score') or 0.0):.2f}); inferred from "
             "off-primary expression background, not supplied as a user constraint."
         )
+    # Display candidates in the order of the stated ranking metric (Normalized =
+    # support_fraction_of_top, top = 1.0). The stored trace order can lag this,
+    # which previously rendered a lower-scoring row above a higher-scoring one.
+    ranked_candidates = (
+        sorted(
+            candidate_trace,
+            key=lambda r: (
+                float(r.get("support_fraction_of_top") or 0.0),
+                float(r.get("support_geomean") or 0.0),
+            ),
+            reverse=True,
+        )
+        if candidate_trace
+        else []
+    )
     if candidate_trace:
         lines.append("- **Top candidates** (geomean · normalized):")
-        for row in candidate_trace[:5]:
+        for row in ranked_candidates[:5]:
             lines.append(
                 f"  - **{_cancer_label(row['code'])}**: "
                 f"{row.get('support_geomean', 0.0):.2f} · {row.get('support_fraction_of_top', 0.0):.2f}"
@@ -6532,7 +6547,7 @@ def _generate_text_reports(
         lines.append(
             "|--------|--------|-----------|---------|------------|--------|---------|-------------|"
         )
-        for row in candidate_trace[:8]:
+        for row in ranked_candidates[:8]:
             lineage = row.get("lineage_purity")
             concordance = row.get("lineage_concordance")
             lines.append(

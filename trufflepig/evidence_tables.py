@@ -87,9 +87,9 @@ def _per_subtype_evidence_table(
     lines.append(f"#### {title}\n")
     if has_competitor:
         lines.append(
-            f"| Gene | Sample TPM | {label} median | {competitor_code} median | Δlog2 |"
+            f"| Gene | Sample TPM | {label} median | {competitor_code} median | Δlog2 | Sample supports? |"
         )
-        lines.append("|---|---:|---:|---:|---:|")
+        lines.append("|---|---:|---:|---:|---:|:---:|")
     else:
         lines.append(f"| Gene | Sample TPM | {label} median |")
         lines.append("|---|---:|---:|")
@@ -108,9 +108,16 @@ def _per_subtype_evidence_table(
                 dlog2_str = f"{dlog2:+.2f}"
             except (ValueError, ZeroDivisionError):
                 dlog2_str = "—"
+            # Δlog2 compares the two *reference* medians, not the sample — so a
+            # gene high in the subtype reference but absent in the sample reads
+            # as misleading "support". Mark whether the sample's own expression
+            # is actually closer to the subtype than to the competitor.
+            dist_subtype = abs(math.log2((sample_v + 1.0) / (ref_v + 1.0)))
+            dist_comp = abs(math.log2((sample_v + 1.0) / (comp_v + 1.0)))
+            supports = "✓" if dist_subtype <= dist_comp else "✗"
             lines.append(
                 f"| {gene} | {_format_tpm(sample_v)} | {_format_tpm(ref_v)} | "
-                f"{_format_tpm(comp_v)} | {dlog2_str} |"
+                f"{_format_tpm(comp_v)} | {dlog2_str} | {supports} |"
             )
         else:
             lines.append(
