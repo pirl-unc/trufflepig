@@ -219,10 +219,13 @@ def _warn_unresolved_marker(panel_name: str, role: str, sym: str) -> None:
 
 # ---------- the one scoring function ----------
 
-# A positive lineage marker must be expressed at least this much (TPM) in the
-# sample to count as a hit — guards the ``0 >= 0.5 * 0`` edge case where a marker
-# absent in both sample and cohort would otherwise be mis-counted as in-range.
-_HIGH_MARKER_MIN_TPM = 1.0
+# A positive lineage marker must be *actively expressed* in the sample to count
+# as a hit, not merely detectable. 1 TPM is the detection floor and is too low to
+# call a lineage-defining marker "present"; we use the same "primary marker"
+# level as ``literature_signatures.min_primary_tpm`` (5 TPM). This also guards the
+# ``0 >= 0.5 * 0`` edge case where a marker absent in both sample and cohort would
+# otherwise be mis-counted as in-range (e.g. MUC5AC=0 inflating a CHOL panel).
+_HIGH_MARKER_MIN_TPM = 5.0
 
 
 def score_panel(
