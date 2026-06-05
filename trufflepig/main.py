@@ -250,6 +250,63 @@ def print_dataset_info():
     print()
 
 
+_CLINICAL_GROUP_ORDER = {
+    "Carcinomas and epithelial tumors": 0,
+    "Sarcoma, bone, and soft-tissue tumors": 1,
+    "Hematologic malignancies": 2,
+    "Neuroendocrine and neural-crest tumors": 3,
+    "CNS tumors": 4,
+    "Embryonal and blastemal tumors": 5,
+    "Other pediatric solid tumors": 6,
+    "Endocrine tumors": 7,
+    "Melanoma": 8,
+    "Germ-cell tumors": 9,
+    "Salivary tumors": 10,
+}
+
+
+def clinical_group_for_row(row) -> str:
+    """Map a registry row to its reader-facing clinical group.
+
+    Sarcoma membership routes through the canonical
+    ``tumor_type_ontology.is_sarcoma_code`` (i.e. pirlygenes'
+    ``sarcoma_lineage_codes()``) rather than a hardcoded SARC_* allowlist,
+    so new sarcoma subtypes are grouped correctly without a trufflepig edit.
+    """
+    from .tumor_type_ontology import is_sarcoma_code
+
+    getter = row.get if hasattr(row, "get") else (lambda k, d=None: row[k])
+    family_value = str(getter("family", "") or "").strip()
+    code = str(getter("code", "") or "").strip()
+    if family_value.startswith("carcinoma-") or code in {"NUTM", "THYM"}:
+        return "Carcinomas and epithelial tumors"
+    if is_sarcoma_code(code) or family_value in {
+        "sarcoma",
+        "pediatric-bone",
+        "pediatric-soft",
+    }:
+        return "Sarcoma, bone, and soft-tissue tumors"
+    if family_value.startswith("heme-"):
+        return "Hematologic malignancies"
+    if family_value in {"neuroendocrine", "net", "pediatric-net"}:
+        return "Neuroendocrine and neural-crest tumors"
+    if family_value in {"cns", "pediatric-cns"}:
+        return "CNS tumors"
+    if family_value in {"embryonal", "pediatric-embryonal"}:
+        return "Embryonal and blastemal tumors"
+    if family_value.startswith("pediatric-"):
+        return "Other pediatric solid tumors"
+    if family_value == "endocrine":
+        return "Endocrine tumors"
+    if family_value == "melanoma":
+        return "Melanoma"
+    if family_value == "germ-cell":
+        return "Germ-cell tumors"
+    if family_value in {"salivary"}:
+        return "Salivary tumors"
+    return family_value or "Other"
+
+
 @named("cancers")
 def print_cancer_registry(
     family: str = None,
@@ -546,49 +603,8 @@ def print_cancer_registry(
             return f"{source}; {pmid}"
         return source
 
-    def _clinical_group(row):
-        family_value = _clean(row.get("family"))
-        code = _clean(row.get("code"))
-        if family_value.startswith("carcinoma-") or code in {"NUTM", "THYM"}:
-            return "Carcinomas and epithelial tumors"
-        if family_value in {"sarcoma", "pediatric-bone", "pediatric-soft"} or code in {
-            "SARC_CHOR",
-            "SARC_CHON",
-        }:
-            return "Sarcoma, bone, and soft-tissue tumors"
-        if family_value.startswith("heme-"):
-            return "Hematologic malignancies"
-        if family_value in {"neuroendocrine", "net", "pediatric-net"}:
-            return "Neuroendocrine and neural-crest tumors"
-        if family_value in {"cns", "pediatric-cns"}:
-            return "CNS tumors"
-        if family_value in {"embryonal", "pediatric-embryonal"}:
-            return "Embryonal and blastemal tumors"
-        if family_value.startswith("pediatric-"):
-            return "Other pediatric solid tumors"
-        if family_value == "endocrine":
-            return "Endocrine tumors"
-        if family_value == "melanoma":
-            return "Melanoma"
-        if family_value == "germ-cell":
-            return "Germ-cell tumors"
-        if family_value in {"salivary"}:
-            return "Salivary tumors"
-        return family_value or "Other"
-
-    group_order = {
-        "Carcinomas and epithelial tumors": 0,
-        "Sarcoma, bone, and soft-tissue tumors": 1,
-        "Hematologic malignancies": 2,
-        "Neuroendocrine and neural-crest tumors": 3,
-        "CNS tumors": 4,
-        "Embryonal and blastemal tumors": 5,
-        "Other pediatric solid tumors": 6,
-        "Endocrine tumors": 7,
-        "Melanoma": 8,
-        "Germ-cell tumors": 9,
-        "Salivary tumors": 10,
-    }
+    _clinical_group = clinical_group_for_row
+    group_order = _CLINICAL_GROUP_ORDER
 
     def _group_sort_key(group):
         return group_order.get(str(group), 99)

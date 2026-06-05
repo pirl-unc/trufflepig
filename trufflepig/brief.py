@@ -245,12 +245,12 @@ def _registry_family(code: Optional[str]) -> str:
 
 
 def _sarcoma_lineage_codes() -> frozenset:
-    # Derive sarcoma membership from pirlygenes' canonical, prefix-agnostic API
-    # rather than a hardcoded family set, so it survives the ongoing taxonomy /
-    # registry restructure (pirlygenes Phase C) without a trufflepig edit.
-    from pirlygenes.gene_sets_cancer import sarcoma_lineage_codes
+    # Single trufflepig-side source of truth for sarcoma membership, derived
+    # from pirlygenes' canonical, prefix-agnostic API so it survives the
+    # ongoing taxonomy / registry restructure without a trufflepig edit.
+    from .tumor_type_ontology import sarcoma_lineage_codes
 
-    return frozenset(sarcoma_lineage_codes())
+    return sarcoma_lineage_codes()
 
 
 def _clinical_supergroup(code: Optional[str]) -> str:
