@@ -139,6 +139,61 @@ def test_sarc_reference_is_parental_not_a_single_histology_subset():
     )
 
 
+def test_sarcoma_membership_matches_pirlygenes():
+    """trufflepig's sarcoma-membership notion must equal pirlygenes'
+    canonical ``sarcoma_lineage_codes()`` — for every registry code. The
+    single trufflepig accessor (``tumor_type_ontology.is_sarcoma_code``)
+    is the only thing any call site should consult; this guard turns a
+    future pirlygenes addition (a new SARC_* subtype, a re-parented
+    histology) into a loud failure instead of a silent desync."""
+    from trufflepig.tumor_type_ontology import (
+        is_sarcoma_code,
+        sarcoma_lineage_codes as tp_sarcoma_codes,
+    )
+    from pirlygenes.gene_sets_cancer import (
+        cancer_type_registry,
+        sarcoma_lineage_codes as pg_sarcoma_codes,
+    )
+
+    # The trufflepig accessor must be a pure pass-through of the pirlygenes set.
+    assert set(tp_sarcoma_codes()) == set(pg_sarcoma_codes())
+
+    canonical = set(pg_sarcoma_codes())
+    mismatched = [
+        code
+        for code in cancer_type_registry()["code"].dropna().astype(str)
+        if is_sarcoma_code(code) != (code in canonical)
+    ]
+    assert not mismatched, (
+        "is_sarcoma_code disagrees with pirlygenes.sarcoma_lineage_codes() "
+        f"for: {sorted(mismatched)}"
+    )
+
+
+def test_clinical_group_routes_every_sarcoma_code_to_the_sarcoma_group():
+    """The `cancers` CLI clinical-group classifier must place every canonical
+    sarcoma-lineage code in the sarcoma/bone/soft-tissue group via the shared
+    membership API — not a hardcoded SARC_* allowlist that drifts."""
+    from pirlygenes.gene_sets_cancer import (
+        cancer_type_registry,
+        sarcoma_lineage_codes,
+    )
+    from trufflepig.main import clinical_group_for_row
+
+    reg = cancer_type_registry().fillna("")
+    rows = {str(r["code"]): dict(r) for _, r in reg.iterrows()}
+    misrouted = []
+    for code in sarcoma_lineage_codes():
+        row = rows.get(code)
+        if row is None:
+            continue
+        if clinical_group_for_row(row) != "Sarcoma, bone, and soft-tissue tumors":
+            misrouted.append(code)
+    assert not misrouted, (
+        f"sarcoma-lineage codes not routed to the sarcoma group: {sorted(misrouted)}"
+    )
+
+
 def test_every_live_family_is_classified_by_the_cancers_cli(capsys):
     """The `cancers` CLI clinical-group classifier must give every live family a
     real group label — a newly curated family must not fall through to the raw

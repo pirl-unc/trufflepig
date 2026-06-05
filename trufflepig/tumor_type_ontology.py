@@ -180,6 +180,28 @@ def _registry() -> dict[str, dict[str, Any]]:
 
 
 @lru_cache(maxsize=1)
+def sarcoma_lineage_codes() -> frozenset[str]:
+    """Canonical, prefix-agnostic sarcoma membership.
+
+    Single trufflepig-side source of truth, delegating to pirlygenes'
+    ``sarcoma_lineage_codes()`` so the membership survives the ongoing
+    taxonomy restructure (chordoma/chondrosarcoma, the SARC grand-union,
+    and any new SARC_* subtypes) without a trufflepig edit. Every place
+    that asks "is this a sarcoma / same sarcoma supergroup" routes here
+    instead of hardcoding a family/prefix set.
+    """
+    from pirlygenes.gene_sets_cancer import sarcoma_lineage_codes as _pg
+
+    return frozenset(_pg())
+
+
+def is_sarcoma_code(code: str | None) -> bool:
+    """True when ``code`` is in the canonical sarcoma lineage set."""
+    code_text = _clean(code)
+    return bool(code_text) and code_text in sarcoma_lineage_codes()
+
+
+@lru_cache(maxsize=1)
 def _lineage_genes() -> dict[str, tuple[str, ...]]:
     from pirlygenes.gene_sets_cancer import lineage_genes_by_cancer_type
 
