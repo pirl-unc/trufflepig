@@ -2886,16 +2886,23 @@ def build_actionable(
             "biology and eligibility before acting.\n"
         )
         for hit in offcontext[:8]:
-            primary = hit["indications"][0]
+            # Prefer an entry that names a real agent; the registry union may
+            # carry richer modality/approval context than the key-genes row.
+            entries = hit["indications"]
+            primary = next((e for e in entries if e.get("agent")), entries[0])
             agent = primary.get("agent") or "binder"
-            phase = _phase_label(str(primary.get("phase") or ""))
+            modality = primary.get("modality") or ""
+            approval = primary.get("approval") or ""
+            # Approval clause (registry) is more informative than a bare phase.
+            status = approval or _phase_label(str(primary.get("phase") or ""))
+            qualifier = f"{modality}, {status}" if modality else status
             other_codes = ", ".join(
-                sorted({e["cancer_code"] for e in hit["indications"] if e["cancer_code"]})
+                sorted({e["cancer_code"] for e in entries if e.get("cancer_code")})
             )
             where = other_codes or primary.get("indication") or "another indication"
             lines.append(
                 f"- **{hit['symbol']}** — tumor-attributed {hit['tumor_tpm']:.0f} TPM; "
-                f"{agent} ({phase}) in {where}."
+                f"{agent} ({qualifier}) in {where}."
             )
         lines.append("")
 
