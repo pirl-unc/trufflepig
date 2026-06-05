@@ -161,7 +161,7 @@ def test_fine_reference_promotion_routes_into_fine_scope_inference():
 
     # Sanity: there is a configured fine-reference spec for OS so the path
     # is exercised end-to-end (not just stubbed).
-    assert any(s.cancer_type == "OS" for s in _FINE_REFERENCE_SPECS)
+    assert any(s.cancer_type == "SARC_OS" for s in _FINE_REFERENCE_SPECS)
 
     analysis = _analysis(("SARC", 1.0), ("UCS", 0.3))
 
@@ -215,9 +215,9 @@ def test_fine_reference_promotion_routes_into_fine_scope_inference():
     )
 
     assert selected_scope is not None
-    assert selected_scope["cancer_type"] == "OS"
+    assert selected_scope["cancer_type"] == "SARC_OS"
     assert "fine_reference" in selected_scope["evidence_sources"]
-    assert report_scope_cancer_type == "OS"
+    assert report_scope_cancer_type == "SARC_OS"
     assert rare_scope_inference is None
     assert fine_scope_inference is selected_scope
 
@@ -235,10 +235,10 @@ def test_routing_uses_selected_by_not_set_membership(monkeypatch):
     from trufflepig import cancer_type_evidence as cte_module
 
     fake_selected = {
-        "cancer_type": "OS",
+        "cancer_type": "SARC_OS",
         "selected_by": "fine_reference",
         "evidence_sources": ["fine_reference", "rare_marker"],
-        "expression_reference_cancer_type": "OS",
+        "expression_reference_cancer_type": "SARC_OS",
     }
     fake_evidence = {
         "selected": fake_selected,
@@ -266,7 +266,7 @@ def test_routing_uses_selected_by_not_set_membership(monkeypatch):
         fine_scope_inference=None,
     )
     assert selected_scope is fake_selected
-    assert report_scope_cancer_type == "OS"
+    assert report_scope_cancer_type == "SARC_OS"
     assert rare_scope_inference is None
     assert fine_scope_inference is fake_selected
 

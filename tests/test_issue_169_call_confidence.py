@@ -125,7 +125,7 @@ def test_step0_mismatch_downgrades_to_moderate():
     }
     tier = compute_call_confidence(analysis)
     assert tier.tier == "moderate"
-    assert any("Step-0" in r and "SARC" in r for r in tier.reasons)
+    assert any("Tissue composition screen" in r and "SARC" in r for r in tier.reasons)
 
 
 def test_multiple_contradictions_all_surface_at_low_tier():

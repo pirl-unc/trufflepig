@@ -307,6 +307,18 @@ def print_cancer_registry(
         code = str(value).strip()
         return canonical_code_by_upper.get(code.upper(), code)
 
+    def _source_cohort_values(frame):
+        # Deconvolved-expression frames may omit ``source_cohort`` (the TCGA
+        # deconvolved reference carries no per-cohort provenance), so guard
+        # the column rather than relying on a DataFrame ``.get`` default.
+        if "source_cohort" not in frame.columns:
+            return set()
+        return {
+            str(v)
+            for v in frame["source_cohort"].dropna().unique()
+            if str(v).strip()
+        }
+
     parent_by_code = {
         str(row["code"]).strip(): _parent
         for _, row in registry_df.iterrows()
@@ -316,21 +328,13 @@ def print_cancer_registry(
     if tcga_deconv is not None:
         for code, group_df in tcga_deconv.groupby("cancer_code"):
             code_s = _canonical_code(code)
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             expression_sources_by_code[code_s].update(sources)
             exact_expression_sources_by_code[code_s].update(sources)
     if sub_deconv is not None and "subtype" in sub_deconv.columns:
         for code, group_df in sub_deconv.groupby("cancer_code"):
             code_s = _canonical_code(code)
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             nonblank_subtype = group_df["subtype"].fillna("").astype(str).str.strip()
             if nonblank_subtype.eq("").all():
                 expression_sources_by_code[code_s].update(sources)
@@ -344,11 +348,7 @@ def print_cancer_registry(
             subtype_s = _canonical_code(subtype)
             if not subtype_s or subtype_s.lower() == "nan":
                 continue
-            sources = {
-                str(v)
-                for v in group_df.get("source_cohort", []).dropna().unique()
-                if str(v).strip()
-            }
+            sources = _source_cohort_values(group_df)
             expression_sources_by_code[subtype_s].update(sources)
             exact_expression_sources_by_code[subtype_s].update(sources)
             parent = parent_by_code.get(subtype_s, "")
@@ -498,6 +498,8 @@ def print_cancer_registry(
             "heme-plasma": "plasma-cell malignancies",
             "heme-tcell": "T-cell malignancies",
             "melanoma": "melanoma",
+            "neuroendocrine": "neuroendocrine tumors",
+            "embryonal": "embryonal / blastemal tumors",
             "net": "neuroendocrine tumors",
             "pediatric-bone": "pediatric bone tumors",
             "pediatric-cns": "pediatric CNS tumors",
@@ -550,16 +552,18 @@ def print_cancer_registry(
         if family_value.startswith("carcinoma-") or code in {"NUTM", "THYM"}:
             return "Carcinomas and epithelial tumors"
         if family_value in {"sarcoma", "pediatric-bone", "pediatric-soft"} or code in {
-            "CHOR",
-            "CHON",
+            "SARC_CHOR",
+            "SARC_CHON",
         }:
             return "Sarcoma, bone, and soft-tissue tumors"
         if family_value.startswith("heme-"):
             return "Hematologic malignancies"
-        if family_value in {"net", "pediatric-net"}:
+        if family_value in {"neuroendocrine", "net", "pediatric-net"}:
             return "Neuroendocrine and neural-crest tumors"
         if family_value in {"cns", "pediatric-cns"}:
             return "CNS tumors"
+        if family_value in {"embryonal", "pediatric-embryonal"}:
+            return "Embryonal and blastemal tumors"
         if family_value.startswith("pediatric-"):
             return "Other pediatric solid tumors"
         if family_value == "endocrine":
@@ -578,11 +582,12 @@ def print_cancer_registry(
         "Hematologic malignancies": 2,
         "Neuroendocrine and neural-crest tumors": 3,
         "CNS tumors": 4,
-        "Other pediatric solid tumors": 5,
-        "Endocrine tumors": 6,
-        "Melanoma": 7,
-        "Germ-cell tumors": 8,
-        "Salivary tumors": 9,
+        "Embryonal and blastemal tumors": 5,
+        "Other pediatric solid tumors": 6,
+        "Endocrine tumors": 7,
+        "Melanoma": 8,
+        "Germ-cell tumors": 9,
+        "Salivary tumors": 10,
     }
 
     def _group_sort_key(group):
@@ -6477,9 +6482,24 @@ def _generate_text_reports(
             f"score {float(inferred_site.get('score') or 0.0):.2f}); inferred from "
             "off-primary expression background, not supplied as a user constraint."
         )
+    # Display candidates in the order of the stated ranking metric (Normalized =
+    # support_fraction_of_top, top = 1.0). The stored trace order can lag this,
+    # which previously rendered a lower-scoring row above a higher-scoring one.
+    ranked_candidates = (
+        sorted(
+            candidate_trace,
+            key=lambda r: (
+                float(r.get("support_fraction_of_top") or 0.0),
+                float(r.get("support_geomean") or 0.0),
+            ),
+            reverse=True,
+        )
+        if candidate_trace
+        else []
+    )
     if candidate_trace:
         lines.append("- **Top candidates** (geomean · normalized):")
-        for row in candidate_trace[:5]:
+        for row in ranked_candidates[:5]:
             lines.append(
                 f"  - **{_cancer_label(row['code'])}**: "
                 f"{row.get('support_geomean', 0.0):.2f} · {row.get('support_fraction_of_top', 0.0):.2f}"
@@ -6527,7 +6547,7 @@ def _generate_text_reports(
         lines.append(
             "|--------|--------|-----------|---------|------------|--------|---------|-------------|"
         )
-        for row in candidate_trace[:8]:
+        for row in ranked_candidates[:8]:
             lineage = row.get("lineage_purity")
             concordance = row.get("lineage_concordance")
             lines.append(

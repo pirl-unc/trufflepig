@@ -822,7 +822,7 @@ def test_select_actionable_plot_genes_prefers_therapy_linked_surface_hits():
 
     genes = cli_mod._select_actionable_plot_genes(
         ranges_df,
-        "OS",
+        "SARC_OS",
         target_panel=None,
         max_genes=5,
     )
@@ -1513,7 +1513,7 @@ def test_embedding_can_include_available_subtype_references():
 
     assert matrix.shape[0] == len(labels)
     assert "SARC_LMS" in labels
-    assert "OS" in labels
+    assert "SARC_OS" in labels
     assert np.isfinite(matrix).all()
 
 

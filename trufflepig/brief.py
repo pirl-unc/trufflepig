@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from .reporting import (
+    agent_metadata_clause,
+    offcontext_known_targets,
     analysis_site_template_for_subtype,
     cancer_code_display_name,
     cancer_key_genes_lookup_for_analysis,
@@ -242,10 +244,20 @@ def _registry_family(code: Optional[str]) -> str:
     return "" if family.lower() == "nan" else family
 
 
+def _sarcoma_lineage_codes() -> frozenset:
+    # Derive sarcoma membership from pirlygenes' canonical, prefix-agnostic API
+    # rather than a hardcoded family set, so it survives the ongoing taxonomy /
+    # registry restructure (pirlygenes Phase C) without a trufflepig edit.
+    from pirlygenes.gene_sets_cancer import sarcoma_lineage_codes
+
+    return frozenset(sarcoma_lineage_codes())
+
+
 def _clinical_supergroup(code: Optional[str]) -> str:
-    family = _registry_family(code)
-    if family in {"sarcoma", "pediatric-bone", "pediatric-soft"}:
+    code_text = str(code or "").strip()
+    if code_text and code_text in _sarcoma_lineage_codes():
         return "sarcoma/bone/soft-tissue"
+    family = _registry_family(code)
     if family.startswith("carcinoma-"):
         return family
     return family
@@ -708,6 +720,9 @@ def _format_therapy_bullet(
         interpretation_parts.append(notes[0])
     if path_context:
         interpretation_parts.append(path_context)
+    agent_meta = agent_metadata_clause(target_row)
+    if agent_meta:
+        interpretation_parts.append(agent_meta)
     interpretation = "; ".join(part for part in interpretation_parts if part)
     maturity_sentence = f" Clinical maturity: {maturity}." if maturity else ""
     return (
@@ -1422,6 +1437,18 @@ def _lineage_panel_subtype_reasoning_line(analysis, cancer_code: str) -> Optiona
         return None
     note = str(summary.get("top_panel_program_note") or "").strip()
     if not note:
+        return None
+    # Only render a subtype program when the panel is consistent with the actual
+    # cancer call. A high-scoring panel that was held back by the broad
+    # classifier (e.g. a CHOL biliary panel under a PRAD call) must NOT be
+    # presented as the call's "subtype" — that reads as a contradiction. The
+    # evidence line still reports it as "noted, did not change the call".
+    promotion = summary.get("promotion") or {}
+    promoted_code = str(promotion.get("code") or "").strip()
+    call = str(cancer_code or "").strip()
+    if promotion.get("blockers"):
+        return None
+    if promotion.get("promoted") and promoted_code and promoted_code != call:
         return None
     return f"**Subtype:** {top_panel} — {note}."
 
@@ -2813,6 +2840,9 @@ def build_actionable(
                             interp_parts.append(
                                 f"current-therapy check: {state_caution}"
                             )
+                        agent_meta = agent_metadata_clause(t)
+                        if agent_meta:
+                            interp_parts.append(agent_meta)
                         interp_parts.append(
                             clinical_maturity_summary(t, target_panel=targets_df)
                         )
@@ -2838,6 +2868,36 @@ def build_actionable(
             "key-genes panel — see `evidence.md` for the generic "
             "expression-ranked tables.*\n"
         )
+
+    # Off-context expressed targets (#47): genes highly expressed in this
+    # sample that are validated drug targets in *other* indications but absent
+    # from this cancer's curated panel. Surfaced as expression-only leads so a
+    # known binder isn't silently dropped just because it's off-label here.
+    panel_symbols = set()
+    if targets_df is not None and "symbol" in getattr(targets_df, "columns", []):
+        panel_symbols = {str(s) for s in targets_df["symbol"]}
+    offcontext = offcontext_known_targets(ranges_df, panel_symbols)
+    if offcontext:
+        lines.append("## Off-Context Expressed Targets\n")
+        lines.append(
+            "Highly expressed here and a validated drug target in *another* "
+            "indication, but not on this cancer's curated panel — "
+            "expression-only leads, **not** on-label recommendations; confirm "
+            "biology and eligibility before acting.\n"
+        )
+        for hit in offcontext[:8]:
+            primary = hit["indications"][0]
+            agent = primary.get("agent") or "binder"
+            phase = _phase_label(str(primary.get("phase") or ""))
+            other_codes = ", ".join(
+                sorted({e["cancer_code"] for e in hit["indications"] if e["cancer_code"]})
+            )
+            where = other_codes or primary.get("indication") or "another indication"
+            lines.append(
+                f"- **{hit['symbol']}** — tumor-attributed {hit['tumor_tpm']:.0f} TPM; "
+                f"{agent} ({phase}) in {where}."
+            )
+        lines.append("")
 
     # Caveats
     caveats = (

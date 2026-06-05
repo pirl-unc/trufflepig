@@ -321,9 +321,9 @@ def test_fine_reference_medians_filter_to_requested_cancer_code(monkeypatch):
 
     df = pd.DataFrame(
         [
-            {"symbol": "RUNX2", "cancer_code": "OS", "tumor_tpm_median": 100.0},
-            {"symbol": "RUNX2", "cancer_code": "CHOR", "tumor_tpm_median": 2.0},
-            {"symbol": "TBXT", "cancer_code": "CHOR", "tumor_tpm_median": 50.0},
+            {"symbol": "RUNX2", "cancer_code": "SARC_OS", "tumor_tpm_median": 100.0},
+            {"symbol": "RUNX2", "cancer_code": "SARC_CHOR", "tumor_tpm_median": 2.0},
+            {"symbol": "TBXT", "cancer_code": "SARC_CHOR", "tumor_tpm_median": 50.0},
         ]
     )
     monkeypatch.setattr(
@@ -333,7 +333,7 @@ def test_fine_reference_medians_filter_to_requested_cancer_code(monkeypatch):
     evidence._reference_medians.cache_clear()
 
     try:
-        assert evidence._reference_medians("OS") == {"RUNX2": 100.0}
+        assert evidence._reference_medians("SARC_OS") == {"RUNX2": 100.0}
     finally:
         evidence._reference_medians.cache_clear()
 
@@ -464,7 +464,7 @@ def test_marker_prompt_only_rules_never_set_report_scope():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     finding = {
-        "cancer_type": "CHOR",
+        "cancer_type": "SARC_CHOR",
         "rule_id": "chor_tbxt",
         "surrogate": "TBXT",
         "surrogate_tpm": 50.0,
@@ -479,7 +479,7 @@ def test_marker_prompt_only_rules_never_set_report_scope():
     )
 
     assert result["selected"]["cancer_type"] == "SARC"
-    chor = next(row for row in result["evidence"] if row["cancer_type"] == "CHOR")
+    chor = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_CHOR")
     assert chor["rule_promotes_report_scope"] is False
     assert chor["can_select_report_label"] is False
 
@@ -509,9 +509,9 @@ def test_osteogenic_reference_evidence_promotes_os_over_broad_sarc():
         _analysis(("SARC", 1.0), ("UCS", 0.3)),
     )
 
-    assert result["selected"]["cancer_type"] == "OS"
+    assert result["selected"]["cancer_type"] == "SARC_OS"
     assert result["selected"]["reference_cancer_type"] == "SARC"
-    assert result["selected"]["expression_reference_cancer_type"] == "OS"
+    assert result["selected"]["expression_reference_cancer_type"] == "SARC_OS"
     assert result["selected"]["evidence_sources"] == ["fine_reference"]
     assert result["selected"]["metrics"]["related_context_support"] == 1.0
     assert result["selected"]["metrics"]["fine_reference_support"] >= 0.7
@@ -540,8 +540,8 @@ def test_mdm2_amp_without_osteogenic_program_stays_broad_sarc():
     )
 
     assert result["selected"]["cancer_type"] == "SARC"
-    os_evidence = next(row for row in result["evidence"] if row["cancer_type"] == "OS")
-    assert os_evidence["cancer_type"] == "OS"
+    os_evidence = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_OS")
+    assert os_evidence["cancer_type"] == "SARC_OS"
     assert os_evidence["can_select_report_label"] is False
     assert os_evidence["blocking_reasons"]
 

@@ -106,13 +106,13 @@ def test_miscited_osteosarcoma_ganitumab_row_is_filtered_from_reports():
     targets = pd.DataFrame(
         [
             {
-                "cancer_code": "OS",
+                "cancer_code": "SARC_OS",
                 "symbol": "IGF1R",
                 "agent": "ganitumab + chemo",
                 "indication": "metastatic OS",
             },
             {
-                "cancer_code": "OS",
+                "cancer_code": "SARC_OS",
                 "symbol": "VEGFA",
                 "agent": "cabozantinib",
                 "indication": "R/R OS",

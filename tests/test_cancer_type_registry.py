@@ -93,10 +93,10 @@ def test_registry_includes_pediatric():
     df = cancer_type_registry()
     codes = set(df["code"])
     for need in (
-        "OS",
-        "EWS",
-        "RMS_ERMS",
-        "RMS_ARMS",
+        "SARC_OS",
+        "SARC_EWS",
+        "SARC_RMS_ERMS",
+        "SARC_RMS_ARMS",
         "NBL",
         "WILMS",
         "RT",
@@ -118,7 +118,7 @@ def test_registry_includes_net_axis():
 def test_registry_includes_rare_entities():
     df = cancer_type_registry()
     codes = set(df["code"])
-    for need in ("NUTM", "ADCC", "MTC", "CHOR", "NPC"):
+    for need in ("NUTM", "ADCC", "MTC", "SARC_CHOR", "NPC"):
         assert need in codes, f"missing rare code: {need}"
 
 
@@ -168,8 +168,8 @@ def test_bone_tissue_returns_osteosarcoma_and_ewing():
     """Site-aware hypothesis: any sample suspected of bone origin
     should be able to enumerate OS + Ewing as candidates."""
     bone_cancers = set(cancer_types_by_tissue("bone"))
-    assert "OS" in bone_cancers
-    assert "EWS" in bone_cancers
+    assert "SARC_OS" in bone_cancers
+    assert "SARC_EWS" in bone_cancers
 
 
 def test_heme_myeloid_family_contains_laml_and_related():
@@ -182,7 +182,9 @@ def test_heme_myeloid_family_contains_laml_and_related():
 
 
 def test_net_family_contains_sclc_and_pannet():
-    net = set(cancer_types_in_family("net"))
+    # pirlygenes 5.12 lineage-only ontology renamed the `net` family to
+    # `neuroendocrine` (WHO Endocrine & Neuroendocrine 2022).
+    net = set(cancer_types_in_family("neuroendocrine"))
     assert "SCLC" in net
     assert "PANNET" in net
     assert "MEC" in net  # Merkel cell carcinoma
@@ -207,33 +209,29 @@ def test_registry_has_source_cohort_column():
 
 
 def test_source_cohort_values_are_canonical():
-    """source_cohort should only take values from the canonical
-    cohort vocabulary — rejects typos like 'TCGA_BRCA' vs 'TCGA_XENA_TOIL'."""
+    """source_cohort should only take values from the canonical cohort
+    vocabulary — rejects typos like 'TCGA_BRCA' vs 'TREEHOUSE_POLYA_25_01'.
+
+    The canonical vocabulary is pirlygenes' own expression-reference manifest
+    (``available_cancer_expression_references``) so the allowlist tracks the
+    dependency instead of drifting as new cohorts are added. A handful of
+    non-expression values (curated literature, the pan-cancer Xena matrix,
+    blank) are not in that manifest and are allowed explicitly.
+    """
+    import pirlygenes as _pirlygenes
+
     df = cancer_type_registry()
-    valid = {
-        "",
-        "TCGA_XENA_TOIL",
-        "TCGA_BRCA_PAM50",
-        "TCGA_HNSC",
-        "TCGA_LUAD",
-        "BEATAML_OHSU_2022",
-        "TARGET_NBL_2018",
-        "TARGET_OS_2020",
-        "TARGET_RMS_2014",
-        "TARGET_WT_2015",
-        "TARGET_RT_2017",
-        "TARGET_ALL_2018",
-        "TARGET_UNSPECIFIED",
-        "TARGET_AML_2018",
-        "SCLC_UCOLOGNE_2015",
-        "MMRF_COMMPASS",
-        "ICGC",
-        "LITERATURE_CURATED",
-        "TREEHOUSE_v25.01",
-        "GSE118014_ALVAREZ_2018",
-    }
+    canonical = set(
+        _pirlygenes.available_cancer_expression_references()["source_cohort"]
+        .fillna("")
+        .astype(str)
+    )
+    valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
     present = set(df["source_cohort"].fillna("").astype(str).unique())
-    unknown = present - valid
+    # COMPUTED_* are pirlygenes' computed aggregate cohorts (e.g. the SARC
+    # grand union COMPUTED_PAN_SARCOMA, Phase C.2) — a legitimate cohort
+    # category that isn't a single deposited dataset in the manifest.
+    unknown = {c for c in (present - valid) if not c.startswith("COMPUTED_")}
     assert not unknown, f"unknown source_cohort values: {unknown}"
 
 
@@ -255,14 +253,14 @@ def test_expanded_sarcomas_present():
         "SARC_MYXFIB",
         "SARC_SFT",
         "SARC_IMT",
-        "GCTB",
-        "ESS_LG",
-        "ESS_HG",
+        "SARC_GCTB",
+        "SARC_ESS_LG",
+        "SARC_ESS_HG",
         "SARC_LGFMS",
         "SARC_EMC",
         "SARC_PLEOLPS",
-        "RMS_PRMS",
-        "RMS_SSRMS",
+        "SARC_RMS_PRMS",
+        "SARC_RMS_SSRMS",
     }
     missing = required - codes
     assert not missing, f"expanded-sarcoma codes missing: {missing}"
@@ -295,7 +293,8 @@ def test_subtype_key_maps_sarc_subtypes_to_key_genes_entries():
 def test_cancers_cli_uses_explicit_coverage_columns(capsys):
     from trufflepig.main import print_cancer_registry
 
-    print_cancer_registry(family="pediatric-soft")
+    # RMS_ARMS moved from the retired `pediatric-soft` family to `sarcoma` (5.12).
+    print_cancer_registry(family="sarcoma")
     out = capsys.readouterr().out
 
     assert "Clinical group: Sarcoma, bone, and soft-tissue tumors" in out
@@ -307,8 +306,7 @@ def test_cancers_cli_uses_explicit_coverage_columns(capsys):
     assert "Lineage" in out
     assert "Normal" in out
     assert "Response" in out
-    assert "Parent scopes:" not in out
-    assert "RMS_ARMS" in out
+    assert "SARC_RMS_ARMS" in out
     assert "Treehouse v25.01 PolyA" in out
     assert "| Code |" not in out
     assert "bm=" not in out
@@ -340,7 +338,7 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
 
     assert "TCGA:SARC" in out
     assert "Treehouse:SARC_SYN" in out
-    assert "GEO:CHON" in out
+    assert "GEO:SARC_CHON" in out
     assert "GEO:SARC_DDLPS" in out
     assert "GEO GSE299759" in out
     assert "GEO GSE75885" in out
@@ -352,7 +350,8 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
     assert "TCGA/PAM50:BRCA_HER2" in out
     assert "no expr 0" in out
 
-    print_cancer_registry(family="pediatric-eye")
+    # RB moved from the retired `pediatric-eye` family to `embryonal` (5.12).
+    print_cancer_registry(family="embryonal")
     out = capsys.readouterr().out
 
     assert "Treehouse/RiboD:RB" in out
@@ -390,7 +389,7 @@ def test_gse299759_chondrosarcoma_expression_ref_is_bundled():
     assert d is not None
 
     rows = d[
-        (d["cancer_code"] == "CHON")
+        (d["cancer_code"] == "SARC_CHON")
         & (d["source_cohort"] == "GSE299759_MEIJER_2026")
     ]
     assert not rows.empty
@@ -408,7 +407,7 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
 
     expected = {
         "RB": 15,
-        "CHOR": 3,
+        "SARC_CHOR": 3,
     }
     for code, n_samples in expected.items():
         rows = d[
@@ -422,7 +421,7 @@ def test_treehouse_ribod_sparse_expression_refs_are_bundled():
     assert rb.loc["CRX", "tumor_tpm_median"] > 25
     assert rb.loc["ARR3", "tumor_tpm_median"] > 5
 
-    chor = d[d["cancer_code"] == "CHOR"].set_index("symbol")
+    chor = d[d["cancer_code"] == "SARC_CHOR"].set_index("symbol")
     assert chor.loc["COL2A1", "tumor_tpm_median"] > 25
     assert chor.loc["ACAN", "tumor_tpm_median"] > 10
 

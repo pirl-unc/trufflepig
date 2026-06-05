@@ -94,17 +94,23 @@ _LOCAL_REFERENCE_MIN_BURDEN_RATIO = 0.10
 _LOCAL_REFERENCE_BURDEN_SCORE_ANCHOR = 0.35
 _LOCAL_REFERENCE_MIN_SUPPORT = 0.65
 _LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare", "salivary"})
+# Keyed on pirlygenes' lineage-only family ontology (5.12+). Retired
+# ``pediatric-*`` / ``net`` keys are kept as harmless back-compat aliases (older
+# pirlygenes); ``test_taxonomy_robustness`` guarantees every *live* family is
+# covered so ongoing pirlygenes curation can't silently leave one unmapped.
 _LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY = {
+    "sarcoma": ("SARC",),
     "pediatric-bone": ("SARC",),
     "pediatric-soft": ("SARC",),
-    "sarcoma": ("SARC",),
     "heme-bcell": ("DLBC", "LAML", "THYM"),
     "heme-plasma": ("DLBC", "LAML", "THYM"),
     "heme-tcell": ("DLBC", "LAML", "THYM"),
     "heme-myeloid": ("LAML", "DLBC", "THYM"),
     "cns": ("GBM", "LGG"),
     "pediatric-cns": ("GBM", "LGG"),
+    "embryonal": ("LIHC", "CHOL", "GBM"),
     "pediatric-liver": ("LIHC", "CHOL"),
+    "neuroendocrine": ("PCPG", "LUAD", "LUSC", "PAAD"),
     "net": ("PCPG", "LUAD", "LUSC", "PAAD"),
     "pediatric-net": ("PCPG", "LUAD", "LUSC"),
 }
@@ -292,9 +298,9 @@ class RareRnaPolicy:
 
 _FINE_REFERENCE_SPECS = (
     FineReferenceSpec(
-        cancer_type="OS",
+        cancer_type="SARC_OS",
         reference_cancer_type="SARC",
-        reference_code="OS",
+        reference_code="SARC_OS",
         marker_groups={
             "osteogenic": _OS_OSTEOGENIC_MARKERS,
             "matrix": _OS_MATRIX_MARKERS,

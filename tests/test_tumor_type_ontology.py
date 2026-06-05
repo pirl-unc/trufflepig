@@ -24,25 +24,40 @@ def test_every_registry_code_has_ontology_marker_expectations():
 
 
 def test_ontology_records_exact_expression_reference_and_markers_for_os():
-    entry = tumor_type_ontology_entry("OS")
+    entry = tumor_type_ontology_entry("SARC_OS")
 
     assert entry is not None
-    assert entry.family == "pediatric-bone"
-    assert entry.expression_reference_code == "OS"
+    # OS moved from `pediatric-bone` to the lineage-only `sarcoma` family (5.12).
+    assert entry.family == "sarcoma"
+    assert entry.expression_reference_code == "SARC_OS"
     assert entry.expression_reference_direct
     assert {"RUNX2", "COL1A1", "ALPL"} <= set(entry.expected_high_genes)
     assert {"EPCAM", "PTPRC"} <= set(entry.expected_low_genes)
 
 
-def test_ontology_records_fallback_reference_and_literature_markers_for_adcc():
+def test_ontology_records_direct_reference_and_literature_markers_for_adcc():
+    # ADCC gained its own salivary-gland-carcinoma cohort in pirlygenes >=5.11,
+    # so it now resolves to a direct reference rather than the HNSC fallback.
     entry = tumor_type_ontology_entry("ADCC")
+
+    assert entry is not None
+    assert entry.family == "salivary"
+    assert entry.expression_reference_code == "ADCC"
+    assert entry.expression_reference_direct
+    assert entry.expression_reference_reason == ""
+    assert {"MYB", "MYBL1", "NFIB"} <= set(entry.expected_high_genes)
+
+
+def test_ontology_records_salivary_family_fallback_for_acinic():
+    # ACINIC has no direct cohort of its own and still documents the
+    # salivary-family fallback to HNSC.
+    entry = tumor_type_ontology_entry("ACINIC")
 
     assert entry is not None
     assert entry.family == "salivary"
     assert entry.expression_reference_code == "HNSC"
     assert not entry.expression_reference_direct
     assert "salivary family fallback" in entry.expression_reference_reason
-    assert {"MYB", "MYBL1", "NFIB"} <= set(entry.expected_high_genes)
 
 
 def test_ontology_has_subtype_contrast_for_brca_her2():

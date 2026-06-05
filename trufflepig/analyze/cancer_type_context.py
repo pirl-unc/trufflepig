@@ -276,19 +276,20 @@ _REFERENCE_CODE_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "PCN": ("MM",),
 }
 
+# Keyed on pirlygenes' lineage-only family ontology (5.12+): the old
+# ``net`` / ``pediatric-*`` families collapsed into ``neuroendocrine`` /
+# ``sarcoma`` / ``cns`` / ``embryonal``.
 _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "carcinoma-breast": ("BRCA",),
     "carcinoma-head-neck": ("HNSC",),
     "carcinoma-lung": ("LUAD", "LUSC"),
+    "cns": ("MBL", "GBM", "LGG"),
     "endocrine": ("THCA", "PCPG", "ACC"),
     "heme-bcell": ("DLBC", "CLL", "B_ALL"),
     "heme-myeloid": ("LAML",),
     "heme-plasma": ("MM",),
     "heme-tcell": ("T_ALL",),
-    "net": ("SCLC", "PANNET", "LUAD"),
-    "pediatric-cns": ("MBL", "GBM", "LGG"),
-    "pediatric-net": ("NBL_MYCN_nonamp", "NBL_MYCN_amp"),
-    "pediatric-soft": ("SARC",),
+    "neuroendocrine": ("SCLC", "PANNET", "LUAD"),
     "salivary": ("HNSC",),
     "sarcoma": ("SARC",),
 }

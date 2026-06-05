@@ -246,7 +246,7 @@ EXTENSION_CODE_TO_FAMILY: Mapping[str, str] = {
     "MPN": "HEME_MYELOID",
     "CML": "HEME_MYELOID",
     # Singletons / rare
-    "CHOR": "NOTOCHORDAL",
+    "SARC_CHOR": "NOTOCHORDAL",
     "NUTM": "MIDLINE_NUT",
     # Pediatric (most have their own biology)
     "WILMS": "WILMS_LIKE",
@@ -258,15 +258,15 @@ EXTENSION_CODE_TO_FAMILY: Mapping[str, str] = {
     # NPC, HNSC variant — stays SQUAMOUS
     "NPC": "SQUAMOUS",
     # Sarcoma extensions to MESENCHYMAL
-    "GCTB": "MESENCHYMAL",
-    "ESS_LG": "MESENCHYMAL",
-    "ESS_HG": "MESENCHYMAL",
-    "CHON": "MESENCHYMAL",
-    "OS": "MESENCHYMAL",
-    "EWS": "MESENCHYMAL",
-    "RMS_ERMS": "MESENCHYMAL",
-    "RMS_ARMS": "MESENCHYMAL",
-    "RMS_SSRMS": "MESENCHYMAL",
+    "SARC_GCTB": "MESENCHYMAL",
+    "SARC_ESS_LG": "MESENCHYMAL",
+    "SARC_ESS_HG": "MESENCHYMAL",
+    "SARC_CHON": "MESENCHYMAL",
+    "SARC_OS": "MESENCHYMAL",
+    "SARC_EWS": "MESENCHYMAL",
+    "SARC_RMS_ERMS": "MESENCHYMAL",
+    "SARC_RMS_ARMS": "MESENCHYMAL",
+    "SARC_RMS_SSRMS": "MESENCHYMAL",
 }
 
 
@@ -321,17 +321,17 @@ LINEAGE_DISCRIMINATION_PANELS: Mapping[str, Mapping[str, tuple[str, ...]]] = {
         "PCPG": ("TH", "DBH", "PNMT", "CHGA"),
     },
     "MESENCHYMAL": {
-        "OS": ("RUNX2", "COL1A1", "ALPL", "SPP1", "IBSP"),
-        "EWS": ("CD99", "NKX2-2", "CAV1", "FLI1"),
-        "CHON": ("COL2A1", "SOX9", "ACAN", "COMP"),
-        "RMS_ERMS": ("MYOD1", "MYOG", "DES", "MYF5"),
-        "RMS_ARMS": ("PAX3", "PAX7", "FOXO1", "MYOG"),
-        "RMS_SSRMS": ("MYOD1", "MYOG", "DES", "MYF5"),
+        "SARC_OS": ("RUNX2", "COL1A1", "ALPL", "SPP1", "IBSP"),
+        "SARC_EWS": ("CD99", "NKX2-2", "CAV1", "FLI1"),
+        "SARC_CHON": ("COL2A1", "SOX9", "ACAN", "COMP"),
+        "SARC_RMS_ERMS": ("MYOD1", "MYOG", "DES", "MYF5"),
+        "SARC_RMS_ARMS": ("PAX3", "PAX7", "FOXO1", "MYOG"),
+        "SARC_RMS_SSRMS": ("MYOD1", "MYOG", "DES", "MYF5"),
         "SARC": ("VIM", "COL1A1", "COL1A2", "CD44"),
         "UCS": ("PAX8", "ESR1", "WT1"),  # carcinosarcoma with epithelial
-        "GCTB": ("CSF1", "ACP5", "MMP9"),
-        "ESS_LG": ("CD10", "ESR1", "PGR"),
-        "ESS_HG": ("YWHAE", "BCOR"),
+        "SARC_GCTB": ("CSF1", "ACP5", "MMP9"),
+        "SARC_ESS_LG": ("CD10", "ESR1", "PGR"),
+        "SARC_ESS_HG": ("YWHAE", "BCOR"),
     },
     "GYNECOLOGIC_GLANDULAR": {
         "OV": ("PAX8", "WT1", "MSLN", "MUC16", "FOLR1"),

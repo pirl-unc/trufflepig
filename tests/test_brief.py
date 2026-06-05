@@ -7,9 +7,52 @@ from trufflepig.brief import (
     build_brief,
     build_summary,
     _format_therapy_bullet,
+    _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
 )
 from trufflepig.confidence import ConfidenceTier
+
+
+def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
+    return {
+        "lineage_panel_evidence": {
+            "top_score": 0.90,
+            "top_panel": top_panel,
+            "top_panel_program_note": "biliary epithelial program",
+            "promotion": {
+                "promoted": promoted,
+                "code": code,
+                "blockers": list(blockers),
+            },
+        }
+    }
+
+
+def test_subtype_line_suppressed_when_panel_blocked_against_call():
+    # A high-scoring CHOL panel that was held back under a PRAD call must not
+    # render as the call's "subtype" — that contradicts the cancer call.
+    analysis = _lineage_panel_evidence(
+        "CHOL", blockers=["CHOL is not among the top-5 first-pass RNA candidates"]
+    )
+    assert _lineage_panel_subtype_reasoning_line(analysis, "PRAD") is None
+
+
+def test_subtype_line_shown_when_panel_consistent_with_call():
+    # Promoted-and-adopted, or confirmed-without-blockers, both render.
+    promoted = _lineage_panel_evidence("CHOL", promoted=True, code="CHOL")
+    assert "**Subtype:** CHOL" in (
+        _lineage_panel_subtype_reasoning_line(promoted, "CHOL") or ""
+    )
+    confirmed = _lineage_panel_evidence("CHOL")
+    assert "**Subtype:** CHOL" in (
+        _lineage_panel_subtype_reasoning_line(confirmed, "CHOL") or ""
+    )
+
+
+def test_subtype_line_suppressed_when_panel_proposes_unadopted_label():
+    # Panel proposed a different label that wasn't adopted as the report scope.
+    analysis = _lineage_panel_evidence("CHOL", promoted=True, code="CHOL")
+    assert _lineage_panel_subtype_reasoning_line(analysis, "PRAD") is None
 
 
 def _make_analysis(
@@ -342,11 +385,11 @@ def test_summary_marks_supplied_cancer_type_rna_ambiguity():
 
 def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     analysis = _make_analysis()
-    analysis["cancer_type"] = "OS"
+    analysis["cancer_type"] = "SARC_OS"
     analysis["cancer_name"] = "Osteosarcoma"
-    analysis["analysis_constraints"] = {"cancer_type": "OS"}
+    analysis["analysis_constraints"] = {"cancer_type": "SARC_OS"}
     analysis["cancer_type_source"] = "user-specified"
-    analysis["report_scope_cancer_type"] = "OS"
+    analysis["report_scope_cancer_type"] = "SARC_OS"
     analysis["reference_cancer_type"] = "SARC"
     analysis["candidate_trace"] = [
         {"code": "SARC", "support_geomean": 0.58},
@@ -359,14 +402,17 @@ def test_summary_treats_broad_sarc_as_compatible_with_supplied_osteosarcoma():
     md = build_summary(
         analysis,
         ranges_df,
-        cancer_code="OS",
+        cancer_code="SARC_OS",
         disease_state="",
     )
 
-    assert "externally supplied OS (Osteosarcoma) sets the fine/report label" in md
-    assert "expression-reference context is SARC (Sarcoma)" in md
-    assert "sarcoma-family broad-context support for supplied OS (Osteosarcoma)" in md
-    assert "does not independently resolve the refined label" in md
+    # SARC_OS is now a registry child of SARC (5.13), so the brief recognizes
+    # the direct parent-child relationship ("concordant at the parent level")
+    # rather than the old same-family broad-context heuristic.
+    assert "externally supplied SARC_OS (Osteosarcoma) sets the fine/report label" in md
+    assert "SARC (Sarcoma) is used as the parent expression context" in md
+    assert "concordant at the parent level: SARC (Sarcoma) is top" in md
+    assert "refined report label remains SARC_OS (Osteosarcoma)" in md
     assert "raw signature favors KIRC" not in md
     assert "confidence caveats" not in md
 
@@ -1095,6 +1141,43 @@ def test_actionable_is_longer_but_structured():
     assert "*-evidence.md*" in md or "`*-evidence.md`" in md, (
         "actionable should link to evidence.md as the target-table source"
     )
+
+
+def test_actionable_surfaces_offcontext_expressed_target():
+    # CLDN18 is a curated target for gastric/PAAD (zolbetuximab), NOT prostate.
+    # Highly expressed in a PRAD sample it should surface as an off-context lead
+    # rather than being dropped because it's off this cancer's panel (#47).
+    analysis = _make_analysis()
+    ranges_df = _make_ranges_df()
+    ranges_df = pd.concat(
+        [
+            ranges_df,
+            pd.DataFrame([{
+                "symbol": "CLDN18",
+                "observed_tpm": 120.0,
+                "attribution": {},
+                "attr_tumor_tpm": 110.0,
+                "attr_tumor_fraction": 0.92,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }]),
+        ],
+        ignore_index=True,
+    )
+    md = build_actionable(
+        analysis,
+        ranges_df,
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "Off-Context Expressed Targets" in md
+    assert "CLDN18" in md
+    # Names the off-context binder + that it's off-label here.
+    assert "zolbetuximab" in md
+    assert "not on this cancer's curated panel" in md
 
 
 def test_brief_normalizes_path_like_sample_id():

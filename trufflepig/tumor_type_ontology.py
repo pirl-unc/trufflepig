@@ -95,8 +95,8 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "BRCA_HER2": ("ERBB2", "GRB7", "GATA3", "FOXA1"),
     "BRCA_Basal": ("KRT5", "KRT14", "KRT17", "EGFR", "TP63"),
     "BRCA_Normal": ("KRT5", "KRT14", "KRT17", "EPCAM", "KRT8"),
-    "HNSC_HPV_pos": ("CDKN2A", "KRT5", "KRT14", "TP63", "SOX2"),
-    "HNSC_HPV_neg": ("KRT5", "KRT14", "TP63", "SOX2", "EGFR"),
+    "HNSC_HPVpos": ("CDKN2A", "KRT5", "KRT14", "TP63", "SOX2"),
+    "HNSC_HPVneg": ("KRT5", "KRT14", "TP63", "SOX2", "EGFR"),
     "LUAD_EGFR": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "EGFR"),
     "LUAD_KRAS": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "KRAS"),
     "LUAD_STK11": ("NKX2-1", "NAPSA", "SFTPB", "SFTPC", "SLC34A2", "STK11"),
@@ -105,8 +105,12 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "LAML_ELN_Adv": ("CD34", "ELANE", "MPO", "KIT", "FLT3"),
     "NBL_MYCN_amp": ("MYCN", "PHOX2B", "TH", "B4GALNT1", "ALK"),
     "NBL_MYCN_nonamp": ("PHOX2B", "TH", "B4GALNT1", "ALK"),
+    # Rectal NET (pirlygenes >=5.11): a top-level NET with no lineage panel
+    # or key-gene coverage upstream, so seed it with the pan-NET core shared
+    # by its midgut-NET sibling.
+    "REC_NET": ("CHGA", "SYP", "INSM1", "ENO2", "SSTR2"),
     "MBL": ("OTX2", "ATOH1", "SOX2", "MYC", "MYCN"),
-    "CHOR": ("TBXT", "KRT8", "KRT18", "EPCAM", "COL2A1"),
+    "SARC_CHOR": ("TBXT", "KRT8", "KRT18", "EPCAM", "COL2A1"),
     "ATRT": ("VIM", "SOX2", "NES", "LIN28A", "EPCAM"),
     "RB": ("CRX", "VSX2", "RCVRN", "OTX2", "ARR3"),
     "HEPB": ("AFP", "DLK1", "GPC3", "EPCAM", "KRT8", "KRT18"),
@@ -114,18 +118,18 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "B_ALL": ("CD19", "CD22", "MS4A1", "PAX5", "CD79A"),
     "NUTM": ("NUTM1", "MYC", "TP63", "SOX2", "KRT5"),
     "WILMS": ("WT1", "SIX1", "SIX2", "PAX2", "PAX8", "IGF2"),
-    "OS": ("RUNX2", "COL1A1", "ALPL", "SPP1", "IBSP"),
-    "EWS": ("EWSR1", "FLI1", "NKX2-2", "CD99", "CAV1"),
-    "CHON": ("COL2A1", "SOX9", "ACAN", "COMP", "COL11A1"),
+    "SARC_OS": ("RUNX2", "COL1A1", "ALPL", "SPP1", "IBSP"),
+    "SARC_EWS": ("EWSR1", "FLI1", "NKX2-2", "CD99", "CAV1"),
+    "SARC_CHON": ("COL2A1", "SOX9", "ACAN", "COMP", "COL11A1"),
     "RT": ("EPCAM", "KRT8", "KRT18", "VIM", "SALL4"),
-    "RMS_ERMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
-    "RMS_ARMS": ("PAX3", "PAX7", "FOXO1", "MYOG", "FGFR4"),
+    "SARC_RMS_ERMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
+    "SARC_RMS_ARMS": ("PAX3", "PAX7", "FOXO1", "MYOG", "FGFR4"),
     "SARC_UPS": ("VIM", "COL1A1", "COL1A2", "CD44", "PDGFRA"),
     "SARC_MYXFIB": ("COL1A1", "COL1A2", "VIM", "PDGFRA", "MMP2"),
     "SARC_LGFMS": ("MUC4", "FUS", "CREB3L2", "COL1A1", "COL1A2"),
     "SARC_PLEOLPS": ("MDM2", "CDK4", "HMGA2", "PPARG", "VIM"),
-    "RMS_PRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
-    "RMS_SSRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
+    "SARC_RMS_PRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
+    "SARC_RMS_SSRMS": ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
 }
 
 _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
@@ -133,22 +137,24 @@ _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
     "BRCA_LumB": ("KRT5", "KRT14"),
     "BRCA_HER2": ("ESR1", "PGR", "KRT5", "KRT14"),
     "BRCA_Basal": ("ESR1", "PGR", "ERBB2"),
-    "HNSC_HPV_neg": ("CDKN2A",),
+    "HNSC_HPVneg": ("CDKN2A",),
     "NBL_MYCN_nonamp": ("MYCN",),
     "RT": ("SMARCB1",),
 }
 
+# Keyed on pirlygenes' lineage-only family ontology (5.12+); ``carcinoma-*`` and
+# ``heme-*`` match on the family root. The old ``net`` / ``pediatric-*`` families
+# collapsed into ``neuroendocrine`` / ``sarcoma`` / ``cns`` / ``embryonal``.
 _FAMILY_LOW_GENES: Mapping[str, tuple[str, ...]] = {
     "carcinoma": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
+    "cns": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "embryonal": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
     "endocrine": ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT5", "KRT14"),
     "heme": ("EPCAM", "KRT8", "KRT18", "ACTA2", "DES", "MYOD1"),
-    "net": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
-    "pediatric-bone": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-cns": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-embryonal": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
-    "pediatric-net": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
-    "pediatric-soft": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "melanoma": ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT8", "KRT18"),
+    "neuroendocrine": ("PTPRC", "CD3D", "MS4A1", "MYOD1", "MYOG", "DES"),
     "sarcoma": ("EPCAM", "KRT8", "KRT18", "PTPRC", "CD3D", "MS4A1"),
+    "thymic": ("EPCAM", "KRT8", "KRT18", "MYOD1", "MYOG", "DES"),
 }
 
 _DEFAULT_LOW_GENES = ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT8", "KRT18")
