@@ -2900,9 +2900,15 @@ def build_actionable(
                 sorted({e["cancer_code"] for e in entries if e.get("cancer_code")})
             )
             where = other_codes or primary.get("indication") or "another indication"
+            # On-target/normal-tissue guardrail (#47): surface the curated
+            # liability so the off-context lead is read with its risk.
+            from .therapeutic_agents import target_liability_note
+
+            caveat = target_liability_note(hit["symbol"])
+            caveat_clause = f" — {caveat}" if caveat else ""
             lines.append(
                 f"- **{hit['symbol']}** — tumor-attributed {hit['tumor_tpm']:.0f} TPM; "
-                f"{agent} ({qualifier}) in {where}."
+                f"{agent} ({qualifier}) in {where}.{caveat_clause}"
             )
         lines.append("")
 
