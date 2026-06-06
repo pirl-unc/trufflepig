@@ -20,6 +20,12 @@ from ._data import TRUFFLEPIG_DATA_DIR
 from .clean_tpm import assert_clean_tpm
 
 
+# pirlygenes clean_tpm_v4 pins the technical-RNA + ribosomal compartment to this
+# fraction of the 1e6 budget (two-compartment "fixed_fraction" normalization)
+# rather than zeroing it. References loaded from pirlygenes are v4, so the
+# clean-TPM guard must expect technical RNA at ~this fraction, not ~0.
+_CLEAN_TPM_V4_TECHNICAL_FRACTION = 0.25
+
 _PAN_CANCER_CACHE: dict[tuple, pd.DataFrame] = {}
 _TCGA_DECONV_PATH = TRUFFLEPIG_DATA_DIR / "tcga-deconvolved-expression.csv.gz"
 _SUBTYPE_DECONV_PATH = TRUFFLEPIG_DATA_DIR / "subtype-deconvolved-expression.csv.gz"
@@ -462,6 +468,7 @@ def cancer_reference_expression(
                 df.loc[clean_rows],
                 value_cols=value_cols,
                 context="cancer_reference_expression",
+                technical_fraction=_CLEAN_TPM_V4_TECHNICAL_FRACTION,
             )
         else:
             value_cols = [col for col in df.columns if str(col).endswith("_TPM_clean")]
@@ -469,6 +476,7 @@ def cancer_reference_expression(
                 df,
                 value_cols=value_cols,
                 context="cancer_reference_expression",
+                technical_fraction=_CLEAN_TPM_V4_TECHNICAL_FRACTION,
             )
     return df
 
