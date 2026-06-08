@@ -167,6 +167,14 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "cutaneous T-cell lymphoma helper/T-cell activation marker program",
     ),
     LiteratureSignature(
+        "ALCL",
+        ("T_ALL",),
+        ("TNFRSF8", "ALK", "IL2RA", "GZMB", "PRF1"),
+        "PMID:8122112;curated_t_cell_lymphoma_literature",
+        "anaplastic large cell lymphoma CD30+/ALK (NPM1-ALK) cytotoxic "
+        "T-cell program",
+    ),
+    LiteratureSignature(
         "NET_MIDGUT",
         ("SCLC",),
         ("CHGA", "SYP", "INSM1", "SSTR2", "TPH1"),

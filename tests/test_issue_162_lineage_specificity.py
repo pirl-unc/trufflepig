@@ -23,6 +23,7 @@ from trufflepig.tumor_purity import (
     LINEAGE_GENES,
     _cancer_specific_lineage_genes,
     _LINEAGE_SPECIFIC_CACHE,
+    lineage_purity_panel_codes,
     rank_cancer_type_candidates,
 )
 
@@ -96,9 +97,15 @@ def test_sarc_panel_drops_tme_shared_smooth_muscle_markers():
 
 
 def test_filter_always_returns_at_least_minimum_genes():
-    """Every cohort with a lineage panel keeps ≥ 2 genes (the
-    estimator needs at least that to anchor a stable purity)."""
-    for code in LINEAGE_GENES:
+    """Every code whose own panel anchors its purity estimate keeps ≥ 2
+    genes after specificity filtering (the estimator needs at least that
+    to anchor a stable purity).
+
+    Diagnostic-marker subtypes (SARC_ASPS=[TFE3], ...) fall back to the
+    parent cohort for purity, so their single-marker entry is never used
+    as a purity panel — they're scoped out via ``lineage_purity_panel_codes``
+    (see test_issue_170)."""
+    for code in lineage_purity_panel_codes():
         specific = _cancer_specific_lineage_genes(code)
         if LINEAGE_GENES[code]:
             assert len(specific) >= 2, f"{code}: filter returned < 2 genes: {specific}"
