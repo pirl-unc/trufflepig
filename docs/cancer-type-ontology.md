@@ -98,6 +98,33 @@ up** rather than guessing. Examples from the rep sweep:
   expression and is distinguished from LUSC only by the NUTM1 fusion — a
   defining-alteration flag, not a lineage call.
 
+## Holistic integration: signature + recall + lineage exclusion
+
+`classify_cancer_type_ontology(df)` integrates three tumour-intrinsic evidence
+channels, then walks the ontology:
+
+1. **Signature backbone** — the production cross-cohort screen (per-cohort
+   `support_geomean`). Validated, carries the clean cases.
+2. **Lineage-marker recall** ([`lineage_marker_recall.py`](../trufflepig/lineage_marker_recall.py))
+   — adds no-reference NE entities the screen can't propose (additive).
+3. **Epithelial-exclusion gate** ([`lineage_evidence.py`](../trufflepig/lineage_evidence.py))
+   — when the tumour-intrinsic epithelial program (EPCAM/keratins) is present,
+   down-weights the mesenchymal & hematolymphoid branches, **confidence-
+   proportional** to the epithelial HK-ratio. This is the admixture / stromal-
+   confound fix: a carcinoma with heavy stroma scores a mesenchymal cohort high
+   off the *stromal* program, but its tumour cells are epithelial, so the gate
+   demotes the spurious sarcoma. Real sarcomas (epithelial-absent) are untouched.
+
+This is what the deconvolution-residual line was reaching for and failed to
+achieve (the decomposition has no stromal compartment — see
+[cancer-type-residual-matching-findings.md](./cancer-type-residual-matching-findings.md)).
+Marker exclusion does it cleanly: measured epithelial HK-ratio is 0.22–5.1× in
+carcinomas vs 0.01–0.07× in real sarcomas.
+
+With all three channels, the local clinical set reaches **11/11 broad and 11/11
+leaf-in-candidates** (vs 11/11 broad, 10/11 leaf for the signature-only walk) —
+the pfo002-washu stromal-SARC confound now resolves cleanly to READ.
+
 ## Ground-truth ledger — 11 local clinical samples
 
 Truth labels are the curated local set (cegat = PRAD/Kat-DL, pfo004 = osteosarcoma,

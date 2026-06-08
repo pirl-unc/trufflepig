@@ -343,12 +343,29 @@ def _inject_recall(score_map: dict[str, float], proposals) -> list[str]:
     return notes
 
 
+def _apply_lineage_exclusion(score_map: dict[str, float], evidence) -> list[str]:
+    """Down-weight non-epithelial candidates when epithelial markers are present.
+
+    Multiplies each code's score by its broad lineage's demotion factor (1.0 for
+    lineages not excluded). Additive-only — never raises a score.
+    """
+    if not evidence or not evidence.factors:
+        return []
+    for code in list(score_map):
+        factor = evidence.factors.get(broad_lineage(code), 1.0)
+        if factor != 1.0:
+            score_map[code] *= factor
+    return list(evidence.notes)
+
+
 def classify_cancer_type_ontology(
     df_gene_expr=None,
     *,
     ranked_rows=None,
     recall_proposals=None,
     use_recall: bool = True,
+    use_lineage_exclusion: bool = True,
+    lineage_evidence=None,
     margins: dict[str, float] | None = None,
     top_k: int = 40,
 ) -> CancerTypeOntologyResult:
@@ -383,21 +400,39 @@ def classify_cancer_type_ontology(
         for row in ranked_rows
     }
 
-    # Lineage-marker recall: surface tumour-intrinsic, no-reference entities
-    # (neuroendocrine: SCLC/NET/Merkel/NBL) the cross-cohort screen cannot
-    # propose. Auto-computed from the sample when a df is supplied and the caller
-    # didn't pass proposals explicitly.
-    if use_recall and recall_proposals is None and df_gene_expr is not None:
-        from .lineage_marker_recall import recall_candidates
+    # Tumour-intrinsic marker evidence (recall + lineage exclusion) is computed
+    # from the sample once and shared. Recall surfaces no-reference NE entities;
+    # the exclusion gate down-weights non-epithelial candidates when the
+    # epithelial program is present (admixture / stromal-confound correction).
+    sample_tpm = hk_median = None
+    need_sample = df_gene_expr is not None and (
+        (use_recall and recall_proposals is None)
+        or (use_lineage_exclusion and lineage_evidence is None)
+    )
+    if need_sample:
         from .tumor_purity import _build_sample_tpm_by_symbol, _sample_hk_median
 
         sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
-        recall_proposals = recall_candidates(sample_tpm, _sample_hk_median(sample_tpm))
+        hk_median = _sample_hk_median(sample_tpm)
+
+    if use_recall and recall_proposals is None and sample_tpm is not None:
+        from .lineage_marker_recall import recall_candidates
+
+        recall_proposals = recall_candidates(sample_tpm, hk_median)
     recall_notes = _inject_recall(score_map, recall_proposals) if use_recall else []
+
+    exclusion_notes = []
+    if use_lineage_exclusion:
+        if lineage_evidence is None and sample_tpm is not None:
+            from .lineage_evidence import lineage_exclusion_evidence
+
+            lineage_evidence = lineage_exclusion_evidence(sample_tpm, hk_median)
+        exclusion_notes = _apply_lineage_exclusion(score_map, lineage_evidence)
 
     resolved_margins = {**DEFAULT_MARGINS, **(margins or {})}
     result = _walk(score_map, resolved_margins)
     result.recall_notes = recall_notes
-    if recall_notes:
-        result.trace = [f"[recall] {n}" for n in recall_notes] + result.trace
+    prefix = [f"[exclude] {n}" for n in exclusion_notes] + [f"[recall] {n}" for n in recall_notes]
+    if prefix:
+        result.trace = prefix + result.trace
     return result
