@@ -40,6 +40,19 @@ def test_fires_on_high_grade_sclc_modest_markers():
     assert p is not None
 
 
+def test_fires_on_single_dominant_core_granin():
+    # NET_MIDGUT-like: one very high core granin (CHGB ~5.5x), the rest modest.
+    # The 2-marker minimum would miss it; the strong-single-core path catches it.
+    p = neuroendocrine_recall(_tpm(CHGB=5.5, INSM1=0.12, SYP=0.12, SCG2=0.28), HK)
+    assert p is not None
+
+
+def test_single_modest_core_still_needs_two_markers():
+    # A core marker just over the bar but below strong_core, alone, must not fire.
+    p = neuroendocrine_recall(_tpm(CHGB=0.5, INSM1=0.0, SYP=0.0, SCG2=0.0), HK)
+    assert p is None
+
+
 def test_silent_on_non_ne():
     # COAD/BRCA-like: NE program essentially off.
     assert neuroendocrine_recall(_tpm(CHGA=0.0, SYP=0.0, SCG2=0.01), HK) is None

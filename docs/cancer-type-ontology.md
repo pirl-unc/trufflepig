@@ -85,8 +85,14 @@ granin/INSM1 and a 2-marker minimum. It's safe because these markers are absent
 from stroma/immune background (100–1000× separation) — unlike the TME-contaminated
 heme/epithelial panels. `classify_cancer_type_ontology` auto-runs it, injects the
 proposed entities into the score map (additively — screen candidates are never
-lowered), and the NE branch then competes in the walk. Validated: fires on
-SCLC/NET/PCPG reps, silent on every non-NE rep and all 11 locals (0/11).
+lowered), and the NE branch then competes in the walk. Validated against pirlygenes' expanded representative cohorts (73 → 109, which
+now include the neuroendocrine family): the recall fires on **10/11** NE reps
+(SCLC, NET_PANCREAS/MIDGUT/RECTAL, NEC_LUNG_LARGECELL, NBL ±MYCN, PCPG, MTC) and
+stays silent on **22/22** new heme / sarcoma / embryonal reps (perfect
+specificity) and all 11 local clinical samples. A single dominant core granin
+(≥2.0×HK) fires on its own (catches well-differentiated NETs like NET_MIDGUT that
+present one granin); NET_LUNG is the one honest miss (that rep's NE markers are
+all <0.15×HK — atypical / low-purity).
 
 Cohorts with a TCGA reference signature (~33) refine to a leaf; rarer codes are
 scored by their nearest reference neighbours and the walk **honestly stops higher
