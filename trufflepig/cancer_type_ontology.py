@@ -410,10 +410,12 @@ def classify_cancer_type_ontology(
         or (use_lineage_exclusion and lineage_evidence is None)
     )
     if need_sample:
-        from .tumor_purity import _build_sample_tpm_by_symbol, _sample_hk_median
+        from .lineage_marker_recall import marker_hk_median
+        from .tumor_purity import _build_sample_tpm_by_symbol
 
         sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
-        hk_median = _sample_hk_median(sample_tpm)
+        # Ribosomal-free HK median: the gate denominator invariant to v4 clean-TPM.
+        hk_median = marker_hk_median(sample_tpm)
 
     if use_recall and recall_proposals is None and sample_tpm is not None:
         from .lineage_marker_recall import recall_candidates

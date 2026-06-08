@@ -12,6 +12,8 @@ from trufflepig.cancer_type_ontology import classify_cancer_type_ontology
 from trufflepig.lineage_marker_recall import (
     CORE_MARKERS,
     NE_NO_REFERENCE,
+    _ribo_free_hk_symbols,
+    marker_hk_median,
     neuroendocrine_recall,
     recall_candidates,
 )
@@ -32,8 +34,9 @@ def test_fires_on_well_differentiated_ne():
 
 
 def test_fires_on_high_grade_sclc_modest_markers():
-    # SCLC-like: CHGA ~0.5x, ASCL1 ~0.24x — modest but a core marker present.
-    p = neuroendocrine_recall(_tpm(CHGA=0.54, ASCL1=0.24, CHGB=0.13, INSM1=0.13), HK)
+    # SCLC-like on the ribosomal-free HK scale: CHGA ~1.5x, ASCL1 ~0.7x — modest
+    # for NE but well clear of the 0.3 bar, with a core marker present.
+    p = neuroendocrine_recall(_tpm(CHGA=1.52, ASCL1=0.68, CHGB=0.36, INSM1=0.37), HK)
     assert p is not None
 
 
@@ -44,15 +47,15 @@ def test_silent_on_non_ne():
 
 def test_ascl1_alone_does_not_fire_without_core_marker():
     # NUT carcinoma / NE-LUAD: ASCL1 elevated, but no core granin/INSM1.
-    # ASCL1 + an incidental SCG2 would clear the 2-marker count, so this pins the
+    # ASCL1 + an incidental SCG2 clear the 2-marker count, so this pins the
     # core-marker obligate (the pfo019 false-positive that motivated it).
-    p = neuroendocrine_recall(_tpm(ASCL1=0.33, SCG2=0.20, CHGA=0.0, CHGB=0.0, INSM1=0.0), HK)
+    p = neuroendocrine_recall(_tpm(ASCL1=0.62, SCG2=0.35, CHGA=0.0, CHGB=0.0, INSM1=0.0), HK)
     assert p is None
 
 
 def test_core_marker_alone_insufficient_needs_two():
-    # A single core marker just over threshold shouldn't fire on its own.
-    p = neuroendocrine_recall(_tpm(CHGA=0.2, CHGB=0.0, INSM1=0.0, SYP=0.0), HK)
+    # A single core marker over threshold shouldn't fire on its own.
+    p = neuroendocrine_recall(_tpm(CHGA=0.4, CHGB=0.0, INSM1=0.0, SYP=0.0), HK)
     assert p is None
 
 
@@ -62,6 +65,19 @@ def test_zero_hk_median_is_safe():
 
 def test_core_markers_are_granins_and_insm1():
     assert set(CORE_MARKERS) == {"CHGA", "CHGB", "INSM1"}
+
+
+def test_marker_hk_set_excludes_ribosomal_protein_genes():
+    # The gate denominator must exclude RPL*/RPS* — those are in v4 clean-TPM's
+    # pinned ribosomal compartment, which would couple the HK median to the
+    # normalization (~2.4x inflation on v4 vs ~1.4x on legacy).
+    syms = _ribo_free_hk_symbols()
+    assert syms, "ribosomal-free HK set is empty"
+    assert not any(s.startswith(("RPL", "RPS")) for s in syms)
+    # the median ignores ribosomal genes even when they're huge
+    tpm = {s: 1.0 for s in syms}
+    tpm["RPLP0"] = 99999.0
+    assert marker_hk_median(tpm) == 1.0
 
 
 def test_recall_candidates_collects_fired_proposals():

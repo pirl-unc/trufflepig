@@ -37,9 +37,11 @@ EPITHELIAL_MARKERS = ("EPCAM", "KRT8", "KRT18", "KRT19", "CDH1")
 # Broad lineages a robust epithelial program excludes (carcinoma is not these).
 EPITHELIAL_EXCLUDES = ("mesenchymal", "hematolymphoid")
 
-# Fire above this epithelial HK-ratio. 0.15 sits cleanly between the highest real
-# sarcoma (~0.07×HK) and the lowest carcinoma (~0.22×HK) observed locally.
-DEFAULT_EPITHELIAL_THRESHOLD = 0.15
+# Fire above this epithelial HK-ratio, measured against the ribosomal-free HK
+# median (:func:`lineage_marker_recall.marker_hk_median` — invariant to v4
+# clean-TPM). 0.25 sits between the highest real sarcoma (~0.11×) and the lowest
+# carcinoma (~0.43×) observed locally.
+DEFAULT_EPITHELIAL_THRESHOLD = 0.25
 # Demotion curve: factor = 1 - SLOPE * min(epi, CAP) / CAP, floored at FLOOR.
 _DEMOTE_SLOPE = 0.6
 _DEMOTE_CAP = 3.0

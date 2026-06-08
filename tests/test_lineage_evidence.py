@@ -40,8 +40,8 @@ def test_zero_hk_is_safe():
 
 
 def test_threshold_between_sarcoma_and_carcinoma():
-    # observed: sarcoma ~0.07x, carcinoma >=0.22x.
-    assert 0.07 < DEFAULT_EPITHELIAL_THRESHOLD < 0.22
+    # observed on the ribosomal-free HK scale: sarcoma <=0.11x, carcinoma >=0.43x.
+    assert 0.11 < DEFAULT_EPITHELIAL_THRESHOLD < 0.43
 
 
 def test_stromal_sarcoma_confound_resolved_in_walk():

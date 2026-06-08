@@ -23,7 +23,42 @@ candidates, so the 11/11 production behaviour on referenced types is untouched.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass, field
+
+
+@functools.lru_cache(maxsize=1)
+def _ribo_free_hk_symbols() -> tuple[str, ...]:
+    """Housekeeping symbols EXCLUDING ribosomal-protein genes (RPL*/RPS*).
+
+    The default housekeeping set has 7 ribosomal-protein genes among 30. Those
+    genes are part of pirlygenes' v4 clean-TPM *pinned* ribosomal/technical
+    compartment (fixed 25% of the budget), so a HK median that includes them is
+    coupled to the clean-TPM normalization: it inflates ~2.4× on v4-clean input
+    vs ~1.4× on legacy-clean input. Dropping them makes the marker-gate
+    denominator invariant to the clean-TPM compartment handling, so the
+    HK-ratio thresholds transfer across normalizations.
+    """
+    from .reference import pan_cancer_expression
+    from .tumor_purity import housekeeping_gene_ids
+
+    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+    syms = (str(id_to_sym.get(i, i)) for i in housekeeping_gene_ids())
+    return tuple(s for s in syms if not s.startswith(("RPL", "RPS")))
+
+
+def marker_hk_median(sample_tpm_by_symbol) -> float:
+    """Median expression of the ribosomal-free housekeeping set (gate denominator).
+
+    This is the canonical denominator for every tumour-intrinsic marker gate
+    (NE recall, epithelial exclusion) — chosen to be invariant to the v4
+    two-compartment clean-TPM handling (see :func:`_ribo_free_hk_symbols`).
+    """
+    import numpy as np
+
+    vals = [float(sample_tpm_by_symbol.get(s, 0.0)) for s in _ribo_free_hk_symbols()]
+    return float(np.median(vals)) if vals else 0.0
 
 # Tumour-intrinsic pan-neuroendocrine program. Any-of presence; CHGA/CHGB/INSM1/
 # ASCL1 are the strongest (and cleanest of stromal/immune background).
@@ -54,14 +89,13 @@ _SUBTYPE_MARKERS = {
 # listed for completeness/sub-typing but the screen already covers it.
 NE_NO_REFERENCE = ("SCLC", "NET_PANCREAS", "NET_LUNG", "NET_MIDGUT", "NEC_MERKEL", "NBL")
 
-# Calibrated on NE reps (SCLC/NET/PCPG) vs non-NE reps + the 11 local clinical
-# samples. Per-marker HK-ratios: well-differentiated NE (NET/PCPG) run 5–200×;
-# high-grade SCLC is more modest (CHGA 0.54×, ASCL1 0.24× on a high-HK rep) but
-# still carries >=2 specific markers; non-NE tumours and all 11 non-NE locals
-# sit at 0.0–0.07× with at most one incidental marker. A 0.15 bar on the specific
-# GATING_MARKERS with a 2-marker minimum fires on all three NE reps and stays
-# silent on every non-NE rep and all 11 locals.
-DEFAULT_HK_RATIO_THRESHOLD = 0.15
+# Calibrated against the RIBOSOMAL-FREE HK median (:func:`marker_hk_median`).
+# NE core markers (CHGA/CHGB/INSM1): SCLC 1.52×, NET 37×, PCPG 606× — vs every
+# non-NE rep and local at <=0.14× (LUAD's lone ASCL1 has no core marker). A 0.3
+# bar on the specific GATING_MARKERS with a 2-marker minimum + a core-marker
+# obligate sits in a 10× gap, firing on all three NE reps and staying silent on
+# every non-NE rep and all locals.
+DEFAULT_HK_RATIO_THRESHOLD = 0.30
 DEFAULT_MIN_PRESENT = 2
 
 

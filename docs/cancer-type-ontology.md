@@ -115,6 +115,15 @@ channels, then walks the ontology:
    off the *stromal* program, but its tumour cells are epithelial, so the gate
    demotes the spurious sarcoma. Real sarcomas (epithelial-absent) are untouched.
 
+All marker gates (recall + exclusion) normalise against a **ribosomal-free
+housekeeping median** (`lineage_marker_recall.marker_hk_median`). The default
+30-gene housekeeping set has 7 ribosomal-protein genes (RPL*/RPS*) which are
+part of pirlygenes v4 clean-TPM's *pinned* ribosomal compartment — including them
+couples the HK median to the normalization (~2.4× inflation on v4-clean input vs
+~1.4× on legacy), shifting every HK-ratio threshold. Dropping them makes the gate
+denominator invariant to the clean-TPM handling; thresholds then transfer across
+normalizations (recalibrated: NE core ≥0.3, epithelial ≥0.25 — both in wide gaps).
+
 This is what the deconvolution-residual line was reaching for and failed to
 achieve (the decomposition has no stromal compartment — see
 [cancer-type-residual-matching-findings.md](./cancer-type-residual-matching-findings.md)).
