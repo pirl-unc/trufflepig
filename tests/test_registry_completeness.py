@@ -43,6 +43,9 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "ADCC",
         "NPC",
         "NUTM",
+        # ALCL: heme T-cell lymphoma (pirlygenes leaf addition); no
+        # matched-normal panel — like its T-cell siblings T_ALL / CTCL.
+        "ALCL",
         "BL",
         "B_ALL",
         "CLL",
@@ -86,6 +89,8 @@ _MISSING_THERAPY_AXIS = frozenset(
         "ACC",
         "ACINIC",
         "ADCC",
+        # ALCL: no therapy-response axis panel yet (new heme T-cell leaf).
+        "ALCL",
         "ATRT",
         "BL",
         "BLCA",
@@ -178,6 +183,11 @@ _TOLERATED_GAPS_EXPLICIT = {
     "FL": {"expression"},
     "HCL": {"expression"},
     "CTCL": {"expression"},
+    # ALCL: anaplastic large cell lymphoma — heme T-cell leaf with no
+    # deposited clean-TPM cohort (the heme-tcell family fallback resolves to
+    # T_ALL, which itself has no cohort). Lineage / biomarker / therapy are
+    # supplied by pirlygenes; only the expression reference is genuinely absent.
+    "ALCL": {"expression"},
     "CML": {"expression"},
     "MDS": {"expression", "lineage", "biomarker", "therapy"},
     "MPN": {"expression", "lineage", "biomarker", "therapy"},
