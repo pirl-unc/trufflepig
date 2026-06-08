@@ -26,6 +26,8 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 
+import numpy as np
+
 
 @functools.lru_cache(maxsize=1)
 def _ribo_free_hk_symbols() -> tuple[str, ...]:
@@ -55,8 +57,6 @@ def marker_hk_median(sample_tpm_by_symbol) -> float:
     (NE recall, epithelial exclusion) — chosen to be invariant to the v4
     two-compartment clean-TPM handling (see :func:`_ribo_free_hk_symbols`).
     """
-    import numpy as np
-
     vals = [float(sample_tpm_by_symbol.get(s, 0.0)) for s in _ribo_free_hk_symbols()]
     return float(np.median(vals)) if vals else 0.0
 
@@ -81,8 +81,9 @@ CORE_MARKERS = ("CHGA", "CHGB", "INSM1")
 _SUBTYPE_MARKERS = {
     "NBL": ("PHOX2B", "MYCN", "LIN28B", "DBH"),        # embryonal neural-crest
     "NEC_MERKEL": ("KRT20",),                          # Merkel-cell carcinoma
-    "SCLC": ("NEUROD1", "ASCL1", "POU2F3", "YAP1"),    # small-cell molecular subtypes
-    "PCPG": ("PNMT", "TH", "DBH"),                     # adrenal chromaffin
+    "SCLC": ("NEUROD1", "POU2F3", "YAP1"),             # small-cell molecular subtypes
+    "NET_PANCREAS": ("SSTR2", "PCSK1", "PAX6"),        # well-diff pancreatic NET
+    "PCPG": ("PNMT", "TH"),                            # adrenal chromaffin
 }
 
 # NE entities the cross-cohort screen cannot propose (no TCGA cohort). PCPG is

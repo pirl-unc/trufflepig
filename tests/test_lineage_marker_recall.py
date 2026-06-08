@@ -88,16 +88,33 @@ def test_recall_candidates_collects_fired_proposals():
 
 
 def test_recall_injection_routes_to_neuroendocrine_branch():
-    # screen scattered an NE sample across LUAD/DLBC; recall rescues it.
+    # screen scattered a no-reference NE sample low across LUAD/DLBC; recall
+    # rescues it (injected at the 0.5 floor, clearly above the scattered signal).
     rows = [
-        {"code": "LUAD", "signature_score": 0.45, "support_geomean": 0.45},
-        {"code": "DLBC", "signature_score": 0.40, "support_geomean": 0.40},
+        {"code": "LUAD", "signature_score": 0.40, "support_geomean": 0.40},
+        {"code": "DLBC", "signature_score": 0.35, "support_geomean": 0.35},
     ]
     props = recall_candidates(_tpm(CHGA=12.0, CHGB=12.0, SYP=1.0), HK)
     r = classify_cancer_type_ontology(ranked_rows=rows, recall_proposals=props)
     assert all(c in NE_NO_REFERENCE for c in r.candidates)
     assert r.recall_notes
     assert r.trace[0].startswith("[recall]")
+
+
+def test_recall_only_ties_a_confident_signature():
+    # SCLC-like overlap: a strong lung signature (LUAD 0.6) competes with the NE
+    # program. Recall is capped at the signature, so the broad walk surfaces BOTH
+    # lineages rather than letting markers override the call.
+    rows = [
+        {"code": "LUAD", "signature_score": 0.60, "support_geomean": 0.60},
+        {"code": "DLBC", "signature_score": 0.55, "support_geomean": 0.55},
+    ]
+    props = recall_candidates(_tpm(CHGA=12.0, CHGB=12.0, SYP=1.0), HK)
+    r = classify_cancer_type_ontology(ranked_rows=rows, recall_proposals=props)
+    cands = set(r.candidates)
+    assert "LUAD" in cands and cands & set(NE_NO_REFERENCE)  # both surfaced
+    # NE injected at most to the signature ceiling, never above it
+    assert max(r.scores[c] for c in NE_NO_REFERENCE) <= 0.60 + 1e-9
 
 
 def test_recall_is_additive_does_not_lower_screen_candidates():

@@ -102,10 +102,11 @@ def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> li
     i = 0
     while i < len(cmd):
         tok = cmd[i]
+        has_value = i + 1 < len(cmd)
         if tok in ("--output-dir", "--workspace"):
             i += 2  # we substitute our own --workspace
             continue
-        if tok == "--sample":
+        if tok == "--sample" and has_value:
             input_path = cmd[i + 1]
             i += 2
             continue
@@ -118,14 +119,15 @@ def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> li
             args_after.append(tok)
             i += 1
             continue
-        if tok in _PASSTHROUGH:
+        if tok in _PASSTHROUGH and has_value:
             args_after.extend([tok, cmd[i + 1]])
             i += 2
             continue
         if tok.startswith("--"):
-            # Unknown flag → skip pair (don't break trufflepig parser).
+            # Unknown (or value-less trailing) flag → skip it without consuming a
+            # following positional we might need (e.g. the input path).
             print(f"[{name}] dropping unsupported flag {tok!r}", file=sys.stderr)
-            i += 2
+            i += 2 if has_value else 1
             continue
         # positional — that's the input file (legacy analyze form)
         if input_path is None:

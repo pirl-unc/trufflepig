@@ -49,6 +49,7 @@ honestly stops higher up rather than guessing a specific subtype.
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass, field
 
@@ -115,7 +116,7 @@ _EPITHELIAL_CODES_WITHOUT_TCGA = ("NUTM", "ADCC", "ACINIC", "NPC", "THYM", "MESO
 
 def broad_lineage(code: str, _registry=None) -> str:
     """Return the broad-lineage node for a registry code."""
-    reg = _registry if _registry is not None else _REGISTRY
+    reg = _registry if _registry is not None else _registry_families()
     family = str(reg.get(code, "")) if reg is not None else ""
     if family in _FAMILY_BROAD:
         return _FAMILY_BROAD[family]
@@ -139,13 +140,12 @@ def ontology_path(code: str) -> list[str]:
     return ["root", broad, code]
 
 
-# Build the registry lookup once at import (family by code).
-def _load_registry_families() -> dict[str, str]:
+# Registry lookup (family by code), loaded lazily on first use so importing this
+# module stays cheap.
+@functools.lru_cache(maxsize=1)
+def _registry_families() -> dict[str, str]:
     reg = cancer_type_registry()
     return dict(zip(reg["code"].astype(str), reg["family"].astype(str)))
-
-
-_REGISTRY = _load_registry_families()
 
 
 # --------------------------------------------------------------------------
@@ -325,20 +325,33 @@ def _recall_score(program_score: float) -> float:
     return float(min(0.95, max(0.5, 0.5 + 0.09 * math.log1p(max(program_score, 0.0)))))
 
 
+# Floor for a recall-injected score when no signature candidate competes (a pure
+# no-reference NE sample whose signatures all scatter low) — keeps the NE entity
+# visible. Matches the floor of :func:`_recall_score`.
+_RECALL_FLOOR = 0.5
+
+
 def _inject_recall(score_map: dict[str, float], proposals) -> list[str]:
     """Add recall-proposed entities to the score map; return trace notes.
 
-    Purely additive — only raises a code's score (via ``max``), never lowers an
-    existing screen candidate. So a referenced type the screen already ranked is
-    untouched; the no-reference NE entities simply gain an entry they otherwise
-    never had.
+    Additive — only raises a code's score (via ``max``), never lowers an existing
+    screen candidate. The injected score is capped at the strongest existing
+    signature score (floored at :data:`_RECALL_FLOOR`), so recall can at most
+    *tie* a confident signature — surfacing both lineages on a genuine overlap
+    (e.g. small-cell lung: epithelial + neuroendocrine) rather than letting a
+    marker fire override a well-supported call. The strict core-granin-obligate
+    gate remains the primary false-positive guard; this bounds the blast radius
+    if it ever mis-fires.
     """
     notes = []
-    for proposal in proposals or []:
-        base = _recall_score(proposal.program_score)
+    if not proposals:
+        return notes
+    ceiling = max(max(score_map.values(), default=0.0), _RECALL_FLOOR)
+    for proposal in proposals:
+        base = min(_recall_score(proposal.program_score), ceiling)
         for entity in proposal.entities:
             bump = 0.02 if entity == proposal.subtype_hint else 0.0
-            score_map[entity] = max(score_map.get(entity, 0.0), base + bump)
+            score_map[entity] = max(score_map.get(entity, 0.0), min(base + bump, ceiling))
         notes.append(proposal.rationale)
     return notes
 
@@ -375,11 +388,14 @@ def classify_cancer_type_ontology(
     ----------
     df_gene_expr:
         Clean per-sample gene-expression frame (``gene_symbol`` / ``TPM`` style),
-        as consumed by :func:`rank_cancer_type_candidates`. Ignored when
-        ``ranked_rows`` is supplied.
+        as consumed by :func:`rank_cancer_type_candidates`. Used for the signature
+        screen (when ``ranked_rows`` is not supplied) **and** for the tumour-
+        intrinsic marker channels (recall + lineage exclusion) — so it is still
+        consumed for those even when ``ranked_rows`` is provided.
     ranked_rows:
         Pre-computed output of :func:`rank_cancer_type_candidates` (avoids
-        re-scoring when the caller already ran it).
+        re-scoring when the caller already ran it). The marker channels still run
+        from ``df_gene_expr`` if it is also supplied.
     margins:
         Optional per-level margin overrides (see :data:`DEFAULT_MARGINS`).
     top_k:

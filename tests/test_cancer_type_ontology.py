@@ -102,3 +102,42 @@ def test_requires_input():
 
 def test_default_margins_increase_with_level_breadth():
     assert DEFAULT_MARGINS["broad"] >= DEFAULT_MARGINS["leaf"]
+
+
+def _cohort_median_df(code):
+    """A TCGA cohort median as a pseudo-sample (battery-test pattern)."""
+    from trufflepig.reference import pan_cancer_expression
+
+    ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    return pd.DataFrame(
+        {
+            "ensembl_gene_id": ref["Ensembl_Gene_ID"],
+            "gene_symbol": ref["Symbol"],
+            "TPM": ref[f"{code}_TPM"].astype(float),
+        }
+    )
+
+
+def test_df_path_runs_signature_and_marker_channels_end_to_end():
+    """Integration: classify_cancer_type_ontology(df_gene_expr=...) must drive the
+    signature screen AND auto-compute the marker channels (recall + epithelial
+    exclusion) from the same df. Synthetic ranked_rows tests can't cover this
+    wiring (need_sample / marker_hk_median-from-df), so use a real cohort median.
+    """
+    r = classify_cancer_type_ontology(df_gene_expr=_cohort_median_df("COAD"))
+    # epithelial cohort -> epithelial broad lineage
+    assert all(broad_lineage(c) == "epithelial" for c in r.candidates), r.candidates
+    # COAD median should land in the GI/colorectal neighbourhood
+    assert {"COAD", "READ"} & set(r.candidates), r.candidates
+    # the epithelial-exclusion channel must have fired from the df (proves the
+    # df -> marker_hk_median -> lineage_evidence wiring runs)
+    assert any(t.startswith("[exclude]") for t in r.trace), r.trace
+    # a colon adenocarcinoma is not neuroendocrine -> recall stays silent
+    assert not r.recall_notes
+
+
+def test_df_path_requires_clean_input_columns():
+    # guards that the df path actually reaches the loaders (KeyError on junk).
+    bad = pd.DataFrame({"ensembl_gene_id": ["x"], "gene_symbol": ["Y"]})
+    with pytest.raises(Exception):
+        classify_cancer_type_ontology(df_gene_expr=bad)
