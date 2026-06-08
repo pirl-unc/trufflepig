@@ -98,6 +98,12 @@ NE_NO_REFERENCE = ("SCLC", "NET_PANCREAS", "NET_LUNG", "NET_MIDGUT", "NEC_MERKEL
 # every non-NE rep and all locals.
 DEFAULT_HK_RATIO_THRESHOLD = 0.30
 DEFAULT_MIN_PRESENT = 2
+# A single core granin/INSM1 this high is unambiguously neuroendocrine on its own
+# (well-differentiated NETs can present one dominant granin — e.g. NET_MIDGUT's
+# CHGB at 5.5×HK with the rest modest). No non-NE cohort comes near a core marker
+# at this level (they sit at ~0), so this relaxes the 2-marker minimum without
+# costing specificity.
+DEFAULT_STRONG_CORE = 2.0
 
 
 @dataclass
@@ -127,6 +133,7 @@ def neuroendocrine_recall(
     *,
     threshold: float = DEFAULT_HK_RATIO_THRESHOLD,
     min_present: int = DEFAULT_MIN_PRESENT,
+    strong_core: float = DEFAULT_STRONG_CORE,
 ) -> RecallProposal | None:
     """Propose neuroendocrine entities when the tumour-intrinsic NE program is on.
 
@@ -142,12 +149,18 @@ def neuroendocrine_recall(
         key=lambda kv: -kv[1],
     )
     program_score = max((ratios[s] for s in GATING_MARKERS if s in ratios), default=0.0)
-    if len(present) < min_present:
+    core_max = max((ratios.get(s, 0.0) for s in CORE_MARKERS), default=0.0)
+    # Fire on either (a) >=min_present gating markers with a core marker present,
+    # or (b) one dominant core granin/INSM1 (>= strong_core) on its own — a
+    # well-differentiated NET can present a single very high granin.
+    if core_max >= strong_core:
+        pass  # dominant single core marker is sufficient
+    elif len(present) < min_present:
         return None
     # Obligate: at least one core granin / INSM1 must be present. Without this,
     # ASCL1 (shared by neural / NUT-carcinoma / NE-LUAD) plus an incidental
     # SYP/SCG2 would mis-fire on non-NE tumours.
-    core_present = any(ratios.get(s, 0.0) >= threshold for s in CORE_MARKERS)
+    core_present = core_max >= threshold
     if not core_present:
         return None
 
