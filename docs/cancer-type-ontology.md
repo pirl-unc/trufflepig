@@ -116,10 +116,33 @@ channels, then walks the ontology:
 3. **Epithelial-exclusion gate** ([`lineage_evidence.py`](../trufflepig/lineage_evidence.py))
    — when the tumour-intrinsic epithelial program (EPCAM/keratins) is present,
    down-weights the mesenchymal & hematolymphoid branches, **confidence-
-   proportional** to the epithelial HK-ratio. This is the admixture / stromal-
-   confound fix: a carcinoma with heavy stroma scores a mesenchymal cohort high
-   off the *stromal* program, but its tumour cells are epithelial, so the gate
+   proportional** to the epithelial signal's **multi-view confidence**
+   ([`signal_views.py`](../trufflepig/signal_views.py)). This is the admixture /
+   stromal-confound fix: a carcinoma with heavy stroma scores a mesenchymal cohort
+   high off the *stromal* program, but its tumour cells are epithelial, so the gate
    demotes the spurious sarcoma. Real sarcomas (epithelial-absent) are untouched.
+
+### Multi-view signal normalization
+
+Every signal is expressed under **five normalizations**, each answering a different
+question, and the gate reasons over their concordance ([`signal_views.py`](../trufflepig/signal_views.py)):
+
+| view | question |
+|------|----------|
+| `hk` | how high vs this sample's housekeeping baseline (scale-invariant) |
+| `within_pct` | how dominant within this transcriptome (purity/dominance) |
+| `log1p` | absolute expression, compressed — **tightest within-class separator** |
+| `cohort_pct` | how high vs other cancer types (specificity) |
+| `cohort_z` | how many SDs above the cross-cohort background |
+
+No single one is best: an empirical gate sweep on 334 reps + 18 locals gave
+within-carcinoma CV of **1.02 (HK) vs 0.29 (log1p)** and carcinoma/sarcoma
+separation **0.45 (HK) vs 1.46 (log1p)** — so the gate is driven by the log1p-led
+multi-view confidence, not a single HK threshold. Concordance across views = the
+call's confidence; *which* views disagree is itself diagnostic and is surfaced in
+the trace (`high cohort_z + low within_pct ⇒ admixture / low purity`;
+`high within_pct + low cohort_pct ⇒ dominant but not cohort-specific`). The full
+five-view fingerprint + flags appear on the `[exclude]` trace lines.
 
 All marker gates (recall + exclusion) normalise against a **ribosomal-free
 housekeeping median** (`lineage_marker_recall.marker_hk_median`). The default

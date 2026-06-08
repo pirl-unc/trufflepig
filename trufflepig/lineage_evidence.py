@@ -37,14 +37,15 @@ EPITHELIAL_MARKERS = ("EPCAM", "KRT8", "KRT18", "KRT19", "CDH1")
 # Broad lineages a robust epithelial program excludes (carcinoma is not these).
 EPITHELIAL_EXCLUDES = ("mesenchymal", "hematolymphoid")
 
-# Fire above this epithelial HK-ratio, measured against the ribosomal-free HK
-# median (:func:`lineage_marker_recall.marker_hk_median` — invariant to v4
-# clean-TPM). 0.25 sits between the highest real sarcoma (~0.11×) and the lowest
-# carcinoma (~0.43×) observed locally.
-DEFAULT_EPITHELIAL_THRESHOLD = 0.25
-# Demotion curve: factor = 1 - SLOPE * min(epi, CAP) / CAP, floored at FLOOR.
-_DEMOTE_SLOPE = 0.6
-_DEMOTE_CAP = 3.0
+# The gate fires on the epithelial signal's multi-view CONFIDENCE
+# (:mod:`trufflepig.signal_views`), which integrates five normalizations — chiefly
+# log1p(clean TPM), the tightest within-class separator (3.5× tighter than the old
+# single HK-ratio gate, sep 1.46 vs 0.45). On the rep + local sweep, carcinoma
+# confidence ≈ 0.62 (median) vs sarcoma ≈ 0.07; 0.45 sits in the gap (the only
+# overlap is epithelioid sarcomas, which are genuinely keratin+ — no expression-
+# only fix). Demotion is proportional to confidence.
+DEFAULT_EPITHELIAL_CONFIDENCE = 0.45
+_DEMOTE_SLOPE = 0.9
 _DEMOTE_FLOOR = 0.35
 
 
@@ -55,6 +56,7 @@ class LineageEvidence:
     factors: dict[str, float]
     epithelial_hk_ratio: float
     notes: list[str] = field(default_factory=list)
+    signal: object | None = None  # the SignalViews fingerprint (5 normalizations)
 
 
 def _median(values):
@@ -74,29 +76,53 @@ def epithelial_hk_ratio(sample_tpm_by_symbol, sample_hk_median) -> float:
     )
 
 
+def _fingerprint(signal) -> str:
+    """One-line 5-view fingerprint for the trace."""
+    v = signal.views
+    return (
+        f"epithelial views — HK {v['hk']:.2f}× · within-sample pct {v['within_pct']:.2f} · "
+        f"log1p(TPM) {v['log1p']:.2f} · cohort-pct {v['cohort_pct']:.2f} · "
+        f"cohort-z {v['cohort_z']:+.2f} → {signal.call} (confidence {signal.confidence:.2f}, "
+        f"concordance {signal.concordance:.2f})"
+    )
+
+
 def lineage_exclusion_evidence(
     sample_tpm_by_symbol,
     sample_hk_median,
     *,
-    threshold: float = DEFAULT_EPITHELIAL_THRESHOLD,
+    confidence_threshold: float = DEFAULT_EPITHELIAL_CONFIDENCE,
+    cohort_reference=None,
 ) -> LineageEvidence:
-    """Compute broad-lineage demotion factors from tumour-intrinsic markers.
+    """Compute broad-lineage demotion factors from the epithelial signal's
+    multi-view confidence.
 
-    Returns all-1.0 factors (a no-op) when no epithelial program is present, so
-    real sarcomas / lymphomas pass through untouched.
+    Returns all-1.0 factors (a no-op) when the epithelial program isn't
+    confidently present, so real sarcomas / lymphomas pass through untouched.
     """
-    epi = epithelial_hk_ratio(sample_tpm_by_symbol, sample_hk_median)
+    from .signal_views import signal_report
+
+    sig = signal_report(
+        "epithelial", EPITHELIAL_MARKERS, sample_tpm_by_symbol,
+        sample_hk_median=sample_hk_median, cohort_reference=cohort_reference,
+    )
     factors: dict[str, float] = {}
     notes: list[str] = []
-    if epi >= threshold:
-        demote = max(
-            _DEMOTE_FLOOR, 1.0 - _DEMOTE_SLOPE * min(epi, _DEMOTE_CAP) / _DEMOTE_CAP
-        )
+    if sig.confidence >= confidence_threshold:
+        demote = max(_DEMOTE_FLOOR, 1.0 - _DEMOTE_SLOPE * sig.confidence)
         for broad in EPITHELIAL_EXCLUDES:
             factors[broad] = demote
         notes.append(
-            f"Epithelial differentiation present (EPCAM/keratins {epi:.2f}×HK) — "
-            f"carcinoma; {', '.join(EPITHELIAL_EXCLUDES)} candidates demoted ×{demote:.2f} "
-            f"(a true sarcoma/lymphoma would lack this tumour-intrinsic program)."
+            f"Epithelial differentiation present — carcinoma; "
+            f"{', '.join(EPITHELIAL_EXCLUDES)} candidates demoted ×{demote:.2f} "
+            f"(a true sarcoma/lymphoma would lack this tumour-intrinsic program). "
+            f"[{_fingerprint(sig)}]"
         )
-    return LineageEvidence(factors=factors, epithelial_hk_ratio=float(epi), notes=notes)
+        for flag in sig.flags:
+            notes.append(f"epithelial signal: {flag}")
+    return LineageEvidence(
+        factors=factors,
+        epithelial_hk_ratio=float(sig.views.get("hk", 0.0)),
+        notes=notes,
+        signal=sig,
+    )
