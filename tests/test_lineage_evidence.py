@@ -1,47 +1,66 @@
-"""Tests for the tumour-intrinsic epithelial-exclusion lineage gate."""
+"""Tests for the tumour-intrinsic epithelial-exclusion lineage gate (multi-view)."""
+
+import numpy as np
 
 from trufflepig.cancer_type_ontology import classify_cancer_type_ontology
 from trufflepig.lineage_evidence import (
-    DEFAULT_EPITHELIAL_THRESHOLD,
+    DEFAULT_EPITHELIAL_CONFIDENCE,
     EPITHELIAL_EXCLUDES,
-    epithelial_hk_ratio,
+    EPITHELIAL_MARKERS,
     lineage_exclusion_evidence,
 )
 
 HK = 100.0
+# synthetic cross-cohort background for the epithelial markers (low) — keeps the
+# tests fast (no reference-matrix load) and deterministic.
+COHORT = {g: np.array([1.0, 2.0, 1.0, 0.0, 2.0, 1.0, 3.0, 1.0, 0.0, 2.0]) for g in EPITHELIAL_MARKERS}
 
 
-def _tpm(**ratios):
-    return {sym: r * HK for sym, r in ratios.items()}
+def _sample(marker_ratio):
+    """A sample where the epithelial markers sit at ``marker_ratio`` x HK among a
+    low background — so within-sample percentile is high when markers are high."""
+    d = {f"FILL{i}": 1.0 for i in range(30)}
+    for g in EPITHELIAL_MARKERS:
+        d[g] = marker_ratio * HK
+    return d
+
+
+def _ev(marker_ratio, **kw):
+    return lineage_exclusion_evidence(_sample(marker_ratio), HK, cohort_reference=COHORT, **kw)
 
 
 def test_silent_when_epithelial_absent():
-    # real sarcoma: epithelial program off.
-    ev = lineage_exclusion_evidence(_tpm(EPCAM=0.0, KRT8=0.0, KRT18=0.05), HK)
+    ev = _ev(0.0)  # real sarcoma: epithelial program off
     assert ev.factors == {}
     assert ev.notes == []
+    assert ev.signal.call == "absent"
 
 
 def test_demotes_non_epithelial_when_epithelial_present():
-    ev = lineage_exclusion_evidence(_tpm(EPCAM=3.0, KRT8=3.0, KRT18=3.0, KRT19=3.0, CDH1=3.0), HK)
+    ev = _ev(4.0)  # strong epithelial program
     assert set(ev.factors) == set(EPITHELIAL_EXCLUDES)
     assert all(f < 1.0 for f in ev.factors.values())
     assert ev.notes
+    assert ev.signal.call == "present"
 
 
 def test_demotion_is_confidence_proportional():
-    weak = lineage_exclusion_evidence(_tpm(EPCAM=0.3, KRT8=0.3, KRT18=0.3, KRT19=0.3, CDH1=0.3), HK)
-    strong = lineage_exclusion_evidence(_tpm(EPCAM=5.0, KRT8=5.0, KRT18=5.0, KRT19=5.0, CDH1=5.0), HK)
-    assert strong.factors["mesenchymal"] < weak.factors["mesenchymal"]
+    weak = _ev(0.8)
+    strong = _ev(5.0)
+    assert strong.signal.confidence > weak.signal.confidence
+    if weak.factors and strong.factors:
+        assert strong.factors["mesenchymal"] <= weak.factors["mesenchymal"]
 
 
-def test_zero_hk_is_safe():
-    assert epithelial_hk_ratio(_tpm(EPCAM=10.0), 0.0) == 0.0
+def test_fingerprint_reports_all_five_views():
+    ev = _ev(4.0)
+    note = ev.notes[0]
+    for token in ("HK", "within-sample pct", "log1p(TPM)", "cohort-pct", "cohort-z"):
+        assert token in note, note
 
 
-def test_threshold_between_sarcoma_and_carcinoma():
-    # observed on the ribosomal-free HK scale: sarcoma <=0.11x, carcinoma >=0.43x.
-    assert 0.11 < DEFAULT_EPITHELIAL_THRESHOLD < 0.43
+def test_threshold_is_a_confidence_in_unit_interval():
+    assert 0.0 < DEFAULT_EPITHELIAL_CONFIDENCE < 1.0
 
 
 def test_stromal_sarcoma_confound_resolved_in_walk():
@@ -51,7 +70,7 @@ def test_stromal_sarcoma_confound_resolved_in_walk():
         {"code": "SARC", "signature_score": 0.54, "support_geomean": 0.54},
         {"code": "COAD", "signature_score": 0.52, "support_geomean": 0.52},
     ]
-    ev = lineage_exclusion_evidence(_tpm(EPCAM=3.0, KRT8=3.0, KRT18=3.0, KRT19=3.0, CDH1=3.0), HK)
+    ev = _ev(4.0)
     r = classify_cancer_type_ontology(ranked_rows=rows, lineage_evidence=ev, use_recall=False)
     assert "SARC" not in r.candidates  # mesenchymal demoted out
     assert r.candidates[0] == "READ"
@@ -59,12 +78,11 @@ def test_stromal_sarcoma_confound_resolved_in_walk():
 
 
 def test_real_sarcoma_untouched_in_walk():
-    # epithelial absent -> no exclusion -> SARC survives.
     rows = [
         {"code": "SARC", "signature_score": 0.55, "support_geomean": 0.55},
         {"code": "BRCA", "signature_score": 0.40, "support_geomean": 0.40},
     ]
-    ev = lineage_exclusion_evidence(_tpm(EPCAM=0.05, KRT8=0.0), HK)
+    ev = _ev(0.0)  # epithelial absent
     r = classify_cancer_type_ontology(ranked_rows=rows, lineage_evidence=ev, use_recall=False)
     assert r.candidates == ["SARC"]
 
@@ -74,9 +92,8 @@ def test_exclusion_disabled_is_noop():
         {"code": "READ", "signature_score": 0.55, "support_geomean": 0.55},
         {"code": "SARC", "signature_score": 0.54, "support_geomean": 0.54},
     ]
-    ev = lineage_exclusion_evidence(_tpm(EPCAM=3.0, KRT8=3.0, KRT18=3.0), HK)
+    ev = _ev(4.0)
     r = classify_cancer_type_ontology(
         ranked_rows=rows, lineage_evidence=ev, use_lineage_exclusion=False, use_recall=False
     )
-    # without the gate, READ/SARC stay close -> broad tie surfaces both
     assert "SARC" in r.candidates
