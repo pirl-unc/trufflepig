@@ -56,37 +56,63 @@ _PASSTHROUGH = {
 _FLAGS_NO_VALUE = {
     "--force", "--aggregate-gene-expression",
     "--expression-qc-remove-noncoding", "--deprecated-figures",
+    "--no-figures",
 }
 
 
-def _translate_command(name, run, workspace: Path) -> list[str]:
-    """Translate a pirlygenes-side `command` array into a trufflepig invocation.
+def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> list[str]:
+    """Translate a manifest ``command`` array into a trufflepig invocation.
 
-    Each manifest run command looks like::
+    Two manifest formats are supported:
+
+    * **legacy** pirlygenes ``analyze``::
 
         [<python>, '-m', 'pirlygenes.cli', 'analyze',
-         '--output-dir', '...', '--output-image-prefix', name,
-         '--force', '--cancer-type', 'XXX', input_path]
+         '--output-dir', '...', '--cancer-type', 'XXX', input_path]
 
-    The output goes into ``workspace``; the input path is whatever
-    positional argument the manifest carried.
+    * **current** trufflepig ``run`` (what the pirlygenes harness now emits)::
+
+        [<trufflepig>, 'run', '--workspace', '...', '--sample-id-value', 'S',
+         '--gene-id-col', 'gene_id', '--sample', input_path, '--no-figures']
+
+    Earlier this function only understood the ``analyze`` form and stripped
+    everything up to that token; against a ``run`` command (no ``analyze``
+    token) it discarded **every flag**, which silently dropped
+    ``--sample-id-value`` (so multi-sample inputs like pfo017 / the NUTM1
+    long-format files loaded the wrong column or failed outright) and all the
+    clinical-context flags (``--cancer-type`` / ``--fusions`` / ``--hla-types``
+    / ``--alterations``). We now locate the sub-command (``analyze`` *or*
+    ``run``) and preserve the flags that follow.
+
+    The output goes into ``workspace``; ``--workspace`` / ``--output-dir`` are
+    substituted, and the input path comes from ``--sample`` (run form) or the
+    trailing positional (analyze form).
     """
-    cmd = list(run["command"])
+    cmd = [str(tok) for tok in run["command"]]
 
-    # Drop the leading [python, -m, pirlygenes.cli, analyze] header.
-    while cmd and cmd[0] != "analyze":
-        cmd.pop(0)
-    if cmd and cmd[0] == "analyze":
-        cmd.pop(0)
+    # Drop the launcher header up to and including the sub-command token.
+    sub_idx = next(
+        (i for i, tok in enumerate(cmd) if tok in ("analyze", "run")), None
+    )
+    if sub_idx is not None:
+        cmd = cmd[sub_idx + 1:]
 
-    # The trailing positional arg is the input file.
     input_path = run.get("input")
     args_after = []
     i = 0
     while i < len(cmd):
         tok = cmd[i]
-        if tok == "--output-dir":
+        if tok in ("--output-dir", "--workspace"):
             i += 2  # we substitute our own --workspace
+            continue
+        if tok == "--sample":
+            input_path = cmd[i + 1]
+            i += 2
+            continue
+        if blind and tok == "--cancer-type":
+            # blind mode: drop the clinically-known diagnosis so the report
+            # scope is driven entirely by the RNA-inferred top candidate.
+            i += 2
             continue
         if tok in _FLAGS_NO_VALUE:
             args_after.append(tok)
@@ -101,7 +127,7 @@ def _translate_command(name, run, workspace: Path) -> list[str]:
             print(f"[{name}] dropping unsupported flag {tok!r}", file=sys.stderr)
             i += 2
             continue
-        # positional — that's the input file
+        # positional — that's the input file (legacy analyze form)
         if input_path is None:
             input_path = tok
         i += 1
@@ -188,6 +214,15 @@ def main():
         action="store_true",
         help="Run only individual analyses; skip compare-analyze.",
     )
+    parser.add_argument(
+        "--blind",
+        action="store_true",
+        help=(
+            "Strip --cancer-type from every run so the report scope is driven "
+            "by the RNA-inferred top candidate instead of the clinically-known "
+            "diagnosis. Use to evaluate blind classification end-to-end."
+        ),
+    )
     args = parser.parse_args()
 
     source = args.source.resolve()
@@ -241,7 +276,7 @@ def main():
             continue
         ws = root / name
         run_dirs[name] = ws
-        cmd = _translate_command(name, run, ws)
+        cmd = _translate_command(name, run, ws, blind=args.blind)
         log_path = logs / f"{name}.log"
         rc, elapsed = _run(name, cmd, log_path)
         manifest["runs"].append({
