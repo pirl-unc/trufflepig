@@ -503,6 +503,22 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_pathology_literature",
         "primary peritoneal high-grade serous carcinoma Müllerian program (PAX8/WT1)",
     ),
+    # CNS leaf types with no own cohort; effective reference falls back to the
+    # nearest available CNS cohort (MBL). Markers are the defining lineage panel.
+    LiteratureSignature(
+        "MENINGIOMA",
+        ("MBL",),
+        ("SSTR2", "PGR", "MUC1", "VIM", "NF2"),
+        "curated_pathology_literature",
+        "meningioma meningothelial program: SSTR2 (DOTATATE target), PR, EMA(MUC1), vimentin, NF2",
+    ),
+    LiteratureSignature(
+        "CHOROID_PLEXUS",
+        ("MBL",),
+        ("TTR", "OTX2", "AQP1", "KCNJ13", "CLIC6"),
+        "curated_pathology_literature",
+        "choroid-plexus tumor program: TTR (transthyretin), OTX2, AQP1, Kir7.1(KCNJ13), CLIC6",
+    ),
 )
 
 

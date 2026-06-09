@@ -3374,13 +3374,26 @@ def rank_cancer_type_candidates(
 
     if unconstrained:
         candidate_codes = [row["code"] for row in stats[:8]]
+        # The leading *signature* candidate (stats[0]); used to decide whether a
+        # soft family's expansion is warranted.
+        top_signature_code = candidate_codes[0] if candidate_codes else None
+        top_signature_family = _CANCER_FAMILY_BY_CODE.get(top_signature_code)
         for family, score in ranked_families[: family_params["candidate_panel_top_n"]]:
             if score < family_params["candidate_panel_min_score"]:
                 continue
             if (
                 family in soft_families
                 and top_family_score >= family_params["presence_scale"]
+                and family != top_signature_family
             ):
+                # Skip a *soft* (non-penalizing) family's expansion when a hard
+                # family is present UNLESS the soft family is the leading
+                # candidate's own family. A stromal-heavy epithelial sample
+                # (e.g. CRC + smooth-muscle admixture) inflates MESENCHYMAL from
+                # the stroma alone — we must NOT pull SARC/UCS in there. But when
+                # the top signature candidate is itself mesenchymal (SARC), we DO
+                # expand so its family sibling (UCS) reaches the scored pool and
+                # can be surfaced as a broad-family alternative.
                 continue
             family_codes = [
                 code

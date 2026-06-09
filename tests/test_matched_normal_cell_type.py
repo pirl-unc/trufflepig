@@ -139,6 +139,10 @@ def test_all_leaf_tissues_either_covered_or_documented():
         "sellar_suprasellar",
         "pons_midline",
         "pituitary",
+        # CNS split (pirlygenes): meningioma / choroid-plexus primary tissues —
+        # no single-cell decomposition reference, transparent bulk fallback.
+        "meninges",
+        "choroid_plexus",
     }
     uncovered = all_tissues - covered - _ACKNOWLEDGED_BULK_FALLBACK
     assert not uncovered, (
