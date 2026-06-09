@@ -1164,6 +1164,27 @@ def _panel_display_label(panel_code, panel_subtype=None):
     return panel_code
 
 
+def _parent_code_for(code):
+    """Registry ``parent_code`` for a subtype code, else ``""``."""
+    if not code:
+        return ""
+    try:
+        import pandas as pd
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        reg = cancer_type_registry()
+        row = reg[reg["code"].astype(str) == str(code)]
+        if not row.empty:
+            val = row.iloc[0].get("parent_code")
+            if pd.isna(val):
+                return ""
+            text = str(val).strip()
+            return "" if text.lower() == "nan" else text
+    except Exception:
+        pass
+    return ""
+
+
 def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
     from pirlygenes.gene_sets_cancer import cancer_therapy_targets
 
@@ -1176,6 +1197,23 @@ def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
         targets_df = cancer_therapy_targets(panel_code, subtype=panel_subtype)
     else:
         targets_df = cancer_therapy_targets(panel_code)
+    # Subtype -> parent fallback: a refined call can land on a subtype code
+    # (e.g. HNSC_HPVneg, LAML_ELNfav) that has no curated therapy rows of its
+    # own, which would silently empty the shortlist even though the parent
+    # cohort (HNSC: pembrolizumab/cetuximab; LAML: CD33/FLT3/IDH/venetoclax)
+    # is fully curated. Fall back to the parent panel and report against it;
+    # the existing ``subtype_curation_scope_note`` (fires when panel_code !=
+    # cancer_code) explains the parent-panel use to the reader.
+    if targets_df is None or targets_df.empty:
+        parent = _parent_code_for(panel_code)
+        if parent and parent != panel_code:
+            parent_targets = cancer_therapy_targets(parent)
+            if parent_targets is not None and not parent_targets.empty:
+                panel_code, panel_subtype, targets_df = (
+                    parent,
+                    None,
+                    parent_targets,
+                )
     targets_df = filter_current_therapy_targets(targets_df)
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 

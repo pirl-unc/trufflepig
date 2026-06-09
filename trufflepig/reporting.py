@@ -1282,12 +1282,11 @@ THERAPY_PATH_TIERS = frozenset(
 # still fails, and a row that becomes conforming upstream also fails (forcing
 # the stale entry to be removed). Drop an entry once the corresponding
 # pirlygenes release conforms.
-KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS = frozenset(
-    {
-        ("ALCL", "TNFRSF8"),  # brentuximab vedotin: tier "approved_first_line"
-        ("ALCL", "ALK"),  # crizotinib: tier "investigational", phase "trial"
-    }
-)
+KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS = frozenset()
+# (Was the two ALCL rows shipping ad-hoc tier/phase enums; conformed upstream in
+# pirlygenes "Refine ALCL therapy-status enums in cancer-key-genes.csv", so the
+# quarantine is retired — the pinned test flagged it stale automatically. The
+# empty set + machinery stay for the next upstream drift.)
 _THERAPY_PATH_RANK = {
     "approved_standard": 0,
     "approved_indication_matched": 1,
