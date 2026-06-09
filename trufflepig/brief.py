@@ -2481,22 +2481,44 @@ def build_summary(
                 + "\n"
             )
         if top:
+            # Mirror the target deep-dive figure's approval-status tiers
+            # (plot_target_deep_dive._PRIORITY_STATUS_LABELS) in the text: the
+            # curated shortlist is all disease-matched, so split it into the
+            # approved vs clinical-trial tiers the figure draws, making the
+            # on-label / in-trial distinction explicit rather than only inline.
+            from .plot_target_deep_dive import _PRIORITY_STATUS_LABELS
+
+            approved_bullets, clinical_bullets = [], []
             for target_row, expression_row in top:
-                lines.append(
-                    _format_therapy_bullet(
-                        target_row,
-                        expression_row,
-                        target_panel=targets_df,
-                        analysis=therapy_analysis,
-                        disease_state=disease_state_display,
-                        ranges_df=ranges_df,
-                    )
+                bullet = _format_therapy_bullet(
+                    target_row,
+                    expression_row,
+                    target_panel=targets_df,
+                    analysis=therapy_analysis,
+                    disease_state=disease_state_display,
+                    ranges_df=ranges_df,
                 )
+                phase = str(target_row.get("phase") or "").strip().lower()
+                if phase == "approved":
+                    approved_bullets.append(bullet)
+                else:
+                    clinical_bullets.append(bullet)
+            if approved_bullets:
+                lines.append(
+                    f"### {_PRIORITY_STATUS_LABELS['approved_disease_matched']}\n"
+                )
+                lines.extend(approved_bullets)
+                lines.append("")
+            if clinical_bullets:
+                lines.append(
+                    f"### {_PRIORITY_STATUS_LABELS['clinical_disease_matched']}\n"
+                )
+                lines.extend(clinical_bullets)
+                lines.append("")
             omission_note = _shortlist_omission_note(targets_df, ranges_df, top)
             if omission_note:
-                lines.append("")
                 lines.append(omission_note)
-            lines.append("")
+                lines.append("")
         else:
             lines.append(
                 _empty_therapy_shortlist_message(targets_df, ranges_df)
@@ -2916,12 +2938,26 @@ def build_actionable(
         panel_symbols = {str(s) for s in targets_df["symbol"]}
     offcontext = offcontext_known_targets(ranges_df, panel_symbols)
     if offcontext:
-        lines.append("## Off-Context Expressed Targets\n")
+        # The figure's "Approved elsewhere / generic target" tier
+        # (_PRIORITY_STATUS_LABELS['approved_other_context']): validated drug
+        # targets approved in *another* indication, surfaced on this sample's
+        # expression. These are cross-indication repurposing candidates — which
+        # is a deliberate trufflepig capability, but materially less certain to
+        # work and to be clinically accessible than an on-label option.
+        from .plot_target_deep_dive import _PRIORITY_STATUS_LABELS
+
+        lines.append(
+            "## Off-Context Expressed Targets — "
+            f"{_PRIORITY_STATUS_LABELS['approved_other_context']}\n"
+        )
         lines.append(
             "Highly expressed here and a validated drug target in *another* "
             "indication, but not on this cancer's curated panel — "
-            "expression-only leads, **not** on-label recommendations; confirm "
-            "biology and eligibility before acting.\n"
+            "**cross-indication repurposing candidates**: efficacy is less "
+            "certain than for the approved indication and clinical "
+            "access/reimbursement is not guaranteed. Expression-only leads, "
+            "**not** on-label recommendations; confirm biology and eligibility "
+            "before acting.\n"
         )
         for hit in offcontext[:8]:
             # Prefer an entry that names a real agent; the registry union may
