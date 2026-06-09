@@ -323,3 +323,22 @@ def test_subtype_scope_note_avoids_duplicate_parent_label():
     )
     assert "synovial sarcoma-specific therapy evidence" in note
     assert "synovial sarcoma sarcoma" not in note
+
+
+def test_subtype_call_falls_back_to_parent_therapy_panel():
+    """A refined call landing on a subtype code with no curated therapy rows
+    of its own (HNSC_HPVneg, LAML_ELNfav) must fall back to the parent cohort's
+    curated panel instead of emptying the shortlist (recovers HNSC's
+    PD-1/EGFR and AML's CD33/FLT3/IDH/venetoclax)."""
+    from trufflepig.brief import _curated_target_panel_for_sample, _parent_code_for
+
+    assert _parent_code_for("HNSC_HPVneg") == "HNSC"
+    assert _parent_code_for("LAML_ELNfav") == "LAML"
+    assert _parent_code_for("BRCA") == ""  # top-level: no parent, not "nan"
+
+    for code, parent in [("HNSC_HPVneg", "HNSC"), ("LAML_ELNfav", "LAML")]:
+        panel_code, panel_subtype, targets_df = _curated_target_panel_for_sample(
+            code, {"cancer_type": code}
+        )
+        assert panel_code == parent, f"{code} did not fall back to {parent}"
+        assert len(targets_df) > 0, f"{code} parent panel still empty"
