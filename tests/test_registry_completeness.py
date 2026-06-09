@@ -83,6 +83,7 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "PITNET",
         # CNS leaf types (pirlygenes CNS split) — rare tumors with no
         # matched-normal panel, like their CNS siblings above.
+        # Upstream coverage tracked in pirlygenes#369.
         "MENINGIOMA",
         "CHOROID_PLEXUS",
     }
@@ -163,6 +164,7 @@ _MISSING_THERAPY_AXIS = frozenset(
         "DIPG",
         "EPN",
         "PITNET",
+        # CNS split — no therapy-response axis panel yet (pirlygenes#369).
         "MENINGIOMA",
         "CHOROID_PLEXUS",
     }
@@ -247,7 +249,7 @@ _TOLERATED_GAPS_EXPLICIT = {
     # CNS split leaf types: expression resolves via fallback + a literature
     # signature (markers seeded in tumor_type_ontology._CURATED_HIGH); lineage
     # panels, biomarkers and therapy targets are pirlygenes-owned data not yet
-    # deposited for these rare entities.
+    # deposited for these rare entities. Tracked in pirlygenes#369.
     "MENINGIOMA": {"lineage", "biomarker", "therapy"},
     "CHOROID_PLEXUS": {"lineage", "biomarker", "therapy"},
 }

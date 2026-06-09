@@ -503,21 +503,33 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_pathology_literature",
         "primary peritoneal high-grade serous carcinoma Müllerian program (PAX8/WT1)",
     ),
-    # CNS leaf types with no own cohort; effective reference falls back to the
-    # nearest available CNS cohort (MBL). Markers are the defining lineage panel.
+    # CNS leaf types with no own cohort. The marker panels are defining and
+    # high-confidence, but the parent CONTEXT is a weak fallback: effective
+    # expression reference resolves to MBL (medulloblastoma) only because it is
+    # the nearest 'cns'-family cohort — NOT a biological match for a
+    # meningothelial or choroid-plexus tumor. Confidence is therefore marked
+    # ``low`` (the markers anchor the call; the cohort context does not).
+    # A proper fix needs a closer reference; tracked in pirlygenes (cohort
+    # coverage gap) and the taxonomy/union:<node> redesign (pirlygenes#366).
     LiteratureSignature(
         "MENINGIOMA",
         ("MBL",),
         ("SSTR2", "PGR", "MUC1", "VIM", "NF2"),
         "curated_pathology_literature",
-        "meningioma meningothelial program: SSTR2 (DOTATATE target), PR, EMA(MUC1), vimentin, NF2",
+        "meningioma meningothelial program: SSTR2 (DOTATATE target), PR, EMA(MUC1), "
+        "vimentin, NF2. NOTE: MBL parent context is a non-biological fallback "
+        "(no meningioma cohort) — markers carry the call, not the cohort.",
+        confidence="low",
     ),
     LiteratureSignature(
         "CHOROID_PLEXUS",
         ("MBL",),
         ("TTR", "OTX2", "AQP1", "KCNJ13", "CLIC6"),
         "curated_pathology_literature",
-        "choroid-plexus tumor program: TTR (transthyretin), OTX2, AQP1, Kir7.1(KCNJ13), CLIC6",
+        "choroid-plexus tumor program: TTR (transthyretin), OTX2, AQP1, "
+        "Kir7.1(KCNJ13), CLIC6. NOTE: MBL parent context is a non-biological "
+        "fallback (no choroid-plexus cohort) — markers carry the call, not the cohort.",
+        confidence="low",
     ),
 )
 

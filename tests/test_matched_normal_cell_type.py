@@ -141,6 +141,7 @@ def test_all_leaf_tissues_either_covered_or_documented():
         "pituitary",
         # CNS split (pirlygenes): meningioma / choroid-plexus primary tissues —
         # no single-cell decomposition reference, transparent bulk fallback.
+        # Upstream coverage tracked in pirlygenes#369.
         "meninges",
         "choroid_plexus",
     }
