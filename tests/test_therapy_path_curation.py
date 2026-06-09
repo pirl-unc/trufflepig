@@ -4,6 +4,7 @@ import pandas as pd
 
 from trufflepig._data import DATA_DIR as _DATA_DIR
 from trufflepig.reporting import (
+    KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS,
     THERAPY_PATH_TIERS,
     expression_independent_indication,
     indication_biomarker,
@@ -20,9 +21,40 @@ from trufflepig.reporting import (
 )
 
 
+_PHASE_BY_TIER = {
+    "approved_standard": {"approved"},
+    "approved_indication_matched": {"approved"},
+    "approved_later_line": {"approved"},
+    "late_clinical": {"phase_3"},
+    "investigational_biomarker_matched": {"phase_1", "phase_2"},
+    "trial_follow_up": {"phase_1", "phase_2"},
+    "preclinical": {"preclinical"},
+    "off_label": {"off_label"},
+}
+
+
 def _target_rows():
     df = pd.read_csv(_DATA_DIR / "cancer-key-genes.csv").fillna("")
     return df[df["role"].astype(str).str.strip() == "target"].copy()
+
+
+def _is_quarantined(row) -> bool:
+    return (
+        str(row.cancer_code),
+        str(row.symbol),
+    ) in KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS
+
+
+def _row_nonconformance(row) -> str | None:
+    """Return a reason string if a target row violates the controlled
+    tier/phase vocabulary, else None."""
+    tier = str(row.treatment_path_tier)
+    if tier not in THERAPY_PATH_TIERS:
+        return f"tier '{tier}' not in controlled vocabulary"
+    phase = str(row.phase)
+    if phase not in _PHASE_BY_TIER.get(tier, set()):
+        return f"phase '{phase}' incompatible with tier '{tier}'"
+    return None
 
 
 def test_target_rows_have_structured_treatment_path_curation():
@@ -35,33 +67,50 @@ def test_target_rows_have_structured_treatment_path_curation():
             for row in missing.head(10).itertuples()
         )
 
-    invalid = targets[
-        ~targets["treatment_path_tier"].astype(str).isin(THERAPY_PATH_TIERS)
-    ]
-    assert invalid.empty, "invalid treatment_path_tier values: " + ", ".join(
-        sorted(set(invalid["treatment_path_tier"].astype(str)))
+    # Quarantined upstream rows (see KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS)
+    # are exempt; the contract still holds for every row trufflepig governs.
+    invalid = sorted(
+        {
+            str(row.treatment_path_tier)
+            for row in targets.itertuples()
+            if not _is_quarantined(row)
+            and str(row.treatment_path_tier) not in THERAPY_PATH_TIERS
+        }
     )
+    assert not invalid, f"invalid treatment_path_tier values: {', '.join(invalid)}"
 
 
 def test_treatment_path_tier_is_phase_compatible():
     targets = _target_rows()
-    allowed = {
-        "approved_standard": {"approved"},
-        "approved_indication_matched": {"approved"},
-        "approved_later_line": {"approved"},
-        "late_clinical": {"phase_3"},
-        "investigational_biomarker_matched": {"phase_1", "phase_2"},
-        "trial_follow_up": {"phase_1", "phase_2"},
-        "preclinical": {"preclinical"},
-        "off_label": {"off_label"},
-    }
     bad = []
     for row in targets.itertuples():
+        if _is_quarantined(row):
+            continue
         phase = str(row.phase)
         tier = str(row.treatment_path_tier)
-        if phase not in allowed[tier]:
+        if phase not in _PHASE_BY_TIER.get(tier, set()):
             bad.append(f"{row.cancer_code}:{row.symbol}:{row.agent}:{phase}->{tier}")
     assert not bad, "phase/tier mismatch: " + ", ".join(bad[:20])
+
+
+def test_upstream_nonconformance_quarantine_is_current():
+    """The quarantine must list exactly the rows that are genuinely non-
+    conforming upstream — no stale entries (a row pirlygenes has since fixed,
+    or one no longer present) silently suppressing the contract."""
+    targets = _target_rows()
+    present = {
+        (str(row.cancer_code), str(row.symbol)): row for row in targets.itertuples()
+    }
+    for code, sym in KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS:
+        row = present.get((code, sym))
+        assert row is not None, (
+            f"stale quarantine: {code}:{sym} is no longer a target row — "
+            "remove it from KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS"
+        )
+        assert _row_nonconformance(row) is not None, (
+            f"stale quarantine: {code}:{sym} now conforms upstream — "
+            "remove it from KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS"
+        )
 
 
 def test_target_row_sources_are_present_for_most_curation_rows():

@@ -1270,6 +1270,24 @@ THERAPY_PATH_TIERS = frozenset(
         "off_label",
     }
 )
+
+# Therapy rows from the upstream pirlygenes ``cancer-key-genes`` table that ship
+# tier/phase values outside trufflepig's controlled vocabulary. trufflepig owns
+# the therapy-path clinical layer, so it quarantines these rather than hard-
+# failing on data it does not produce: the report renderer already degrades an
+# unknown tier to *inferred* ranking (see ``_explicit_therapy_path_info`` —
+# unknown tier -> ``None`` -> phase/agent-class inference), and the curation
+# contract tests exempt exactly these rows. Keyed by ``(cancer_code,
+# target_gene)``. The quarantine is pinned in the tests: a NEW non-conformance
+# still fails, and a row that becomes conforming upstream also fails (forcing
+# the stale entry to be removed). Drop an entry once the corresponding
+# pirlygenes release conforms.
+KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS = frozenset(
+    {
+        ("ALCL", "TNFRSF8"),  # brentuximab vedotin: tier "approved_first_line"
+        ("ALCL", "ALK"),  # crizotinib: tier "investigational", phase "trial"
+    }
+)
 _THERAPY_PATH_RANK = {
     "approved_standard": 0,
     "approved_indication_matched": 1,
