@@ -1239,6 +1239,42 @@ def test_hierarchy_embedding_keeps_coad_near_crc_family():
     assert np.linalg.norm(sample - read) < np.linalg.norm(sample - dlbc)
 
 
+def test_reference_family_matrix_scores_each_cohort_to_its_own_family():
+    """Lock the reference/sample scorer unification across multiple cohorts.
+
+    ``_reference_family_feature_matrix`` now scores TCGA centroids with the same
+    ENSG-keyed scorer as the sample side (one normalization basis, one
+    vocabulary). Validate it on several lineages — not just COAD — so a future
+    regression in the shared path or the normalization basis can't pass: each
+    cohort's top family must be its own lineage family.
+    """
+    candidate_codes, family_labels, _sites, _labels = (
+        plot_mod._hierarchy_feature_labels()
+    )
+    matrix = plot_mod._reference_family_feature_matrix(candidate_codes, family_labels)
+    code_row = {code: i for i, code in enumerate(candidate_codes)}
+    fam_col = {fam: j for j, fam in enumerate(family_labels)}
+
+    # (cohort code, family that should score highest for it)
+    expected = [
+        ("COAD", "CRC"),
+        ("READ", "CRC"),
+        ("PRAD", "PROSTATE"),
+        ("GBM", "GLIAL"),
+        ("LGG", "GLIAL"),
+        ("DLBC", "HEME_BCELL"),
+    ]
+    for code, family in expected:
+        if code not in code_row or family not in fam_col:
+            continue
+        row = matrix[code_row[code]]
+        top_family = family_labels[int(np.argmax(row))]
+        assert top_family == family, (
+            f"{code}: expected top family {family!r}, got {top_family!r} "
+            f"(score {row[fam_col[family]]:.3f} vs max {row.max():.3f})"
+        )
+
+
 def test_hierarchy_embedding_metadata_reports_feature_space():
     meta = plot_mod.get_embedding_feature_metadata(method="hierarchy")
 

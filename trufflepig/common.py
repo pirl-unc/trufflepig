@@ -171,15 +171,22 @@ def assert_tpm_keyed_by_gene_id(sample_tpm, *, context=""):
     """
     if not sample_tpm:
         return
-    keys = list(sample_tpm.keys())[:64]
-    ensg = sum(1 for k in keys if str(k).startswith("ENSG"))
-    if ensg < 0.5 * len(keys):
-        sample_keys = [str(k) for k in keys[:5]]
+    all_keys = list(sample_tpm.keys())
+    # Strided sample across the whole key set, not the head: keys often arrive
+    # groupby-sorted, so a head slice could be biased by a pathological prefix
+    # (e.g. non-ENSG spike-ins that sort ahead of ENSG…). A stride is representative.
+    stride = max(1, len(all_keys) // 256)
+    sampled = all_keys[::stride][:256]
+    ensg = sum(1 for k in sampled if str(k).startswith("ENSG"))
+    if ensg < 0.5 * len(sampled):
+        examples = [str(k) for k in all_keys[:5]]
         raise TypeError(
-            f"{context or 'sample TPM dict'} must be keyed by versionless "
-            f"Ensembl gene ID (ENSG…); got keys like {sample_keys!r}. This is the "
-            "ENSG-vs-symbol crossing that silently zeroes panels — build it with "
-            "build_sample_tpm_by_gene_id(), not build_sample_tpm_by_symbol()."
+            f"{context or 'sample TPM dict'} must be keyed by versionless Ensembl "
+            f"gene ID (ENSG…); got keys like {examples!r}. Either a symbol-keyed "
+            "dict was passed (build it with build_sample_tpm_by_gene_id(), not "
+            "build_sample_tpm_by_symbol()), or the source's gene-ID column is not "
+            "Ensembl-keyed. Family panels join in ENSG space, so a non-ENSG key "
+            "silently misses every marker."
         )
 
 

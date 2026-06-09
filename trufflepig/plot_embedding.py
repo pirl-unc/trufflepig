@@ -148,6 +148,7 @@ _bottleneck_gene_cache = {}
 _pan_reference_gene_cache = {}
 _hierarchy_feature_cache = {}
 _hierarchy_site_cache = {}
+_hierarchy_family_cache = {}
 _tcga_parent_code_cache = None
 
 
@@ -1127,29 +1128,37 @@ def _reference_family_feature_matrix(candidate_codes, family_labels):
     from .tumor_purity import _score_cancer_family_panels
     from .plot_data_helpers import _strip_ensembl_version
 
+    cache_key = (tuple(candidate_codes), tuple(family_labels))
+    cached = _hierarchy_family_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Raw clean per-cohort TPM (not housekeeping-normalized): the shared scorer
     # does its own housekeeping division internally, exactly as on the sample.
     ref = pan_cancer_expression(technical_rna_normalize=True)
     gene_ids = ref["Ensembl_Gene_ID"].astype(str).map(_strip_ensembl_version)
     id_valid = gene_ids.notna() & gene_ids.str.strip().str.len().gt(0)
 
+    # One max-per-versionless-gene-id collapse across every cohort column at
+    # once (mirrors build_sample_tpm_by_gene_id's max-per-id), instead of a
+    # groupby per candidate code. Each column then feeds the shared scorer as a
+    # plain {ENSG: TPM} dict.
+    cohort_cols = [f"{code}_TPM" for code in candidate_codes]
+    numeric = ref.loc[id_valid, cohort_cols].apply(pd.to_numeric, errors="coerce")
+    by_id = numeric.groupby(gene_ids[id_valid]).max()
+
     rows = []
     for code in candidate_codes:
-        tpms = pd.to_numeric(ref[f"{code}_TPM"], errors="coerce")
-        valid = id_valid & tpms.notna()
-        # max-TPM per versionless gene id — mirrors build_sample_tpm_by_gene_id.
-        cohort_tpm_by_id = dict(
-            pd.DataFrame({"gid": gene_ids[valid], "tpm": tpms[valid]})
-            .groupby("gid")["tpm"]
-            .max()
-        )
+        cohort_tpm_by_id = by_id[f"{code}_TPM"].dropna().to_dict()
         family_scores = _score_cancer_family_panels(cohort_tpm_by_id)
         family_values = [float(family_scores.get(family, 0.0)) for family in family_labels]
         max_family = max(family_values, default=0.0)
         if max_family > 0:
             family_values = [float(value / max_family) for value in family_values]
         rows.append(family_values)
-    return np.asarray(rows, dtype=float)
+    result = np.asarray(rows, dtype=float)
+    _hierarchy_family_cache[cache_key] = result
+    return result
 
 
 def _reference_site_feature_matrix(candidate_codes, site_labels):
