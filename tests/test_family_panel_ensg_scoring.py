@@ -7,6 +7,7 @@ marker read as "not expressed". Scoring by ID eliminates that class.
 """
 
 import pandas as pd
+import pytest
 from pirlygenes.gene_sets_cancer import cancer_family_panels_df, housekeeping_gene_ids
 
 from trufflepig.tumor_purity import (
@@ -56,3 +57,16 @@ def test_scoring_matches_by_ensg_even_with_wrong_symbol():
     assert all(
         v == 0 for fam, v in scores.items() if fam != "NEUROENDOCRINE"
     ), scores
+
+
+def test_symbol_keyed_sample_raises_instead_of_silently_zeroing():
+    """The #65 regression class made loud.
+
+    Passing a *symbol*-keyed sample (what the second, missed caller did) used to
+    silently score every family as zero. The ENSG-vs-symbol crossing is now
+    caught at the boundary — a wrong-vocabulary dict raises rather than
+    returning quietly-degraded scores that no test would notice.
+    """
+    symbol_keyed = {"KLK3": 500.0, "GFAP": 10.0, "EPCAM": 200.0}
+    with pytest.raises(TypeError, match="Ensembl gene ID"):
+        _score_cancer_family_panels(symbol_keyed)

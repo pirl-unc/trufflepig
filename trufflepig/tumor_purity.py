@@ -2497,6 +2497,11 @@ def _score_cancer_family_panels(sample_tpm_by_id):
     to zero because of symbol/alias drift. ``sample_tpm_by_id`` is the
     versionless-ENSG-keyed sample (:func:`build_sample_tpm_by_gene_id`).
     """
+    from .common import assert_tpm_keyed_by_gene_id
+
+    # Loud-fail the ENSG-vs-symbol crossing here rather than silently scoring
+    # every family as zero (the #65 regression class).
+    assert_tpm_keyed_by_gene_id(sample_tpm_by_id, context="cancer-family-panel sample")
     hk_median = _sample_hk_median_by_id(sample_tpm_by_id)
     if hk_median <= 0:
         return {family: 0.0 for family in _CANCER_FAMILY_PANELS_BY_ID}

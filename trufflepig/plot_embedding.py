@@ -1111,30 +1111,40 @@ def _hierarchy_feature_vector(
 
 
 def _reference_family_feature_matrix(candidate_codes, family_labels):
-    """Build normalized family-panel features for TCGA reference centroids."""
-    from .tumor_purity import _CANCER_FAMILY_PANELS
+    """Build normalized family-panel features for TCGA reference centroids.
 
-    ref_hk = pan_cancer_expression(
-        normalize="housekeeping",
-        technical_rna_normalize=True,
-    ).drop_duplicates(subset="Symbol")
-    ref_hk = ref_hk.set_index("Symbol")
+    Scores each cohort with the SAME ENSG-keyed scorer the sample side uses
+    (:func:`_score_cancer_family_panels`), so the ``family::*`` block is computed
+    one single way in both halves of the embedding's feature space. Previously
+    the reference half re-implemented the upper-half-median scoring *by HGNC
+    symbol* against the reference's ``Symbol`` column, while the sample half
+    scored *by Ensembl ID* — a latent vocabulary split that would silently
+    diverge the moment the panel's curation symbols drifted from the reference
+    symbols. Building an ENSG-keyed cohort TPM dict and reusing the one scorer
+    removes the split by construction (the #65 class, structurally).
+    """
+    import pandas as pd
+    from .tumor_purity import _score_cancer_family_panels
+    from .plot_data_helpers import _strip_ensembl_version
+
+    # Raw clean per-cohort TPM (not housekeeping-normalized): the shared scorer
+    # does its own housekeeping division internally, exactly as on the sample.
+    ref = pan_cancer_expression(technical_rna_normalize=True)
+    gene_ids = ref["Ensembl_Gene_ID"].astype(str).map(_strip_ensembl_version)
+    id_valid = gene_ids.notna() & gene_ids.str.strip().str.len().gt(0)
 
     rows = []
     for code in candidate_codes:
-        col = f"{code}_TPM"
-        family_values = []
-        for family in family_labels:
-            genes = [
-                gene for gene in _CANCER_FAMILY_PANELS[family] if gene in ref_hk.index
-            ]
-            if genes:
-                values = sorted(ref_hk.loc[genes, col].astype(float).tolist())
-                upper_half = values[len(values) // 2 :] if len(values) >= 3 else values
-                score = float(np.median(upper_half)) if upper_half else 0.0
-            else:
-                score = 0.0
-            family_values.append(score)
+        tpms = pd.to_numeric(ref[f"{code}_TPM"], errors="coerce")
+        valid = id_valid & tpms.notna()
+        # max-TPM per versionless gene id — mirrors build_sample_tpm_by_gene_id.
+        cohort_tpm_by_id = dict(
+            pd.DataFrame({"gid": gene_ids[valid], "tpm": tpms[valid]})
+            .groupby("gid")["tpm"]
+            .max()
+        )
+        family_scores = _score_cancer_family_panels(cohort_tpm_by_id)
+        family_values = [float(family_scores.get(family, 0.0)) for family in family_labels]
         max_family = max(family_values, default=0.0)
         if max_family > 0:
             family_values = [float(value / max_family) for value in family_values]

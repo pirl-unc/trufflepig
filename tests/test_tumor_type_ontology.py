@@ -11,7 +11,15 @@ def test_every_registry_code_has_ontology_marker_expectations():
     registry_codes = set(cancer_type_registry()["code"].dropna().astype(str))
     ontology = tumor_type_ontology()
 
-    assert set(ontology) == registry_codes
+    # Coverage contract: every upstream registry code must have ontology marker
+    # expectations curated here. Report *which* codes are uncovered so a new
+    # pirlygenes code fails actionably ("here's the gap to fill") instead of as
+    # an opaque set-inequality.
+    uncovered = sorted(registry_codes - set(ontology))
+    assert not uncovered, f"registry codes lacking ontology entries: {uncovered}"
+    # And no stale ontology entries for codes the registry dropped or renamed.
+    stale = sorted(set(ontology) - registry_codes)
+    assert not stale, f"ontology entries for codes absent from the registry: {stale}"
     missing_high = [
         code for code, entry in ontology.items() if not entry.expected_high_genes
     ]

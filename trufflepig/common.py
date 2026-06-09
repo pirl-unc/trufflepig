@@ -150,6 +150,39 @@ def build_sample_tpm_by_symbol(df_gene_expr):
 _build_sample_tpm_by_symbol = build_sample_tpm_by_symbol
 
 
+def assert_tpm_keyed_by_gene_id(sample_tpm, *, context=""):
+    """Guard that a sample-TPM dict is keyed by versionless Ensembl gene ID.
+
+    The ENSG-vs-symbol crossing is a *silent* failure class: hand a
+    symbol-keyed dict (``{"KLK3": ...}``) to a consumer that looks markers up
+    by Ensembl ID and every ``.get(ensg, 0.0)`` misses → the whole panel reads
+    as zero with no exception (the trufflepig #65 family-panel regression: a
+    second caller kept passing the symbol-keyed sample after the function moved
+    to ID matching, silently degrading the hierarchy embedding).
+
+    ENSG keys are recognizable where HGNC symbols are not — no human symbol
+    starts with ``ENSG`` — so the wrong vocabulary is cheaply detectable. This
+    converts "audit every call site forever" into "fail loudly at the boundary":
+    ID-keyed consumers call this on entry, so a miswired caller raises instead
+    of returning quietly-wrong numbers. Build the input with
+    :func:`build_sample_tpm_by_gene_id`, never :func:`build_sample_tpm_by_symbol`.
+
+    No-op on an empty dict (nothing to misread).
+    """
+    if not sample_tpm:
+        return
+    keys = list(sample_tpm.keys())[:64]
+    ensg = sum(1 for k in keys if str(k).startswith("ENSG"))
+    if ensg < 0.5 * len(keys):
+        sample_keys = [str(k) for k in keys[:5]]
+        raise TypeError(
+            f"{context or 'sample TPM dict'} must be keyed by versionless "
+            f"Ensembl gene ID (ENSG…); got keys like {sample_keys!r}. This is the "
+            "ENSG-vs-symbol crossing that silently zeroes panels — build it with "
+            "build_sample_tpm_by_gene_id(), not build_sample_tpm_by_symbol()."
+        )
+
+
 def build_sample_tpm_by_gene_id(df_gene_expr):
     """Return ``{versionless_ensembl_id: max_TPM}`` from already-clean
     sample expression.
