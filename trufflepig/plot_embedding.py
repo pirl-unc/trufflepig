@@ -1067,7 +1067,12 @@ def _hierarchy_feature_vector(
     )
     trace_by_code = {row["code"]: row for row in candidate_trace}
     sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
-    family_scores = _score_cancer_family_panels(sample_raw_by_symbol)
+    # Family panels are scored by Ensembl ID (alias-drift immune); pass the
+    # ID-keyed clean-TPM sample, not the symbol-keyed one.
+    from .common import build_sample_tpm_by_gene_id
+
+    sample_raw_by_id = build_sample_tpm_by_gene_id(df_gene_expr)
+    family_scores = _score_cancer_family_panels(sample_raw_by_id)
     max_family_score = max(family_scores.values(), default=0.0)
     if max_family_score > 0:
         family_features = [

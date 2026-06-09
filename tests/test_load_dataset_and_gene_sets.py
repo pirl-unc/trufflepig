@@ -252,7 +252,11 @@ def test_lineage_gene_loaders_cover_all_tcga_codes():
 
 def test_cancer_family_panel_loader():
     families = gsc.cancer_family_panels()
-    expected = {
+    # Stable core families that must always be present. The panel set grows as
+    # new lineages are curated upstream (heme, neuroendocrine, embryonal, ...),
+    # so assert the core is a subset rather than pinning an exact set — pinning
+    # makes every upstream panel addition a spurious failure here.
+    core = {
         "PROSTATE",
         "CRC",
         "GASTRIC",
@@ -263,7 +267,11 @@ def test_cancer_family_panel_loader():
         "GLIAL",
         "MELANOCYTIC",
     }
-    assert set(families) == expected
+    assert core <= set(families), f"missing core families: {core - set(families)}"
+    # Every loaded panel must carry markers.
+    for family, markers in families.items():
+        assert markers, f"{family}: empty panel"
+    # Behavioral checks: panels resolve to the right markers, not cross-contaminated.
     assert "KLK3" in gsc.cancer_family_panel("PROSTATE")
     assert "GFAP" not in gsc.cancer_family_panel("PROSTATE")
 

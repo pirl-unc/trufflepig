@@ -118,20 +118,25 @@ def _cohort_median_df(code):
     )
 
 
-def test_df_path_runs_signature_and_marker_channels_end_to_end():
-    """Integration: classify_cancer_type_ontology(df_gene_expr=...) must drive the
-    signature screen AND auto-compute the marker channels (recall + epithelial
-    exclusion) from the same df. Synthetic ranked_rows tests can't cover this
-    wiring (need_sample / marker_hk_median-from-df), so use a real cohort median.
+def test_df_path_auto_computes_marker_channels_from_df():
+    """Integration: when df_gene_expr is supplied the marker channels (recall +
+    epithelial exclusion) auto-compute FROM THE DF. Pass cheap pre-computed
+    ranked_rows so the (separately battery-tested) signature engine is skipped —
+    this isolates and covers the need_sample / marker_hk_median-from-df wiring
+    without the ~30s full-engine scoring.
     """
-    r = classify_cancer_type_ontology(df_gene_expr=_cohort_median_df("COAD"))
-    # epithelial cohort -> epithelial broad lineage
-    assert all(broad_lineage(c) == "epithelial" for c in r.candidates), r.candidates
-    # COAD median should land in the GI/colorectal neighbourhood
-    assert {"COAD", "READ"} & set(r.candidates), r.candidates
-    # the epithelial-exclusion channel must have fired from the df (proves the
-    # df -> marker_hk_median -> lineage_evidence wiring runs)
+    df = _cohort_median_df("COAD")  # real ensembl IDs + clean TPM for the markers
+    rows = [
+        {"code": "READ", "signature_score": 0.60, "support_geomean": 0.60},
+        {"code": "SARC", "signature_score": 0.50, "support_geomean": 0.50},
+        {"code": "COAD", "signature_score": 0.55, "support_geomean": 0.55},
+    ]
+    r = classify_cancer_type_ontology(df_gene_expr=df, ranked_rows=rows)
+    # epithelial program present in COAD -> exclusion fires from the df, demoting
+    # SARC out of the candidate set (proves df -> marker_hk_median -> evidence).
     assert any(t.startswith("[exclude]") for t in r.trace), r.trace
+    assert "SARC" not in r.candidates, r.candidates
+    assert {"COAD", "READ"} & set(r.candidates), r.candidates
     # a colon adenocarcinoma is not neuroendocrine -> recall stays silent
     assert not r.recall_notes
 
