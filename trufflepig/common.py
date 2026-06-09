@@ -104,6 +104,110 @@ def ensembl_id_to_symbol_map() -> dict[str, str]:
     return dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
 
 
+@lru_cache(maxsize=1)
+def _versionless_id_to_symbol_map() -> dict[str, str]:
+    """Reference Ensembl ID -> Symbol map, keyed by versionless ID."""
+    from .plot_data_helpers import _strip_ensembl_version
+
+    return {
+        _strip_ensembl_version(str(gid)): sym
+        for gid, sym in ensembl_id_to_symbol_map().items()
+    }
+
+
+def canonical_reference_symbols(symbols, gene_ids):
+    """Translate curated panel symbols to the reference's symbol vocabulary by
+    routing each through its (unambiguous) Ensembl gene ID.
+
+    Curated panels and the expression reference sometimes disagree on a gene's
+    HGNC symbol — alias drift: a panel curated as ``CD20`` where the reference
+    column says ``MS4A1``. The symbol-keyed sample inherits the reference's
+    symbol vocabulary (it is built by mapping sample Ensembl IDs through the
+    reference's ID->Symbol map), so a drifted panel symbol silently misses and
+    the gene drops out of scoring entirely. Resolving each panel entry through
+    its Ensembl ID to the reference's own symbol removes the drift while keeping
+    the join in symbol space for the consumers that need it — the ENSG is the
+    unambiguous join key, the symbol is just the reference-canonical label.
+
+    Returns the reference's canonical symbol when the panel's gene ID is present
+    in the reference, else the original symbol unchanged (no reference symbol to
+    translate to). Length- and order-preserving.
+    """
+    from .plot_data_helpers import _strip_ensembl_version
+
+    vmap = _versionless_id_to_symbol_map()
+    out = []
+    for sym, gid in zip(symbols, gene_ids):
+        gid_s = str(gid)
+        canon = (
+            vmap.get(_strip_ensembl_version(gid_s))
+            if gid_s and gid_s.lower() != "nan"
+            else None
+        )
+        out.append(canon if canon else str(sym))
+    return out
+
+
+def canonicalize_symbols_to_reference(symbols):
+    """Canonicalize curated symbols to the reference's vocabulary when the panel
+    carries *no* Ensembl column, by resolving each missing symbol through
+    pirlygenes' alias resolver to an Ensembl ID and then to the reference symbol.
+
+    For panels that already carry Ensembl IDs prefer :func:`canonical_reference_symbols`
+    (a pure dict lookup, no pyensembl walk). This variant exists for symbol-only
+    sources like ``cancer_biomarker_genes`` where a clinical alias (``TROP2`` for
+    ``TACSTD2``, ``CD20`` for ``MS4A1``, ``VEGFR2`` for ``KDR``) would otherwise
+    silently miss the reference-vocabulary sample. Symbols already in the
+    reference are passed through untouched (no resolver cost); symbols that don't
+    resolve (or when pyensembl is unavailable) are returned unchanged — so this
+    only ever *recovers* genes, never drops one. Order-preserving.
+    """
+    syms = [str(s) for s in symbols]
+    vmap = _versionless_id_to_symbol_map()
+    ref_syms = set(vmap.values())
+    missing = [s for s in syms if s not in ref_syms]
+    id_map = panel_symbols_to_gene_ids(missing) if missing else {}
+    out = []
+    for s in syms:
+        if s in ref_syms:
+            out.append(s)
+            continue
+        canon = vmap.get(id_map.get(s, ""))
+        out.append(canon if canon else s)
+    return out
+
+
+@lru_cache(maxsize=1)
+def lineage_genes_by_cancer_type_canonical() -> dict:
+    """``{TCGA_code: [Symbol, ...]}`` lineage panels, symbols canonicalized to the
+    reference vocabulary via Ensembl ID.
+
+    The single source of canonical lineage panels: both the purity estimator
+    (``tumor_purity.LINEAGE_GENES``) and the tumor-type ontology consume this so
+    they cannot diverge on which symbol vocabulary they speak. Same shape and
+    membership as pirlygenes' ``lineage_genes_by_cancer_type()`` (a groupby over
+    the ``lineage-genes`` table); the only change is alias-drift immunity (e.g.
+    the DLBC panel's ``CD20`` becomes the reference's ``MS4A1``).
+    """
+    from pirlygenes.gene_sets_cancer import lineage_genes_df
+
+    df = lineage_genes_df()
+    canon = canonical_reference_symbols(
+        df["Symbol"].tolist(), df["Ensembl_Gene_ID"].tolist()
+    )
+    result: dict = {}
+    seen: dict = {}
+    for code, sym in zip(df["Cancer_Type"].astype(str).tolist(), canon):
+        bucket = result.setdefault(code, [])
+        marks = seen.setdefault(code, set())
+        # Dedup only collisions introduced by canonicalization (two aliases of
+        # one gene), matching the reference's own drop_duplicates(subset=Symbol).
+        if sym not in marks:
+            marks.add(sym)
+            bucket.append(sym)
+    return result
+
+
 def build_sample_tpm_by_symbol(df_gene_expr):
     """Return ``{symbol: max_TPM}`` from already-clean sample expression.
 

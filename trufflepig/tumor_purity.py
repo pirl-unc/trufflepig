@@ -26,7 +26,7 @@ import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
 
-    cancer_family_panels, cancer_family_panels_df, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type, resolve_cancer_type,
+    cancer_family_panels, cancer_family_panels_df, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, resolve_cancer_type,
 
 )
 
@@ -463,7 +463,13 @@ def _sample_hk_median(sample_tpm):
 # genes with low TME background and high expression in the origin tissue
 # should be listed there. Keep the name `LINEAGE_GENES` for backward
 # compatibility with external importers.
-LINEAGE_GENES = lineage_genes_by_cancer_type()
+# Canonicalized via the shared accessor so the purity estimator and the
+# tumor-type ontology speak one symbol vocabulary (alias-drift immune: the DLBC
+# panel's ``CD20`` resolves to the reference's ``MS4A1``, the rituximab target,
+# instead of silently missing the reference-vocabulary sample).
+from .common import lineage_genes_by_cancer_type_canonical as _lineage_genes_canonical
+
+LINEAGE_GENES = _lineage_genes_canonical()
 
 
 _PURITY_PANEL_CODES_CACHE: list = []

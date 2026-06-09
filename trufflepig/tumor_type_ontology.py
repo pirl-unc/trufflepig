@@ -141,6 +141,14 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     "URETH": ("GATA3", "KRT7", "KRT5", "TP63", "UPK2"),
     "CRANIO": ("CTNNB1", "KRT8", "KRT18", "BRAF", "EPCAM"),
     "PITNET": ("CHGA", "SYP", "POU1F1", "PRL", "GH1"),
+    # CNS leaf types added to the registry without upstream lineage/biomarker
+    # coverage (pirlygenes CNS split) — seed with their defining markers.
+    # Meningioma: SSTR2 (the DOTATATE-PET target, near-universal), PR (PGR),
+    # EMA (MUC1), vimentin, NF2. Choroid plexus: TTR (transthyretin, the
+    # definitive CP marker), OTX2, AQP1, Kir7.1 (KCNJ13), CLIC6 — deliberately
+    # excludes cytokeratins/EPCAM so the epithelial low-default isn't contradicted.
+    "MENINGIOMA": ("SSTR2", "PGR", "MUC1", "VIM", "NF2"),
+    "CHOROID_PLEXUS": ("TTR", "OTX2", "AQP1", "KCNJ13", "CLIC6"),
 }
 
 _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
@@ -203,11 +211,13 @@ def is_sarcoma_code(code: str | None) -> bool:
 
 @lru_cache(maxsize=1)
 def _lineage_genes() -> dict[str, tuple[str, ...]]:
-    from pirlygenes.gene_sets_cancer import lineage_genes_by_cancer_type
+    # Shared canonical source (alias-drift immune) so the ontology and the purity
+    # estimator can't diverge on the lineage-panel symbol vocabulary.
+    from .common import lineage_genes_by_cancer_type_canonical
 
     return {
         _clean(code): _unique_genes(tuple(genes))
-        for code, genes in lineage_genes_by_cancer_type().items()
+        for code, genes in lineage_genes_by_cancer_type_canonical().items()
     }
 
 
@@ -267,7 +277,14 @@ def _key_biomarker_genes(code: str, subtype_key: str = "") -> tuple[str, ...]:
         mask = mask & df["subtype"].map(_norm_key).eq(_norm_key(subtype_key))
     else:
         mask = mask & df["subtype"].map(_norm_key).eq("")
-    return _unique_genes(tuple(df.loc[mask, "symbol"].astype(str)))
+    # cancer-key-genes carries no Ensembl column, so canonicalize the curated
+    # biomarker symbols to the reference vocabulary via the alias resolver — else
+    # clinical aliases (TROP2->TACSTD2, CD20->MS4A1, VEGFR2->KDR) silently miss
+    # the reference-vocabulary sample in the marker-expectation channel.
+    from .common import canonicalize_symbols_to_reference
+
+    symbols = df.loc[mask, "symbol"].astype(str).tolist()
+    return _unique_genes(tuple(canonicalize_symbols_to_reference(symbols)))
 
 
 def _high_expectations_for_code(

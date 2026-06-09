@@ -7,6 +7,48 @@ from trufflepig.tumor_type_ontology import (
 )
 
 
+def test_lineage_panels_lose_no_genes_to_alias_drift():
+    """Every canonical lineage-panel symbol must resolve in the reference.
+
+    Curated panels speak HGNC symbols; the symbol-keyed sample/reference speak
+    the reference's symbol vocabulary. Canonicalizing through Ensembl ID
+    (common.lineage_genes_by_cancer_type_canonical) must leave zero panel symbols
+    that the reference can't see — otherwise a marker (e.g. CD20/MS4A1) silently
+    scores zero. Guards against future alias drift re-introducing lost genes.
+    """
+    from trufflepig.common import lineage_genes_by_cancer_type_canonical
+    from trufflepig.reference import pan_cancer_expression
+
+    ref_symbols = set(pan_cancer_expression()["Symbol"].astype(str))
+    panels = lineage_genes_by_cancer_type_canonical()
+    lost = {
+        code: [g for g in genes if g not in ref_symbols]
+        for code, genes in panels.items()
+    }
+    lost = {code: miss for code, miss in lost.items() if miss}
+    assert not lost, f"lineage panel symbols absent from the reference: {lost}"
+    # CD20 specifically must have been canonicalized to MS4A1 (rituximab target).
+    assert "MS4A1" in panels.get("DLBC", [])
+    assert "CD20" not in panels.get("DLBC", [])
+
+
+def test_biomarker_symbols_canonicalized_to_reference_vocabulary():
+    """cancer-key-genes biomarker aliases must be recovered into the reference
+    vocabulary for the marker-expectation channel (it has no Ensembl column, so
+    this routes through the alias resolver). CD20 -> MS4A1 is the canary; if
+    pyensembl is unavailable the resolver degrades to a no-op, so only assert the
+    recovery when the raw alias was present and resolution is possible.
+    """
+    from trufflepig.tumor_type_ontology import _key_biomarker_genes
+    from trufflepig.common import canonicalize_symbols_to_reference
+
+    # B_ALL curates CD20 as a biomarker; it must surface as MS4A1, not CD20.
+    genes = _key_biomarker_genes("B_ALL")
+    if "MS4A1" in canonicalize_symbols_to_reference(["CD20"]):
+        assert "MS4A1" in genes
+        assert "CD20" not in genes
+
+
 def test_every_registry_code_has_ontology_marker_expectations():
     registry_codes = set(cancer_type_registry()["code"].dropna().astype(str))
     ontology = tumor_type_ontology()
