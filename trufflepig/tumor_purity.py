@@ -461,15 +461,36 @@ def _sample_hk_median(sample_tpm):
 # Lineage genes per cancer type — genes retained in metastases and specific
 # enough to calibrate purity. Loaded from data/lineage-genes.csv; only
 # genes with low TME background and high expression in the origin tissue
-# should be listed there. Keep the name `LINEAGE_GENES` for backward
-# compatibility with external importers.
+# should be listed there.
+#
 # Canonicalized via the shared accessor so the purity estimator and the
 # tumor-type ontology speak one symbol vocabulary (alias-drift immune: the DLBC
 # panel's ``CD20`` resolves to the reference's ``MS4A1``, the rituximab target,
 # instead of silently missing the reference-vocabulary sample).
-from .common import lineage_genes_by_cancer_type_canonical as _lineage_genes_canonical
+#
+# Lazy + cached: the canonicalization needs the pan-cancer reference, so
+# computing it eagerly would pull a reference load into ``import tumor_purity``.
+# Internal code calls ``_lineage_genes_map()``; the public ``LINEAGE_GENES``
+# name is preserved for external importers via the module ``__getattr__`` below,
+# so ``from trufflepig.tumor_purity import LINEAGE_GENES`` still works but pays
+# the load only on first access (by which point a purity/lineage call needs the
+# reference anyway).
+def _lineage_genes_map() -> dict:
+    # Honor a monkey-patched module-level override (tests set ``tp.LINEAGE_GENES``
+    # directly) — preserving the pre-lazy contract — otherwise compute via the
+    # lru-cached canonical accessor (cheap on repeat; no eager reference load).
+    override = globals().get("LINEAGE_GENES")
+    if override is not None:
+        return override
+    from .common import lineage_genes_by_cancer_type_canonical
 
-LINEAGE_GENES = _lineage_genes_canonical()
+    return lineage_genes_by_cancer_type_canonical()
+
+
+def __getattr__(name):
+    if name == "LINEAGE_GENES":
+        return _lineage_genes_map()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 _PURITY_PANEL_CODES_CACHE: list = []
@@ -498,7 +519,7 @@ def lineage_purity_panel_codes() -> frozenset:
         return _PURITY_PANEL_CODES_CACHE[0]
     result = frozenset(
         code
-        for code in LINEAGE_GENES
+        for code in _lineage_genes_map()
         if not (_broad_purity_fallback_code(code) or "").strip()
         or _broad_purity_fallback_code(code) == code
     )
@@ -547,7 +568,7 @@ def _cancer_specific_lineage_genes(cancer_code: str) -> list:
     """
     if cancer_code in _LINEAGE_SPECIFIC_CACHE:
         return _LINEAGE_SPECIFIC_CACHE[cancer_code]
-    panel = LINEAGE_GENES.get(cancer_code, [])
+    panel = _lineage_genes_map().get(cancer_code, [])
     if not panel:
         _LINEAGE_SPECIFIC_CACHE[cancer_code] = []
         return []
@@ -942,7 +963,7 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
     best = None
     per_subtype = []
     for subtype_code in subtypes:
-        panel = LINEAGE_GENES.get(subtype_code, [])
+        panel = _lineage_genes_map().get(subtype_code, [])
         if not panel:
             continue
         per_gene, skipped = _subtype_lineage_purity_estimates(
@@ -1186,7 +1207,7 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
         excluded = ref_by_sym.index.to_series().map(is_excluded).astype(bool)
 
     if exclude_lineage:
-        lineage_genes = set(LINEAGE_GENES.get(cancer_code, []))
+        lineage_genes = set(_lineage_genes_map().get(cancer_code, []))
         if lineage_genes:
             excluded = excluded | ref_by_sym.index.to_series().isin(lineage_genes)
 
@@ -1424,7 +1445,7 @@ def _broad_purity_fallback_code(code):
 def _has_direct_purity_markers(cancer_code):
     """Whether ``cancer_code`` has marker panels usable for direct purity."""
     return bool(
-        LINEAGE_GENES.get(cancer_code)
+        _lineage_genes_map().get(cancer_code)
         or _select_tumor_specific_genes(cancer_code, n=1)
     )
 
@@ -1610,7 +1631,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     if reference_expression_source == "subtype_deconvolved":
         lineage_per_gene, lineage_skipped_detected = _subtype_lineage_purity_estimates(
             reference_cancer_code,
-            LINEAGE_GENES.get(reference_cancer_code, []),
+            _lineage_genes_map().get(reference_cancer_code, []),
             sample_tpm,
             hk_syms,
             ref_by_sym=ref_by_sym,

@@ -159,7 +159,17 @@ _CURATED_LOW: Mapping[str, tuple[str, ...]] = {
     "HNSC_HPVneg": ("CDKN2A",),
     "NBL_MYCNnonamp": ("MYCN",),
     "RT": ("SMARCB1",),
+    # Choroid plexus is the one *epithelial* CNS tumor (cytokeratin/EPCAM+), so
+    # the cns family-low (which excludes EPCAM/KRT8/KRT18) is wrong for it — it
+    # would penalize the markers CP genuinely expresses. Give it glial/immune
+    # competitors instead and suppress the family-low (see _SUPPRESS_FAMILY_LOW).
+    "CHOROID_PLEXUS": ("GFAP", "OLIG2", "PTPRC", "CD3D"),
 }
+
+# Codes whose own lineage markers overlap their family's low-expectation set, so
+# the family/default low must NOT be appended (it would flag genes the tumor
+# really expresses). Such codes carry a complete curated low above.
+_SUPPRESS_FAMILY_LOW: frozenset = frozenset({"CHOROID_PLEXUS"})
 
 # Keyed on pirlygenes' lineage-only family ontology (5.12+); ``carcinoma-*`` and
 # ``heme-*`` match on the family root. The old ``net`` / ``pediatric-*`` families
@@ -370,7 +380,8 @@ def _low_expectations_for_code(code: str) -> tuple[GeneExpectation, ...]:
     family_root = family.split("-", 1)[0] if family else ""
     family_lows = _FAMILY_LOW_GENES.get(family, _FAMILY_LOW_GENES.get(family_root))
     genes = list(_CURATED_LOW.get(code, ()))
-    genes.extend(family_lows or _DEFAULT_LOW_GENES)
+    if code not in _SUPPRESS_FAMILY_LOW:
+        genes.extend(family_lows or _DEFAULT_LOW_GENES)
     out: list[GeneExpectation] = []
     _add_expectations(
         out,
