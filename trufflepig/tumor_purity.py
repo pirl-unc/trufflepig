@@ -26,7 +26,7 @@ import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
 
-    cancer_family_panels, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type, resolve_cancer_type,
+    cancer_family_panels, cancer_family_panels_df, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, lineage_genes_by_cancer_type, resolve_cancer_type,
 
 )
 
@@ -36,6 +36,7 @@ from trufflepig.reference import (
 
 )
 from .common import _build_sample_tpm_by_symbol as _common_build_sample_tpm
+from .common import build_sample_tpm_by_gene_id as _build_sample_tpm_by_gene_id
 from .format import render_fold
 from .reference import estimate_signatures
 
@@ -142,6 +143,38 @@ _HOST_SITE_BACKGROUND_TISSUES = {
 # Stages 2-4 + pirlygenes #266). Until then, the extension data
 # stays as design documentation, not active scoring input.
 _CANCER_FAMILY_PANELS = cancer_family_panels()
+
+
+def _build_family_panels_by_id():
+    """``{family: [versionless Ensembl ID, ...]}`` from the curated panel table.
+
+    The family panels are scored by **Ensembl gene ID**, not HGNC symbol, so the
+    scoring is immune to symbol/alias drift between the panel's curation
+    vocabulary (Ensembl 112) and trufflepig's reference symbols. Matching by
+    symbol made a drifted alias (e.g. TDGF1/CRIPTO) silently resolve to
+    ``.get(symbol, 0.0)`` — reading a real, expressed marker as "not expressed"
+    and quietly weakening the panel. The panel CSV already carries clean
+    unversioned ENSGs; this consumes them.
+    """
+    from .plot_data_helpers import _strip_ensembl_version
+
+    out = {}
+    try:
+        df = cancer_family_panels_df()
+        for family, grp in df.groupby("Family", sort=False):
+            out[str(family)] = [
+                _strip_ensembl_version(str(g))
+                for g in grp["Ensembl_Gene_ID"].dropna()
+                if str(g).strip() and str(g).strip().lower() != "nan"
+            ]
+    except Exception:
+        # Fall back to an empty map; the scorer degrades to all-zero scores
+        # rather than crashing if the panel table is unavailable.
+        out = {}
+    return out
+
+
+_CANCER_FAMILY_PANELS_BY_ID = _build_family_panels_by_id()
 
 _CANCER_FAMILY_BY_CODE = {
     "PRAD": "PROSTATE",
@@ -2442,15 +2475,35 @@ def _score_host_tissues(sample_tpm_by_symbol, tissues=None, top_n=None):
     return [(row["tissue"], row["score"], row["n_genes"]) for row in details]
 
 
-def _score_cancer_family_panels(sample_tpm_by_symbol):
-    """Score broad cancer families before attempting fine subtype ranking."""
-    hk_median = _sample_hk_median(sample_tpm_by_symbol)
+def _sample_hk_median_by_id(sample_tpm_by_id):
+    """Housekeeping median on the clean-TPM scale, keyed by Ensembl gene ID.
+
+    Like :func:`_sample_hk_median` but matches the housekeeping panel by ID, so
+    it shares the symbol-drift immunity of the ID-keyed family scoring (and is
+    simpler — ``housekeeping_gene_ids()`` are already Ensembl IDs).
+    """
+    from .plot_data_helpers import _strip_ensembl_version
+
+    hk_ids = [_strip_ensembl_version(str(gid)) for gid in housekeeping_gene_ids()]
+    vals = [sample_tpm_by_id[g] for g in hk_ids if sample_tpm_by_id.get(g, 0) > 0]
+    return float(np.median(vals)) if vals else 0.0
+
+
+def _score_cancer_family_panels(sample_tpm_by_id):
+    """Score broad cancer families before attempting fine subtype ranking.
+
+    Markers are matched by **Ensembl gene ID** (the panels carry curated
+    unversioned ENSGs) rather than HGNC symbol, so a marker can't silently drop
+    to zero because of symbol/alias drift. ``sample_tpm_by_id`` is the
+    versionless-ENSG-keyed sample (:func:`build_sample_tpm_by_gene_id`).
+    """
+    hk_median = _sample_hk_median_by_id(sample_tpm_by_id)
     if hk_median <= 0:
-        return {family: 0.0 for family in _CANCER_FAMILY_PANELS}
+        return {family: 0.0 for family in _CANCER_FAMILY_PANELS_BY_ID}
 
     scores = {}
-    for family, genes in _CANCER_FAMILY_PANELS.items():
-        values = [sample_tpm_by_symbol.get(g, 0.0) / hk_median for g in genes]
+    for family, ids in _CANCER_FAMILY_PANELS_BY_ID.items():
+        values = [sample_tpm_by_id.get(gid, 0.0) / hk_median for gid in ids]
         if not values:
             scores[family] = 0.0
             continue
@@ -3251,7 +3304,10 @@ def rank_cancer_type_candidates(
             ):
                 subtype_stats = compute_subtype_signature_stats(df_gene_expr)
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
-    family_scores = _score_cancer_family_panels(sample_tpm)
+    # Family panels are scored by Ensembl ID (alias-drift immune); build the
+    # versionless-ENSG-keyed sample for that lookup.
+    sample_tpm_by_id = _build_sample_tpm_by_gene_id(df_gene_expr)
+    family_scores = _score_cancer_family_panels(sample_tpm_by_id)
     family_params = TUMOR_PURITY_PARAMETERS["family_scoring"]
     soft_families = set(family_params.get("non_penalizing_families", []))
     hard_family_scores = {
