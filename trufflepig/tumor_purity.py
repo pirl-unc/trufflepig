@@ -433,6 +433,40 @@ def _sample_hk_median(sample_tpm):
 LINEAGE_GENES = lineage_genes_by_cancer_type()
 
 
+_PURITY_PANEL_CODES_CACHE: list = []
+
+
+def lineage_purity_panel_codes() -> frozenset:
+    """Codes whose *own* lineage panel anchors their purity estimate.
+
+    The purity estimator only uses a code's own lineage panel when the
+    code does not fall back to a broad parent cohort (see
+    :func:`_broad_purity_fallback_code`). Fusion-defined sarcoma subtypes
+    (``SARC_ASPS``, ``SARC_SFT``, ``SARC_CCS``, ...) fall back to ``SARC``
+    for purity, so their lineage entry is never consulted as a purity
+    panel — it exists only for *subtype identification* via the
+    ontology/recall path. pirlygenes' "subtype-marker" batch lists a
+    single pathognomonic fusion/IHC gene for these (TFE3 for ASPS, STAT6
+    for SFT, ...), which is correct as a diagnostic marker but is not a
+    purity panel.
+
+    The purity-panel size floors (#170 ≥5, #162/#167 ≥2) therefore apply
+    only to the codes returned here — every code that actually drives its
+    own purity estimate. (Invariant, asserted in the tests: no such code
+    has fewer than 5 curated genes.)
+    """
+    if _PURITY_PANEL_CODES_CACHE:
+        return _PURITY_PANEL_CODES_CACHE[0]
+    result = frozenset(
+        code
+        for code in LINEAGE_GENES
+        if not (_broad_purity_fallback_code(code) or "").strip()
+        or _broad_purity_fallback_code(code) == code
+    )
+    _PURITY_PANEL_CODES_CACHE.append(result)
+    return result
+
+
 # #162: cross-cohort lineage-panel specificity. When a lineage panel
 # gene is expressed at comparable levels in multiple TCGA cohorts
 # (e.g. MUC5AC in both STAD and PAAD, KRT19 across all GI epithelia),

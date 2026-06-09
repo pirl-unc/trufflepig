@@ -58,8 +58,25 @@ def assert_clean_tpm(
     id_col: str | None = "Ensembl_Gene_ID",
     context: str = "clean TPM",
     tolerance: float = 1e-9,
+    technical_fraction: float | None = None,
+    fraction_slack: float = 0.15,
 ) -> None:
-    """Raise when a clean TPM matrix still has technical-RNA expression."""
+    """Raise when a TPM matrix has not been cleaned of technical-RNA inflation.
+
+    Two contracts, selected by ``technical_fraction``:
+
+    - **legacy "zeroed"** (default, ``technical_fraction=None``): the historical
+      clean-TPM transform zeros technical-RNA features, so their summed TPM must
+      be ~0 (within ``tolerance``).
+    - **v4 "fixed-fraction"** (``technical_fraction`` set, e.g. ``0.25``):
+      pirlygenes clean_tpm_v4 deliberately *pins* the technical-RNA + ribosomal
+      compartment to a fixed fraction of the 1e6 budget rather than zeroing it
+      (avoids inflating the biological genes). Technical RNA is therefore
+      expected to be non-zero; assert only that the strict technical-RNA rows
+      (a subset of that compartment) don't *exceed* ``technical_fraction +
+      fraction_slack`` of the column total — which still catches egregiously
+      un-normalized (technical-dominant) input without rejecting v4 data.
+    """
     cols = [col for col in value_cols if col in df.columns]
     if not cols or df.empty:
         return
@@ -68,9 +85,6 @@ def assert_clean_tpm(
         return
     values = df.loc[mask, cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     per_col = values.sum(axis=0)
-    bad = per_col[per_col.abs() > tolerance]
-    if bad.empty:
-        return
 
     labels = (
         df.loc[mask, label_col].fillna("").astype(str)
@@ -78,6 +92,37 @@ def assert_clean_tpm(
         else pd.Series([""] * int(mask.sum()), index=df.index[mask])
     )
     row_totals = values.abs().sum(axis=1).sort_values(ascending=False)
+
+    if technical_fraction is not None:
+        # v4 two-compartment: bound the technical fraction rather than zero it.
+        col_totals = (
+            df[cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=0)
+        )
+        limit = float(technical_fraction) + float(fraction_slack)
+        frac = pd.Series(
+            {
+                col: (float(per_col[col]) / float(col_totals[col]))
+                if float(col_totals[col]) > 0
+                else 0.0
+                for col in cols
+            }
+        )
+        bad = frac[frac > limit]
+        if bad.empty:
+            return
+        top = []
+        for idx, total in row_totals.head(5).items():
+            label = labels.loc[idx] if idx in labels.index else str(idx)
+            top.append(f"{label or idx}={float(total):.3g}")
+        bad_cols = ", ".join(f"{col}={val:.1%}" for col, val in bad.head(8).items())
+        raise ValueError(
+            f"{context} technical-RNA fraction exceeds the v4 bound "
+            f"({limit:.0%}): {bad_cols}. Top technical rows: {', '.join(top)}"
+        )
+
+    bad = per_col[per_col.abs() > tolerance]
+    if bad.empty:
+        return
     top = []
     for idx, total in row_totals.head(5).items():
         label = labels.loc[idx] if idx in labels.index else str(idx)

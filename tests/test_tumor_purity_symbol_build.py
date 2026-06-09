@@ -1,6 +1,6 @@
 import pandas as pd
 
-from trufflepig.common import build_sample_tpm_by_symbol
+from trufflepig.common import build_sample_tpm_by_symbol, ensembl_id_to_symbol_map
 
 # Backward-compat: the underscore alias is still importable from tumor_purity
 from trufflepig.tumor_purity import _build_sample_tpm_by_symbol
@@ -32,6 +32,11 @@ def test_build_sample_tpm_by_symbol_does_not_deepcopy_attrs(monkeypatch):
     monkeypatch.setattr(
         "trufflepig.reference.pan_cancer_expression", lambda: ref
     )
+    # ensembl_id_to_symbol_map() is lru_cached; clear it so the patched
+    # reference is honored regardless of what warmed the cache earlier in this
+    # worker. (conftest also clears it on teardown so the tiny test map can't
+    # leak into later tests.)
+    ensembl_id_to_symbol_map.cache_clear()
 
     out = build_sample_tpm_by_symbol(df)
     assert out == {"GENE1": 1.0, "GENE2": 2.5}

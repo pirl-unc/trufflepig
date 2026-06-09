@@ -12,9 +12,12 @@ right level without re-deriving parent/subtype rules locally.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, replace
 from functools import lru_cache
 from typing import Any, Mapping
+
+log = logging.getLogger(__name__)
 
 
 def _clean(value: Any) -> str:
@@ -127,8 +130,8 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
                 source=_clean(row.get("source_cohort")) or "pan_cancer",
                 gene_key="ensembl_symbol",
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("observed pan-cancer reference discovery failed: %s", exc)
 
     try:
         from trufflepig.reference import cancer_reference_expression
@@ -158,8 +161,8 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
                         source=source,
                         gene_key="ensembl_symbol",
                     )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("observed-bulk reference discovery failed: %s", exc)
 
     try:
         from trufflepig.reference import tcga_deconvolved_expression
@@ -186,8 +189,8 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
                             gene_key="ensembl_symbol",
                             source_code=code_text,
                         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("TCGA deconvolved reference discovery failed: %s", exc)
 
     try:
         from trufflepig.reference import subtype_deconvolved_expression
@@ -241,8 +244,8 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
                             gene_key="symbol_only",
                             source_code=subtype_text,
                         )
-    except Exception:
-        pass
+    except Exception as exc:
+        log.warning("subtype deconvolved reference discovery failed: %s", exc)
 
     out: dict[str, tuple[ExpressionReferenceRecord, ...]] = {}
     for code, records in records_by_code.items():

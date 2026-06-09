@@ -367,3 +367,37 @@ def test_cancer_enriched_genes_preserves_legacy_columns(monkeypatch):
     assert "fold_over_others" in out.columns
     assert "fold_change" not in out.columns
     assert out["fold_over_others"].tolist() == pytest.approx([5.0, 3.0])
+
+
+@pytest.mark.parametrize(
+    "public,cached",
+    [
+        ("tcga_deconvolved_expression", "_tcga_deconvolved_normalized"),
+        ("subtype_deconvolved_expression", "_subtype_deconvolved_normalized"),
+    ],
+)
+def test_deconvolved_normalization_is_memoized(public, cached):
+    """The normalize -> renormalize -> assert pipeline over the ~640k/1.05M-row
+    deconvolved artifacts is pure in (raw read, bool args) and was being re-run
+    on every call. It must now be memoized: a second call is served from the
+    ``lru_cache`` (a hit), returns equal data, and a *distinct* object so callers
+    can mutate without corrupting the cache.
+    """
+    fn = getattr(gsc, public)
+    cache = getattr(gsc, cached)
+    cache.cache_clear()
+
+    first = fn()
+    hits_before = cache.cache_info().hits
+    second = fn()
+    hits_after = cache.cache_info().hits
+
+    assert hits_after == hits_before + 1, "second call should hit the cache"
+    assert first.equals(second), "memoized output must equal a fresh build"
+    assert first is not second, "callers must get an independent copy"
+
+    # Mutating a returned frame must not corrupt the cached frame.
+    value_col = next(c for c in ("tumor_tpm_median",) if c in first.columns)
+    first.iloc[0, first.columns.get_loc(value_col)] = -12345.0
+    third = fn()
+    assert third.iloc[0][value_col] != -12345.0

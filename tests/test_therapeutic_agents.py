@@ -7,11 +7,15 @@ from trufflepig.common import ensembl_id_to_symbol_map
 from trufflepig.therapeutic_agents import (
     MODALITIES,
     agents_for_target,
+    all_target_genes,
     best_agent_for_target,
     druggable_target_genes,
     is_druggable_target,
     target_agent_summary,
+    target_annotation,
+    target_liability_note,
     therapeutic_agents,
+    therapeutic_targets,
 )
 from trufflepig.reporting import cross_cancer_target_index, offcontext_known_targets
 
@@ -89,6 +93,37 @@ def test_cross_cancer_index_unions_registry_targets():
     # Registry entries carry modality + approval context.
     dll3 = index.get("DLL3", ())
     assert any(e.get("modality") for e in dll3)
+
+
+def test_target_annotations_cover_all_targets_with_localization():
+    df = therapeutic_targets()
+    assert len(df) >= 65
+    valid_loc = {"surface", "surface_and_secreted", "intracellular_HLA_presented"}
+    assert set(df["localization"]) <= valid_loc
+    # Every druggable target also carries a target-level annotation (so the
+    # normal-tissue guardrail can fire wherever an agent surfaces).
+    annotated = set(df["target_gene"])
+    missing = sorted(g for g in druggable_target_genes() if g not in annotated)
+    assert not missing, f"druggable targets lacking a target annotation: {missing}"
+
+
+def test_all_target_genes_is_reasoning_available_superset():
+    # The full curated target universe (incl. no-binder targets) is the
+    # reasoning-available set; it is a superset of the druggable ones.
+    universe = all_target_genes()
+    assert druggable_target_genes() <= universe
+    # A no-binder target (e.g. ALPPL2) is still reasoning-available.
+    assert "ALPPL2" in universe
+
+
+def test_target_liability_note_surfaces_normal_tissue_risk():
+    annotation = target_annotation("CA9")
+    assert annotation is not None and annotation.is_surface
+    note = target_liability_note("CA9")
+    assert note.startswith("normal-tissue caveat:")
+    assert "GI" in note or "biliary" in note.lower() or "stomach" in note.lower()
+    # A gene with no curated target annotation yields no caveat.
+    assert target_liability_note("GAPDH") == ""
 
 
 def test_offcontext_surfaces_registry_only_target_when_high():

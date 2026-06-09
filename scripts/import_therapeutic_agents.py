@@ -74,8 +74,60 @@ def _year(value) -> str:
         return text
 
 
+OUT_TARGETS = (
+    Path(__file__).resolve().parent.parent
+    / "trufflepig"
+    / "data"
+    / "therapeutic-targets.csv"
+)
+
+_TARGET_COLUMNS = [
+    "target_gene",
+    "protein_name",
+    "localization",
+    "liabilities",
+    "cancer_relevance",
+    "binder_accessible",
+    "priority_hint",
+    "evidence_pmids",
+]
+
+
+def _write_targets(xlsx: Path) -> None:
+    """Per-target annotation (localization + on-target/normal-tissue liabilities)
+    — the #47 normal-expression guardrail. One row per target gene; covers all
+    targets including those with no curated binder yet."""
+    targets = pd.ExcelFile(xlsx).parse("Targets")
+    rows = []
+    for _, t in targets.iterrows():
+        gene = _clean(t.get("Gene Symbol"))
+        if not gene:
+            continue
+        # Normalize a parenthetical variant to the base symbol.
+        if "(" in gene:
+            gene = gene.split("(", 1)[0].strip()
+        rows.append(
+            {
+                "target_gene": gene,
+                "protein_name": _clean(t.get("Protein Name")),
+                "localization": _clean(t.get("Localization")),
+                "liabilities": _clean(t.get("Liabilities")),
+                "cancer_relevance": _clean(t.get("Cancer Relevance")),
+                "binder_accessible": _clean(t.get("Binder Accessible")),
+                "priority_hint": _clean(t.get("Priority Hint")),
+                "evidence_pmids": _clean(t.get("Evidence PMIDs")),
+            }
+        )
+    df = pd.DataFrame(rows, columns=_TARGET_COLUMNS)
+    df = df.drop_duplicates("target_gene").sort_values("target_gene").reset_index(drop=True)
+    OUT_TARGETS.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(OUT_TARGETS, index=False)
+    print(f"wrote {len(df)} target annotations -> {OUT_TARGETS}")
+
+
 def main() -> None:
     xlsx = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_XLSX
+    _write_targets(xlsx)
     binders = pd.ExcelFile(xlsx).parse("Binders")
 
     rows = []

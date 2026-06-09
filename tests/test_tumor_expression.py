@@ -6,6 +6,7 @@ import numpy as np
 
 from trufflepig.tumor_purity import (
     LINEAGE_GENES,
+    lineage_purity_panel_codes,
     TCGA_MEDIAN_PURITY,
     _combine_purity_estimates,
     _lineage_purity_estimates,
@@ -25,9 +26,17 @@ def test_lineage_genes_covers_all_tcga_types():
 
 
 def test_lineage_genes_values_are_nonempty_lists():
+    panels = lineage_purity_panel_codes()
     for ct, genes in LINEAGE_GENES.items():
         assert isinstance(genes, list), f"{ct}: expected list, got {type(genes)}"
-        assert len(genes) >= 2, f"{ct}: need at least 2 lineage genes, got {len(genes)}"
+        assert len(genes) >= 1, f"{ct}: empty lineage entry"
+        # Diagnostic-marker subtypes (e.g. SARC_ASPS=[TFE3]) legitimately
+        # carry a single pathognomonic marker; only codes that anchor their
+        # own purity estimate need the >=2 floor (purity panels need >=5, #170).
+        if ct in panels:
+            assert len(genes) >= 2, (
+                f"{ct}: purity panel needs at least 2 lineage genes, got {len(genes)}"
+            )
 
 
 def test_lineage_genes_has_no_duplicates():

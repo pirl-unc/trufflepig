@@ -20,6 +20,12 @@ from ._data import TRUFFLEPIG_DATA_DIR
 from .clean_tpm import assert_clean_tpm
 
 
+# pirlygenes clean_tpm_v4 pins the technical-RNA + ribosomal compartment to this
+# fraction of the 1e6 budget (two-compartment "fixed_fraction" normalization)
+# rather than zeroing it. References loaded from pirlygenes are v4, so the
+# clean-TPM guard must expect technical RNA at ~this fraction, not ~0.
+_CLEAN_TPM_V4_TECHNICAL_FRACTION = 0.25
+
 _PAN_CANCER_CACHE: dict[tuple, pd.DataFrame] = {}
 _TCGA_DECONV_PATH = TRUFFLEPIG_DATA_DIR / "tcga-deconvolved-expression.csv.gz"
 _SUBTYPE_DECONV_PATH = TRUFFLEPIG_DATA_DIR / "subtype-deconvolved-expression.csv.gz"
@@ -347,17 +353,17 @@ def _pan_cancer_cache_key(
     return cache_key, genes_tuple
 
 
-def tcga_deconvolved_expression(
-    technical_rna_normalize: bool = False,
-    remove_noncoding: bool = False,
+@lru_cache(maxsize=None)
+def _tcga_deconvolved_normalized(
+    technical_rna_normalize: bool,
+    remove_noncoding: bool,
 ) -> pd.DataFrame:
-    """Per-(gene, TCGA code) tumor-only TPM medians from offline deconv.
+    """Build + validate the normalized TCGA-deconvolved frame once per worker.
 
-    The current bundled artifact includes ``Ensembl_Gene_ID`` when it can be
-    recovered unambiguously from the source reference. Historical rows for
-    duplicated symbols remain symbol-keyed until the offline generator is rerun
-    with the new ID-preserving schema. Trufflepig always exposes the artifact
-    on the standard TPM-1e6 footing.
+    The normalize -> renormalize -> assert pipeline over the ~640k-row artifact
+    costs ~3.5s and is a pure function of the (cached) raw read plus the two
+    bool args, so memoize it — callers were re-running it on every call. The
+    public wrapper returns a ``.copy()`` to keep the fresh-object contract.
     """
     df = _tcga_deconvolved_expression_cached().copy()
     df, _ = _pirlygenes.normalize_expression(
@@ -383,14 +389,33 @@ def tcga_deconvolved_expression(
     return df
 
 
-def subtype_deconvolved_expression(
+def tcga_deconvolved_expression(
     technical_rna_normalize: bool = False,
     remove_noncoding: bool = False,
 ) -> pd.DataFrame:
-    """Per-(cancer_code, subtype, symbol) tumor-only TPM medians.
+    """Per-(gene, TCGA code) tumor-only TPM medians from offline deconv.
 
-    Each (cancer_code, subtype) group is renormalized to the standard
-    TPM-1e6 footing — trufflepig does not expose the native bundled scale.
+    The current bundled artifact includes ``Ensembl_Gene_ID`` when it can be
+    recovered unambiguously from the source reference. Historical rows for
+    duplicated symbols remain symbol-keyed until the offline generator is rerun
+    with the new ID-preserving schema. Trufflepig always exposes the artifact
+    on the standard TPM-1e6 footing.
+    """
+    return _tcga_deconvolved_normalized(
+        technical_rna_normalize, remove_noncoding
+    ).copy()
+
+
+@lru_cache(maxsize=None)
+def _subtype_deconvolved_normalized(
+    technical_rna_normalize: bool,
+    remove_noncoding: bool,
+) -> pd.DataFrame:
+    """Build + validate the normalized subtype-deconvolved frame once per worker.
+
+    Same rationale as :func:`_tcga_deconvolved_normalized`: the pipeline over the
+    ~1.05M-row artifact costs ~5s and is pure in (raw read, bool args), so cache
+    it instead of recomputing on every call.
     """
     df = _subtype_deconvolved_expression_cached().copy()
     df, _ = _pirlygenes.normalize_expression(
@@ -414,6 +439,20 @@ def subtype_deconvolved_expression(
         context="subtype_deconvolved_expression",
     )
     return df
+
+
+def subtype_deconvolved_expression(
+    technical_rna_normalize: bool = False,
+    remove_noncoding: bool = False,
+) -> pd.DataFrame:
+    """Per-(cancer_code, subtype, symbol) tumor-only TPM medians.
+
+    Each (cancer_code, subtype) group is renormalized to the standard
+    TPM-1e6 footing — trufflepig does not expose the native bundled scale.
+    """
+    return _subtype_deconvolved_normalized(
+        technical_rna_normalize, remove_noncoding
+    ).copy()
 
 
 def cancer_reference_expression(
@@ -462,6 +501,7 @@ def cancer_reference_expression(
                 df.loc[clean_rows],
                 value_cols=value_cols,
                 context="cancer_reference_expression",
+                technical_fraction=_CLEAN_TPM_V4_TECHNICAL_FRACTION,
             )
         else:
             value_cols = [col for col in df.columns if str(col).endswith("_TPM_clean")]
@@ -469,6 +509,7 @@ def cancer_reference_expression(
                 df,
                 value_cols=value_cols,
                 context="cancer_reference_expression",
+                technical_fraction=_CLEAN_TPM_V4_TECHNICAL_FRACTION,
             )
     return df
 

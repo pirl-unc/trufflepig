@@ -21,6 +21,7 @@ import pandas as pd
 from ._data import TRUFFLEPIG_DATA_DIR
 
 _CSV = TRUFFLEPIG_DATA_DIR / "therapeutic-agents.csv"
+_TARGETS_CSV = TRUFFLEPIG_DATA_DIR / "therapeutic-targets.csv"
 
 # Controlled modality vocabulary + reader-facing labels.
 MODALITY_LABELS = {
@@ -181,3 +182,85 @@ def target_agent_summary(symbol: str | None) -> str:
         f"{best.agent} ({best.modality_label}, {best.approval_clause()})"
         f"{extra}"
     )
+
+
+# --------------------------------------------------------------------------
+# Target-level annotation: localization + on-target/normal-tissue liabilities
+# (the #47 "normal-expression guardrail"). Covers all curated targets,
+# including those with no binder yet, so every target is reasoning-available.
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TherapeuticTarget:
+    target_gene: str
+    protein_name: str
+    localization: str
+    liabilities: str
+    cancer_relevance: str
+    binder_accessible: str
+    priority_hint: str
+    evidence_pmids: str
+
+    @property
+    def is_surface(self) -> bool:
+        return self.localization.startswith("surface")
+
+    @property
+    def liability_items(self) -> tuple[str, ...]:
+        return tuple(p.strip() for p in self.liabilities.split(";") if p.strip())
+
+
+@lru_cache(maxsize=1)
+def therapeutic_targets() -> pd.DataFrame:
+    """Per-target annotation table (localization, liabilities, …)."""
+    return pd.read_csv(_TARGETS_CSV, dtype=str).fillna("")
+
+
+@lru_cache(maxsize=1)
+def _targets_by_gene() -> dict[str, TherapeuticTarget]:
+    out: dict[str, TherapeuticTarget] = {}
+    for _, row in therapeutic_targets().iterrows():
+        gene = _clean(row.get("target_gene"))
+        if not gene:
+            continue
+        out[gene] = TherapeuticTarget(
+            target_gene=gene,
+            protein_name=_clean(row.get("protein_name")),
+            localization=_clean(row.get("localization")),
+            liabilities=_clean(row.get("liabilities")),
+            cancer_relevance=_clean(row.get("cancer_relevance")),
+            binder_accessible=_clean(row.get("binder_accessible")),
+            priority_hint=_clean(row.get("priority_hint")),
+            evidence_pmids=_clean(row.get("evidence_pmids")),
+        )
+    return out
+
+
+def all_target_genes() -> frozenset[str]:
+    """Every curated target gene (binder or not) — the reasoning-available
+    universe. Superset of :func:`druggable_target_genes`."""
+    return frozenset(_targets_by_gene()) | druggable_target_genes()
+
+
+def target_annotation(symbol: str | None) -> TherapeuticTarget | None:
+    if not symbol:
+        return None
+    return _targets_by_gene().get(str(symbol).strip())
+
+
+def target_liability_note(symbol: str | None, *, max_items: int = 2) -> str:
+    """Short on-target/normal-tissue caveat for a target, e.g.
+    ``"normal-tissue caveat: GI expression (stomach, biliary tree); Hypoxic
+    induction"``. Empty if the target has no curated liabilities."""
+    annotation = target_annotation(symbol)
+    if annotation is None:
+        return ""
+    items = [
+        item
+        for item in annotation.liability_items
+        if "limited clinical program" not in item.lower()
+    ][:max_items]
+    if not items:
+        return ""
+    return "normal-tissue caveat: " + "; ".join(items)
