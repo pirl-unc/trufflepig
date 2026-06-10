@@ -10,3 +10,10 @@ htmlcov/
 .env
 /site/
 /docs/_build/
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store
+
+# Claude Code agent workspace
+.claude/

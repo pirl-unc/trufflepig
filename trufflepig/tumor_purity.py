@@ -186,6 +186,12 @@ _CANCER_FAMILY_BY_CODE = {
     "LUSC": "SQUAMOUS",
     "CESC": "SQUAMOUS",
     "SARC": "MESENCHYMAL",
+    # UCS (uterine carcinosarcoma) is biphasic: epithelial *origin* (the
+    # registry family is ``carcinoma-gu`` -> ``broad_lineage`` returns
+    # ``epithelial``) but its *bulk RNA* is dominated by the sarcomatous
+    # component, so for family-panel scoring it groups with SARC as MESENCHYMAL.
+    # The two layers intentionally disagree — origin vs RNA-signal-family — and
+    # this is the one code where they do. Not a bug.
     "UCS": "MESENCHYMAL",
     "KIRC": "RENAL",
     "KIRP": "RENAL",
