@@ -49,7 +49,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_DSRCT",
         ("SARC",),
         ("WT1", "EWSR1", "KRT8", "KRT18", "DES"),
-        "PMID:1847340",
+        "PMID:8187063",
         "DSRCT EWSR1-WT1 and polyphenotypic epithelial/myogenic markers",
     ),
     LiteratureSignature(
@@ -112,7 +112,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "MCL",
         ("DLBC",),
         ("CCND1", "SOX11", "CD5", "MS4A1", "CD79A"),
-        "PMID:19016864;PMCID:PMC4650381",
+        "PMID:19880778",
         "mantle-cell lymphoma cyclin-D1/SOX11 B-cell program",
     ),
     LiteratureSignature(
@@ -235,7 +235,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "ACINIC",
         ("HNSC",),
         ("NR4A3", "ANO1", "AQP5", "SOX10", "BCL6"),
-        "PMID:31094928;PMID:34535188",
+        "PMID:31094928",
         "acinic-cell carcinoma NR4A3/acinar-salivary marker program",
     ),
     LiteratureSignature(
@@ -284,21 +284,21 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_DFSP",
         ("SARC",),
         ("COL1A1", "PDGFB", "CD34", "PDGFRB", "APOD"),
-        "PMID:19805687",
+        "PMID:8988177",
         "DFSP COL1A1-PDGFB/CD34 fibroblastic marker program",
     ),
     LiteratureSignature(
         "SARC_ASPS",
         ("SARC",),
         ("TFE3", "ASPSCR1", "MET", "ANGPTL2", "KDR"),
-        "PMID:12835757",
+        "PMID:11244503",
         "alveolar soft-part sarcoma ASPSCR1-TFE3/angiogenic marker program",
     ),
     LiteratureSignature(
         "SARC_CCS",
         ("SARC",),
         ("MITF", "SOX10", "MLANA", "PMEL", "TYR"),
-        "PMID:14576204",
+        "PMID:8401579",
         "clear-cell sarcoma melanocytic/EWSR1-ATF1 marker program",
     ),
     LiteratureSignature(
@@ -312,7 +312,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_EHE",
         ("SARC",),
         ("CAMTA1", "WWTR1", "ERG", "FLI1", "PECAM1"),
-        "PMID:22265237",
+        "PMID:21885404",
         "EHE WWTR1-CAMTA1/YAP1-TFE3 vascular marker program",
     ),
     LiteratureSignature(
@@ -375,7 +375,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_CIC",
         ("SARC",),
         ("ETV4", "ETV1", "ETV5", "WT1", "CCND2"),
-        "PMID:28765524",
+        "PMID:16717057",
         "CIC-rearranged sarcoma CIC-DUX4 PEA3 (ETV) + WT1 target program",
     ),
     LiteratureSignature(
@@ -546,7 +546,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_LPS",
         ("SARC",),
         ("MDM2", "CDK4", "HMGA2", "PPARG", "FABP4"),
-        "PMID:21509751",
+        "PMID:18214854",
         "liposarcoma family: 12q13-15 amplicon (MDM2/CDK4/HMGA2) + adipogenic "
         "program (PPARG/FABP4) — covers WD/DD/myxoid/pleomorphic LPS.",
     ),

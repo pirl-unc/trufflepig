@@ -33,6 +33,23 @@ def test_preaggregated_salmon_gene_file_raises_clear_error(tmp_path):
         le.load_expression_data(str(p), verbose=False, progress=False)
 
 
+def test_truncated_expression_file_warns_but_loads(tmp_path):
+    """A non-empty but suspiciously sparse file (far below a whole transcriptome)
+    must WARN (not error) — so intentionally-tiny inputs still load, but a
+    truncated real sample is surfaced rather than silently producing a confident
+    report on a handful of genes."""
+    p = tmp_path / "tiny.tsv"
+    p.write_text(
+        "ensembl_gene_id\tgene_symbol\tTPM\n"
+        "ENSG00000146648\tEGFR\t583.0\n"
+        "ENSG00000111640\tGAPDH\t5000.0\n"
+    )
+    with pytest.warns(UserWarning, match="far below"):
+        out = le.load_expression_data(str(p), verbose=False, progress=False)
+    # "warns but loads": the warning is non-fatal — the frame still comes back.
+    assert out is not None and len(out) > 0
+
+
 def test_get_canonical_gene_name_from_gene_ids_string(monkeypatch):
     monkeypatch.setattr(
         le,
