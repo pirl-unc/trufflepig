@@ -546,7 +546,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "SARC_LPS",
         ("SARC",),
         ("MDM2", "CDK4", "HMGA2", "PPARG", "FABP4"),
-        "PMID:21509751",
+        "PMID:18214854",
         "liposarcoma family: 12q13-15 amplicon (MDM2/CDK4/HMGA2) + adipogenic "
         "program (PPARG/FABP4) — covers WD/DD/myxoid/pleomorphic LPS.",
     ),
