@@ -45,7 +45,9 @@ def test_truncated_expression_file_warns_but_loads(tmp_path):
         "ENSG00000111640\tGAPDH\t5000.0\n"
     )
     with pytest.warns(UserWarning, match="far below"):
-        le.load_expression_data(str(p), verbose=False, progress=False)
+        out = le.load_expression_data(str(p), verbose=False, progress=False)
+    # "warns but loads": the warning is non-fatal — the frame still comes back.
+    assert out is not None and len(out) > 0
 
 
 def test_get_canonical_gene_name_from_gene_ids_string(monkeypatch):

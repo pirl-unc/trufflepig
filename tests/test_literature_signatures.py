@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 
 from pirlygenes.gene_sets_cancer import cancer_type_registry
@@ -5,6 +7,7 @@ from pirlygenes.gene_sets_cancer import cancer_type_registry
 from trufflepig.analyze import effective_expression_reference, expression_reference_options
 from trufflepig.common import ensembl_id_to_symbol_map
 from trufflepig.literature_signatures import (
+    _SIGNATURE_ROWS,
     literature_signature,
     literature_signature_rules_df,
 )
@@ -12,6 +15,28 @@ from trufflepig.rare_inference import (
     infer_rare_cancer_marker_hypotheses_from_rna,
     rare_cancer_rna_surrogate_rules_df,
 )
+
+
+# A ``source`` field is a ``;``-separated list of citation tokens, each of which
+# must be a well-formed PubMed/PMC id or a curated-label. This is a *format*
+# guard — it catches typos and stray formats (a bare number, ``PMID:PMC123``, a
+# truncated id), the cheap class of error. It can't tell a wrong-but-well-formed
+# PMID from a right one (that needs the offline NCBI audit), but it stops typos
+# at CI time.
+_CITATION_TOKEN = re.compile(r"^(PMID:\d+|PMCID:PMC\d+|curated_[a-z0-9_]+_literature)$")
+
+
+def test_signature_source_citations_are_well_formed():
+    bad = []
+    for row in _SIGNATURE_ROWS:
+        for token in str(row.source).split(";"):
+            token = token.strip()
+            if not _CITATION_TOKEN.fullmatch(token):
+                bad.append(f"{row.cancer_code}: {token!r}")
+    assert not bad, (
+        "malformed citation token(s) in literature_signatures source fields "
+        f"(expected PMID:<digits> / PMCID:PMC<digits> / curated_*_literature): {bad}"
+    )
 
 
 def _expression_frame(tpm_by_symbol):
