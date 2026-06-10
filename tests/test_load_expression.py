@@ -8,6 +8,31 @@ import pirlygenes.gene_ids as gene_ids_mod
 import trufflepig.load_expression as le
 
 
+def test_empty_expression_file_raises_clear_error(tmp_path):
+    """A header-only / empty expression file must fail loud at the load boundary
+    with an actionable message — not surface later as a confusing
+    AttributeError/transcript-ID error deep in the pipeline (the alvin
+    gene_tpm.tsv case)."""
+    p = tmp_path / "empty.tsv"
+    p.write_text("gene_id\tTPM\tNumReads\tEffectiveLength\n")
+    with pytest.raises(ValueError, match="no data rows"):
+        le.load_expression_data(str(p), verbose=False, progress=False)
+
+
+def test_preaggregated_salmon_gene_file_raises_clear_error(tmp_path):
+    """A pre-aggregated salmon gene file (gene_id + NumReads + EffectiveLength,
+    no transcript IDs or symbols) must raise a clear message pointing at the
+    transcript-level quant.sf, not the misleading 'transcript ID column' error."""
+    p = tmp_path / "salmon_gene.tsv"
+    p.write_text(
+        "gene_id\tTPM\tNumReads\tEffectiveLength\n"
+        "ENSG00000146648\t583.0\t1000\t2000\n"
+        "ENSG00000111640\t5000.0\t9000\t1500\n"
+    )
+    with pytest.raises(ValueError, match="pre-aggregated salmon gene"):
+        le.load_expression_data(str(p), verbose=False, progress=False)
+
+
 def test_get_canonical_gene_name_from_gene_ids_string(monkeypatch):
     monkeypatch.setattr(
         le,

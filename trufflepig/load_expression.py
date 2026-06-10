@@ -1223,6 +1223,61 @@ def _try_load_sibling_transcript_frame(input_path, verbose=False, progress=True)
     return None
 
 
+def _validate_expression_input(df, input_path):
+    """Fail loud and early on empty / unusable expression input.
+
+    Without this an empty file or a pre-aggregated salmon gene table only
+    surfaces much later as a confusing ``AttributeError: canonical_gene_name`` or
+    ``Unable to find a column for transcript ID`` deep in the pipeline — see the
+    alvin ``gene_tpm.tsv`` (header-only) case. Catch the obvious-garbage inputs
+    at the load boundary with an actionable message instead.
+    """
+    if len(df) == 0:
+        raise ValueError(
+            f"Expression input {input_path!r} has no data rows — the file is "
+            "empty or header-only. Check that the upstream quantification step "
+            "actually produced output before re-running."
+        )
+    cols = {str(c).lower() for c in df.columns}
+    # Salmon hallmark columns (NumReads + EffectiveLength) but only a gene id and
+    # no transcript Name / gene symbol => a *pre-aggregated salmon gene* file.
+    # trufflepig does its own transcript->gene aggregation (with clean-TPM), so it
+    # needs the transcript-level quant.sf (a ``Name`` column) or a gene table that
+    # carries symbols — not a gene file collapsed upstream by a different rule.
+    salmon_like = "numreads" in cols and "effectivelength" in cols
+    has_transcript = any(
+        c in cols for c in ("name", "transcript_id", "transcript", "target_id")
+    )
+    has_symbol = any(
+        c in cols
+        for c in (
+            "gene", "gene_name", "gene_symbol", "symbol",
+            "canonical_gene_name", "gene_display_name",
+        )
+    )
+    has_gene_id = any(c in cols for c in ("gene_id", "ensembl_gene_id"))
+    if salmon_like and has_gene_id and not has_transcript and not has_symbol:
+        raise ValueError(
+            f"Expression input {input_path!r} looks like a pre-aggregated salmon "
+            "gene-level file (gene_id + NumReads + EffectiveLength, no transcript "
+            "IDs or gene symbols). trufflepig aggregates transcripts to genes "
+            "itself, so provide the transcript-level quant.sf (a 'Name' column) "
+            "or a gene table that includes a gene symbol column."
+        )
+    # A whole-transcriptome quant carries ~20k+ genes; a few hundred rows means a
+    # truncated file or a targeted panel that trufflepig can't reference-compare.
+    # Warn (not error) so intentionally-tiny unit fixtures still load.
+    _MIN_EXPECTED_FEATURES = 1000
+    if len(df) < _MIN_EXPECTED_FEATURES:
+        warnings.warn(
+            f"Expression input {input_path!r} has only {len(df)} rows — far below "
+            f"the ~20k+ genes expected from whole-transcriptome RNA-seq. The file "
+            "may be truncated or a targeted panel; reference-based calls will be "
+            "unreliable.",
+            stacklevel=2,
+        )
+
+
 def load_expression_data(
     input_path,
     aggregate_gene_expression=False,
@@ -1251,10 +1306,9 @@ def load_expression_data(
     if verbose:
         print(f"[load] Loaded {len(df)} rows and {len(df.columns)} columns")
 
-    # TEMP-STUB: _raise_if_disallowed_preaggregated_salmon_gene_file is
-    # a forward reference in WIP that's not yet defined. Inline noop so
-    # the file loads while the guard is in progress.
-    pass  # _raise_if_disallowed_preaggregated_salmon_gene_file(input_path, df)
+    # Fail loud and early on empty / pre-aggregated-salmon-gene input rather than
+    # letting it surface as a confusing error deep in the pipeline.
+    _validate_expression_input(df, input_path)
 
     df, used_sidecar = _attach_gene_sidecar_if_present(input_path, df, verbose=verbose)
     df = _select_sample_rows(
