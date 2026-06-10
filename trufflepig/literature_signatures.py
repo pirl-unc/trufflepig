@@ -112,7 +112,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "MCL",
         ("DLBC",),
         ("CCND1", "SOX11", "CD5", "MS4A1", "CD79A"),
-        "PMID:19880778;PMCID:PMC4650381",
+        "PMID:19880778",
         "mantle-cell lymphoma cyclin-D1/SOX11 B-cell program",
     ),
     LiteratureSignature(
