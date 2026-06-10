@@ -28,3 +28,25 @@ def _isolate_symbol_map_cache():
     except Exception:
         # Never let cache teardown mask a real test result.
         pass
+
+
+@pytest.fixture(autouse=True)
+def _close_matplotlib_figures():
+    """Close any matplotlib figures a test left open.
+
+    The plotting helpers (e.g. ``plot_priority_targets``) ``return fig`` for the
+    caller to own; the main pipeline closes per-sample, but tests that just
+    assert-and-discard don't, so pyplot's global registry accumulates figures
+    across tests in a worker (the ``More than 20 figures have been opened``
+    RuntimeWarning + a slow memory creep). Only act if matplotlib is already
+    imported, so non-plotting tests don't pay the import.
+    """
+    yield
+    import sys
+
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is not None:
+        try:
+            plt.close("all")
+        except Exception:
+            pass
