@@ -531,6 +531,77 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "fallback (no choroid-plexus cohort) — markers carry the call, not the cohort.",
         confidence="low",
     ),
+    # Intermediate sarcoma nodes (pirlygenes taxonomy build-out, #366): grouping
+    # levels between SARC and the leaf subtypes; resolve to the SARC reference and
+    # carry the shared-program markers of their subtype family.
+    LiteratureSignature(
+        "SARC_RMS",
+        ("SARC",),
+        ("MYOD1", "MYOG", "DES", "MYF5", "MYF6"),
+        "curated_pathology_literature",
+        "rhabdomyosarcoma family shared myogenic master-regulator program "
+        "(MYOD1/MYOG/DES) — covers ERMS/ARMS/PRMS/SSRMS subtypes.",
+    ),
+    LiteratureSignature(
+        "SARC_LPS",
+        ("SARC",),
+        ("MDM2", "CDK4", "HMGA2", "PPARG", "FABP4"),
+        "PMID:21509751",
+        "liposarcoma family: 12q13-15 amplicon (MDM2/CDK4/HMGA2) + adipogenic "
+        "program (PPARG/FABP4) — covers WD/DD/myxoid/pleomorphic LPS.",
+    ),
+    LiteratureSignature(
+        "SARC_ESS",
+        ("SARC",),
+        ("MME", "ESR1", "PGR", "WT1", "CCND1"),
+        "curated_pathology_literature",
+        "endometrial stromal sarcoma family: CD10(MME)+ hormone-receptor "
+        "(ESR1/PGR) endometrial-stromal program — covers low/high-grade ESS.",
+    ),
+    # TCGA endometrial molecular subtypes (UCEC integrated genomic classes,
+    # PMID:23636398): no own deconvolved cohort yet, resolve to the UCEC reference.
+    # POLE-ultramutated and MSI-hypermutated are both immune-hot (degenerate by RNA
+    # — DNA/MSI-PCR distinguishes them); CN-low is endometrioid/hormone-driven;
+    # CN-high is serous-like/TP53. Confidence ``low``: the molecular class is a
+    # mutation/CN phenotype, only partially an expression phenotype.
+    LiteratureSignature(
+        "UCEC_POLE",
+        ("UCEC",),
+        ("POLE", "CXCL9", "CXCL10", "GZMB", "IDO1"),
+        "PMID:23636398",
+        "POLE-ultramutated endometrial: ultrahigh TMB -> strong immune-hot "
+        "(IFN-gamma/cytolytic) RNA proxy. Convergent with MSI immune-hot; confirm "
+        "with POLE exonuclease-domain mutation testing.",
+        confidence="low",
+    ),
+    LiteratureSignature(
+        "UCEC_MSI",
+        ("UCEC",),
+        ("MLH1", "CXCL9", "CXCL10", "GZMB", "IDO1"),
+        "PMID:23636398",
+        "MSI-hypermutated endometrial: MLH1-silencing + immune-hot "
+        "(IFN-gamma/cytolytic) RNA proxy. Convergent with POLE; confirm with "
+        "MSI-PCR/MMR-IHC.",
+        confidence="low",
+    ),
+    LiteratureSignature(
+        "UCEC_CNL",
+        ("UCEC",),
+        ("ESR1", "PGR", "PAX8", "PTEN", "FOXA2"),
+        "PMID:23636398",
+        "copy-number-low (endometrioid) endometrial: hormone-receptor-driven "
+        "(ESR1/PGR) PAX8+ endometrioid program.",
+        confidence="low",
+    ),
+    LiteratureSignature(
+        "UCEC_CNH",
+        ("UCEC",),
+        ("TP53", "MKI67", "CCNE1", "FOLR1", "MUC16"),
+        "PMID:23636398",
+        "copy-number-high (serous-like) endometrial: TP53-mutated, highly "
+        "proliferative (MKI67/CCNE1) serous-like program.",
+        confidence="low",
+    ),
 )
 
 
