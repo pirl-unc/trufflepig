@@ -200,6 +200,26 @@ _CANCER_FAMILY_BY_CODE = {
     "LGG": "GLIAL",
     "SKCM": "MELANOCYTIC",
     "UVM": "MELANOCYTIC",
+    # Neuroendocrine (#71): the pirlygenes NEUROENDOCRINE panel (CHGA/CHGB/SYP/
+    # INSM1/NCAM1/ASCL1/...) already scores, but no code mapped to it, so the
+    # score never attached to a candidate and SCLC/NET/NEC defaulted to a plain
+    # carcinoma. NE markers are specific (≈0 in LUAD/carcinomas), so this is a
+    # hard (penalizing) family — when the program is present, non-NE carcinoma
+    # candidates are demoted. The family-expansion path then pulls these into the
+    # scored pool. Driver-defined SCLC subtypes inherit via the parent SCLC.
+    "PCPG": "NEUROENDOCRINE",
+    "SCLC": "NEUROENDOCRINE",
+    "SCLC_ASCL1": "NEUROENDOCRINE",
+    "SCLC_NEUROD1": "NEUROENDOCRINE",
+    "SCLC_POU2F3": "NEUROENDOCRINE",
+    "SCLC_YAP1": "NEUROENDOCRINE",
+    "NET_LUNG": "NEUROENDOCRINE",
+    "NET_PANCREAS": "NEUROENDOCRINE",
+    "NET_MIDGUT": "NEUROENDOCRINE",
+    "NET_RECTAL": "NEUROENDOCRINE",
+    "NEC_LUNG_LARGECELL": "NEUROENDOCRINE",
+    "NEC_MERKEL": "NEUROENDOCRINE",
+    "MTC": "NEUROENDOCRINE",
 }
 
 _CANCER_FAMILY_CODE_COUNTS = Counter(_CANCER_FAMILY_BY_CODE.values())
@@ -217,6 +237,7 @@ _CANCER_FAMILY_DISPLAY = {
     "GLIAL": "glial",
     "MELANOCYTIC": "melanocytic",
     "MESENCHYMAL": "mesenchymal / sarcoma-like",
+    "NEUROENDOCRINE": "neuroendocrine",
     "PROSTATE": "prostate",
     "RENAL": "renal",
     "SQUAMOUS": "squamous",
@@ -3448,7 +3469,14 @@ def rank_cancer_type_candidates(
     top_family_label = hard_ranked_families[0][0] if hard_ranked_families else None
     non_penalizing_families = soft_families
     for code in ordered_codes:
-        purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
+        # A candidate pulled in by family-expansion may lack a scoreable purity
+        # reference (e.g. a deconvolved-only subtype with no pan-cancer column and
+        # no broad fallback). Skip it rather than abort the whole ranking — it
+        # simply doesn't compete, instead of erroring the analysis.
+        try:
+            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
+        except ValueError:
+            continue
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
         broad_signature_score = float(signature_score_map.get(code, 0.0))
         signature_score = broad_signature_score
