@@ -67,9 +67,12 @@ _FAMILY_BROAD = {
     "sarcoma": "mesenchymal",
     "melanoma": "melanocytic",
     "germ-cell": "germ",
-    "cns": "neural",
     "neuroendocrine": "neuroendocrine",
     "embryonal": "embryonal",
+    # ``cns`` and ``endocrine`` are no longer single families — pirlygenes #359
+    # split them into ``cns-glial/ependymal/meningeal/sellar/choroid/embryonal``
+    # and ``endocrine-epithelial/-neuroendocrine``. Handled by prefix in
+    # ``broad_lineage`` so future sub-splits don't re-break this.
 }
 
 # Carcinoma cohorts -> (differentiation program, organ-of-origin).
@@ -122,9 +125,17 @@ def broad_lineage(code: str, _registry=None) -> str:
         return _FAMILY_BROAD[family]
     if family.startswith("heme"):
         return "hematolymphoid"
+    # CNS sub-families (pirlygenes #359): all CNS/neural at the broad level,
+    # except the embryonal class (MBL/ATRT) which keeps its own poly-phenotypic
+    # node. Covers the legacy bare ``cns`` too.
+    if family == "cns" or family.startswith("cns-"):
+        return "embryonal" if "embryonal" in family else "neural"
+    # Endocrine split (pirlygenes #359 follow-up): neuroendocrine vs epithelial.
+    if family.startswith("endocrine"):
+        return "neuroendocrine" if "neuroendocrine" in family else "epithelial"
     if (
         family.startswith("carcinoma")
-        or family in ("salivary", "thymic", "endocrine")
+        or family in ("salivary", "thymic")
         or code in _EPITHELIAL_CODES_WITHOUT_TCGA
     ):
         return "epithelial"

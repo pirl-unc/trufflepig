@@ -59,7 +59,15 @@ def _expression_frame(tpm_by_symbol):
 def test_all_codes_without_direct_expression_reference_have_literature_signature():
     missing = []
     mismatched_context = []
-    for code in cancer_type_registry()["code"].dropna().astype(str):
+    reg = cancer_type_registry()
+    # Abstract grouping nodes (a code that is the parent_code of other codes,
+    # e.g. CRC -> COAD/READ) are not classifiable cohorts — the classifier scores
+    # the child cohorts, and the ontology walk only stops at the parent to report
+    # the tied children as a set. They don't need their own literature signature.
+    parent_nodes = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
+    for code in reg["code"].dropna().astype(str):
+        if code in parent_nodes:
+            continue
         if expression_reference_options(code, include_fallback=False):
             continue
         signature = literature_signature(code)

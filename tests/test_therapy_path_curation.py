@@ -61,10 +61,13 @@ def test_target_rows_have_structured_treatment_path_curation():
     targets = _target_rows()
     assert len(targets) >= 300
     for column in ("treatment_path_tier", "line_of_therapy", "eligibility_note"):
-        missing = targets[targets[column].astype(str).str.strip().eq("")]
-        assert missing.empty, f"{column} missing for target rows: " + ", ".join(
-            f"{row.cancer_code}:{row.symbol}:{row.agent}"
-            for row in missing.head(10).itertuples()
+        missing = [
+            row
+            for row in targets.itertuples()
+            if str(getattr(row, column)).strip() == "" and not _is_quarantined(row)
+        ]
+        assert not missing, f"{column} missing for target rows: " + ", ".join(
+            f"{row.cancer_code}:{row.symbol}:{row.agent}" for row in missing[:10]
         )
 
     # Quarantined upstream rows (see KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS)
