@@ -3678,6 +3678,40 @@ def rank_cancer_type_candidates(
         rows = _apply_prad_stromal_rescue(rows, sample_tpm)
         rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm)
         rows = _apply_normal_tissue_tiebreaker(rows, sample_tpm)
+
+    # Tumour-intrinsic lineage exclusion (#71/#75): demote candidates whose broad
+    # lineage is contradicted by the sample's tumour-intrinsic program — epithelial
+    # present demotes mesenchymal / hematolymphoid; a specific neuroendocrine
+    # program demotes the epithelial branch. Applied HERE — after the support
+    # recomputations above (orphan / stromal / tiebreaker rescues), before the
+    # final ordering — so it actually reaches the Working cancer call. The same
+    # gate previously lived only in the ontology walk, which ``analyze()`` never
+    # invokes (a disconnect no test caught); a live characterization test now
+    # guards this wiring.
+    if sample_tpm:
+        from .cancer_type_ontology import broad_lineage
+        from .lineage_evidence import lineage_exclusion_evidence
+        from .lineage_marker_recall import marker_hk_median
+
+        _lineage_ev = lineage_exclusion_evidence(
+            sample_tpm, marker_hk_median(sample_tpm)
+        )
+        if _lineage_ev.factors:
+            for r in rows:
+                _factor = _lineage_ev.factors.get(broad_lineage(r["code"]), 1.0)
+                if _factor != 1.0:
+                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor
+                    r["support_geomean"] = (
+                        float(r.get("support_geomean") or 0.0) * _factor
+                    )
+                    r["lineage_exclusion_factor"] = _factor
+            rows.sort(
+                key=lambda row: (
+                    -row["support_score"],
+                    -row["signature_score"],
+                    row["code"],
+                )
+            )
     rows = _promote_same_family_alternatives(rows)
 
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
