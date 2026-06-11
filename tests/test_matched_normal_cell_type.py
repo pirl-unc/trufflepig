@@ -144,6 +144,9 @@ def test_all_leaf_tissues_either_covered_or_documented():
         # Upstream coverage tracked in pirlygenes#369.
         "meninges",
         "choroid_plexus",
+        # CRC parent node's primary_tissue (colon/rectum covered separately);
+        # the abstract colorectal grouping falls back to bulk.
+        "colorectum",
     }
     uncovered = all_tissues - covered - _ACKNOWLEDGED_BULK_FALLBACK
     assert not uncovered, (

@@ -56,10 +56,8 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "HL",
         "MCL",
         "MDS",
-        "MM",
         "MPN",
         "T_ALL",
-        "SARC",
         "NET_LUNG",
         "NEC_LUNG_LARGECELL",
         "NEC_MERKEL",
@@ -112,42 +110,33 @@ _MISSING_THERAPY_AXIS = frozenset(
         "HCL",
         "HEPB",
         "HL",
-        "HNSC",
         "KICH",
         "KIRC",
         "KIRP",
-        "LAML",
         "LGG",
         "LIHC",
         "NET_LUNG",
         "NEC_LUNG_LARGECELL",
-        "MBL",
         "MCL",
         "MDS",
         "NEC_MERKEL",
         "MESO",
         "NET_MIDGUT",
-        "MM",
         "MPN",
         "MTC",
         "NPC",
         "NUTM",
-        "OV",
         "PAAD",
         "NET_PANCREAS",
         "PCPG",
         "RB",
-        "READ",
         "NET_RECTAL",
         "RT",
-        "SARC",
-        "SCLC",
         "STAD",
         "TGCT",
         "THCA",
         "THYM",
         "T_ALL",
-        "UCEC",
         "UCS",
         "UVM",
         "WILMS",
@@ -258,6 +247,11 @@ _TOLERATED_GAPS_EXPLICIT = {
 def _build_tolerated_gaps():
     reg = cancer_type_registry()
     leaf = reg[reg["parent_code"].fillna("").astype(str).eq("")]
+    # Exclude abstract grouping parents (parent_code-empty but the parent_code of
+    # other codes, e.g. CRC -> COAD/READ): they group child cohorts and aren't
+    # terminal leaves with their own coverage requirement.
+    _parents = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
+    leaf = leaf[~leaf["code"].astype(str).isin(_parents)]
     out = {}
     for code in leaf["code"]:
         base = _TOLERATED_GAPS_EXPLICIT.get(code, set())
@@ -273,6 +267,11 @@ _TOLERATED_GAPS = _build_tolerated_gaps()
 def _leaf_codes_with_coverage():
     reg = cancer_type_registry()
     leaf = reg[reg["parent_code"].fillna("").astype(str).eq("")]
+    # Exclude abstract grouping parents (parent_code-empty but the parent_code of
+    # other codes, e.g. CRC -> COAD/READ): they group child cohorts and aren't
+    # terminal leaves with their own coverage requirement.
+    _parents = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
+    leaf = leaf[~leaf["code"].astype(str).isin(_parents)]
 
     ln = get_data("lineage-genes")
     ln_codes = {code for code, group in ln.groupby("Cancer_Type") if len(group) >= 5}

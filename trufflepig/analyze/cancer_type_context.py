@@ -293,6 +293,9 @@ _REFERENCE_CODE_FALLBACKS: Mapping[str, tuple[str, ...]] = {
 # ``sarcoma`` / ``cns`` / ``embryonal``.
 _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "carcinoma-breast": ("BRCA",),
+    # GI adenocarcinomas (incl. the CRC colorectal grouping parent, which has no
+    # own cohort) -> nearest GI cohorts.
+    "carcinoma-gi": ("COAD", "STAD", "READ"),
     "carcinoma-head-neck": ("HNSC",),
     "carcinoma-lung": ("LUAD", "LUSC"),
     # Keratinocyte carcinomas (BCC, cSCC): nearest bulk squamous reference.
@@ -322,7 +325,17 @@ def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
     for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
         candidates.append((fallback, "curated code fallback"))
     family = _clean(row.get("family")).lower()
-    for fallback in _REFERENCE_FAMILY_FALLBACKS.get(family, ()):
+    fam_fallbacks = _REFERENCE_FAMILY_FALLBACKS.get(family)
+    if not fam_fallbacks and "-" in family:
+        # Fine sub-family (pirlygenes #359 split: ``cns`` -> ``cns-meningeal`` /
+        # ``cns-choroid`` / ``cns-sellar`` / ``cns-glial`` / ``cns-ependymal`` /
+        # ``cns-embryonal``; ``endocrine`` -> ``endocrine-epithelial`` /
+        # ``endocrine-neuroendocrine``). Fall back via the family group root so a
+        # cohort-less sub-family still resolves to the group's reference (e.g.
+        # MENINGIOMA cns-meningeal -> the cns group -> MBL). Robust to future splits.
+        root = family.split("-", 1)[0]
+        fam_fallbacks = _REFERENCE_FAMILY_FALLBACKS.get(root)
+    for fallback in fam_fallbacks or ():
         candidates.append((fallback, f"{family} family fallback"))
 
     seen = set()

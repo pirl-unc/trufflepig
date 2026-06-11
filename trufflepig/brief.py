@@ -1688,6 +1688,18 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
         report_context_code or constrained_code or str(cancer_code or "").strip()
     )
     comparison_code = parent_context_code or constrained_code or supplied_code
+    if parent_context_code:
+        # Only compare at the parent level when the parent is a real expression
+        # cohort (e.g. SARC_OS -> SARC, SARC has a cohort). An *abstract grouping*
+        # parent with no own cohort (e.g. COAD's new CRC parent, which exists only
+        # to group COAD/READ) must not hijack the comparison — keep it on the
+        # supplied code, which is itself the cohort.
+        from trufflepig.analyze import expression_reference_options
+
+        if not expression_reference_options(
+            parent_context_code, include_fallback=False
+        ):
+            comparison_code = constrained_code or supplied_code
     supplied_label = _cancer_type_context_label(supplied_code)
     comparison_label = _cancer_type_context_label(comparison_code)
     candidate_trace = analysis.get("candidate_trace") or []

@@ -50,23 +50,36 @@ def test_biomarker_symbols_canonicalized_to_reference_vocabulary():
 
 
 def test_every_registry_code_has_ontology_marker_expectations():
-    registry_codes = set(cancer_type_registry()["code"].dropna().astype(str))
+    reg = cancer_type_registry()
+    registry_codes = set(reg["code"].dropna().astype(str))
+    # Abstract grouping nodes (a code that is the parent_code of other codes, e.g.
+    # CRC -> COAD/READ) aren't classifiable cohorts and have no own marker
+    # expectations — the classifier scores the child cohorts. Exempt them from the
+    # *coverage* requirement (but they remain valid registry codes, so an ontology
+    # entry for one is NOT stale — BRCA/COAD/... are parents that do have entries).
+    parent_nodes = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
     ontology = tumor_type_ontology()
 
     # Coverage contract: every upstream registry code must have ontology marker
     # expectations curated here. Report *which* codes are uncovered so a new
     # pirlygenes code fails actionably ("here's the gap to fill") instead of as
     # an opaque set-inequality.
-    uncovered = sorted(registry_codes - set(ontology))
+    uncovered = sorted((registry_codes - parent_nodes) - set(ontology))
     assert not uncovered, f"registry codes lacking ontology entries: {uncovered}"
     # And no stale ontology entries for codes the registry dropped or renamed.
     stale = sorted(set(ontology) - registry_codes)
     assert not stale, f"ontology entries for codes absent from the registry: {stale}"
+    # Abstract parent nodes (CRC) get a placeholder ontology entry but no own
+    # high/low markers — exempt them here too (their child cohorts carry markers).
     missing_high = [
-        code for code, entry in ontology.items() if not entry.expected_high_genes
+        code
+        for code, entry in ontology.items()
+        if code not in parent_nodes and not entry.expected_high_genes
     ]
     missing_low = [
-        code for code, entry in ontology.items() if not entry.expected_low_genes
+        code
+        for code, entry in ontology.items()
+        if code not in parent_nodes and not entry.expected_low_genes
     ]
 
     assert not missing_high
