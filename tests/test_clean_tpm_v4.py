@@ -62,3 +62,53 @@ def test_v4_observed_bulk_references_load_directly(code, expected_source):
     assert ref is not None, f"{code} lost its expression reference under v4"
     assert ref.reference_code == code
     assert ref.source == expected_source
+
+
+def test_normalize_to_reference_space_conforms_v4_to_zeroed_compartment():
+    """A v4 sample (technical compartment present) is conformed to the cohort
+    reference's strict-technical-zeroed space; rank order of biological genes is
+    preserved (#74)."""
+    from trufflepig.clean_tpm import (
+        normalize_to_reference_space,
+        technical_rna_mask,
+        resolve_gene_columns,
+    )
+
+    # MT-RNR2 / RN7SL1 are strict technical-RNA; EPCAM/COL1A1/ACTB biological.
+    df = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": [
+                "ENSG00000210082",  # MT-RNR2 (mt-DNA)
+                "ENSG00000276168",  # RN7SL1 (rRNA-like)
+                "ENSG00000119888",  # EPCAM
+                "ENSG00000108821",  # COL1A1
+                "ENSG00000075624",  # ACTB
+            ],
+            "Symbol": ["MT-RNR2", "RN7SL1", "EPCAM", "COL1A1", "ACTB"],
+            "TPM": [150000.0, 100000.0, 50000.0, 200000.0, 500000.0],
+        }
+    )
+    label, idc = resolve_gene_columns(df)
+    out = normalize_to_reference_space(df, value_cols=["TPM"], label_col=label, id_col=idc)
+
+    mask = technical_rna_mask(out, label_col=label, id_col=idc)
+    assert float(out.loc[mask, "TPM"].sum()) == pytest.approx(0.0)  # compartment zeroed
+    assert float(out["TPM"].sum()) == pytest.approx(1e6)  # renormalized
+    # biological ordering preserved (ACTB > COL1A1 > EPCAM)
+    bio = out.loc[~mask].set_index("Symbol")["TPM"]
+    assert bio["ACTB"] > bio["COL1A1"] > bio["EPCAM"]
+
+
+def test_normalize_to_reference_space_noop_without_technical_compartment():
+    """No technical genes -> no-op (don't force-rescale a partial/synthetic frame)."""
+    from trufflepig.clean_tpm import normalize_to_reference_space
+
+    df = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG00000119888", "ENSG00000108821"],
+            "Symbol": ["EPCAM", "COL1A1"],
+            "TPM": [10.0, 40.0],  # deliberately not summing to 1e6
+        }
+    )
+    out = normalize_to_reference_space(df, value_cols=["TPM"])
+    assert list(out["TPM"]) == [10.0, 40.0]

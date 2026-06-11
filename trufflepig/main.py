@@ -63,7 +63,11 @@ from trufflepig.reference import (
 from PIL import Image
 from .load_expression import load_expression_data
 from .load_expression import apply_expression_qc_rescue
-from .clean_tpm import assert_clean_tpm
+from .clean_tpm import (
+    assert_clean_tpm,
+    normalize_to_reference_space,
+    resolve_gene_columns,
+)
 from trufflepig.expression_qc import (
     expression_qc_rescue_summary_line,
     qc_category_levels_lines,
@@ -2010,36 +2014,23 @@ def _analyze_body(run: AnalyzeRun):
         mode=config.expression_qc_rescue,
         remove_noncoding=config.expression_qc_remove_noncoding,
     )
+    # Conform the sample to the cohort reference's clean-TPM space (#74): the
+    # reference ships strict-technical-RNA zeroed, but a clean_tpm_v4 input keeps
+    # that compartment at a fixed fraction, diluting biological genes ~15-25%
+    # relative to the reference. Deterministically zero+renormalize so sample and
+    # reference share one space regardless of the clean state the input arrived in.
+    _sample_label_col, _sample_id_col = resolve_gene_columns(df_expr)
+    df_expr = normalize_to_reference_space(
+        df_expr,
+        value_cols=["TPM"],
+        label_col=_sample_label_col,
+        id_col=_sample_id_col,
+    )
     assert_clean_tpm(
         df_expr,
         value_cols=["TPM"],
-        label_col=next(
-            (
-                col
-                for col in (
-                    "gene_display_name",
-                    "canonical_gene_name",
-                    "gene",
-                    "gene_symbol",
-                    "symbol",
-                )
-                if col in df_expr.columns
-            ),
-            None,
-        ),
-        id_col=next(
-            (
-                col
-                for col in (
-                    "canonical_gene_id",
-                    "ensembl_gene_id",
-                    "gene_id",
-                    "Ensembl_Gene_ID",
-                )
-                if col in df_expr.columns
-            ),
-            None,
-        ),
+        label_col=_sample_label_col,
+        id_col=_sample_id_col,
         context="analysis sample expression",
     )
     expression_scale_qc = dict(df_expr.attrs.get("expression_scale_qc") or {})
