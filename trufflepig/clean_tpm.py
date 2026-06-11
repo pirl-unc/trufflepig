@@ -24,6 +24,36 @@ def _cached_qc_group(label: str, ensembl_id: str | None = None) -> str:
     return classify_gene_qc(label, ensembl_id=ensembl_id).group
 
 
+# Gene label / id column names seen across the loaders + reference frames, in
+# resolution priority. Centralized so callers don't re-spell the candidate list.
+_LABEL_COL_CANDIDATES = (
+    "gene_display_name",
+    "canonical_gene_name",
+    "gene",
+    "gene_symbol",
+    "symbol",
+    "Symbol",
+)
+_ID_COL_CANDIDATES = (
+    "canonical_gene_id",
+    "ensembl_gene_id",
+    "gene_id",
+    "Ensembl_Gene_ID",
+)
+
+
+def resolve_gene_columns(df: pd.DataFrame) -> tuple[str | None, str | None]:
+    """Return the (label_col, id_col) present in ``df`` for clean-TPM helpers.
+
+    The loaders and reference frames spell these columns several ways
+    (``canonical_gene_name`` vs ``symbol`` vs ``Symbol``, etc.); resolve them
+    once here so callers pass the frame, not a re-spelled candidate list.
+    """
+    label = next((c for c in _LABEL_COL_CANDIDATES if c in df.columns), None)
+    id_col = next((c for c in _ID_COL_CANDIDATES if c in df.columns), None)
+    return label, id_col
+
+
 def technical_rna_mask(
     df: pd.DataFrame,
     *,
@@ -48,6 +78,48 @@ def technical_rna_mask(
         index=df.index,
         dtype=bool,
     )
+
+
+def normalize_to_reference_space(
+    df: pd.DataFrame,
+    *,
+    value_cols: Iterable[str],
+    label_col: str | None = "Symbol",
+    id_col: str | None = "Ensembl_Gene_ID",
+) -> pd.DataFrame:
+    """Conform an expression matrix to the cohort reference's clean-TPM space.
+
+    The cohort reference (``pan_cancer_expression`` / ``tcga_deconvolved_expression``)
+    ships with the strict technical-RNA compartment (mt-DNA / rRNA-like / mt-like
+    pseudogenes / polyA-bias lncRNA) zeroed. A ``clean_tpm_v4`` input sample keeps
+    that compartment at a fixed fraction (~15% of the 1e6 budget), so the sample's
+    biological genes are systematically diluted ~15-25% relative to the reference —
+    a space mismatch in every sample↔cohort comparison (#74).
+
+    This deterministically zeroes that same compartment and renormalizes each
+    column back to 1e6, so **any** input (v4 fixed-fraction, legacy-zeroed, or raw)
+    lands in the one reference space. It's a uniform rescale of the surviving
+    (biological + ribosomal-protein) genes, so rank/correlation/HK-ratio scoring is
+    unchanged; only the absolute budget shared with the reference is corrected.
+    Idempotent: an already-zeroed input is unaffected. QC (mt-fraction, RNA-quant)
+    runs upstream on the raw frame, so this never hides degradation signal.
+    """
+    cols = [col for col in value_cols if col in df.columns]
+    if not cols:
+        return df
+    mask = technical_rna_mask(df, label_col=label_col, id_col=id_col)
+    if not bool(mask.any()):
+        # No technical-RNA compartment present (already conformed, or a partial
+        # frame / synthetic fixture) — nothing to zero, so leave the budget as-is
+        # rather than force a 1e6 rescale that would alter the input.
+        return df
+    out = df.copy()
+    out.loc[mask, cols] = 0.0
+    for col in cols:
+        total = float(pd.to_numeric(out[col], errors="coerce").fillna(0.0).sum())
+        if total > 0:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0) * 1e6 / total
+    return out
 
 
 def assert_clean_tpm(
