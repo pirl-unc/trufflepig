@@ -1282,15 +1282,10 @@ THERAPY_PATH_TIERS = frozenset(
 # still fails, and a row that becomes conforming upstream also fails (forcing
 # the stale entry to be removed). Drop an entry once the corresponding
 # pirlygenes release conforms.
-KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS = frozenset(
-    {
-        # MENINGIOMA SSTR2 / 177Lu-DOTATATE ships phase=emerging with an EMPTY
-        # treatment_path_tier (every other key-gene row carries a tier). A curation
-        # gap introduced with the #369 CNS coverage; filed upstream in pirlygenes.
-        # Drop this entry once the pirlygenes release fills the tier.
-        ("MENINGIOMA", "SSTR2"),
-    }
-)
+KNOWN_UPSTREAM_NONCONFORMING_THERAPY_ROWS = frozenset()
+# (MENINGIOMA SSTR2 / 177Lu-DOTATATE shipped phase=emerging with an empty tier —
+# pirlygenes#401 — and conformed upstream in 5.22.54 (phase_2 /
+# investigational_biomarker_matched); the pinned staleness test retired the entry.)
 # (Was the two ALCL rows shipping ad-hoc tier/phase enums; conformed upstream in
 # pirlygenes "Refine ALCL therapy-status enums in cancer-key-genes.csv", so the
 # quarantine is retired — the pinned test flagged it stale automatically. The
