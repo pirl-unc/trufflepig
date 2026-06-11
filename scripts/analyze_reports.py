@@ -51,7 +51,11 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-_CALL = re.compile(r"\*\*Working cancer call\*\*:\s*([A-Za-z][A-Za-z0-9_]+)")
+_CALL_LINE = re.compile(r"\*\*Working cancer call\*\*:\s*(.+)")
+# Codes appear as ``CODE (Human Name)`` — capture the token before each "(".
+# Handles single calls ("KIRC (Kidney...)") and abstentions
+# ("provisional between LGG (Lower Grade Glioma) and GBM (Glioblastoma...)").
+_CODE_BEFORE_PAREN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(")
 
 
 def _registry_parent_map():
@@ -119,13 +123,23 @@ class Compat:
         return False
 
 
-def _call_of(analysis_md: Path):
+def _calls_of(analysis_md: Path):
+    """Return (candidate_codes, provisional) from the Working cancer call line.
+
+    A confident call yields one candidate; an abstention ("provisional between X
+    and Y") yields the set it's deciding among. A sample counts as compatible if
+    *any* candidate is compatible with the expected code — abstaining among the
+    right lineage is not a lineage error.
+    """
     try:
         text = analysis_md.read_text(encoding="utf-8")
     except OSError:
-        return None
-    m = _CALL.search(text)
-    return m.group(1) if m else None
+        return ([], False)
+    m = _CALL_LINE.search(text)
+    if not m:
+        return ([], False)
+    line = m.group(1)
+    return (_CODE_BEFORE_PAREN.findall(line), "provisional" in line.lower())
 
 
 def _iter_samples(reports: Path):
@@ -204,46 +218,58 @@ def main(argv=None):
     truth = _load_truth(args.truth) if args.truth else {}
     compat = Compat(_registry_parent_map(), _broad_lineage_fn())
 
+    def compat_any(calls, expected):
+        return any(compat(c, expected) for c in calls)
+
     rows = []
     for group, sample_id, md in _iter_samples(args.reports):
         expected, notes = _expected_for(group, sample_id, truth, args.infer_expected)
-        new_call = _call_of(md)
-        base_call = None
+        new_calls, new_prov = _calls_of(md)
+        base_calls = []
         if args.baseline:
             base_md = args.baseline / md.relative_to(args.reports)
-            base_call = _call_of(base_md)
+            base_calls, _ = _calls_of(base_md)
         rows.append(
             {
                 "group": group,
                 "sample": sample_id,
                 "expected": expected,
-                "baseline_call": base_call,
-                "new_call": new_call,
+                "baseline_call": "|".join(base_calls),
+                "new_call": "|".join(new_calls),
+                "_new": new_calls,
+                "_base": base_calls,
+                "provisional": new_prov,
                 "notes": notes,
             }
         )
 
     scored = [r for r in rows if r["expected"]]
     n = len(scored)
-    new_ok = sum(compat(r["new_call"], r["expected"]) for r in scored)
+    new_ok = sum(compat_any(r["_new"], r["expected"]) for r in scored)
     print(f"reports scored: {n} (of {len(rows)} found; {len(rows) - n} without a known expected)")
-    print(f"compatible-call rate (new): {new_ok}/{n} ({100 * new_ok / n:.0f}%)" if n else "no scored reports")
+    if n:
+        print(f"compatible-call rate (new): {new_ok}/{n} ({100 * new_ok / n:.0f}%)")
 
     if args.baseline:
-        have_both = [r for r in scored if r["baseline_call"] and r["new_call"]]
-        base_ok = sum(compat(r["baseline_call"], r["expected"]) for r in have_both)
-        changed = [r for r in have_both if r["baseline_call"] != r["new_call"]]
-        improved = [r for r in changed if compat(r["new_call"], r["expected"]) and not compat(r["baseline_call"], r["expected"])]
-        regressed = [r for r in changed if compat(r["baseline_call"], r["expected"]) and not compat(r["new_call"], r["expected"])]
-        print(f"compatible-call rate (baseline): {base_ok}/{len(have_both)} ({100 * base_ok / len(have_both):.0f}%)" if have_both else "")
+        have_both = [r for r in scored if r["_base"] and r["_new"]]
+        base_ok = sum(compat_any(r["_base"], r["expected"]) for r in have_both)
+        changed = [r for r in have_both if r["_base"] != r["_new"]]
+        improved = [r for r in changed if compat_any(r["_new"], r["expected"]) and not compat_any(r["_base"], r["expected"])]
+        regressed = [r for r in changed if compat_any(r["_base"], r["expected"]) and not compat_any(r["_new"], r["expected"])]
+        if have_both:
+            print(f"compatible-call rate (baseline): {base_ok}/{len(have_both)} ({100 * base_ok / len(have_both):.0f}%)")
         print(f"changed calls baseline->new: {len(changed)}  (improved {len(improved)}, REGRESSED {len(regressed)}, neutral {len(changed) - len(improved) - len(regressed)})")
         for r in regressed[: args.show]:
-            print(f"   REGRESS {r['group']}/{r['sample']}: {r['baseline_call']} -> {r['new_call']}  (expected {r['expected']})")
+            print(f"   REGRESS {r['group']}/{r['sample']}: [{r['baseline_call']}] -> [{r['new_call']}]  (expected {r['expected']})")
         for r in improved[: args.show]:
-            print(f"   improve {r['group']}/{r['sample']}: {r['baseline_call']} -> {r['new_call']}  (expected {r['expected']})")
+            print(f"   improve {r['group']}/{r['sample']}: [{r['baseline_call']}] -> [{r['new_call']}]  (expected {r['expected']})")
 
-    bad = [r for r in scored if not compat(r["new_call"], r["expected"])]
-    print(f"\nincompatible new calls: {len(bad)}/{n}")
+    bad = [r for r in scored if not compat_any(r["_new"], r["expected"])]
+    # Split a genuine wrong call from an abstention that simply didn't include
+    # the right lineage (still a failure to harden, but a softer one).
+    confident_bad = [r for r in bad if not r["provisional"]]
+    abstain_bad = [r for r in bad if r["provisional"]]
+    print(f"\nincompatible new calls: {len(bad)}/{n}  (confident-wrong {len(confident_bad)}, abstaining-wrong {len(abstain_bad)})")
     by_group = Counter(r["group"] for r in bad)
     for group, cnt in by_group.most_common(args.show):
         egs = [r["new_call"] or "?" for r in bad if r["group"] == group][:3]
@@ -253,11 +279,17 @@ def main(argv=None):
         with args.per_sample.open("w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(
                 fh,
-                fieldnames=["group", "sample", "expected", "baseline_call", "new_call", "compatible", "notes"],
+                fieldnames=["group", "sample", "expected", "baseline_call", "new_call", "provisional", "compatible", "notes"],
             )
             w.writeheader()
             for r in rows:
-                w.writerow({**r, "compatible": compat(r["new_call"], r["expected"]) if r["expected"] else ""})
+                w.writerow(
+                    {
+                        k: r[k]
+                        for k in ("group", "sample", "expected", "baseline_call", "new_call", "provisional", "notes")
+                    }
+                    | {"compatible": compat_any(r["_new"], r["expected"]) if r["expected"] else ""}
+                )
         print(f"\nper-sample CSV -> {args.per_sample}")
 
     return 0
