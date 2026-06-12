@@ -37,6 +37,37 @@ EPITHELIAL_MARKERS = ("EPCAM", "KRT8", "KRT18", "KRT19", "CDH1")
 # Broad lineages a robust epithelial program excludes (carcinoma is not these).
 EPITHELIAL_EXCLUDES = ("mesenchymal", "hematolymphoid")
 
+# Every broad-lineage node (see ``cancer_type_ontology.broad_lineage``). Used by
+# *exclusive* programs below.
+ALL_BROAD_LINEAGES = (
+    "epithelial",
+    "mesenchymal",
+    "hematolymphoid",
+    "neural",
+    "melanocytic",
+    "germ",
+    "embryonal",
+    "neuroendocrine",
+)
+
+# Lineage-*specific* programs: their markers are lineage-defining (≈0 in any other
+# lineage), so a confident call means the tumour **is** that lineage — and every
+# *other* broad lineage is excluded, not a hand-picked subset. This is the
+# generalizable rule (cf. the epithelial gate, which is deliberately NOT here:
+# keratins are shared/co-expressed, so epithelial only excludes its validated
+# mesenchymal/heme subset). Each entry: (markers, asserted broad lineage,
+# confidence threshold).
+#
+# - neuroendocrine: CHGA/CHGB/SYP/INSM1 — ~0 in carcinomas/gliomas/sarcomas, high
+#   in SCLC/NET/NEC/PCPG. NE tumours are keratin+ so epithelial-*absence* can't
+#   separate them; the specific program does, demoting epithelial AND neural AND
+#   the rest so the NE candidate (own lineage untouched) wins. (#71)
+# - melanocytic: MLANA/PMEL/TYR/DCT — lineage-defining, same exclusive logic.
+SPECIFIC_LINEAGE_PROGRAMS = (
+    ("neuroendocrine", ("CHGA", "CHGB", "SYP", "INSM1"), "neuroendocrine", 0.45),
+    ("melanocytic", ("MLANA", "PMEL", "TYR", "DCT"), "melanocytic", 0.45),
+)
+
 # The gate fires on the epithelial signal's multi-view CONFIDENCE
 # (:mod:`trufflepig.signal_views`), which integrates five normalizations — chiefly
 # log1p(clean TPM), the tightest within-class separator (3.5× tighter than the old
@@ -47,6 +78,15 @@ EPITHELIAL_EXCLUDES = ("mesenchymal", "hematolymphoid")
 DEFAULT_EPITHELIAL_CONFIDENCE = 0.45
 _DEMOTE_SLOPE = 0.9
 _DEMOTE_FLOOR = 0.35
+
+# Specific-program demotion is *stronger* than the epithelial gate's: epithelial
+# markers (keratins) are shared/co-expressed so its demotion is deliberately
+# gentle, but a lineage-*defining* program (NE / melanocytic — markers ≈0 outside
+# that lineage) is near-diagnostic, so a confident call decisively demotes the
+# other lineages rather than just nudging them. Same proportional-to-confidence
+# shape, steeper slope + lower floor.
+_SPECIFIC_DEMOTE_SLOPE = 1.3
+_SPECIFIC_DEMOTE_FLOOR = 0.15
 
 
 @dataclass
@@ -120,6 +160,57 @@ def lineage_exclusion_evidence(
         )
         for flag in sig.flags:
             notes.append(f"epithelial signal: {flag}")
+
+    # Specific-lineage arms (#71/#75): the lineage-defining programs are COMPETING
+    # hypotheses about the tumour's lineage. Survey them all, then demote each
+    # broad lineage by the *evidence margin* against it — how far the best-supported
+    # specific lineage outscores that lineage's own program. This integrates every
+    # program's confidence rather than discarding any (NOT winner-take-all):
+    #   * one program firing  -> the others have margin == its confidence, so they
+    #     are demoted exactly as a single decisive call (unchanged behaviour);
+    #   * two co-firing       -> the stronger lineage has margin 0 (intact) and the
+    #     weaker is demoted only by their *gap*, so a genuinely biphasic / ambiguous
+    #     tumour surfaces as provisional — never the degenerate "every lineage
+    #     demoted equally" that independent per-program demotion produced.
+    # (Fires even when epithelial is co-present — an NE carcinoma is keratin+ —
+    # which epithelial-absence cannot catch.)
+    prog_sigs = []
+    support: dict[str, float] = {}  # asserted lineage -> best above-threshold confidence
+    for prog_name, markers, asserted_lineage, threshold in SPECIFIC_LINEAGE_PROGRAMS:
+        prog_sig = signal_report(
+            prog_name, markers, sample_tpm_by_symbol,
+            sample_hk_median=sample_hk_median, cohort_reference=cohort_reference,
+        )
+        prog_sigs.append((prog_name, asserted_lineage, prog_sig))
+        if prog_sig.confidence >= threshold:
+            support[asserted_lineage] = max(
+                support.get(asserted_lineage, 0.0), float(prog_sig.confidence)
+            )
+    if support:
+        top_lineage = max(support, key=lambda lineage: support[lineage])
+        top_conf = support[top_lineage]
+        for broad in ALL_BROAD_LINEAGES:
+            margin = top_conf - support.get(broad, 0.0)
+            if margin > 0.0:
+                factors[broad] = min(
+                    factors.get(broad, 1.0),
+                    max(_SPECIFIC_DEMOTE_FLOOR, 1.0 - _SPECIFIC_DEMOTE_SLOPE * margin),
+                )
+        ranked = ", ".join(
+            f"{lineage}={conf:.2f}"
+            for lineage, conf in sorted(support.items(), key=lambda kv: -kv[1])
+        )
+        notes.append(
+            f"Lineage-specific program(s) present [{ranked}] -> tumour lineage = "
+            f"{top_lineage}; competing lineages demoted by evidence margin (a "
+            f"co-firing weaker program is demoted only by its gap, leaving a "
+            f"biphasic tumour provisional rather than forcing a call)."
+        )
+        for prog_name, asserted_lineage, prog_sig in prog_sigs:
+            if asserted_lineage in support:
+                for flag in prog_sig.flags:
+                    notes.append(f"{prog_name} signal: {flag}")
+
     return LineageEvidence(
         factors=factors,
         epithelial_hk_ratio=float(sig.views.get("hk", 0.0)),

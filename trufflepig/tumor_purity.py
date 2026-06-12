@@ -200,6 +200,23 @@ _CANCER_FAMILY_BY_CODE = {
     "LGG": "GLIAL",
     "SKCM": "MELANOCYTIC",
     "UVM": "MELANOCYTIC",
+    # Neuroendocrine (#71): the pirlygenes NEUROENDOCRINE panel (CHGA/CHGB/SYP/
+    # INSM1/NCAM1/ASCL1/...) already scores, but no code mapped to it, so the
+    # score never attached to a candidate and SCLC/NET/NEC defaulted to a plain
+    # carcinoma. NE markers are specific (≈0 in LUAD/carcinomas), so this is a
+    # hard (penalizing) family — when the program is present, non-NE carcinoma
+    # candidates are demoted. The family-expansion path then pulls these into the
+    # scored pool. Only codes with a scoreable reference are listed; driver-defined
+    # SCLC subtypes (deconvolved-only, no pan-cancer column) inherit via parent SCLC.
+    "PCPG": "NEUROENDOCRINE",
+    "SCLC": "NEUROENDOCRINE",
+    "NET_LUNG": "NEUROENDOCRINE",
+    "NET_PANCREAS": "NEUROENDOCRINE",
+    "NET_MIDGUT": "NEUROENDOCRINE",
+    "NET_RECTAL": "NEUROENDOCRINE",
+    "NEC_LUNG_LARGECELL": "NEUROENDOCRINE",
+    "NEC_MERKEL": "NEUROENDOCRINE",
+    "MTC": "NEUROENDOCRINE",
 }
 
 _CANCER_FAMILY_CODE_COUNTS = Counter(_CANCER_FAMILY_BY_CODE.values())
@@ -217,6 +234,7 @@ _CANCER_FAMILY_DISPLAY = {
     "GLIAL": "glial",
     "MELANOCYTIC": "melanocytic",
     "MESENCHYMAL": "mesenchymal / sarcoma-like",
+    "NEUROENDOCRINE": "neuroendocrine",
     "PROSTATE": "prostate",
     "RENAL": "renal",
     "SQUAMOUS": "squamous",
@@ -3448,7 +3466,19 @@ def rank_cancer_type_candidates(
     top_family_label = hard_ranked_families[0][0] if hard_ranked_families else None
     non_penalizing_families = soft_families
     for code in ordered_codes:
-        purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
+        # A candidate pulled in by family-expansion may lack a scoreable purity
+        # reference (e.g. a deconvolved-only subtype with no pan-cancer column and
+        # no broad fallback). Skip *only that* case rather than abort the ranking —
+        # it simply doesn't compete. Re-raise any other ValueError so a genuine bug
+        # isn't silently swallowed.
+        try:
+            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
+        except ValueError as exc:
+            if "no pan-cancer TPM column" in str(exc) or (
+                "no direct purity marker panel" in str(exc)
+            ):
+                continue
+            raise
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
         broad_signature_score = float(signature_score_map.get(code, 0.0))
         signature_score = broad_signature_score
@@ -3650,6 +3680,40 @@ def rank_cancer_type_candidates(
         rows = _apply_prad_stromal_rescue(rows, sample_tpm)
         rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm)
         rows = _apply_normal_tissue_tiebreaker(rows, sample_tpm)
+
+    # Tumour-intrinsic lineage exclusion (#71/#75): demote candidates whose broad
+    # lineage is contradicted by the sample's tumour-intrinsic program — epithelial
+    # present demotes mesenchymal / hematolymphoid; a specific neuroendocrine
+    # program demotes the epithelial branch. Applied HERE — after the support
+    # recomputations above (orphan / stromal / tiebreaker rescues), before the
+    # final ordering — so it actually reaches the Working cancer call. The same
+    # gate previously lived only in the ontology walk, which ``analyze()`` never
+    # invokes (a disconnect no test caught); a live characterization test now
+    # guards this wiring.
+    if sample_tpm:
+        from .cancer_type_ontology import broad_lineage
+        from .lineage_evidence import lineage_exclusion_evidence
+        from .lineage_marker_recall import marker_hk_median
+
+        _lineage_ev = lineage_exclusion_evidence(
+            sample_tpm, marker_hk_median(sample_tpm)
+        )
+        if _lineage_ev.factors:
+            for r in rows:
+                _factor = _lineage_ev.factors.get(broad_lineage(r["code"]), 1.0)
+                if _factor != 1.0:
+                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor
+                    r["support_geomean"] = (
+                        float(r.get("support_geomean") or 0.0) * _factor
+                    )
+                    r["lineage_exclusion_factor"] = _factor
+            rows.sort(
+                key=lambda row: (
+                    -row["support_score"],
+                    -row["signature_score"],
+                    row["code"],
+                )
+            )
     rows = _promote_same_family_alternatives(rows)
 
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over

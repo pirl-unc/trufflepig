@@ -312,6 +312,8 @@ _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "neuroendocrine": ("SCLC", "NET_PANCREAS", "LUAD"),
     "salivary": ("HNSC",),
     "sarcoma": ("SARC",),
+    # Thymic epithelial tumours (THYMCA thymic carcinoma) -> the THYM cohort.
+    "thymic": ("THYM",),
 }
 
 

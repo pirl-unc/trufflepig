@@ -59,10 +59,12 @@ from pirlygenes.gene_sets_cancer import cancer_type_registry
 # Ontology definition
 # --------------------------------------------------------------------------
 
-# Broad lineage for every registry family. Salivary / thymic / endocrine
-# carcinomas are epithelial; embryonal (small-round-blue-cell pediatric) tumours
-# get their own broad node because they are poly-phenotypic and resolved by
-# context + defining alterations, not by a single differentiation program.
+# FALLBACK ONLY (since 5.22.77 broad_lineage consumes pirlygenes'
+# ``cancer_lineage_group`` first — see ``_pirlygenes_broad_lineage``). Used when
+# a code is ungrouped upstream, a test injects ``_registry``, or the API is
+# unavailable. Salivary / thymic / endocrine carcinomas are epithelial; embryonal
+# (small-round-blue-cell pediatric) tumours get their own broad node because they
+# are poly-phenotypic and resolved by context + defining alterations.
 _FAMILY_BROAD = {
     "sarcoma": "mesenchymal",
     "melanoma": "melanocytic",
@@ -117,8 +119,51 @@ _LEVEL_SEQUENCE = ["broad", "differentiation", "organ", "leaf"]
 _EPITHELIAL_CODES_WITHOUT_TCGA = ("NUTM", "ADCC", "ACINIC", "NPC", "THYM", "MESO")
 
 
+# pirlygenes' canonical coarse histogenesis grouping (``cancer_lineage_group``)
+# is the single source of truth; translate its labels to trufflepig's broad-lineage
+# vocabulary. Consuming it means new codes and taxonomy moves (NBL->Embryonal,
+# NEC/NET split, THYMCA, ...) are picked up automatically instead of re-breaking a
+# hardcoded family map on every pirlygenes bump.
+_PIRLYGENES_GROUP_TO_BROAD = {
+    "epithelial": "epithelial",
+    "sarcoma": "mesenchymal",
+    "heme": "hematolymphoid",
+    "melanoma": "melanocytic",
+    "neuroendocrine": "neuroendocrine",
+    "germ cell": "germ",
+    "embryonal": "embryonal",
+    "cns": "neural",
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _pirlygenes_broad_lineage(code: str) -> str | None:
+    """Cached translation of pirlygenes' coarse lineage group to trufflepig's
+    vocabulary (``cancer_lineage_group`` is uncached upstream, and ``broad_lineage``
+    runs in per-candidate hot loops). ``None`` when the code is ungrouped or the
+    API is unavailable, so the caller falls back to the local family map.
+    """
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+        group = cancer_lineage_group(code)
+    except Exception:  # noqa: BLE001 — caller falls back to the local family map
+        return None
+    return _PIRLYGENES_GROUP_TO_BROAD.get(str(group).strip().lower()) if group else None
+
+
 def broad_lineage(code: str, _registry=None) -> str:
-    """Return the broad-lineage node for a registry code."""
+    """Return the broad-lineage node for a registry code.
+
+    Primary source is pirlygenes' canonical coarse lineage grouping
+    (``cancer_lineage_group``), translated to trufflepig's vocabulary. Falls back
+    to the local family map (below) only for codes pirlygenes doesn't group, an
+    injected test ``_registry``, or if the API is unavailable.
+    """
+    if _registry is None:
+        mapped = _pirlygenes_broad_lineage(code)
+        if mapped:
+            return mapped
     reg = _registry if _registry is not None else _registry_families()
     family = str(reg.get(code, "")) if reg is not None else ""
     if family in _FAMILY_BROAD:

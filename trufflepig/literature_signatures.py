@@ -81,6 +81,41 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "neuroblastoma sympathoadrenal/neuroblastic marker program",
     ),
     LiteratureSignature(
+        # THYMCA (thymic carcinoma) — new pirlygenes 5.22.69 leaf with no own
+        # cohort; resolves to the THYM thymic-epithelial reference.
+        "THYMCA",
+        ("THYM",),
+        ("KRT5", "KRT19", "TP63", "CD5", "KIT", "EPCAM"),
+        "curated_thymic_carcinoma_literature",
+        "thymic carcinoma CD5+/KIT+ epithelial program",
+    ),
+    # New pirlygenes 5.22.69 leaves resolving to a parent cohort reference.
+    LiteratureSignature(
+        "PMBCL",
+        ("DLBC",),
+        ("MS4A1", "CD274", "PDCD1LG2", "TNFRSF8", "MAL"),
+        "curated_pmbcl_literature",
+        "primary mediastinal B-cell lymphoma (CD30+, 9p24/PD-L1-L2 program)",
+    ),
+    LiteratureSignature(
+        # ATC (anaplastic thyroid carcinoma) — dedifferentiated. Characterised by
+        # EMT (VIM+, high proliferation) with variably-retained thyroid lineage
+        # (PAX8) rather than the differentiated TG/TPO program. Avoid CDKN2A (often
+        # deleted in ATC) and TP53 (a mutation, not an expression-high marker).
+        "ATC",
+        ("THCA",),
+        ("PAX8", "VIM", "KRT8", "TWIST1", "MKI67"),
+        "curated_anaplastic_thyroid_literature",
+        "anaplastic (dedifferentiated, EMT-high) thyroid carcinoma program",
+    ),
+    LiteratureSignature(
+        "CESC_HPVneg",
+        ("CESC",),
+        ("KRT5", "KRT14", "TP63", "SOX2", "EGFR"),
+        "curated_cervical_carcinoma_literature",
+        "HPV-negative cervical squamous carcinoma program",
+    ),
+    LiteratureSignature(
         "MBL_WNT",
         ("MBL",),
         ("WIF1", "CTNNB1", "DKK1", "LEF1", "TNC"),

@@ -90,6 +90,10 @@ class TumorTypeOntologyEntry:
 
 
 _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
+    # THYMCA (thymic carcinoma) — new pirlygenes leaf with no lineage/biomarker
+    # data yet; curate the diagnostic thymic-carcinoma program (CD5+/KIT+ epithelial,
+    # p63+ keratins) so it has ontology marker expectations. (pirlygenes 5.22.69)
+    "THYMCA": ("KRT5", "KRT19", "TP63", "CD5", "KIT", "EPCAM"),
     "BRCA_LumA": ("ESR1", "PGR", "GATA3", "FOXA1", "TFF1", "TFF3"),
     "BRCA_LumB": ("ESR1", "PGR", "GATA3", "FOXA1", "MKI67"),
     "BRCA_HER2": ("ERBB2", "GRB7", "GATA3", "FOXA1"),
