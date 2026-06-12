@@ -84,6 +84,7 @@ _MISSING_MATCHED_NORMAL = frozenset(
         # Upstream coverage tracked in pirlygenes#369.
         "MENINGIOMA",
         "CHOROID_PLEXUS",
+        "THYMCA",
     }
 )
 
@@ -98,12 +99,10 @@ _MISSING_THERAPY_AXIS = frozenset(
         "BL",
         "BLCA",
         "B_ALL",
-        "CESC",
         "CHOL",
         "CLL",
         "CML",
         "CTCL",
-        "DLBC",
         "ESCA",
         "FL",
         "GBM",
@@ -134,7 +133,6 @@ _MISSING_THERAPY_AXIS = frozenset(
         "RT",
         "STAD",
         "TGCT",
-        "THCA",
         "THYM",
         "T_ALL",
         "UCS",
@@ -156,6 +154,7 @@ _MISSING_THERAPY_AXIS = frozenset(
         # CNS split — no therapy-response axis panel yet (pirlygenes#369).
         "MENINGIOMA",
         "CHOROID_PLEXUS",
+        "THYMCA",
     }
 )
 
@@ -220,6 +219,10 @@ _TOLERATED_GAPS_EXPLICIT = {
     "SARC_ESS_LG": {"expression", "lineage", "biomarker", "therapy"},
     "SARC_ESS_HG": {"expression", "lineage", "biomarker", "therapy"},
     "PCN": {"expression", "lineage", "biomarker", "therapy"},
+    # THYMCA (thymic carcinoma) — new pirlygenes 5.22.69 leaf with no data yet;
+    # expression resolves via the thymic->THYM family fallback + curated ontology
+    # markers, lineage/biomarker/therapy are the upstream follow-on.
+    "THYMCA": {"lineage", "biomarker", "therapy"},
     # NCI-coverage expansion (pirlygenes 5.18). PR1 gives each an expression
     # fallback + ontology markers + literature signature; lineage panels,
     # biomarkers and therapy targets are the #46 follow-on.
