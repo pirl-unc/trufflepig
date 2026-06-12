@@ -117,8 +117,41 @@ _LEVEL_SEQUENCE = ["broad", "differentiation", "organ", "leaf"]
 _EPITHELIAL_CODES_WITHOUT_TCGA = ("NUTM", "ADCC", "ACINIC", "NPC", "THYM", "MESO")
 
 
+# pirlygenes' canonical coarse histogenesis grouping (``cancer_lineage_group``)
+# is the single source of truth; translate its labels to trufflepig's broad-lineage
+# vocabulary. Consuming it means new codes and taxonomy moves (NBL->Embryonal,
+# NEC/NET split, THYMCA, ...) are picked up automatically instead of re-breaking a
+# hardcoded family map on every pirlygenes bump.
+_PIRLYGENES_GROUP_TO_BROAD = {
+    "epithelial": "epithelial",
+    "sarcoma": "mesenchymal",
+    "heme": "hematolymphoid",
+    "melanoma": "melanocytic",
+    "neuroendocrine": "neuroendocrine",
+    "germ cell": "germ",
+    "embryonal": "embryonal",
+    "cns": "neural",
+}
+
+
 def broad_lineage(code: str, _registry=None) -> str:
-    """Return the broad-lineage node for a registry code."""
+    """Return the broad-lineage node for a registry code.
+
+    Primary source is pirlygenes' canonical coarse lineage grouping
+    (``cancer_lineage_group``), translated to trufflepig's vocabulary. Falls back
+    to the local family map only for codes pirlygenes doesn't group, an injected
+    test ``_registry``, or if the API is unavailable.
+    """
+    if _registry is None:
+        try:
+            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+            group = cancer_lineage_group(code)
+            mapped = _PIRLYGENES_GROUP_TO_BROAD.get(str(group).strip().lower()) if group else None
+            if mapped:
+                return mapped
+        except Exception:  # noqa: BLE001 — fall back to the local family map
+            pass
     reg = _registry if _registry is not None else _registry_families()
     family = str(reg.get(code, "")) if reg is not None else ""
     if family in _FAMILY_BROAD:
