@@ -102,10 +102,7 @@ def test_exclusion_disabled_is_noop():
 # --- specific-program relative-margin reasoning (#75) -------------------------
 
 import numpy as _np  # noqa: E402
-from trufflepig.lineage_evidence import (  # noqa: E402
-    SPECIFIC_LINEAGE_PROGRAMS,
-    lineage_exclusion_evidence as _lee,
-)
+from trufflepig.lineage_evidence import SPECIFIC_LINEAGE_PROGRAMS  # noqa: E402
 
 _PROG_BY_LINEAGE = {lin: markers for _n, markers, lin, _t in SPECIFIC_LINEAGE_PROGRAMS}
 
