@@ -97,3 +97,54 @@ def test_exclusion_disabled_is_noop():
         ranked_rows=rows, lineage_evidence=ev, use_lineage_exclusion=False, use_recall=False
     )
     assert "SARC" in r.candidates
+
+
+# --- specific-program relative-margin reasoning (#75) -------------------------
+
+import numpy as _np  # noqa: E402
+from trufflepig.lineage_evidence import (  # noqa: E402
+    SPECIFIC_LINEAGE_PROGRAMS,
+    lineage_exclusion_evidence as _lee,
+)
+
+_PROG_BY_LINEAGE = {lin: markers for _n, markers, lin, _t in SPECIFIC_LINEAGE_PROGRAMS}
+
+
+def _multi_program_sample(ratios):
+    """Sample + cohort background where each lineage's program sits at its given
+    ratio x HK among a low background."""
+    d = {f"FILL{i}": 1.0 for i in range(30)}
+    cohort = {}
+    for lineage, markers in _PROG_BY_LINEAGE.items():
+        for g in markers:
+            d[g] = ratios.get(lineage, 0.0) * HK
+            cohort[g] = _np.array([1.0, 2.0, 1.0, 0.0, 2.0, 1.0, 3.0, 1.0, 0.0, 2.0])
+    return d, cohort
+
+
+def test_cofiring_specific_programs_do_not_cancel():
+    """Two lineage-defining programs both present must NOT cancel (the earlier
+    bug: independent per-program demotion left every lineage demoted equally so
+    the original wrong top survived). With relative-margin reasoning the stronger
+    lineage stays intact, the weaker is demoted only by their gap, and an
+    unsupported lineage is demoted by the full margin."""
+    d, cohort = _multi_program_sample({"neuroendocrine": 8.0, "melanocytic": 3.0})
+    f = lineage_exclusion_evidence(d, HK, cohort_reference=cohort).factors
+    # both programs must clear threshold for this to be a real co-fire test
+    assert f, "neither specific program fired — raise the ratios"
+    # stronger lineage (NE) is intact; weaker (melanocytic) only mildly demoted
+    assert f.get("neuroendocrine", 1.0) == 1.0
+    assert f.get("melanocytic", 1.0) < 1.0
+    # an unsupported lineage is demoted MORE than the co-firing weaker one
+    assert f.get("epithelial", 1.0) < f["melanocytic"]
+    # i.e. NOT the degenerate "all demoted equally"
+    assert f["melanocytic"] > f.get("epithelial", 0.0)
+
+
+def test_single_specific_program_demotes_all_others_decisively():
+    """One program firing alone behaves as a decisive single call (margin == its
+    confidence for every other lineage)."""
+    d, cohort = _multi_program_sample({"neuroendocrine": 8.0})
+    f = lineage_exclusion_evidence(d, HK, cohort_reference=cohort).factors
+    assert f.get("neuroendocrine", 1.0) == 1.0
+    assert f.get("epithelial", 1.0) < 1.0 and f.get("mesenchymal", 1.0) < 1.0

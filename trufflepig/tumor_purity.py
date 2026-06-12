@@ -206,13 +206,10 @@ _CANCER_FAMILY_BY_CODE = {
     # carcinoma. NE markers are specific (≈0 in LUAD/carcinomas), so this is a
     # hard (penalizing) family — when the program is present, non-NE carcinoma
     # candidates are demoted. The family-expansion path then pulls these into the
-    # scored pool. Driver-defined SCLC subtypes inherit via the parent SCLC.
+    # scored pool. Only codes with a scoreable reference are listed; driver-defined
+    # SCLC subtypes (deconvolved-only, no pan-cancer column) inherit via parent SCLC.
     "PCPG": "NEUROENDOCRINE",
     "SCLC": "NEUROENDOCRINE",
-    "SCLC_ASCL1": "NEUROENDOCRINE",
-    "SCLC_NEUROD1": "NEUROENDOCRINE",
-    "SCLC_POU2F3": "NEUROENDOCRINE",
-    "SCLC_YAP1": "NEUROENDOCRINE",
     "NET_LUNG": "NEUROENDOCRINE",
     "NET_PANCREAS": "NEUROENDOCRINE",
     "NET_MIDGUT": "NEUROENDOCRINE",
@@ -3471,12 +3468,17 @@ def rank_cancer_type_candidates(
     for code in ordered_codes:
         # A candidate pulled in by family-expansion may lack a scoreable purity
         # reference (e.g. a deconvolved-only subtype with no pan-cancer column and
-        # no broad fallback). Skip it rather than abort the whole ranking — it
-        # simply doesn't compete, instead of erroring the analysis.
+        # no broad fallback). Skip *only that* case rather than abort the ranking —
+        # it simply doesn't compete. Re-raise any other ValueError so a genuine bug
+        # isn't silently swallowed.
         try:
             purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
-        except ValueError:
-            continue
+        except ValueError as exc:
+            if "no pan-cancer TPM column" in str(exc) or (
+                "no direct purity marker panel" in str(exc)
+            ):
+                continue
+            raise
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
         broad_signature_score = float(signature_score_map.get(code, 0.0))
         signature_score = broad_signature_score

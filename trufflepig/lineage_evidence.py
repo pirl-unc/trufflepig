@@ -161,33 +161,55 @@ def lineage_exclusion_evidence(
         for flag in sig.flags:
             notes.append(f"epithelial signal: {flag}")
 
-    # Specific-lineage arms (#71/#75): a confident lineage-defining program means
-    # the tumour IS that lineage, so it demotes EVERY other broad lineage (not a
-    # subset). Generalizable — one rule covers neuroendocrine, melanocytic, and
-    # any future specific program. Fires even when epithelial is co-present (an NE
-    # carcinoma is keratin+), which epithelial-absence cannot catch.
+    # Specific-lineage arms (#71/#75): the lineage-defining programs are COMPETING
+    # hypotheses about the tumour's lineage. Survey them all, then demote each
+    # broad lineage by the *evidence margin* against it — how far the best-supported
+    # specific lineage outscores that lineage's own program. This integrates every
+    # program's confidence rather than discarding any (NOT winner-take-all):
+    #   * one program firing  -> the others have margin == its confidence, so they
+    #     are demoted exactly as a single decisive call (unchanged behaviour);
+    #   * two co-firing       -> the stronger lineage has margin 0 (intact) and the
+    #     weaker is demoted only by their *gap*, so a genuinely biphasic / ambiguous
+    #     tumour surfaces as provisional — never the degenerate "every lineage
+    #     demoted equally" that independent per-program demotion produced.
+    # (Fires even when epithelial is co-present — an NE carcinoma is keratin+ —
+    # which epithelial-absence cannot catch.)
+    prog_sigs = []
+    support: dict[str, float] = {}  # asserted lineage -> best above-threshold confidence
     for prog_name, markers, asserted_lineage, threshold in SPECIFIC_LINEAGE_PROGRAMS:
         prog_sig = signal_report(
             prog_name, markers, sample_tpm_by_symbol,
             sample_hk_median=sample_hk_median, cohort_reference=cohort_reference,
         )
-        if prog_sig.confidence < threshold:
-            continue
-        demote = max(
-            _SPECIFIC_DEMOTE_FLOOR, 1.0 - _SPECIFIC_DEMOTE_SLOPE * prog_sig.confidence
-        )
+        prog_sigs.append((prog_name, asserted_lineage, prog_sig))
+        if prog_sig.confidence >= threshold:
+            support[asserted_lineage] = max(
+                support.get(asserted_lineage, 0.0), float(prog_sig.confidence)
+            )
+    if support:
+        top_lineage = max(support, key=lambda lineage: support[lineage])
+        top_conf = support[top_lineage]
         for broad in ALL_BROAD_LINEAGES:
-            if broad == asserted_lineage:
-                continue
-            # Compose with any existing demotion (take the stronger).
-            factors[broad] = min(factors.get(broad, 1.0), demote)
-        notes.append(
-            f"{prog_name.capitalize()} program present ({'/'.join(markers)}); "
-            f"all non-{asserted_lineage} candidates demoted ×{demote:.2f} "
-            f"(these markers are lineage-specific). [{_fingerprint(prog_sig)}]"
+            margin = top_conf - support.get(broad, 0.0)
+            if margin > 0.0:
+                factors[broad] = min(
+                    factors.get(broad, 1.0),
+                    max(_SPECIFIC_DEMOTE_FLOOR, 1.0 - _SPECIFIC_DEMOTE_SLOPE * margin),
+                )
+        ranked = ", ".join(
+            f"{lineage}={conf:.2f}"
+            for lineage, conf in sorted(support.items(), key=lambda kv: -kv[1])
         )
-        for flag in prog_sig.flags:
-            notes.append(f"{prog_name} signal: {flag}")
+        notes.append(
+            f"Lineage-specific program(s) present [{ranked}] -> tumour lineage = "
+            f"{top_lineage}; competing lineages demoted by evidence margin (a "
+            f"co-firing weaker program is demoted only by its gap, leaving a "
+            f"biphasic tumour provisional rather than forcing a call)."
+        )
+        for prog_name, asserted_lineage, prog_sig in prog_sigs:
+            if asserted_lineage in support:
+                for flag in prog_sig.flags:
+                    notes.append(f"{prog_name} signal: {flag}")
 
     return LineageEvidence(
         factors=factors,
