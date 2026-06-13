@@ -123,7 +123,8 @@ OPTIONAL_COMPARTMENT_GATES = {
         # under a distinct key so the gate config stays self-contained
         # and the engine can translate ``erythroid_solid`` → the
         # existing ``erythroid`` component when appending.
-        "markers": ["HBA1", "HBA2", "HBB", "ALAS2"],
+        # HBA1/HBA2 fold to the proteoform key HBA1/2 (byte-identical α-globin).
+        "markers": ["HBA1/2", "HBB", "ALAS2"],
         "min_tpm_sum": 100.0,
         "templates": {
             "solid_primary",

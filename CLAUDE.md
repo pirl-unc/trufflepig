@@ -25,3 +25,31 @@ Pytest-xdist also produces *intermittent* test-isolation failures on tests that
 share module-level cache state (e.g. `_PAN_CANCER_CACHE`). If a test passes
 alone but fails in the suite, that's almost always xdist worker-affinity flake,
 not a real regression — re-run the failing file alone to confirm.
+
+## Gene-identifier key space (proteoform contract)
+
+Expression is read as a **protein-abundance proxy**, so the key is the *protein*,
+not the gene locus. Two distinct Ensembl loci encoding a byte-identical protein
+(NY-ESO-1 = `CTAG1A`+`CTAG1B`, α-globin = `HBA1`+`HBA2`, amylase = `AMY1A/B/C`,
+histone/CT47A clusters, segmental-dup paralogs — 172 groups / ~236 genes) each
+get only a *fraction* of the reads, so per-locus they under-count the protein.
+pirlygenes derives the groups (`protein-identical-gene-groups`); trufflepig
+consumes the collapse consistently at every seam.
+
+**Contract** (see `common.collapse_proteoform_loci`):
+
+- *Unique gene → protein*: key = real versionless **ENSG**; symbol = HGNC symbol.
+- *Folded proteoform (≥2 loci, SUMmed in linear space)*: members leave the key
+  space. The row is keyed in **ENSG space** by the group's **canonical member
+  ENSG** (still a real `ENSG…`, so `assert_tpm_keyed_by_gene_id` + ENSG family
+  panels keep working) and named in **symbol space** by the **proteoform id**
+  (`CTAG1A/B`; `display_name` → `NY-ESO-1`).
+
+Applied at: pan-cancer + HPA matrices (`collapse_proteoform_loci`, SUM, linear
+space, before any normalize); sample conform (`build_sample_tpm_by_symbol` /
+`_by_gene_id`, SUM); deconvolved artifacts (symbol **relabel** + keep max-median,
+*not* summed — order-statistic summation must move upstream to the generator,
+filed as follow-up). **Curated panels must reference the proteoform id**, never a
+member symbol — `tests/test_proteoform_key_space.py` fails loudly if a registry
+panel references an unfolded member. Fold a panel at a lookup with
+`common.fold_panel_symbols`.

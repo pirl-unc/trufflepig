@@ -277,7 +277,7 @@ COMPONENT_MARKERS = {
     "melanocyte": ["MLANA", "PMEL", "TYR", "DCT"],
     "normal_myeloid": ["LYZ", "S100A8", "S100A9", "FCER1G"],
     "normal_lymphoid": ["CD3D", "MS4A1", "NKG7", "LTB"],
-    "erythroid": ["HBA1", "HBA2", "HBB", "ALAS2"],
+    "erythroid": ["HBA1/2", "HBB", "ALAS2"],  # HBA1/2 = folded α-globin proteoform
     "normal_blood": ["LYZ", "S100A8", "NKG7", "MS4A1", "HBB"],
     # Optional compartments (#59). Markers match the detection gates
     # in ``templates.OPTIONAL_COMPARTMENT_GATES``.

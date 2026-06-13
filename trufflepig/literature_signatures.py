@@ -41,7 +41,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
     LiteratureSignature(
         "SARC_MYXLPS",
         ("SARC",),
-        ("DDIT3", "FUS", "EWSR1", "CTAG1B", "PPARG"),
+        ("DDIT3", "FUS", "EWSR1", "CTAG1A/B", "PPARG"),  # CTAG1A/B = NY-ESO-1 proteoform
         "PMID:33465826;PMID:35273728",
         "myxoid liposarcoma DDIT3-rearranged/lipogenic program",
     ),

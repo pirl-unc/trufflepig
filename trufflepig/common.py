@@ -97,22 +97,171 @@ _guess_gene_cols = guess_gene_cols
 
 @lru_cache(maxsize=1)
 def ensembl_id_to_symbol_map() -> dict[str, str]:
-    """Return the reference Ensembl ID -> HGNC symbol map."""
+    """Return the reference Ensembl ID -> HGNC symbol map.
+
+    Built from the (proteoform-collapsed) pan-cancer reference, so a folded
+    group's canonical Ensembl id maps to its **proteoform id** symbol
+    (``ENSG…184033 -> "CTAG1A/B"``) and the member loci that left the key space
+    are absent — see :func:`collapse_proteoform_loci`.
+    """
     from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression()
     return dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
 
 
+# -------------------- proteoform key space --------------------
+#
+# A protein-abundance proxy must key on the *protein*, not the gene locus. Two
+# distinct Ensembl loci that encode a byte-identical protein (segmental-dup
+# paralogs, histone clusters, the CT47A / NY-ESO-1 CTA clusters, …) each receive
+# only a *fraction* of the reads a quantifier would assign to a single gene, so
+# read as per-locus they make the protein look under-expressed and distort any
+# per-gene threshold (CTA "ON" counting, marker panels). pirlygenes derives the
+# byte-identical groups (``protein-identical-gene-groups``) and provides the
+# collapse; trufflepig *consumes* it consistently at every seam where a sample,
+# a reference matrix, or a curated panel enters the scoring space.
+#
+# Identifier contract (held everywhere a collapse runs):
+#   * unique gene -> protein (not folded): key = the gene's real versionless
+#     ENSG; symbol = its HGNC symbol. Untouched.
+#   * folded proteoform (>=2 loci summed in LINEAR space): the member ENSGs LEAVE
+#     the key space; the merged row is keyed by the group's **canonical member
+#     ENSG** (a real ``ENSG…``, so the ENSG-keyed guard + family-panel joins keep
+#     working) and *named* by the **proteoform id** (``CTAG1A/B``) so the symbol
+#     space shows exactly what was summed. ``display_name`` maps it to a label
+#     (``CTAG1A/B`` -> ``NY-ESO-1``).
+# So ENSG space carries an ENSG xor a canonical-member ENSG; symbol space carries
+# a symbol xor a proteoform id. Sample, reference, and panels all fold the same
+# way, so a lookup by either is consistent.
+
+
 @lru_cache(maxsize=1)
-def _versionless_id_to_symbol_map() -> dict[str, str]:
-    """Reference Ensembl ID -> Symbol map, keyed by versionless ID."""
+def _proteoform_member_to_canonical_id() -> dict[str, str]:
+    """``{member_versionless_ENSG: group_canonical_ENSG}`` for byte-identical
+    protein groups (identity for ungrouped genes is *not* stored — callers
+    ``.get(id, id)``)."""
+    from pirlygenes.expression.protein_groups import protein_identical_groups
+
+    g = protein_identical_groups()
+    return dict(
+        zip(
+            g["ensembl_gene_id"].astype(str),
+            g["group_canonical_ensembl_gene_id"].astype(str),
+        )
+    )
+
+
+@lru_cache(maxsize=1)
+def _proteoform_canonical_id_to_symbol() -> dict[str, str]:
+    """``{group_canonical_ENSG: proteoform_id}`` (``ENSG…184033 -> "CTAG1A/B"``)."""
+    from pirlygenes.expression.protein_groups import protein_identical_groups
+
+    g = protein_identical_groups()
+    return dict(
+        zip(
+            g["group_canonical_ensembl_gene_id"].astype(str),
+            g["group_canonical_symbol"].astype(str),
+        )
+    )
+
+
+def fold_panel_symbols(symbols):
+    """Fold a curated symbol panel onto the proteoform key space so it matches a
+    collapsed matrix / sample (``["CTAG1B"] -> ["CTAG1A/B"]``; ungrouped symbols
+    unchanged). Order-preserving + de-duplicated. Thin wrapper over pirlygenes'
+    :func:`fold_symbols_to_canonical` — use wherever a curated gene list is
+    looked up against folded expression."""
+    from pirlygenes.expression.protein_groups import fold_symbols_to_canonical
+
+    return fold_symbols_to_canonical(symbols)
+
+
+def relabel_proteoform_symbols_long(
+    df, *, symbol_col="symbol", id_col=None, dedup_keys, value_col=None
+):
+    """Relabel byte-identical-protein member symbols to their proteoform id in a
+    **long summary-statistic** table (the deconvolved median/quantile artifacts),
+    so a folded panel or folded sample joins consistently instead of silently
+    missing the gene.
+
+    This does **not** re-sum the values: those artifacts store medians/quantiles,
+    and protein-level summation of order statistics is invalid — it must happen at
+    the upstream generator (filed as follow-up). Where relabeling collides member
+    rows within a logical row (``dedup_keys``), the row with the largest
+    ``value_col`` is kept (the dominant locus as the proteoform proxy). Folded
+    rows' ``id_col`` (if given) is moved to the canonical member ENSG too. Rows in
+    no group pass through untouched.
+    """
+    from pirlygenes.expression.protein_groups import canonical_symbol_map
     from .plot_data_helpers import _strip_ensembl_version
 
-    return {
+    sym_map = canonical_symbol_map()  # {member_symbol_upper: proteoform_id}
+    up = df[symbol_col].astype(str).str.upper()
+    changed = up.isin(sym_map)
+    if not changed.any():
+        return df
+    out = df.copy()
+    out.loc[changed, symbol_col] = up[changed].map(sym_map).values
+    if id_col and id_col in out.columns:
+        id2canon = _proteoform_member_to_canonical_id()
+        ids = out.loc[changed, id_col].astype(str).map(_strip_ensembl_version)
+        out.loc[changed, id_col] = ids.map(lambda g: id2canon.get(g, g)).values
+    subset = [c for c in dedup_keys if c in out.columns]
+    if value_col and value_col in out.columns:
+        out = out.sort_values(value_col, ascending=False, kind="stable")
+    return out.drop_duplicates(subset=subset, keep="first").reset_index(drop=True)
+
+
+def collapse_proteoform_loci(df, *, id_col="Ensembl_Gene_ID", symbol_col="Symbol", value_cols):
+    """Sum byte-identical-protein Ensembl loci in a **linear-space** wide matrix
+    and relabel folded rows to the proteoform identifier contract.
+
+    Wraps pirlygenes' :func:`collapse_protein_identical_loci` (the summation,
+    ``min_count=1``: absent members ignored) and then normalizes every folded
+    row so its ``id_col`` is the group's **canonical member ENSG** and its
+    ``symbol_col`` is the **proteoform id** — robust to the wide collapse keeping
+    a non-canonical rep when the canonical member is absent. Single-locus genes
+    pass through unchanged. Must run in linear space, before any log transform.
+    """
+    from pirlygenes.expression.protein_groups import collapse_protein_identical_loci
+    from .plot_data_helpers import _strip_ensembl_version
+
+    out = collapse_protein_identical_loci(df, id_col=id_col, value_cols=value_cols)
+    id2canon = _proteoform_member_to_canonical_id()
+    canon2sym = _proteoform_canonical_id_to_symbol()
+    ids = out[id_col].astype(str).map(_strip_ensembl_version)
+    canon = ids.map(id2canon)
+    folded = canon.notna()
+    if folded.any():
+        out.loc[folded, id_col] = canon[folded].values
+        if symbol_col and symbol_col in out.columns:
+            out.loc[folded, symbol_col] = canon[folded].map(canon2sym).values
+    return out
+
+
+@lru_cache(maxsize=1)
+def _versionless_id_to_symbol_map() -> dict[str, str]:
+    """Reference Ensembl ID -> Symbol map, keyed by versionless ID.
+
+    Includes the byte-identical-protein **member** ENSGs (which left the collapsed
+    reference key space) as aliases onto their group's proteoform-id symbol, so a
+    consumer that resolves a raw member ENSG without folding first still lands on
+    the proteoform label instead of dropping the gene.
+    """
+    from .plot_data_helpers import _strip_ensembl_version
+
+    out = {
         _strip_ensembl_version(str(gid)): sym
         for gid, sym in ensembl_id_to_symbol_map().items()
     }
+    id2canon = _proteoform_member_to_canonical_id()
+    canon2sym = _proteoform_canonical_id_to_symbol()
+    for member_id, canon_id in id2canon.items():
+        proteoform = canon2sym.get(canon_id)
+        if proteoform:
+            out.setdefault(_strip_ensembl_version(member_id), proteoform)
+    return out
 
 
 def canonical_reference_symbols(symbols, gene_ids):
@@ -238,16 +387,27 @@ def build_sample_tpm_by_symbol(df_gene_expr):
             context="analysis sample expression",
         )
 
-        id_to_sym = ensembl_id_to_symbol_map()
-
-        syms = gene_ids.map(id_to_sym)
+        # Fold byte-identical-protein loci to their canonical ENSG and SUM their
+        # TPM (linear space) so a protein split across paralog loci reads as one
+        # gene — the proteoform key space (see collapse_proteoform_loci). Members
+        # leave the key space; the canonical id then maps to the proteoform-id
+        # symbol via the (collapsed) reference map. groupby keeps the per-gene
+        # MAX over any *residual* same-symbol-different-ENSG collisions (the few
+        # non-protein-identical symbol clashes), matching the reference dedup.
+        id2canon = _proteoform_member_to_canonical_id()
+        gene_ids = gene_ids.map(lambda g: id2canon.get(g, g))
         tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
-        valid = syms.notna() & tpms.notna()
-        return dict(
-            pd.DataFrame({"sym": syms[valid], "tpm": tpms[valid]})
-            .groupby("sym")["tpm"]
-            .max()
+        valid = gene_ids.notna() & tpms.notna()
+        folded_tpm = (
+            pd.DataFrame({"gid": gene_ids[valid], "tpm": tpms[valid]})
+            .groupby("gid")["tpm"]
+            .sum()
         )
+        id_to_sym = ensembl_id_to_symbol_map()
+        syms = folded_tpm.index.map(id_to_sym)
+        res = pd.DataFrame({"sym": syms, "tpm": folded_tpm.values})
+        res = res[res["sym"].notna()]
+        return dict(res.groupby("sym")["tpm"].max())
 
 
 # Underscore alias for backward compatibility with internal callers.
@@ -332,11 +492,19 @@ def build_sample_tpm_by_gene_id(df_gene_expr):
             & gene_ids.str.strip().str.len().gt(0)
             & tpms.notna()
         )
-        return dict(
-            pd.DataFrame({"gene_id": gene_ids[valid], "tpm": tpms[valid]})
+        # Fold byte-identical-protein loci to the canonical member ENSG and SUM
+        # (linear space) — the ENSG-keyed half of the proteoform key space, so
+        # ENSG family-panel joins see the whole protein. The key stays a real
+        # ENSG (assert_tpm_keyed_by_gene_id holds). Residual duplicate ids take
+        # MAX as before.
+        id2canon = _proteoform_member_to_canonical_id()
+        folded_ids = gene_ids[valid].map(lambda g: id2canon.get(g, g))
+        summed = (
+            pd.DataFrame({"gene_id": folded_ids, "tpm": tpms[valid]})
             .groupby("gene_id")["tpm"]
-            .max()
+            .sum()
         )
+        return dict(summed)
 
 
 # -------------------- ranges_df accessors --------------------

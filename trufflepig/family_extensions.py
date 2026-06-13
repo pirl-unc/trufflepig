@@ -150,7 +150,10 @@ EXTENSION_FAMILY_PANELS: Mapping[str, tuple[str, ...]] = {
     ),
     # --- Salivary (ACINIC, ADCC) ---
     "SALIVARY": (
-        "AMY1A", "AMY1B", "AMY1C", "STATH", "HTN1", "HTN3",
+        # AMY1A/B/C are byte-identical-protein loci folded to one proteoform key
+        # (see common.collapse_proteoform_loci); reference the proteoform id so
+        # this panel matches the collapsed matrix/sample.
+        "AMY1A/B/C", "STATH", "HTN1", "HTN3",
         "PRB1", "MUC7", "LPO", "LACRT",
     ),
     # --- Notochordal (CHOR — Chordoma, TBXT-driven singleton) ---

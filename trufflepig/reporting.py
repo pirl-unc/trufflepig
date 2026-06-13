@@ -1143,6 +1143,15 @@ def cross_cancer_target_index() -> dict[str, tuple[dict, ...]]:
                 }
             )
             seen.setdefault(symbol, set()).add(agent.agent.lower())
+    # Alias each target onto its proteoform key so it matches the conformed
+    # sample's expression rows, which are folded (NY-ESO-1 target "CTAG1B" must
+    # find the sample's "CTAG1A/B" row). See common.collapse_proteoform_loci.
+    from .common import fold_panel_symbols
+
+    for sym in list(out.keys()):
+        folded = fold_panel_symbols([sym])[0]
+        if folded != sym:
+            out.setdefault(folded, []).extend(out[sym])
     return {sym: tuple(entries) for sym, entries in out.items()}
 
 
