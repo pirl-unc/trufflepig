@@ -17,6 +17,10 @@ tumour's **broad lineage** on real local samples, scored against known truth:
 
 All three reuse existing machinery — no new analysis modules.
 
+NOTE: exploratory harness, not a test. ``SAMPLES`` hardcodes machine-specific
+absolute paths to local truth-set data (not in the repo); edit them to re-run
+elsewhere. Not collected by pytest.
+
 Run:  scripts/decomposition_bakeoff.py            # uses the embedded truth set
 """
 

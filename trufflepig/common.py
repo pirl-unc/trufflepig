@@ -190,8 +190,13 @@ def relabel_proteoform_symbols_long(
     the upstream generator (filed as follow-up). Where relabeling collides member
     rows within a logical row (``dedup_keys``), the row with the largest
     ``value_col`` is kept (the dominant locus as the proteoform proxy). Folded
-    rows' ``id_col`` (if given) is moved to the canonical member ENSG too. Rows in
-    no group pass through untouched.
+    rows' ``id_col`` (if given) is moved to the canonical member ENSG too.
+
+    Only the **relabeled** rows are deduplicated, and every other row is left
+    untouched and in its original position: a non-protein-identical symbol that
+    happens to have duplicate ``dedup_keys`` rows (e.g. MATR3, PINX1 — same symbol,
+    distinct non-identical ENSGs) is never folded, so it is never merged, and the
+    global row order is preserved (no whole-frame sort).
     """
     from pirlygenes.expression.protein_groups import canonical_symbol_map
     from .plot_data_helpers import _strip_ensembl_version
@@ -207,10 +212,16 @@ def relabel_proteoform_symbols_long(
         id2canon = _proteoform_member_to_canonical_id()
         ids = out.loc[changed, id_col].astype(str).map(_strip_ensembl_version)
         out.loc[changed, id_col] = ids.map(lambda g: id2canon.get(g, g)).values
+    # Dedup ONLY the relabeled rows (a proteoform id never collides with an
+    # unfolded row — no real symbol contains "/"). Keep the largest-value row per
+    # collision; drop the losers; leave the rest of the frame in place.
     subset = [c for c in dedup_keys if c in out.columns]
-    if value_col and value_col in out.columns:
-        out = out.sort_values(value_col, ascending=False, kind="stable")
-    return out.drop_duplicates(subset=subset, keep="first").reset_index(drop=True)
+    relabeled = out[changed]
+    if value_col and value_col in relabeled.columns:
+        relabeled = relabeled.sort_values(value_col, ascending=False, kind="stable")
+    keep_idx = relabeled.drop_duplicates(subset=subset, keep="first").index
+    drop_idx = out.index[changed].difference(keep_idx)
+    return out.drop(index=drop_idx).reset_index(drop=True)
 
 
 def collapse_proteoform_loci(df, *, id_col="Ensembl_Gene_ID", symbol_col="Symbol", value_cols):

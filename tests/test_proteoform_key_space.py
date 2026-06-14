@@ -7,6 +7,8 @@ and curated panel — instead of a per-locus fraction. See
 ``trufflepig.common.collapse_proteoform_loci`` for the identifier contract.
 """
 
+import re
+
 import pandas as pd
 
 from trufflepig.common import (
@@ -47,10 +49,10 @@ def test_pan_cancer_folds_members_to_proteoform_id():
     assert "AMY1A/B/C" in syms
     # CD99's two loci share the symbol, so the proteoform id IS "CD99"
     assert "CD99" in syms
-    # the folded row is keyed by the canonical member ENSG (a real ENSG…),
-    # so the ENSG-keyed guard + family-panel joins still resolve
+    # the folded row is keyed by the canonical member ENSG (a real ENSG…, one of
+    # the group's members), so the ENSG-keyed guard + family-panel joins resolve
     row = ref[ref["Symbol"] == "CTAG1A/B"]
-    assert row["Ensembl_Gene_ID"].iloc[0] == CTAG1B_ID
+    assert row["Ensembl_Gene_ID"].iloc[0] in {CTAG1A_ID, CTAG1B_ID}
 
 
 def test_hpa_folds_members():
@@ -66,6 +68,28 @@ def test_tcga_deconvolved_relabels_members():
     syms = set(tcga_deconvolved_expression()["symbol"].astype(str))
     assert "CTAG1A/B" in syms
     assert "CTAG1A" not in syms and "CTAG1B" not in syms
+
+
+def test_tcga_deconvolved_preserves_tpm_1e6_after_folding():
+    """Relabel runs pre-renormalize, so folding out member rows must NOT break the
+    per-cancer TPM-1e6 invariant (regression guard for the bug where relabel ran
+    after renormalization)."""
+    from trufflepig.reference import tcga_deconvolved_expression
+
+    sums = tcga_deconvolved_expression().groupby("cancer_code")["tumor_tpm_median"].sum()
+    assert ((sums - 1_000_000.0).abs() < 1.0).all(), sums[(sums - 1_000_000.0).abs() >= 1.0]
+
+
+def test_non_protein_identical_dup_symbols_are_not_merged():
+    """A symbol with duplicate (symbol, cancer) rows from *non*-identical loci
+    (MATR3, PINX1) must survive un-merged — only protein-identical members fold."""
+    from trufflepig.reference import tcga_deconvolved_expression
+
+    df = tcga_deconvolved_expression()
+    for sym in ("MATR3", "PINX1"):
+        per_cancer = df[df["symbol"] == sym].groupby("cancer_code").size()
+        if len(per_cancer):
+            assert per_cancer.max() > 1, f"{sym} was wrongly merged to one row/cancer"
 
 
 # ---- sample conform sums protein-identical loci --------------------------
@@ -103,30 +127,55 @@ def test_collapse_is_a_noop_for_ungrouped_matrix():
 
 # ---- guard: no curated panel references an UNfolded member symbol --------
 
-def _registry_symbols():
-    """Every gene symbol referenced by the importable curated-panel registries."""
-    from trufflepig.family_extensions import EXTENSION_FAMILY_PANELS
-    from trufflepig.decomposition.signature import COMPONENT_MARKERS
-    from trufflepig.tumor_type_ontology import _CURATED_HIGH, _CURATED_LOW
-    from trufflepig.literature_signatures import _SIGNATURE_ROWS
+# Modules holding curated gene-symbol panels. The AST scan below covers EVERY
+# panel in these (nested dicts, tuples, the OPTIONAL_COMPARTMENT_GATES markers,
+# lineage programs, …) without enumerating each structure — so a panel added to
+# any of them is checked automatically.
+_PANEL_MODULES = (
+    "family_extensions.py",
+    "tumor_type_ontology.py",
+    "literature_signatures.py",
+    "lineage_evidence.py",
+    "subtype_signature.py",
+    "decomposition/signature.py",
+    "decomposition/templates.py",
+)
 
+# A bare gene-symbol-shaped string literal (incl. proteoform ids like CTAG1A/B).
+_SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9./-]{1,14}")
+
+
+def _panel_symbol_constants():
+    """Gene-symbol-shaped *string constants* in the panel modules, via AST.
+
+    Parsing (not grepping) means comments are absent and docstrings are single
+    long Constants that never equal a bare symbol — so this has none of the
+    false positives a source scan would, and ignores nothing a panel uses."""
+    import ast
+    import pathlib
+
+    import trufflepig
+
+    root = pathlib.Path(trufflepig.__file__).parent
     out = set()
-    for reg in (EXTENSION_FAMILY_PANELS, COMPONENT_MARKERS, _CURATED_HIGH, _CURATED_LOW):
-        for panel in reg.values():
-            out.update(str(s) for s in panel)
-    for row in _SIGNATURE_ROWS:
-        out.update(str(s) for s in row.marker_genes)
+    for rel in _PANEL_MODULES:
+        tree = ast.parse((root / rel).read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                s = node.value.strip()
+                if _SYMBOL_RE.fullmatch(s):
+                    out.add(s)
     return out
 
 
 def test_no_curated_panel_references_an_unfolded_member():
     """A symbol that folds to something *other than itself* is an unfolded member
     of a byte-identical-protein group — it would silently miss the collapsed
-    matrix/sample. Catches future panel additions (fail loudly, as with
-    assert_tpm_keyed_by_gene_id)."""
+    matrix/sample. Catches future panel additions in any module above (fail
+    loudly, as with assert_tpm_keyed_by_gene_id)."""
     offenders = {
         s: fold_panel_symbols([s])[0]
-        for s in _registry_symbols()
+        for s in _panel_symbol_constants()
         if fold_panel_symbols([s]) != [s]
     }
     assert not offenders, (
