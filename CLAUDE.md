@@ -46,10 +46,20 @@ consumes the collapse consistently at every seam.
   (`CTAG1A/B`; `display_name` → `NY-ESO-1`).
 
 Applied at: pan-cancer + HPA matrices (`collapse_proteoform_loci`, SUM, linear
-space, before any normalize); sample conform (`build_sample_tpm_by_symbol` /
-`_by_gene_id`, SUM); deconvolved artifacts (symbol **relabel** + keep max-median,
-*not* summed — order-statistic summation must move upstream to the generator,
-filed as follow-up). **Curated panels must reference the proteoform id**, never a
-member symbol — `tests/test_proteoform_key_space.py` fails loudly if a registry
-panel references an unfolded member. Fold a panel at a lookup with
+space, before any normalize); the **sample conform chokepoint**
+(`clean_tpm.normalize_to_reference_space`, which every analyzed sample passes
+through — folds the whole sample once so *every* consumer, canonical or ad-hoc,
+sees a proteoform-native frame and no member-locus read is ever dropped);
+deconvolved artifacts (symbol **relabel** + keep max-median, *not* summed —
+order-statistic summation must move upstream to the generator, filed as
+follow-up). `ensembl_id_to_symbol_map` re-adds member ENSGs as aliases onto the
+proteoform id, so any direct caller resolving a raw member ENSG never drops it.
+
+**TPM is conserved**: `collapse_proteoform_loci` and both `build_sample_tpm_by_*`
+assert each column total is preserved across the fold (a pure within-group SUM) —
+a regression that drops or double-counts a read fails loudly.
+
+**Curated panels must reference the proteoform id**, never a member symbol —
+`tests/test_proteoform_key_space.py` AST-scans every panel module and fails
+loudly if one references an unfolded member. Fold a panel at a lookup with
 `common.fold_panel_symbols`.

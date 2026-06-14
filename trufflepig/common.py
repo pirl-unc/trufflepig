@@ -101,13 +101,22 @@ def ensembl_id_to_symbol_map() -> dict[str, str]:
 
     Built from the (proteoform-collapsed) pan-cancer reference, so a folded
     group's canonical Ensembl id maps to its **proteoform id** symbol
-    (``ENSG…184033 -> "CTAG1A/B"``) and the member loci that left the key space
-    are absent — see :func:`collapse_proteoform_loci`.
+    (``ENSG…184033 -> "CTAG1A/B"``) — see :func:`collapse_proteoform_loci`. The
+    member loci that left the reference key space are re-added as **aliases** onto
+    the same proteoform id, so a caller that resolves a raw member ENSG without
+    folding first still lands on the proteoform label instead of dropping the
+    gene. (Members appear only as keys; ``.values()`` is unchanged.)
     """
     from trufflepig.reference import pan_cancer_expression
 
     ref = pan_cancer_expression()
-    return dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
+    out = dict(zip(ref["Ensembl_Gene_ID"].astype(str), ref["Symbol"].astype(str)))
+    canon2sym = _proteoform_canonical_id_to_symbol()
+    for member_id, canon_id in _proteoform_member_to_canonical_id().items():
+        proteoform = canon2sym.get(canon_id)
+        if proteoform:
+            out.setdefault(member_id, proteoform)
+    return out
 
 
 # -------------------- proteoform key space --------------------
@@ -248,6 +257,17 @@ def collapse_proteoform_loci(df, *, id_col="Ensembl_Gene_ID", symbol_col="Symbol
         out.loc[folded, id_col] = canon[folded].values
         if symbol_col and symbol_col in out.columns:
             out.loc[folded, symbol_col] = canon[folded].map(canon2sym).values
+    # Conservation sanity check: a proteoform collapse is a pure within-group SUM
+    # in linear space — it MUST preserve each column's total exactly (no TPM is
+    # ever lost, double-counted, or dropped). Fail loudly if it doesn't.
+    for col in value_cols:
+        before = float(pd.to_numeric(df[col], errors="coerce").fillna(0.0).sum())
+        after = float(pd.to_numeric(out[col], errors="coerce").fillna(0.0).sum())
+        if before > 0.0 and abs(after - before) > 1e-6 * before:
+            raise AssertionError(
+                f"proteoform collapse did not conserve {col!r}: "
+                f"{before:.6g} -> {after:.6g} (Δ={after - before:.3g})"
+            )
     return out
 
 
@@ -255,24 +275,16 @@ def collapse_proteoform_loci(df, *, id_col="Ensembl_Gene_ID", symbol_col="Symbol
 def _versionless_id_to_symbol_map() -> dict[str, str]:
     """Reference Ensembl ID -> Symbol map, keyed by versionless ID.
 
-    Includes the byte-identical-protein **member** ENSGs (which left the collapsed
-    reference key space) as aliases onto their group's proteoform-id symbol, so a
-    consumer that resolves a raw member ENSG without folding first still lands on
-    the proteoform label instead of dropping the gene.
+    Inherits the byte-identical-protein **member** aliases from
+    :func:`ensembl_id_to_symbol_map` (member ENSG -> proteoform id), so resolving a
+    raw member ENSG never drops the gene.
     """
     from .plot_data_helpers import _strip_ensembl_version
 
-    out = {
+    return {
         _strip_ensembl_version(str(gid)): sym
         for gid, sym in ensembl_id_to_symbol_map().items()
     }
-    id2canon = _proteoform_member_to_canonical_id()
-    canon2sym = _proteoform_canonical_id_to_symbol()
-    for member_id, canon_id in id2canon.items():
-        proteoform = canon2sym.get(canon_id)
-        if proteoform:
-            out.setdefault(_strip_ensembl_version(member_id), proteoform)
-    return out
 
 
 def canonical_reference_symbols(symbols, gene_ids):
@@ -414,6 +426,15 @@ def build_sample_tpm_by_symbol(df_gene_expr):
             .groupby("gid")["tpm"]
             .sum()
         )
+        # Conservation: folding member loci to canonical ENSG is a pure regroup +
+        # SUM — the total over all valid genes must be unchanged (no read lost).
+        _before = float(tpms[valid].sum())
+        _after = float(folded_tpm.sum())
+        if _before > 0.0 and abs(_after - _before) > 1e-6 * _before:
+            raise AssertionError(
+                f"proteoform fold lost TPM in build_sample_tpm_by_symbol: "
+                f"{_before:.6g} -> {_after:.6g}"
+            )
         id_to_sym = ensembl_id_to_symbol_map()
         syms = folded_tpm.index.map(id_to_sym)
         res = pd.DataFrame({"sym": syms, "tpm": folded_tpm.values})
@@ -515,6 +536,14 @@ def build_sample_tpm_by_gene_id(df_gene_expr):
             .groupby("gene_id")["tpm"]
             .sum()
         )
+        # Conservation: the fold is a pure regroup + SUM, so no read is lost.
+        _before = float(tpms[valid].sum())
+        _after = float(summed.sum())
+        if _before > 0.0 and abs(_after - _before) > 1e-6 * _before:
+            raise AssertionError(
+                f"proteoform fold lost TPM in build_sample_tpm_by_gene_id: "
+                f"{_before:.6g} -> {_after:.6g}"
+            )
         return dict(summed)
 
 

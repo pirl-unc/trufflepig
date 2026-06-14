@@ -109,6 +109,57 @@ def test_sample_by_gene_id_sums_members_and_keys_by_canonical_ensg():
     assert all(str(k).startswith("ENSG") for k in d)
 
 
+# ---- sample conform chokepoint folds once + conserves TPM ----------------
+
+def test_conform_folds_sample_and_conserves_tpm():
+    """normalize_to_reference_space (the one sample chokepoint) folds member loci
+    to the proteoform key AND loses no TPM — so every downstream consumer, even
+    ad-hoc ones, sees a proteoform-native sample."""
+    from trufflepig.clean_tpm import normalize_to_reference_space
+
+    df = _sample_df()  # CTAG1A=3, CTAG1B=5, GAPDH=100
+    before = df["TPM"].sum()
+    out = normalize_to_reference_space(
+        df, value_cols=["TPM"], label_col="gene_name", id_col="ensembl_gene_id"
+    )
+    # member loci folded into one proteoform row, summed
+    assert "CTAG1A/B" in set(out["gene_name"].astype(str))
+    assert not {"CTAG1A", "CTAG1B"} & set(out["gene_name"].astype(str))
+    assert out.loc[out["gene_name"] == "CTAG1A/B", "TPM"].iloc[0] == 8.0
+    # no TPM lost (no technical-RNA here, so no rescale — pure fold)
+    assert abs(out["TPM"].sum() - before) < 1e-9
+
+
+def test_member_ensg_resolves_via_reference_map_no_drop():
+    """A raw member ENSG resolves to the proteoform id through the reference map,
+    so an ad-hoc consumer that skips folding does not drop the gene."""
+    from trufflepig.common import ensembl_id_to_symbol_map, _versionless_id_to_symbol_map
+
+    for m in (ensembl_id_to_symbol_map(), _versionless_id_to_symbol_map()):
+        assert m.get(CTAG1A_ID) == "CTAG1A/B"  # member alias, not dropped
+        assert m.get(CTAG1B_ID) == "CTAG1A/B"
+
+
+def test_collapse_conservation_guard_fires_on_loss(monkeypatch):
+    """The conservation guard inside collapse_proteoform_loci raises if the
+    underlying collapse ever fails to preserve a column total (regression guard
+    against a future change that drops or double-counts TPM)."""
+    import pytest
+
+    from trufflepig.common import collapse_proteoform_loci
+
+    # Patch the underlying pirlygenes collapse to drop a row -> total not conserved.
+    import pirlygenes.expression.protein_groups as pgp
+
+    real = pgp.collapse_protein_identical_loci
+    monkeypatch.setattr(pgp, "collapse_protein_identical_loci", lambda d, **kw: real(d, **kw).iloc[1:])
+
+    with pytest.raises(AssertionError, match="did not conserve"):
+        collapse_proteoform_loci(
+            _sample_df(), id_col="ensembl_gene_id", symbol_col="gene_name", value_cols=["TPM"]
+        )
+
+
 # ---- panel folding -------------------------------------------------------
 
 def test_fold_panel_symbols():
