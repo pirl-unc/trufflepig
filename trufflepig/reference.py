@@ -297,12 +297,6 @@ def _all_wide_tpm_value_cols(df: pd.DataFrame) -> list[str]:
     return _raw_value_cols(df) + _clean_companion_value_cols(df) + _analysis_value_cols(df)
 
 
-def _renormalize_wide_to_million(df: pd.DataFrame) -> pd.DataFrame:
-    value_cols = _all_wide_tpm_value_cols(df)
-    out, _ = _pirlygenes.renormalize_to_million(df, value_cols=value_cols)
-    return out
-
-
 def _apply_trufflepig_pan_normalize(
     df: pd.DataFrame,
     normalize,

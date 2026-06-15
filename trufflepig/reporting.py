@@ -1408,10 +1408,6 @@ def _target_symbol(target_row) -> str:
     ).upper()
 
 
-def _agent_text(target_row) -> str:
-    return _clean_text(target_row.get("agent") if hasattr(target_row, "get") else "")
-
-
 def _agent_class_text(target_row) -> str:
     return _clean_text(
         target_row.get("agent_class") if hasattr(target_row, "get") else ""

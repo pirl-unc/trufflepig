@@ -852,13 +852,6 @@ def _parse_always_label_genes(always_label_genes: Optional[str]) -> Set[str]:
     return {token.strip() for token in always_label_genes.split(",") if token.strip()}
 
 
-def _parse_csv_tokens(arg_value: Optional[str]):
-    if arg_value is None:
-        return None
-    tokens = [token.strip() for token in str(arg_value).split(",") if token.strip()]
-    return tokens or None
-
-
 _MT_EXPECTED_MISSING_PREPS = frozenset({"poly_a", "exome_capture"})
 
 # The AR-transactivation output panel used by the CRPC-pattern
@@ -4236,35 +4229,6 @@ def _purity_ci_phrase(purity):
     elif tier == "moderate":
         core += " (moderate-width range)"
     return core
-
-
-def _summary_mode_clause(sample_mode, purity, top_tissues):
-    tissue_str = ", ".join(f"{t} ({s:.2f})" for t, s, _ in top_tissues[:3])
-    ci_phrase = _purity_ci_phrase(purity)
-    if sample_mode == "pure":
-        return (
-            f"The sample was analyzed in **pure-population mode**. The reported "
-            f"purity-like estimate ({ci_phrase}) is best read as "
-            "a coherence check against the likely tissue-of-origin profile rather than as a bulk admixture fraction. "
-            f"Residual background signatures are limited ({tissue_str}). "
-        )
-    if sample_mode == "heme":
-        return (
-            f"The estimated **malignant-lineage fraction proxy** is {ci_phrase}. "
-            "In heme mode this is not a strict tumor-vs-immune split; it reflects how strongly the sample "
-            "resembles the matched malignant program relative to hematopoietic background. "
-            f"Top lineage/background contexts: {tissue_str}. "
-        )
-    return (
-        f"Estimated tumor purity is {ci_phrase}, "
-        f"with {render_fold(purity['components']['stromal']['enrichment'])} stromal "
-        f"and {render_fold(purity['components']['immune']['enrichment'])} immune enrichment "
-        f"vs TCGA median. "
-        f"Top background signatures: {tissue_str}. "
-        "These tissue matches describe residual non-tumor background; strong off-primary "
-        "organ signal can support an inferred host-site context, but the scores are not "
-        "composition percentages. "
-    )
 
 
 def _background_section_config(sample_mode):
