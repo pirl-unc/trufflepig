@@ -59,7 +59,14 @@ proteoform id, so any direct caller resolving a raw member ENSG never drops it.
 assert each column total is preserved across the fold (a pure within-group SUM) —
 a regression that drops or double-counts a read fails loudly.
 
-**Curated panels must reference the proteoform id**, never a member symbol —
-`tests/test_proteoform_key_space.py` AST-scans every panel module and fails
-loudly if one references an unfolded member. Fold a panel at a lookup with
-`common.fold_panel_symbols`.
+**Curated panels stay in natural member symbols** (`HBA1`/`HBA2`, `CTAG1B`, …);
+their **accessors fold** to the proteoform key at lookup via
+`common.fold_panel_symbols`, so curation auto-adapts to whatever pirlygenes
+currently groups (no baked `HBA1/2` label to silently miss if the group changes).
+Live fold points: `signature.get_component_markers`, the
+`templates.OPTIONAL_COMPARTMENT_GATES` detection loop, and the literature-signature
+consumers (`literature_signature_rules_df`, `tumor_type_ontology` expectations).
+A consumer that reads a panel **raw** (bypassing its folding accessor) silently
+misses a folded member — route every panel→expression lookup through the accessor
+or `fold_panel_symbols`. `tests/test_proteoform_key_space.py` pins that each live
+accessor folds.

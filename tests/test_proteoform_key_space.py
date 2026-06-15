@@ -7,8 +7,6 @@ and curated panel — instead of a per-locus fraction. See
 ``trufflepig.common.collapse_proteoform_loci`` for the identifier contract.
 """
 
-import re
-
 import pandas as pd
 
 from trufflepig.common import (
@@ -176,60 +174,45 @@ def test_collapse_is_a_noop_for_ungrouped_matrix():
     assert list(out["Symbol"]) == ["GAPDH"] and list(out["v"]) == [1.0]
 
 
-# ---- guard: no curated panel references an UNfolded member symbol --------
+# ---- panel ACCESSORS fold member-symbol curation at lookup -----------------
+#
+# Curated panels are written in natural member symbols (HBA1/HBA2, CTAG1B, …) and
+# their sanctioned accessors fold to the proteoform key at lookup — so the
+# curation auto-adapts to whatever pirlygenes currently groups, instead of baking
+# a folded label that silently misses if the group changes. These tests pin that
+# each live accessor actually folds.
 
-# Modules holding curated gene-symbol panels. The AST scan below covers EVERY
-# panel in these (nested dicts, tuples, the OPTIONAL_COMPARTMENT_GATES markers,
-# lineage programs, …) without enumerating each structure — so a panel added to
-# any of them is checked automatically.
-_PANEL_MODULES = (
-    "family_extensions.py",
-    "tumor_type_ontology.py",
-    "literature_signatures.py",
-    "lineage_evidence.py",
-    "subtype_signature.py",
-    "decomposition/signature.py",
-    "decomposition/templates.py",
-)
+def test_component_markers_accessor_folds():
+    from trufflepig.decomposition.signature import COMPONENT_MARKERS, get_component_markers
 
-# A bare gene-symbol-shaped string literal (incl. proteoform ids like CTAG1A/B).
-_SYMBOL_RE = re.compile(r"[A-Z][A-Z0-9./-]{1,14}")
+    # curation is in member symbols ...
+    assert "HBA1" in COMPONENT_MARKERS["erythroid"]
+    # ... but the accessor returns the folded proteoform key.
+    folded = get_component_markers("erythroid")
+    assert "HBA1/2" in folded and "HBA1" not in folded and "HBA2" not in folded
 
 
-def _panel_symbol_constants():
-    """Gene-symbol-shaped *string constants* in the panel modules, via AST.
+def test_literature_signature_rules_fold():
+    from trufflepig.literature_signatures import _SIGNATURE_ROWS, literature_signature_rules_df
 
-    Parsing (not grepping) means comments are absent and docstrings are single
-    long Constants that never equal a bare symbol — so this has none of the
-    false positives a source scan would, and ignores nothing a panel uses."""
-    import ast
-    import pathlib
-
-    import trufflepig
-
-    root = pathlib.Path(trufflepig.__file__).parent
-    out = set()
-    for rel in _PANEL_MODULES:
-        tree = ast.parse((root / rel).read_text())
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                s = node.value.strip()
-                if _SYMBOL_RE.fullmatch(s):
-                    out.add(s)
-    return out
+    # the curated row holds the member symbol ...
+    myx = next(r for r in _SIGNATURE_ROWS if r.cancer_code == "SARC_MYXLPS")
+    assert "CTAG1B" in myx.marker_genes
+    # ... and the consumed rule folds it to the proteoform key.
+    rules = literature_signature_rules_df()
+    support = str(rules[rules["cancer_code"] == "SARC_MYXLPS"].iloc[0]["required_support_genes"])
+    assert "CTAG1A/B" in support and "CTAG1B" not in support.replace("CTAG1A/B", "")
 
 
-def test_no_curated_panel_references_an_unfolded_member():
-    """A symbol that folds to something *other than itself* is an unfolded member
-    of a byte-identical-protein group — it would silently miss the collapsed
-    matrix/sample. Catches future panel additions in any module above (fail
-    loudly, as with assert_tpm_keyed_by_gene_id)."""
-    offenders = {
-        s: fold_panel_symbols([s])[0]
-        for s in _panel_symbol_constants()
-        if fold_panel_symbols([s]) != [s]
-    }
-    assert not offenders, (
-        "curated panels reference unfolded protein-identical members; use the "
-        f"proteoform id instead: {offenders}"
+def test_optional_compartment_gate_folds_at_detection():
+    """The compartment-gate detection folds its member-symbol markers, so a sample
+    carrying the proteoform key (HBA1/2, as a conformed sample does) fires the gate
+    even though the gate is curated as HBA1/HBA2."""
+    from trufflepig.decomposition.templates import OPTIONAL_COMPARTMENT_GATES, _detect_optional_compartments
+
+    assert "HBA1" in OPTIONAL_COMPARTMENT_GATES["erythroid_solid"]["markers"]
+    sample = {"HBA1/2": 1000.0, "HBB": 1000.0, "ALAS2": 1000.0}
+    detected = _detect_optional_compartments(
+        sample, cancer_type="COAD", template_name="solid_primary"
     )
+    assert "erythroid" in detected

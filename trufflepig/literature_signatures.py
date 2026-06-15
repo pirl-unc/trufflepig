@@ -41,7 +41,7 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
     LiteratureSignature(
         "SARC_MYXLPS",
         ("SARC",),
-        ("DDIT3", "FUS", "EWSR1", "CTAG1A/B", "PPARG"),  # CTAG1A/B = NY-ESO-1 proteoform
+        ("DDIT3", "FUS", "EWSR1", "CTAG1B", "PPARG"),  # CTAG1B folds to CTAG1A/B (NY-ESO-1) at lookup
         "PMID:33465826;PMID:35273728",
         "myxoid liposarcoma DDIT3-rearranged/lipogenic program",
     ),
@@ -654,8 +654,12 @@ def literature_signature(code: str | None) -> LiteratureSignature | None:
 def literature_signature_rules_df() -> pd.DataFrame:
     """Return signatures in the rare-RNA-surrogate rule schema."""
     rows: list[dict[str, object]] = []
+    from trufflepig.common import fold_panel_symbols
+
     for signature in _SIGNATURE_ROWS:
-        genes = tuple(dict.fromkeys(signature.marker_genes))
+        # Fold to the proteoform key space so members (e.g. CTAG1B -> CTAG1A/B)
+        # match the collapsed reference/sample; curation stays in member symbols.
+        genes = tuple(dict.fromkeys(fold_panel_symbols(signature.marker_genes)))
         if not genes:
             continue
         rows.append(

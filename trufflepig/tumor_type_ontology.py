@@ -347,9 +347,13 @@ def _high_expectations_for_code(
     except Exception:
         signature = None
     if signature is not None:
+        from trufflepig.common import fold_panel_symbols
+
         _add_expectations(
             out,
-            genes=signature.marker_genes,
+            # fold members to the proteoform key (e.g. CTAG1B -> CTAG1A/B) so the
+            # expectation matches the conformed sample.
+            genes=fold_panel_symbols(signature.marker_genes),
             direction="high",
             source="literature signature",
             inherited_from=inherited_from,
