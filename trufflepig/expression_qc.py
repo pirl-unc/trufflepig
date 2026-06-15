@@ -25,13 +25,11 @@ from __future__ import annotations
 from typing import Iterable, Mapping, Sequence
 
 from pirlygenes.expression.qc import (
+    TECHNICAL_RNA_GROUPS,
     GeneQcClass,
     classify_gene_qc,
     is_rescue_feature,
-    _POLYA_BIAS_LNCRNA_SYMBOLS,
-    _TECHNICAL_RNA_GROUPS,
 )
-
 
 # Display ordering for the per-category pre-normalization QC block.
 # Removed groups come first (drop-by-default), then retained groups; within
@@ -268,7 +266,7 @@ def qc_category_levels_lines(
             continue
         label = _QC_GROUP_DISPLAY_LABEL.get(group, group)
         row = (group, label, frac)
-        if group in _TECHNICAL_RNA_GROUPS:
+        if group in TECHNICAL_RNA_GROUPS:
             removed_rows.append(row)
         else:
             kept_rows.append(row)

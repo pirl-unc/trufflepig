@@ -6,17 +6,14 @@ from collections.abc import Iterable
 from functools import lru_cache
 
 import pandas as pd
-from pirlygenes.expression.qc import classify_gene_qc
+from pirlygenes.expression.qc import TECHNICAL_RNA_GROUPS, classify_gene_qc
 
-
-TECHNICAL_RNA_QC_GROUPS = frozenset(
-    {
-        "mt_dna",
-        "mt_like_pseudogene",
-        "rrna_like",
-        "polyadenylation_bias_lncrna",
-    }
-)
+# pirlygenes owns the gene-QC taxonomy AND the definition of which groups make up
+# the zero-and-renormalize technical-RNA compartment. Consume its PUBLIC set
+# rather than keeping a local copy (which would silently drift when the upstream
+# technical-RNA set changes). Re-exported under the trufflepig name so existing
+# `from trufflepig.clean_tpm import TECHNICAL_RNA_QC_GROUPS` imports still resolve.
+TECHNICAL_RNA_QC_GROUPS = frozenset(TECHNICAL_RNA_GROUPS)
 
 
 @lru_cache(maxsize=200_000)

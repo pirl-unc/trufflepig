@@ -12,19 +12,18 @@ from __future__ import annotations
 from functools import lru_cache
 
 import pandas as pd
-
 import pirlygenes as _pirlygenes
-from pirlygenes.load_dataset import get_data as get_reference_data
+from pirlygenes.expression.qc import TECHNICAL_FRACTION
 
 from ._data import TRUFFLEPIG_DATA_DIR
 from .clean_tpm import assert_clean_tpm
 
-
-# pirlygenes clean_tpm_v4 pins the technical-RNA + ribosomal compartment to this
-# fraction of the 1e6 budget (two-compartment "fixed_fraction" normalization)
-# rather than zeroing it. References loaded from pirlygenes are v4, so the
-# clean-TPM guard must expect technical RNA at ~this fraction, not ~0.
-_CLEAN_TPM_V4_TECHNICAL_FRACTION = 0.25
+# pirlygenes clean TPM pins the censored (technical-RNA + ribosomal) compartment
+# to this fraction of the 1e6 budget — split into separately-pinned ribosomal
+# (~16%) and other-technical (~9%) sub-compartments — rather than zeroing it.
+# Import the PUBLIC pirlygenes constant so the guard tracks the value pirlygenes
+# actually applies (surviving any future change) instead of a hardcoded copy.
+_CLEAN_TPM_V4_TECHNICAL_FRACTION = TECHNICAL_FRACTION
 
 _PAN_CANCER_CACHE: dict[tuple, pd.DataFrame] = {}
 _TCGA_DECONV_PATH = TRUFFLEPIG_DATA_DIR / "tcga-deconvolved-expression.csv.gz"
