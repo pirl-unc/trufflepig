@@ -16,6 +16,22 @@ from trufflepig.decomposition.plot import (
 from trufflepig.tumor_purity import _summarize_candidate_family
 
 
+def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
+    """Build the target report via the live ``_build_target_report`` and write it
+    to ``{prefix}-targets.md`` (the contract the removed ``_generate_target_report``
+    wrapper used to provide)."""
+    md = cli_mod._build_target_report(
+        ranges_df,
+        analysis,
+        cancer_type=cancer_type,
+        purity_result=purity_result,
+        decomp_results=analysis.get("decomposition_results"),
+    )
+    with open(f"{prefix}-targets.md", "w") as fh:
+        fh.write(md)
+    return md
+
+
 def test_guess_gene_cols_and_pick_genes():
     df = pd.DataFrame(
         {
@@ -852,7 +868,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     purity = {"overall_lower": 0.9, "overall_estimate": 0.95, "overall_upper": 0.99}
 
     pure_prefix = str(tmp_path / "pure")
-    cli_mod._generate_target_report(
+    _write_target_report(
         ranges_df,
         {
             "sample_mode": "pure",
@@ -867,7 +883,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     assert "Context TPM (model)" in pure_text
 
     heme_prefix = str(tmp_path / "heme-targets")
-    cli_mod._generate_target_report(
+    _write_target_report(
         ranges_df,
         {
             "sample_mode": "heme",
@@ -973,7 +989,7 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
     }
 
     prefix = str(tmp_path / "coad")
-    cli_mod._generate_target_report(
+    _write_target_report(
         ranges_df,
         analysis,
         prefix,
@@ -1181,7 +1197,7 @@ def test_generate_target_report_filters_unreliable_rows_from_headlines(tmp_path)
         "mhc1": {"HLA-A": 80, "HLA-B": 75, "HLA-C": 70, "B2M": 400},
     }
     prefix = str(tmp_path / "filtered")
-    cli_mod._generate_target_report(
+    _write_target_report(
         ranges_df,
         analysis,
         prefix,

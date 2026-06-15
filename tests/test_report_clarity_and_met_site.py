@@ -6,11 +6,30 @@ import pandas as pd
 import pytest
 
 from trufflepig.main import (
+    _build_target_report,
     _constrain_purity_interval_with_decomposition,
     _effective_met_site_for_background,
     _infer_likely_met_site_context,
     _next_best_support_gap,
 )
+
+
+def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
+    """Build the target report via the live ``_build_target_report`` and write it
+    to ``{prefix}-targets.md`` (the contract the removed ``_generate_target_report``
+    wrapper used to provide)."""
+    md = _build_target_report(
+        ranges_df,
+        analysis,
+        cancer_type=cancer_type,
+        purity_result=purity_result,
+        decomp_results=analysis.get("decomposition_results"),
+    )
+    with open(f"{prefix}-targets.md", "w") as fh:
+        fh.write(md)
+    return md
+
+
 from trufflepig.plot import (
     MET_SITE_TISSUE_AUGMENTATION,
     estimate_tumor_expression_ranges,
@@ -606,7 +625,6 @@ def test_recommended_targets_skips_tme_dominant_rows():
     """#79: tme_dominant rows must not appear in the Recommended
     Targets Summary; they're called out as excluded."""
     import pandas as pd
-    from trufflepig.main import _generate_target_report
 
     purity = {
         "overall_estimate": 0.6,
@@ -704,7 +722,7 @@ def test_recommended_targets_skips_tme_dominant_rows():
 
     if os.path.exists(f"{tmp_prefix}-targets.md"):
         os.remove(f"{tmp_prefix}-targets.md")
-    _generate_target_report(
+    _write_target_report(
         ranges_df,
         analysis,
         tmp_prefix,
@@ -727,7 +745,6 @@ def test_recommended_targets_skips_tme_dominant_rows():
 def test_target_report_explains_blocked_fn1_pyx201_call():
     """FN1 should carry an explicit report caveat when the curated
     PYX-201 hook is withheld for lack of EDB+ transcript support."""
-    from trufflepig.main import _generate_target_report
 
     purity = {
         "overall_estimate": 0.6,
@@ -812,7 +829,7 @@ def test_target_report_explains_blocked_fn1_pyx201_call():
 
     if os.path.exists(f"{tmp_prefix}-targets.md"):
         os.remove(f"{tmp_prefix}-targets.md")
-    _generate_target_report(
+    _write_target_report(
         ranges_df,
         analysis,
         tmp_prefix,
@@ -828,7 +845,6 @@ def test_target_report_explains_blocked_fn1_pyx201_call():
 def test_target_report_falls_back_to_mixed_source_surface_targets(tmp_path):
     """If no surface row stays tumor-supported, keep the best mixed-source
     options visible with explicit caveats."""
-    from trufflepig.main import _generate_target_report
 
     purity = {
         "overall_estimate": 0.16,
@@ -886,7 +902,7 @@ def test_target_report_falls_back_to_mixed_source_surface_targets(tmp_path):
     )
 
     prefix = str(tmp_path / "sample")
-    _generate_target_report(
+    _write_target_report(
         ranges_df, analysis, prefix, cancer_type="PRAD", purity_result=purity
     )
     targets = (tmp_path / "sample-targets.md").read_text()

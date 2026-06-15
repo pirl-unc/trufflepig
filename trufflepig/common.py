@@ -13,28 +13,7 @@
 from contextlib import contextmanager
 from functools import lru_cache
 import pandas as pd
-from typing import Iterator, Optional
-
-
-def find_column(
-    df: pd.DataFrame, candidates: list[str], column_name: str
-) -> Optional[str]:
-    result = None
-    for col in df.columns:
-        if col.lower() in candidates:
-            result = col
-            break
-    if result is None:
-        raise ValueError(
-            "Unable to find a column for %s in expression data, available columns: %s"
-            % (
-                column_name,
-                list(
-                    df.columns,
-                ),
-            )
-        )
-    return result
+from typing import Iterator
 
 
 @contextmanager

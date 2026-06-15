@@ -438,16 +438,6 @@ def _compile_excluded_gene_matcher():
     return is_excluded
 
 
-def _is_excluded_signature_gene(symbol):
-    """Compatibility wrapper — compiles the matcher per call.
-
-    Kept so external callers (tests, plot.py fallback) can ask without
-    needing to know about the compiled cache. For tight loops prefer
-    `_compile_excluded_gene_matcher()` and call its returned predicate.
-    """
-    return _compile_excluded_gene_matcher()(symbol)
-
-
 def get_tumor_purity_parameters():
     """Return the current tumor-purity and family-scoring free parameters."""
     return TUMOR_PURITY_PARAMETERS

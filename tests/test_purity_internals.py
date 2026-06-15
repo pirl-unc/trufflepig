@@ -14,7 +14,6 @@ from trufflepig.tumor_purity import (
     TUMOR_PURITY_PARAMETERS,
     _combine_purity_estimates,
     _compile_excluded_gene_matcher,
-    _is_excluded_signature_gene,
     _signature_conflicts_with_lineage,
     _summarize_gene_level_purity,
     _select_tumor_specific_genes_for_panel,
@@ -70,12 +69,6 @@ def test_excluded_matcher_handles_empty_and_none():
     is_excluded = _compile_excluded_gene_matcher()
     assert is_excluded("")
     assert is_excluded(None)
-
-
-def test_is_excluded_signature_gene_wrapper_agrees():
-    """The convenience wrapper should agree with the compiled matcher."""
-    for sym in ["IGHV1-2", "HLA-DRA", "RPL5", "MT-CYB", "TP53", "EGFR"]:
-        assert _is_excluded_signature_gene(sym) == _compile_excluded_gene_matcher()(sym)
 
 
 def test_dlbc_panel_bypasses_exclusion():

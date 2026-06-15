@@ -4892,18 +4892,6 @@ def _is_registry_only_label(code):
         return False
 
 
-def _infer_registry_report_scope_from_rna(df_expr, analysis):
-    """Infer rare non-TCGA report scopes from strong RNA surrogates.
-
-    This is intentionally hypothesis-level. It lets expression-only runs
-    surface NUT carcinoma when NUTM1 is ectopically expressed, but the
-    report still keeps the TCGA-backed RNA classifier as a cross-check.
-    """
-    from .rare_inference import infer_rare_cancer_report_scope_from_rna
-
-    return infer_rare_cancer_report_scope_from_rna(df_expr, analysis)
-
-
 def _analysis_constraints(
     cancer_type=None,
     sample_mode="auto",
@@ -8330,22 +8318,6 @@ def _build_target_report(
     lines.append("")
 
     return "\n".join(lines)
-
-
-def _generate_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
-    """Back-compat wrapper that writes the standalone target report."""
-    target_md = _build_target_report(
-        ranges_df,
-        analysis,
-        cancer_type=cancer_type,
-        purity_result=purity_result,
-        decomp_results=analysis.get("decomposition_results"),
-    )
-    target_path = "%s-targets.md" % prefix if prefix else "targets.md"
-    with open(target_path, "w") as f:
-        f.write(target_md)
-    print(f"[report] Saved {target_path}")
-    return target_md
 
 
 @named("plot-expression")
