@@ -149,30 +149,19 @@ def ensembl_id_to_symbol_map() -> dict[str, str]:
 def _proteoform_member_to_canonical_id() -> dict[str, str]:
     """``{member_versionless_ENSG: group_canonical_ENSG}`` for byte-identical
     protein groups (identity for ungrouped genes is *not* stored — callers
-    ``.get(id, id)``)."""
-    from pirlygenes.expression.protein_groups import protein_identical_groups
+    ``.get(id, id)``). Consumes pirlygenes' public protein-identical map."""
+    from pirlygenes.expression.protein_groups import member_to_canonical
 
-    g = protein_identical_groups()
-    return dict(
-        zip(
-            g["ensembl_gene_id"].astype(str),
-            g["group_canonical_ensembl_gene_id"].astype(str),
-        )
-    )
+    return dict(member_to_canonical(kind="protein"))
 
 
 @lru_cache(maxsize=1)
 def _proteoform_canonical_id_to_symbol() -> dict[str, str]:
-    """``{group_canonical_ENSG: proteoform_id}`` (``ENSG…184033 -> "CTAG1A/B"``)."""
-    from pirlygenes.expression.protein_groups import protein_identical_groups
+    """``{group_canonical_ENSG: proteoform_id}`` (``ENSG…184033 -> "CTAG1A/B"``).
+    Consumes pirlygenes' public protein-identical map."""
+    from pirlygenes.expression.protein_groups import canonical_to_symbol
 
-    g = protein_identical_groups()
-    return dict(
-        zip(
-            g["group_canonical_ensembl_gene_id"].astype(str),
-            g["group_canonical_symbol"].astype(str),
-        )
-    )
+    return dict(canonical_to_symbol(kind="protein"))
 
 
 def fold_panel_symbols(symbols):
