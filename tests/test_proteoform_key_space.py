@@ -166,6 +166,20 @@ def test_fold_panel_symbols():
     assert fold_panel_symbols(["GAPDH"]) == ["GAPDH"]  # singleton untouched
 
 
+def test_alias_chain_resolves_any_form_to_canonical():
+    """Any identifier for NY-ESO-1 resolves to the same canonical key AND display
+    label, via the chained alias maps."""
+    from trufflepig.common import canonical_display_name, canonical_proteoform_key
+
+    for form in ("CTAG1A", "CTAG1B", "CTAG1A/B", "NY-ESO-1"):
+        assert canonical_proteoform_key(form) == "CTAG1A/B", form
+        assert canonical_display_name(form) == "NY-ESO-1", form
+    # ungrouped + no-display-alias passthroughs
+    assert canonical_proteoform_key("EPCAM") == "EPCAM"
+    assert canonical_display_name("EPCAM") == "EPCAM"
+    assert canonical_display_name("HBA1") == "HBA1/2"  # folds, but no display alias
+
+
 def test_collapse_is_a_noop_for_ungrouped_matrix():
     df = pd.DataFrame(
         {"Ensembl_Gene_ID": ["ENSG00000111640"], "Symbol": ["GAPDH"], "v": [1.0]}

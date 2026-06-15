@@ -175,6 +175,36 @@ def fold_panel_symbols(symbols):
     return fold_symbols_to_canonical(symbols)
 
 
+def canonical_proteoform_key(name: str) -> str:
+    """Resolve **any** identifier for a (possibly folded) gene to its canonical
+    proteoform **key** by chaining pirlygenes' alias maps:
+
+        member symbol | proteoform id | display alias  ->  proteoform key
+
+    e.g. ``CTAG1A``, ``CTAG1B``, ``CTAG1A/B``, ``NY-ESO-1`` -> ``CTAG1A/B``
+    (``fold_symbols_to_canonical`` already folds member symbols *and* display
+    aliases). Ungrouped names pass through unchanged (``EPCAM`` -> ``EPCAM``)."""
+    from pirlygenes.expression.protein_groups import fold_symbols_to_canonical
+
+    folded = fold_symbols_to_canonical([name])
+    return folded[0] if folded else name
+
+
+def canonical_display_name(name: str) -> str:
+    """Resolve **any** identifier to its canonical human **display** label, by
+    chaining ``canonical_proteoform_key`` -> pirlygenes ``display_name``:
+
+        ``CTAG1A`` | ``CTAG1B`` | ``CTAG1A/B`` | ``NY-ESO-1``  ->  ``NY-ESO-1``
+
+    This is the robust form: ``display_name`` alone is a direct lookup, so it
+    returns ``"CTAG1A"`` for a raw member locus; folding to the proteoform key
+    first lets every alias of a group reach the same label. A group with no
+    display alias resolves to its proteoform key (``HBA1`` -> ``HBA1/2``)."""
+    from pirlygenes.gene_names import display_name
+
+    return display_name(canonical_proteoform_key(name))
+
+
 def relabel_proteoform_symbols_long(
     df, *, symbol_col="symbol", id_col=None, dedup_keys, value_col=None
 ):
