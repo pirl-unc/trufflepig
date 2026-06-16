@@ -231,6 +231,20 @@ def test_local_reference_only_cancer_label_becomes_report_scope():
     assert report_scope == "SARC_OS"
 
 
+def test_concrete_child_with_abstract_umbrella_parent_is_not_promoted():
+    """A concrete expression cohort (COAD) whose registry parent is an *abstract
+    grouping* with no cohort of its own (CRC, which exists only to bucket
+    COAD/READ) must stay its own composition scope — never be promoted to the
+    umbrella. Promoting COAD->CRC stripped it of its expression/purity reference
+    and crashed the purity resolver on a missing CRC_TPM column."""
+    from trufflepig.main import _analysis_input_cancer_type
+
+    for concrete in ("COAD", "READ"):
+        composition_scope, report_scope = _analysis_input_cancer_type(concrete)
+        assert composition_scope == concrete, concrete
+        assert report_scope is None, concrete
+
+
 def test_nutm1_expression_can_infer_registry_only_report_scope():
     import pandas as pd
 
