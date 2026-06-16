@@ -2883,12 +2883,8 @@ def _apply_tnbc_basal_brca_rescue(rows, sample_tpm_by_symbol):
 
     brca["support_override"] = {**pattern, "promoted": True}
     brca["winning_subtype"] = "BRCA_Basal"
-    brca["support_score"] = max(float(brca.get("support_score") or 0.0), max_support * 1.05)
-    brca["support_geomean"] = (
-        float(brca["support_score"] ** _SUPPORT_GEOMEAN_EXPONENT)
-        if brca["support_score"] > 0
-        else 0.0
-    )
+    brca["support_score"] = max(float(brca.get("support_score") or 0.0), max_support * 1.05 ** _SUPPORT_GEOMEAN_EXPONENT)
+    brca["support_geomean"] = brca["support_score"]
 
     rows.sort(
         key=lambda row: (
@@ -2939,7 +2935,7 @@ def _apply_normal_tissue_tiebreaker(
     top_support = float(rows[0].get("support_score") or 0.0)
     if top_support <= 0:
         return rows
-    threshold = top_support * float(close_window)
+    threshold = top_support * float(close_window) ** _SUPPORT_GEOMEAN_EXPONENT
     close_idx = [
         i
         for i, row in enumerate(rows)
@@ -2990,13 +2986,11 @@ def _apply_normal_tissue_tiebreaker(
     if best_score <= top_tissue_score:
         return rows
 
-    boosted = max(float(best_row.get("support_score") or 0.0), top_support * boost_factor)
+    boosted = max(float(best_row.get("support_score") or 0.0), top_support * boost_factor ** _SUPPORT_GEOMEAN_EXPONENT)
     best_row["pre_tiebreaker_support_score"] = best_row.get("support_score")
     best_row["pre_tiebreaker_support_geomean"] = best_row.get("support_geomean")
     best_row["support_score"] = boosted
-    best_row["support_geomean"] = (
-        float(boosted ** _SUPPORT_GEOMEAN_EXPONENT) if boosted > 0 else 0.0
-    )
+    best_row["support_geomean"] = boosted
     best_row["normal_tissue_tiebreaker"] = {
         "applied": True,
         "tissue": best_tissue,
@@ -3159,12 +3153,8 @@ def _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol):
         if row.get("code") != "PRAD":
             continue
         row["support_override"] = pitfall
-        row["support_score"] = max(float(row.get("support_score") or 0.0), max_support * 1.05)
-        row["support_geomean"] = (
-            float(row["support_score"] ** _SUPPORT_GEOMEAN_EXPONENT)
-            if row["support_score"] > 0
-            else 0.0
-        )
+        row["support_score"] = max(float(row.get("support_score") or 0.0), max_support * 1.05 ** _SUPPORT_GEOMEAN_EXPONENT)
+        row["support_geomean"] = row["support_score"]
         break
 
     rows.sort(
@@ -3177,10 +3167,42 @@ def _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol):
     return rows
 
 
-def _candidate_raw_support(row, family_params):
-    """Candidate evidence before family/orphan weighting.
+def _candidate_support_score(
+    signature_score,
+    lineage_support_factor,
+    signature_stability,
+    family_factor,
+    family_params,
+):
+    """THE single definition of a candidate's cancer-type support score.
 
-    Excludes ``purity_estimate`` on purpose — see ``_SUPPORT_FACTOR_COUNT``.
+    The GEOMETRIC MEAN of the per-candidate evidence factors. purity_estimate is
+    deliberately not one of them (see ``_SUPPORT_FACTOR_COUNT``). Using the geomean
+    rather than the naked product keeps the score in [0, 1] and comparable across
+    candidates instead of collapsing toward zero with every extra factor — and
+    living in one function means the initial ranking and every post-rescue
+    recompute cannot drift (they once did: purity was removed from one copy of the
+    product but not the other).
+    """
+    factors = (
+        float(signature_score or 0.0),
+        float(lineage_support_factor if lineage_support_factor is not None else 1.0),
+        max(
+            float(signature_stability or 0.0),
+            family_params["signature_stability_floor"],
+        ),
+        max(float(family_factor or 0.0), family_params["min_factor"]),
+    )
+    assert len(factors) == _SUPPORT_FACTOR_COUNT
+    product = float(np.prod(factors))
+    return float(product ** _SUPPORT_GEOMEAN_EXPONENT) if product > 0 else 0.0
+
+
+def _candidate_raw_support(row, family_params):
+    """Candidate evidence before family/orphan weighting (signature × lineage).
+
+    A distinct internal pre-family quantity used only in same-units ratios
+    (coarse vs top); excludes purity_estimate and family weighting on purpose.
     """
 
     return (
@@ -3190,27 +3212,22 @@ def _candidate_raw_support(row, family_params):
 
 
 def _recompute_candidate_support(row, family_params, family_factor=None):
-    factor = float(row.get("family_factor") if family_factor is None else family_factor)
-    # purity_estimate intentionally excluded from the product (see
-    # _SUPPORT_FACTOR_COUNT): it biases the call toward the sample's dominant
-    # compartment (stroma -> SARC) rather than the true tumor lineage.
-    support_factors = (
-        float(row.get("signature_score") or 0.0),
-        float(row.get("lineage_support_factor") or 1.0),
-        max(
-            float(row.get("signature_stability") or 0.0),
-            family_params["signature_stability_floor"],
-        ),
-        max(factor, family_params["min_factor"]),
+    factor = max(
+        float(row.get("family_factor") if family_factor is None else family_factor),
+        family_params["min_factor"],
     )
-    assert len(support_factors) == _SUPPORT_FACTOR_COUNT
-    row["family_factor"] = max(factor, family_params["min_factor"])
-    row["support_score"] = float(np.prod(support_factors))
-    row["support_geomean"] = (
-        float(row["support_score"] ** _SUPPORT_GEOMEAN_EXPONENT)
-        if row["support_score"] > 0
-        else 0.0
+    row["family_factor"] = factor
+    score = _candidate_support_score(
+        row.get("signature_score"),
+        row.get("lineage_support_factor"),
+        row.get("signature_stability"),
+        factor,
+        family_params,
     )
+    # support_score IS the geomean now (computed once, in [0, 1]); support_geomean
+    # is retained as an alias only so existing readers keep resolving.
+    row["support_score"] = score
+    row["support_geomean"] = score
 
 
 def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
@@ -3566,24 +3583,14 @@ def rank_cancer_type_candidates(
                 )
         else:
             family_factor = 1.0
-        # purity_estimate intentionally excluded from the product (see
-        # _SUPPORT_FACTOR_COUNT): per-candidate purity rewards the sample's
-        # dominant compartment (stroma -> SARC) over the true tumor lineage.
-        support_factors = (
+        support_score = _candidate_support_score(
             signature_score,
             lineage_support_factor,
-            max(signature_stability, family_params["signature_stability_floor"]),
-            max(family_factor, family_params["min_factor"]),
+            signature_stability,
+            family_factor,
+            family_params,
         )
-        assert len(support_factors) == _SUPPORT_FACTOR_COUNT
-        support_score = float(np.prod(support_factors))
-        # Geomean across the factors — same ordering as support_score but
-        # stays bounded on [0, 1] instead of collapsing toward zero.
-        support_geomean = (
-            float(support_score ** _SUPPORT_GEOMEAN_EXPONENT)
-            if support_score > 0
-            else 0.0
-        )
+        support_geomean = support_score  # alias; support_score is itself the geomean
         rows.append(
             {
                 "code": code,
@@ -3720,10 +3727,8 @@ def rank_cancer_type_candidates(
             for r in rows:
                 _factor = _lineage_ev.factors.get(broad_lineage(r["code"]), 1.0)
                 if _factor != 1.0:
-                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor
-                    r["support_geomean"] = (
-                        float(r.get("support_geomean") or 0.0) * _factor
-                    )
+                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor ** _SUPPORT_GEOMEAN_EXPONENT
+                    r["support_geomean"] = r["support_score"]
                     r["lineage_exclusion_factor"] = _factor
             rows.sort(
                 key=lambda row: (

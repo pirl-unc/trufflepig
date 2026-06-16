@@ -39,7 +39,7 @@ def _row(code, support_score, signature_score=0.5):
     return {
         "code": code,
         "support_score": float(support_score),
-        "support_geomean": float(support_score) ** 0.2,
+        "support_geomean": float(support_score),  # support_score is itself the geomean now
         "signature_score": float(signature_score),
     }
 
@@ -48,7 +48,7 @@ def test_tiebreaker_promotes_breast_match_over_close_squamous_top():
     """The HCC1395-style scenario: ESCA tops by a hair, BRCA close, breast tissue present."""
     rows = [
         _row("ESCA", 1.00, signature_score=0.40),
-        _row("BRCA", 0.96, signature_score=0.59),
+        _row("BRCA", 0.99, signature_score=0.59),  # within the geomean-scale close window
         _row("LUSC", 0.85, signature_score=0.32),
     ]
     out = _apply_normal_tissue_tiebreaker(rows, sample_tpm_by_symbol={})
@@ -74,7 +74,7 @@ def test_tiebreaker_is_a_no_op_when_top_already_best_on_tissue(monkeypatch):
     monkeypatch.setattr(tp_module, "_score_host_tissue_details", fake_scorer)
     rows = [
         _row("BRCA", 1.00, signature_score=0.59),
-        _row("ESCA", 0.97, signature_score=0.40),
+        _row("ESCA", 0.99, signature_score=0.40),  # within the geomean-scale close window
     ]
     out = _apply_normal_tissue_tiebreaker(rows, sample_tpm_by_symbol={})
     assert out[0]["code"] == "BRCA"
@@ -103,7 +103,7 @@ def test_tiebreaker_does_nothing_when_candidates_share_tissue(monkeypatch):
     monkeypatch.setattr(tp_module, "_score_host_tissue_details", fake_scorer)
     rows = [
         _row("LUAD", 1.00, signature_score=0.40),
-        _row("LUSC", 0.96, signature_score=0.42),
+        _row("LUSC", 0.99, signature_score=0.42),  # within the geomean-scale close window
     ]
     out = _apply_normal_tissue_tiebreaker(rows, sample_tpm_by_symbol={})
     assert out[0]["code"] == "LUAD"
