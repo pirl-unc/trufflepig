@@ -3566,18 +3566,21 @@ def rank_cancer_type_candidates(
                 )
         else:
             family_factor = 1.0
+        # purity_estimate intentionally excluded from the product (see
+        # _SUPPORT_FACTOR_COUNT): per-candidate purity rewards the sample's
+        # dominant compartment (stroma -> SARC) over the true tumor lineage.
         support_factors = (
             signature_score,
-            max(purity_estimate, family_params["support_fraction_of_top_floor"]),
             lineage_support_factor,
             max(signature_stability, family_params["signature_stability_floor"]),
             max(family_factor, family_params["min_factor"]),
         )
+        assert len(support_factors) == _SUPPORT_FACTOR_COUNT
         support_score = float(np.prod(support_factors))
-        # Geomean across the 5 factors — same ordering as support_score but
+        # Geomean across the factors — same ordering as support_score but
         # stays bounded on [0, 1] instead of collapsing toward zero.
         support_geomean = (
-            float(support_score ** (1.0 / len(support_factors)))
+            float(support_score ** _SUPPORT_GEOMEAN_EXPONENT)
             if support_score > 0
             else 0.0
         )
@@ -3598,8 +3601,6 @@ def rank_cancer_type_candidates(
                 "family_score": family_scores.get(family_label)
                 if family_label is not None
                 else None,
-                "family_presence": family_presence,
-                "family_specificity": family_specificity,
                 "family_factor": family_factor,
                 "support_score": support_score,
                 "support_geomean": support_geomean,

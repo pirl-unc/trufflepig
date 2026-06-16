@@ -2678,8 +2678,6 @@ def _analyze_body(run: AnalyzeRun):
                 "lineage_support_factor": row.get("lineage_support_factor"),
                 "family_label": row.get("family_label"),
                 "family_score": row.get("family_score"),
-                "family_presence": row.get("family_presence"),
-                "family_specificity": row.get("family_specificity"),
                 "family_factor": row.get("family_factor"),
                 "signature_stability": row.get("signature_stability"),
                 "support_score": row["support_score"],
