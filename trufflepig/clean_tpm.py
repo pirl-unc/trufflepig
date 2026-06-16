@@ -6,7 +6,11 @@ from collections.abc import Iterable
 from functools import lru_cache
 
 import pandas as pd
-from pirlygenes.expression.qc import TECHNICAL_RNA_GROUPS, classify_gene_qc
+from pirlygenes.expression.qc import (
+    TECHNICAL_FRACTION,
+    TECHNICAL_RNA_GROUPS,
+    classify_gene_qc,
+)
 
 # pirlygenes owns the gene-QC taxonomy AND the definition of which groups make up
 # the zero-and-renormalize technical-RNA compartment. Consume its PUBLIC set
@@ -84,38 +88,42 @@ def normalize_to_reference_space(
     label_col: str | None = "Symbol",
     id_col: str | None = "Ensembl_Gene_ID",
 ) -> pd.DataFrame:
-    """Conform an expression matrix to the cohort reference's clean-TPM space.
+    """Conform an expression sample to the cohort reference's clean-TPM space by
+    **deferring the transform to pirlygenes** — the normalization owner.
 
-    The cohort reference (``pan_cancer_expression`` / ``tcga_deconvolved_expression``)
-    ships with the strict technical-RNA compartment (mt-DNA / rRNA-like / mt-like
-    pseudogenes / polyA-bias lncRNA) zeroed. A ``clean_tpm_v4`` input sample keeps
-    that compartment at a fixed fraction (~15% of the 1e6 budget), so the sample's
-    biological genes are systematically diluted ~15-25% relative to the reference —
-    a space mismatch in every sample↔cohort comparison (#74).
+    The clean-TPM definition (16% ribosomal-protein, 9% other-technical, 75%
+    biological — three separately-pinned compartments of the 1e6 budget) lives in
+    :func:`pirlygenes.expression.normalize.clean_tpm_matrix`. The reference matrices
+    are built with it, so the sample is conformed by the *same* code and lands in
+    the identical space — and trufflepig encodes no normalization definition of its
+    own, so it tracks any upstream change automatically.
 
-    This deterministically zeroes that same compartment and renormalizes each
-    column back to 1e6, so **any** input (v4 fixed-fraction, legacy-zeroed, or raw)
-    lands in the one reference space. It's a uniform rescale of the surviving
-    (biological + ribosomal-protein) genes, so rank/correlation/HK-ratio scoring is
-    unchanged; only the absolute budget shared with the reference is corrected.
-    Idempotent: an already-zeroed input is unaffected. QC (mt-fraction, RNA-quant)
-    runs upstream on the raw frame, so this never hides degradation signal.
+    A frame with no technical-RNA compartment (a partial frame / synthetic fixture,
+    or one lacking an id column) is left as-is rather than forced through the
+    transform.
     """
     cols = [col for col in value_cols if col in df.columns]
     if not cols:
         return df
-    mask = technical_rna_mask(df, label_col=label_col, id_col=id_col)
-    if not bool(mask.any()):
-        # No technical-RNA compartment present (already conformed, or a partial
-        # frame / synthetic fixture) — nothing to zero, so leave the budget as-is
-        # rather than force a 1e6 rescale that would alter the input.
+    if not id_col or id_col not in df.columns:
         return df
-    out = df.copy()
-    out.loc[mask, cols] = 0.0
-    for col in cols:
-        total = float(pd.to_numeric(out[col], errors="coerce").fillna(0.0).sum())
-        if total > 0:
-            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0) * 1e6 / total
+    # Partial frame / synthetic fixture (no technical compartment) — leave as-is
+    # rather than force a rescale. (The only trufflepig-side check; the transform
+    # itself is entirely pirlygenes'.)
+    if not bool(technical_rna_mask(df, label_col=label_col, id_col=id_col).any()):
+        return df
+    # Defer the ENTIRE clean-TPM conform to pirlygenes' df-level entry point
+    # (16/9/75 fixed_fraction): df in, cleaned df out, no masks/tables/fractions
+    # built here. Same transform that produced the reference matrices.
+    from pirlygenes.expression.normalize import normalize_expression
+
+    out, _ = normalize_expression(
+        df,
+        label_col=label_col,
+        id_col=id_col,
+        value_cols=cols,
+        censored_fill="fixed_fraction",
+    )
     return out
 
 
@@ -127,7 +135,7 @@ def assert_clean_tpm(
     id_col: str | None = "Ensembl_Gene_ID",
     context: str = "clean TPM",
     tolerance: float = 1e-9,
-    technical_fraction: float | None = None,
+    technical_fraction: float | None = TECHNICAL_FRACTION,
     fraction_slack: float = 0.15,
 ) -> None:
     """Raise when a TPM matrix has not been cleaned of technical-RNA inflation.

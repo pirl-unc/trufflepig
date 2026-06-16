@@ -260,13 +260,15 @@ def test_expression_reference_options_canonicalize_source_codes():
             "salivary family fallback",
         ),
         (
+            # NEC_MERKEL gained its own Merkel-cell cohort in the reference rebuild,
+            # so it now self-references instead of falling back to SCLC.
             "NEC_MERKEL",
-            "SCLC",
-            "deconvolved_tumor_reference",
-            "SCLC_UCOLOGNE_2015",
-            "symbol_only",
-            False,
-            "neuroendocrine family fallback",
+            "NEC_MERKEL",
+            "observed_bulk_reference",
+            "GSE235092_MERKEL_2024",
+            "ensembl_symbol",
+            True,
+            "",
         ),
         (
             "SARC_GCTB",
