@@ -142,17 +142,19 @@ def assert_clean_tpm(
 
     Two contracts, selected by ``technical_fraction``:
 
-    - **legacy "zeroed"** (default, ``technical_fraction=None``): the historical
-      clean-TPM transform zeros technical-RNA features, so their summed TPM must
-      be ~0 (within ``tolerance``).
-    - **v4 "fixed-fraction"** (``technical_fraction`` set, e.g. ``0.25``):
-      pirlygenes clean_tpm_v4 deliberately *pins* the technical-RNA + ribosomal
-      compartment to a fixed fraction of the 1e6 budget rather than zeroing it
-      (avoids inflating the biological genes). Technical RNA is therefore
-      expected to be non-zero; assert only that the strict technical-RNA rows
-      (a subset of that compartment) don't *exceed* ``technical_fraction +
+    - **fixed-fraction** (DEFAULT — ``technical_fraction`` defaults to pirlygenes'
+      consumed ``TECHNICAL_FRACTION``): clean TPM deliberately *pins* the
+      technical-RNA + ribosomal compartment to a fixed fraction of the 1e6 budget
+      rather than zeroing it (avoids inflating biological genes). Technical RNA is
+      therefore expected to be non-zero; assert only that the strict technical-RNA
+      rows (a subset of that compartment) don't *exceed* ``technical_fraction +
       fraction_slack`` of the column total — which still catches egregiously
-      un-normalized (technical-dominant) input without rejecting v4 data.
+      un-normalized (technical-dominant) input without rejecting clean data.
+    - **legacy "zeroed"** (OPT-IN — pass ``technical_fraction=None``): the
+      historical transform zeroed technical-RNA features, so their summed TPM must
+      be ~0 (within ``tolerance``). A caller that genuinely requires strict-zeroed
+      data must pass ``technical_fraction=None`` explicitly — it is no longer the
+      default now that all references ship in the fixed-fraction form.
     """
     cols = [col for col in value_cols if col in df.columns]
     if not cols or df.empty:

@@ -249,7 +249,10 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         # Types that still fall back — keep each documented fallback branch
-        # under test now that ADCC/MTC/NET_LUNG resolve directly.
+        # under test now that ADCC/MTC/NET_LUNG resolve directly. (The
+        # deconvolved-tumor-reference fallback PATH stays covered by ACINIC
+        # below + SARC_GCTB; the old neuroendocrine-fallback example was retired
+        # because the rebuild gave every NE code its own cohort — see NEC_MERKEL.)
         (
             "ACINIC",
             "HNSC",
