@@ -15,6 +15,7 @@ from functools import lru_cache
 from typing import Any, Mapping
 
 import numpy as np
+import pandas as pd
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -628,24 +629,45 @@ def _local_expression_reference_panels(
             .median()
             .reset_index(drop=True)
         )
-        ranked: list[tuple[float, float, float, str]] = []
-        ref_by_symbol: dict[str, float] = {}
-        for _, row in ref.iterrows():
-            symbol = _clean(row.get(symbol_col))
-            if not symbol or is_excluded(symbol):
-                continue
-            value = _safe_float(row.get(value_col))
-            if value < _LOCAL_REFERENCE_MIN_TPM:
-                continue
-            base = _safe_float(pan_median.get(symbol), default=0.1)
-            log2_vs_pan = float(np.log2((value + 1.0) / (base + 1.0)))
-            if log2_vs_pan < _LOCAL_REFERENCE_MIN_LOG2_VS_PAN:
-                continue
-            ref_by_symbol[symbol] = value
-            ranked.append((log2_vs_pan, value, -len(symbol), symbol))
-        if not ranked:
+        # Vectorized over the grouped reference. This replaced a per-row
+        # ``iterrows`` that built ~37k pandas Series PER PANEL (×100+ panels =
+        # millions of Series, each triggering ``__finalize__`` attrs-deepcopy) —
+        # historically the single largest analyze-time cost. Same filters, same
+        # ordering, same outputs; ``is_excluded`` (a compiled matcher) now runs
+        # only on the surviving symbols rather than every row.
+        syms_arr = ref[symbol_col].map(_clean).to_numpy()
+        vals = pd.to_numeric(ref[value_col], errors="coerce").fillna(0.0).to_numpy()
+        keep = (syms_arr != "") & (vals >= _LOCAL_REFERENCE_MIN_TPM)
+        if keep.any():
+            kept_idx = np.where(keep)[0]
+            excluded = np.fromiter(
+                (is_excluded(syms_arr[i]) for i in kept_idx), dtype=bool, count=len(kept_idx)
+            )
+            keep[kept_idx[excluded]] = False
+        if not keep.any():
             return
-        ranked.sort(key=lambda item: (-item[0], -item[1], item[3]))
+        k_syms = syms_arr[keep]
+        k_vals = vals[keep]
+        base = np.fromiter(
+            (_safe_float(pan_median.get(s), default=0.1) for s in k_syms),
+            dtype=float,
+            count=len(k_syms),
+        )
+        log2 = np.log2((k_vals + 1.0) / (base + 1.0))
+        passes = log2 >= _LOCAL_REFERENCE_MIN_LOG2_VS_PAN
+        if not passes.any():
+            return
+        f_syms = k_syms[passes]
+        f_vals = k_vals[passes]
+        f_log2 = log2[passes]
+        ref_by_symbol: dict[str, float] = {s: float(v) for s, v in zip(f_syms, f_vals)}
+        ranked = sorted(
+            (
+                (float(lg), float(v), -len(s), s)
+                for lg, v, s in zip(f_log2, f_vals, f_syms)
+            ),
+            key=lambda item: (-item[0], -item[1], item[3]),
+        )
         markers = tuple(
             symbol
             for _log2, _value, _length, symbol in ranked[
