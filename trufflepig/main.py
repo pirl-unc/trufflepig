@@ -2683,6 +2683,8 @@ def _analyze_body(run: AnalyzeRun):
                 "support_score": row["support_score"],
                 "support_geomean": row.get("support_geomean"),
                 "support_fraction_of_top": row["support_fraction_of_top"],
+                "centroid_correlation": row.get("centroid_correlation"),
+                "range_plausibility": row.get("range_plausibility"),
             }
             for idx, row in enumerate(analysis.get("candidate_trace", []))
         ]

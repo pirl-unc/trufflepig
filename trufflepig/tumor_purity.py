@@ -3762,6 +3762,38 @@ def rank_cancer_type_candidates(
 
     rows = _promote_same_family_alternatives(rows)
 
+    # Data-derived centroid cross-check (#83). Annotate each candidate with its
+    # whole-profile centroid correlation and range-restriction plausibility, and
+    # flag when the marker-panel call's coarse lineage disagrees with the
+    # data-derived one. REPORTED ONLY — it does not change the ranking here (the
+    # marker-panel call still wins); it is the foundation for the centroid-anchored
+    # gating in the re-architecture and a mis-call detector for review. Robust to
+    # being unavailable (annotations simply absent).
+    if sample_tpm:
+        try:
+            from .cancer_type_centroid import centroid_correlations, range_plausibility
+            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+            _corr = centroid_correlations(sample_tpm)  # all cohorts, computed once
+            _coarse: dict = {}
+            for _code, _rho in _corr.items():
+                _g = cancer_lineage_group(_code)
+                if _g and float(_rho) > _coarse.get(_g, -2.0):
+                    _coarse[_g] = float(_rho)
+            _cen_top = _corr.index[0] if len(_corr) else None
+            _cen_coarse = max(_coarse, key=_coarse.get) if _coarse else None
+            for row in rows:
+                row["centroid_correlation"] = float(_corr.get(row["code"], float("nan")))
+                row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
+            if rows and _cen_coarse is not None:
+                rows[0]["centroid_top_code"] = _cen_top
+                rows[0]["centroid_coarse_lineage"] = _cen_coarse
+                rows[0]["centroid_lineage_agreement"] = bool(
+                    cancer_lineage_group(rows[0]["code"]) == _cen_coarse
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
     # all candidates). The top candidate always has 1.0; the runner-up's
     # value reads as "fraction of the leader's RNA support". Not a
