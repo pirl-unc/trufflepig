@@ -25,8 +25,10 @@ def _frame(rows):
 def test_legacy_mode_rejects_nonzero_technical():
     # MT-CO2 carries TPM and we assert the legacy zeroed contract -> raises.
     df = _frame([("MT-CO2", "ENSG00000198712", 250_000.0), ("EPCAM", "ENSG00000119888", 750_000.0)])
+    # Legacy strict-zero is now opt-in via technical_fraction=None; the default is
+    # the v4 fixed-fraction bound consumed from pirlygenes.
     with pytest.raises(ValueError, match="nonzero technical-RNA"):
-        assert_clean_tpm(df, value_cols=["TPM"], context="legacy")
+        assert_clean_tpm(df, value_cols=["TPM"], context="legacy", technical_fraction=None)
 
 
 def test_v4_mode_accepts_technical_at_the_fixed_fraction():
@@ -64,36 +66,35 @@ def test_v4_observed_bulk_references_load_directly(code, expected_source):
     assert ref.source == expected_source
 
 
-def test_normalize_to_reference_space_conforms_v4_to_zeroed_compartment():
-    """A v4 sample (technical compartment present) is conformed to the cohort
-    reference's strict-technical-zeroed space; rank order of biological genes is
-    preserved (#74)."""
+def test_normalize_to_reference_space_conforms_v4_to_fixed_fraction():
+    """A sample is conformed by deferring to pirlygenes' clean-TPM transform: the
+    technical compartment is PINNED to its fixed fraction (not zeroed), the budget
+    is 1e6, and biological rank order is preserved (#74). trufflepig asserts no
+    specific fraction here — that's pirlygenes' contract."""
     from trufflepig.clean_tpm import (
         normalize_to_reference_space,
         technical_rna_mask,
         resolve_gene_columns,
     )
 
-    # MT-RNR2 / RN7SL1 are strict technical-RNA; EPCAM/COL1A1/ACTB biological.
     df = pd.DataFrame(
         {
             "Ensembl_Gene_ID": [
-                "ENSG00000210082",  # MT-RNR2 (mt-DNA)
-                "ENSG00000276168",  # RN7SL1 (rRNA-like)
+                "ENSG00000210082",  # MT-RNR2 (mt-DNA, technical)
                 "ENSG00000119888",  # EPCAM
                 "ENSG00000108821",  # COL1A1
                 "ENSG00000075624",  # ACTB
             ],
-            "Symbol": ["MT-RNR2", "RN7SL1", "EPCAM", "COL1A1", "ACTB"],
-            "TPM": [150000.0, 100000.0, 50000.0, 200000.0, 500000.0],
+            "Symbol": ["MT-RNR2", "EPCAM", "COL1A1", "ACTB"],
+            "TPM": [150000.0, 50000.0, 200000.0, 500000.0],
         }
     )
     label, idc = resolve_gene_columns(df)
     out = normalize_to_reference_space(df, value_cols=["TPM"], label_col=label, id_col=idc)
 
     mask = technical_rna_mask(out, label_col=label, id_col=idc)
-    assert float(out.loc[mask, "TPM"].sum()) == pytest.approx(0.0)  # compartment zeroed
-    assert float(out["TPM"].sum()) == pytest.approx(1e6)  # renormalized
+    assert float(out.loc[mask, "TPM"].sum()) > 0.0  # PINNED, not zeroed (new contract)
+    assert float(out["TPM"].sum()) == pytest.approx(1e6)  # renormalized to the budget
     # biological ordering preserved (ACTB > COL1A1 > EPCAM)
     bio = out.loc[~mask].set_index("Symbol")["TPM"]
     assert bio["ACTB"] > bio["COL1A1"] > bio["EPCAM"]

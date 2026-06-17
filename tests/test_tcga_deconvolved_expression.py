@@ -53,8 +53,11 @@ def test_pan_cancer_clean_values_are_default_and_raw_qc_signal_is_explicit():
     mt_clean = float(df.loc[mt_rows, "COAD_TPM_clean"].sum())
     mt_alias = float(df.loc[mt_rows, "COAD_TPM"].sum())
     assert mt_raw > 0
-    assert mt_clean == pytest.approx(0.0)
-    assert mt_alias == pytest.approx(0.0)
+    # New clean-TPM definition PINS the technical compartment to a fixed fraction
+    # (not zeroed) — mt is present in clean below its raw level, and the clean alias
+    # tracks the clean column. (trufflepig defers the fraction to pirlygenes.)
+    assert 0.0 < mt_clean < mt_raw
+    assert mt_alias == pytest.approx(mt_clean)
     clean_alias = df["COAD_TPM"]
     clean = df["COAD_TPM_clean"]
     assert ((clean_alias == clean) | (clean_alias.isna() & clean.isna())).all()

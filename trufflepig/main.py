@@ -2678,8 +2678,6 @@ def _analyze_body(run: AnalyzeRun):
                 "lineage_support_factor": row.get("lineage_support_factor"),
                 "family_label": row.get("family_label"),
                 "family_score": row.get("family_score"),
-                "family_presence": row.get("family_presence"),
-                "family_specificity": row.get("family_specificity"),
                 "family_factor": row.get("family_factor"),
                 "signature_stability": row.get("signature_stability"),
                 "support_score": row["support_score"],
@@ -4834,7 +4832,22 @@ def _registry_parent_analysis_scope(report_scope):
         parent = str(match.iloc[0].get("parent_code") or "").strip()
         if not parent:
             return None
-        return resolve_cancer_type(parent)
+        parent_code = resolve_cancer_type(parent)
+        # Only promote a concrete child to its registry parent when that parent
+        # is a REAL expression cohort of its own (own pan-cancer column or local
+        # deconvolved reference). A purely abstract grouping parent — one that
+        # exists only to bucket children, e.g. CRC over COAD/READ, or any umbrella
+        # with no cohort of its own — must NOT hijack the analysis scope:
+        # promoting COAD to CRC strips it of its expression/purity reference and
+        # crashes the purity resolver on a missing CRC_TPM column. Keep the child
+        # as its own scope instead. (brief.py applies the identical guard to the
+        # comparison code via expression_reference_options; sharing the check
+        # keeps the two scope resolvers from disagreeing.)
+        from .analyze import expression_reference_options
+
+        if not expression_reference_options(parent_code, include_fallback=False):
+            return None
+        return parent_code
     except Exception:
         return None
 

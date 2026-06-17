@@ -140,6 +140,11 @@ def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> li
         "--sample", str(input_path),
         *args_after,
     ]
+    # Bulk sweeps for the cancer-type / target / markdown-consistency review need
+    # only markdown + TSV; figure rendering is ~62% of analyze runtime (matplotlib
+    # text layout), so skip it unless the manifest explicitly requested figures.
+    if "--no-figures" not in out and "--deprecated-figures" not in out:
+        out.append("--no-figures")
     return out
 
 

@@ -242,6 +242,17 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
     return panels
 
 
+# Detection floor (housekeeping-relative) below which a signature gene is treated
+# as not expressed and so cannot contribute positive cross-cancer-percentile
+# evidence — see the "zero-floor percentile inflation" fix below. Anchored at the
+# RNA-seq quantifier-noise boundary: ~0.1× the housekeeping median is ≈1–2 TPM for
+# a typical HK level — below robust detection. The pathological cases sit at
+# ~0.01–0.05 HK (clear noise); genuine markers at ≥1 HK. Set at the noise/detection
+# boundary, not tuned to any sample (it must stay low enough that a genuinely-but-
+# weakly-expressed marker of the true type is NOT clamped).
+_SIGNATURE_DETECTION_FLOOR_HK = 0.1
+
+
 def _compute_cancer_type_signature_stats(
     df_gene_expr,
     n_signature_genes=20,
@@ -295,6 +306,16 @@ def _compute_cancer_type_signature_stats(
                 below = np.sum(ref_vals < sample_hk)
                 equal = np.sum(np.isclose(ref_vals, sample_hk, atol=1e-6))
                 percentile = float((below + 0.5 * equal) / n)
+                # Fix the "zero-floor percentile inflation" pathology: a *specific*
+                # marker is near-zero across non-target cancers, so its cross-cancer
+                # reference is a floor of zeros and ANY nonzero sample value — incl.
+                # quantifier noise — clears it and scores ~1.0, false evidence of
+                # expression. A gene the sample does not detectably express
+                # (sample_hk below the HK-relative detection floor) cannot be
+                # positive evidence: clamp to the neutral 0.5. Genes the sample
+                # genuinely expresses are unaffected.
+                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:
+                    percentile = min(percentile, 0.5)
             percentiles.append(percentile)
             log_diff = abs(np.log2(sample_hk + 1) - np.log2(cohort_hk + 1))
             gene_details.append(

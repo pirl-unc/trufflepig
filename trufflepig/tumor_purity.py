@@ -192,6 +192,11 @@ _CANCER_FAMILY_BY_CODE = {
     # component, so for family-panel scoring it groups with SARC as MESENCHYMAL.
     # The two layers intentionally disagree — origin vs RNA-signal-family — and
     # this is the one code where they do. Not a bug.
+    # NOTE: pirlygenes 5.22.107 (#452/#454) removed the MESENCHYMAL panel, so this
+    # mapping currently references a panel with no genes (it degrades to a zero
+    # family score). Fully migrating SARC/UCS off MESENCHYMAL cascades through the
+    # decomposition family-signal and is done with the taxonomy adoption in
+    # trufflepig#83; left as-is here to avoid a behavior change in this PR.
     "UCS": "MESENCHYMAL",
     "KIRC": "RENAL",
     "KIRP": "RENAL",
@@ -227,6 +232,20 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
     _CANCER_FAMILY_GROUP.get(family, family)
     for family in _CANCER_FAMILY_BY_CODE.values()
 )
+
+# Cancer-type ranking: support_score is the PRODUCT of the per-candidate
+# evidence factors assembled in _recompute_candidate_support. purity_estimate is
+# deliberately NOT one of them: per-candidate purity measures how much the
+# sample's *composition* matches a cohort, which double-counts signature_score
+# and structurally rewards whichever lineage dominates the sample — i.e. stroma
+# (MESENCHYMAL/SARC) in any low-purity tumor — over the true tumor lineage. (It
+# sank true COAD calls below stroma-pure SARC on stroma-diluted colorectal
+# samples.) Purity is reported separately, never as cancer-type evidence. The
+# geomean exponent must track the factor count so support_geomean stays
+# comparable across the post-rescue recomputations below.
+_SUPPORT_FACTOR_COUNT = 5
+_SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
+
 _CANCER_FAMILY_DISPLAY = {
     "CRC": "CRC",
     "ESCA_SQ": "esophageal squamous",
@@ -2869,10 +2888,8 @@ def _apply_tnbc_basal_brca_rescue(rows, sample_tpm_by_symbol):
 
     brca["support_override"] = {**pattern, "promoted": True}
     brca["winning_subtype"] = "BRCA_Basal"
-    brca["support_score"] = max(float(brca.get("support_score") or 0.0), max_support * 1.05)
-    brca["support_geomean"] = (
-        float(brca["support_score"] ** 0.2) if brca["support_score"] > 0 else 0.0
-    )
+    brca["support_score"] = max(float(brca.get("support_score") or 0.0), max_support * 1.05 ** _SUPPORT_GEOMEAN_EXPONENT)
+    brca["support_geomean"] = brca["support_score"]
 
     rows.sort(
         key=lambda row: (
@@ -2923,7 +2940,7 @@ def _apply_normal_tissue_tiebreaker(
     top_support = float(rows[0].get("support_score") or 0.0)
     if top_support <= 0:
         return rows
-    threshold = top_support * float(close_window)
+    threshold = top_support * float(close_window) ** _SUPPORT_GEOMEAN_EXPONENT
     close_idx = [
         i
         for i, row in enumerate(rows)
@@ -2974,13 +2991,11 @@ def _apply_normal_tissue_tiebreaker(
     if best_score <= top_tissue_score:
         return rows
 
-    boosted = max(float(best_row.get("support_score") or 0.0), top_support * boost_factor)
+    boosted = max(float(best_row.get("support_score") or 0.0), top_support * boost_factor ** _SUPPORT_GEOMEAN_EXPONENT)
     best_row["pre_tiebreaker_support_score"] = best_row.get("support_score")
     best_row["pre_tiebreaker_support_geomean"] = best_row.get("support_geomean")
     best_row["support_score"] = boosted
-    best_row["support_geomean"] = (
-        float(boosted ** 0.2) if boosted > 0 else 0.0
-    )
+    best_row["support_geomean"] = boosted
     best_row["normal_tissue_tiebreaker"] = {
         "applied": True,
         "tissue": best_tissue,
@@ -3143,10 +3158,8 @@ def _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol):
         if row.get("code") != "PRAD":
             continue
         row["support_override"] = pitfall
-        row["support_score"] = max(float(row.get("support_score") or 0.0), max_support * 1.05)
-        row["support_geomean"] = (
-            float(row["support_score"] ** 0.2) if row["support_score"] > 0 else 0.0
-        )
+        row["support_score"] = max(float(row.get("support_score") or 0.0), max_support * 1.05 ** _SUPPORT_GEOMEAN_EXPONENT)
+        row["support_geomean"] = row["support_score"]
         break
 
     rows.sort(
@@ -3159,8 +3172,54 @@ def _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol):
     return rows
 
 
+def _candidate_support_score(
+    signature_score,
+    purity_estimate,
+    lineage_support_factor,
+    signature_stability,
+    family_factor,
+    family_params,
+):
+    """THE single definition of a candidate's cancer-type support score.
+
+    The GEOMETRIC MEAN of the per-candidate evidence factors. Using the geomean
+    rather than the naked product keeps the score in [0, 1] and comparable across
+    candidates instead of collapsing toward zero with every extra factor — and
+    living in one function means the initial ranking and every post-rescue
+    recompute cannot drift (they once did: a factor was changed in one copy of the
+    product but not the other).
+
+    NOTE: ``purity_estimate`` is included here. It is a *known-imperfect* term —
+    per-candidate purity rewards the sample's dominant compartment (stroma -> SARC)
+    — but removing it standalone net-regressed the local truth set (it was a
+    bad-but-load-bearing crutch). Its principled removal, paired with the
+    data-derived centroid + sample decomposition that replace its role, is tracked
+    in the cancer-type re-architecture issue and lands in that PR, not here.
+    """
+    factors = (
+        float(signature_score or 0.0),
+        max(
+            float(purity_estimate or 0.0),
+            family_params["support_fraction_of_top_floor"],
+        ),
+        float(lineage_support_factor if lineage_support_factor is not None else 1.0),
+        max(
+            float(signature_stability or 0.0),
+            family_params["signature_stability_floor"],
+        ),
+        max(float(family_factor or 0.0), family_params["min_factor"]),
+    )
+    assert len(factors) == _SUPPORT_FACTOR_COUNT
+    product = float(np.prod(factors))
+    return float(product ** _SUPPORT_GEOMEAN_EXPONENT) if product > 0 else 0.0
+
+
 def _candidate_raw_support(row, family_params):
-    """Candidate evidence before family/orphan weighting."""
+    """Candidate evidence before family/orphan weighting.
+
+    A distinct internal pre-family quantity used only in same-units ratios
+    (coarse vs top); excludes family weighting on purpose.
+    """
 
     return (
         float(row.get("signature_score") or 0.0)
@@ -3173,27 +3232,23 @@ def _candidate_raw_support(row, family_params):
 
 
 def _recompute_candidate_support(row, family_params, family_factor=None):
-    factor = float(row.get("family_factor") if family_factor is None else family_factor)
-    support_factors = (
-        float(row.get("signature_score") or 0.0),
-        max(
-            float(row.get("purity_estimate") or 0.0),
-            family_params["support_fraction_of_top_floor"],
-        ),
-        float(row.get("lineage_support_factor") or 1.0),
-        max(
-            float(row.get("signature_stability") or 0.0),
-            family_params["signature_stability_floor"],
-        ),
-        max(factor, family_params["min_factor"]),
+    factor = max(
+        float(row.get("family_factor") if family_factor is None else family_factor),
+        family_params["min_factor"],
     )
-    row["family_factor"] = max(factor, family_params["min_factor"])
-    row["support_score"] = float(np.prod(support_factors))
-    row["support_geomean"] = (
-        float(row["support_score"] ** (1.0 / len(support_factors)))
-        if row["support_score"] > 0
-        else 0.0
+    row["family_factor"] = factor
+    score = _candidate_support_score(
+        row.get("signature_score"),
+        row.get("purity_estimate"),
+        row.get("lineage_support_factor"),
+        row.get("signature_stability"),
+        factor,
+        family_params,
     )
+    # support_score IS the geomean now (computed once, in [0, 1]); support_geomean
+    # is retained as an alias only so existing readers keep resolving.
+    row["support_score"] = score
+    row["support_geomean"] = score
 
 
 def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
@@ -3549,21 +3604,15 @@ def rank_cancer_type_candidates(
                 )
         else:
             family_factor = 1.0
-        support_factors = (
+        support_score = _candidate_support_score(
             signature_score,
-            max(purity_estimate, family_params["support_fraction_of_top_floor"]),
+            purity_estimate,
             lineage_support_factor,
-            max(signature_stability, family_params["signature_stability_floor"]),
-            max(family_factor, family_params["min_factor"]),
+            signature_stability,
+            family_factor,
+            family_params,
         )
-        support_score = float(np.prod(support_factors))
-        # Geomean across the 5 factors — same ordering as support_score but
-        # stays bounded on [0, 1] instead of collapsing toward zero.
-        support_geomean = (
-            float(support_score ** (1.0 / len(support_factors)))
-            if support_score > 0
-            else 0.0
-        )
+        support_geomean = support_score  # alias; support_score is itself the geomean
         rows.append(
             {
                 "code": code,
@@ -3581,8 +3630,6 @@ def rank_cancer_type_candidates(
                 "family_score": family_scores.get(family_label)
                 if family_label is not None
                 else None,
-                "family_presence": family_presence,
-                "family_specificity": family_specificity,
                 "family_factor": family_factor,
                 "support_score": support_score,
                 "support_geomean": support_geomean,
@@ -3702,10 +3749,8 @@ def rank_cancer_type_candidates(
             for r in rows:
                 _factor = _lineage_ev.factors.get(broad_lineage(r["code"]), 1.0)
                 if _factor != 1.0:
-                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor
-                    r["support_geomean"] = (
-                        float(r.get("support_geomean") or 0.0) * _factor
-                    )
+                    r["support_score"] = float(r.get("support_score") or 0.0) * _factor ** _SUPPORT_GEOMEAN_EXPONENT
+                    r["support_geomean"] = r["support_score"]
                     r["lineage_exclusion_factor"] = _factor
             rows.sort(
                 key=lambda row: (
@@ -3714,6 +3759,7 @@ def rank_cancer_type_candidates(
                     row["code"],
                 )
             )
+
     rows = _promote_same_family_alternatives(rows)
 
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over

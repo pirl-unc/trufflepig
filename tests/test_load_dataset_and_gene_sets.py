@@ -256,13 +256,16 @@ def test_cancer_family_panel_loader():
     # new lineages are curated upstream (heme, neuroendocrine, embryonal, ...),
     # so assert the core is a subset rather than pinning an exact set — pinning
     # makes every upstream panel addition a spurious failure here.
+    # NOTE: MESENCHYMAL was REMOVED in pirlygenes 5.22.107 (#452/#454) — its
+    # pan-stromal markers fired in every solid tumor's TME — so it is no longer a
+    # core family. (trufflepig still references it in _CANCER_FAMILY_BY_CODE where
+    # it degrades to a zero score; that mapping is migrated in trufflepig#83.)
     core = {
         "PROSTATE",
         "CRC",
         "GASTRIC",
         "SQUAMOUS",
         "ESCA_SQ",
-        "MESENCHYMAL",
         "RENAL",
         "GLIAL",
         "MELANOCYTIC",
