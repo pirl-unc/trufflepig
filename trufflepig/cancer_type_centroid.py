@@ -242,7 +242,16 @@ def coarse_lineage_scores(sample_tpm_by_symbol):
     sorted descending — the data-derived coarse-lineage prior.
     """
     corr = centroid_correlations(sample_tpm_by_symbol)
-    if corr.empty:
+    return _coarse_from_correlations(corr)
+
+
+def _coarse_from_correlations(corr):
+    """``{group: best_rho}`` from an already-computed ``centroid_correlations`` Series.
+
+    Split out so the ranker (which already holds the correlation Series) can derive
+    the compartment without a second centroid pass.
+    """
+    if corr is None or len(corr) == 0:
         return pd.Series(dtype=float)
     try:
         from pirlygenes.gene_sets_cancer import cancer_lineage_group
@@ -253,9 +262,122 @@ def coarse_lineage_scores(sample_tpm_by_symbol):
         grp = cancer_lineage_group(code)
         if not grp:
             continue
-        if grp not in groups or rho > groups[grp]:
+        if grp not in groups or float(rho) > groups[grp]:
             groups[grp] = float(rho)
     return pd.Series(groups).sort_values(ascending=False)
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1 of the hierarchical call: the histogenesis compartment (LOCKED).
+# --------------------------------------------------------------------------- #
+# Whole-profile compartment correlation is 15/15 on the local blind truth set, so
+# when it wins by a clear rho margin we trust it to *restrict* stage-2 leaves to
+# that compartment. Below the margin we abstain (no restriction) rather than risk
+# excluding the true leaf on a genuinely ambiguous profile. 0.02 in Spearman-rho:
+# comfortably below the smallest true-call margin observed locally, above tie noise.
+_COMPARTMENT_CONFIDENT_MARGIN = 0.02
+
+
+def compartment_call(sample_tpm_by_symbol, _corr=None):
+    """Stage 1 of the hierarchical cancer-type call: the histogenesis compartment.
+
+    Whole-profile bulk-centroid correlation aggregated by pirlygenes
+    ``cancer_lineage_group`` (Epithelial / Sarcoma / Hematolymphoid / Melanoma /
+    Neuroendocrine / CNS / Germ cell / Embryonal). On the local blind truth set this
+    is 15/15 — the robust, marker-saturation-immune coarse call that the leaf screen
+    cannot make reliably. **Sarcoma is a broad grouping, never a leaf** (the SARC-is-
+    broad rule); stage 2 narrows *within* the pinned compartment.
+
+    Parameters
+    ----------
+    sample_tpm_by_symbol : dict[str, float]
+        Sample expression keyed by gene symbol.
+    _corr : pandas.Series | None
+        Pre-computed :func:`centroid_correlations` result, to avoid a second
+        centroid pass when the caller already has it. Internal optimization.
+
+    Returns
+    -------
+    dict with keys:
+      ``compartment``  top lineage group, or ``None`` if no correlation was possible
+      ``score``        best rho within that compartment
+      ``runner_up``    second-best compartment (or ``None``)
+      ``margin``       ``score`` minus runner-up score (``0.0`` if only one group)
+      ``confident``    ``margin >= _COMPARTMENT_CONFIDENT_MARGIN`` — gate for whether
+                       callers should restrict stage-2 leaves to this compartment
+      ``scores``       full ``{group: rho}`` Series, sorted descending
+    """
+    corr = centroid_correlations(sample_tpm_by_symbol) if _corr is None else _corr
+    groups = _coarse_from_correlations(corr)
+    if groups.empty:
+        return {
+            "compartment": None, "score": float("nan"), "runner_up": None,
+            "margin": 0.0, "confident": False, "scores": groups,
+        }
+    top = str(groups.index[0])
+    score = float(groups.iloc[0])
+    runner_up = str(groups.index[1]) if len(groups) > 1 else None
+    margin = score - float(groups.iloc[1]) if len(groups) > 1 else 0.0
+    return {
+        "compartment": top, "score": score, "runner_up": runner_up,
+        "margin": float(margin),
+        "confident": float(margin) >= _COMPARTMENT_CONFIDENT_MARGIN,
+        "scores": groups,
+    }
+
+
+def in_compartment(code, compartment):
+    """Does leaf ``code`` belong to histogenesis ``compartment``?
+
+    Pure membership test via ``cancer_lineage_group`` — the basis for stage-1 leaf
+    restriction. Sarcoma is broad: every ``SARC``/``SARC_*`` subtype maps to the
+    ``Sarcoma`` group, so all of them are in-compartment when the call is Sarcoma,
+    and none of them is ever promoted to a single sarcoma leaf by this test.
+    Codes with no known lineage group are treated as in-compartment (never
+    excluded on missing metadata — fail-open).
+    """
+    if not compartment:
+        return True
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+    except Exception:  # noqa: BLE001
+        return True
+    grp = cancer_lineage_group(str(code))
+    if not grp:
+        return True
+    return grp == compartment
+
+
+def restrict_rows_to_compartment(rows, compartment, confident):
+    """Stage-1 leaf restriction for the ranker's candidate rows.
+
+    Annotates every row with ``compartment_in_set`` and, when the compartment call
+    is ``confident`` and the candidate set straddles the boundary (has both in- and
+    out-of-compartment leaves), applies a **stable** sort that floats in-compartment
+    leaves above out-of-compartment ones. Stable -> within each tier the incoming
+    order (the marker-panel support ranking) is preserved untouched, so the only
+    reorder is across the compartment boundary — exactly the saturation mis-calls.
+
+    Never restricts to an empty set: if every candidate is out-of-compartment (e.g. a
+    caller-constrained set), nothing is reordered (and the disagreement stays visible
+    as ``compartment_in_set=False`` on every row). Mutates the row dicts in place and
+    may reorder ``rows``.
+
+    Returns ``(rows, restricted: bool)``.
+    """
+    for r in rows:
+        r["compartment_in_set"] = bool(
+            compartment is None or in_compartment(r["code"], compartment)
+        )
+    restricted = bool(
+        compartment is not None
+        and confident
+        and any(not r["compartment_in_set"] for r in rows)
+        and any(r["compartment_in_set"] for r in rows)
+    )
+    if restricted:
+        rows.sort(key=lambda r: 0 if r["compartment_in_set"] else 1)
+    return rows, restricted
 
 
 # --------------------------------------------------------------------------- #

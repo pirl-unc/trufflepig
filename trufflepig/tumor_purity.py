@@ -3746,43 +3746,60 @@ def rank_cancer_type_candidates(
 
     rows = _promote_same_family_alternatives(rows)
 
-    # Data-derived centroid cross-check (#83). Annotate each candidate with its
-    # whole-profile centroid correlation and range-restriction plausibility, and
-    # flag when the marker-panel call's coarse lineage disagrees with the
-    # data-derived one. REPORTED ONLY — it does not change the ranking here (the
-    # marker-panel call still wins); it is the foundation for the centroid-anchored
-    # gating in the re-architecture and a mis-call detector for review.
+    # Hierarchical stage-1 compartment gate (#83). The whole-profile compartment
+    # call (cancer_type_centroid.compartment_call) is 15/15 on the local blind truth
+    # set and immune to the marker-panel saturation that mis-routes stroma-heavy /
+    # squamous-contaminated tumors to SARC/HNSC. We use it two ways here:
     #
-    # Cost: one centroid pass (33 cohort rank-correlations over the shared genes) +
-    # one plausibility check per candidate, run once per rank call. Intentional —
-    # the references are cached module-side, so the per-call cost is the correlation
-    # itself (~tens of ms). Fail-open: any error leaves the annotations absent (the
+    #   1. Annotate every candidate with its whole-profile centroid correlation and
+    #      range-restriction plausibility (review signal + downstream evidence).
+    #   2. When the compartment call is *confident* (clear rho margin), RESTRICT the
+    #      leaves considered at stage 2 to that compartment: a stable two-tier sort
+    #      floats in-compartment leaves above out-of-compartment ones, so the top
+    #      call and the candidate set are drawn from the pinned compartment. Within
+    #      each tier the marker-panel support order is preserved untouched — this
+    #      reorders ONLY across the compartment boundary, i.e. exactly the saturation
+    #      mis-calls. Sarcoma is broad (every SARC_* stays in-tier; none is promoted
+    #      to a single sarcoma leaf). Below the confidence margin we abstain (no
+    #      restriction) rather than risk excluding the true leaf on an ambiguous
+    #      profile.
+    #
+    # Cost: one centroid pass (cohort rank-correlations over the shared genes) + one
+    # plausibility check per candidate, run once per rank call (references cached
+    # module-side). Fail-open: any error leaves annotations/restriction absent (the
     # marker-panel ranking already stands) but is logged so it can't hide a bug.
     if sample_tpm:
         try:
-            from .cancer_type_centroid import centroid_correlations, range_plausibility
+            from .cancer_type_centroid import (
+                centroid_correlations,
+                compartment_call,
+                range_plausibility,
+                restrict_rows_to_compartment,
+            )
             from pirlygenes.gene_sets_cancer import cancer_lineage_group
 
             cen_corr = centroid_correlations(sample_tpm)  # all cohorts, computed once
-            coarse_by_group: dict = {}
-            for code, rho in cen_corr.items():
-                grp = cancer_lineage_group(code)
-                if grp and float(rho) > coarse_by_group.get(grp, -2.0):
-                    coarse_by_group[grp] = float(rho)
+            comp = compartment_call(sample_tpm, _corr=cen_corr)
+            cen_coarse = comp["compartment"]
             cen_top_code = cen_corr.index[0] if len(cen_corr) else None
-            cen_coarse = (
-                max(coarse_by_group, key=coarse_by_group.get)
-                if coarse_by_group
-                else None
-            )
             for row in rows:
                 row["centroid_correlation"] = float(
                     cen_corr.get(row["code"], float("nan"))
                 )
                 row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
+
+            # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
+            # above out-of-compartment ones (stable -> within-tier order preserved).
+            rows, compartment_restricted = restrict_rows_to_compartment(
+                rows, cen_coarse, comp["confident"]
+            )
+
             if rows and cen_coarse is not None:
                 rows[0]["centroid_top_code"] = cen_top_code
                 rows[0]["centroid_coarse_lineage"] = cen_coarse
+                rows[0]["centroid_lineage_margin"] = comp["margin"]
+                rows[0]["centroid_lineage_confident"] = comp["confident"]
+                rows[0]["centroid_compartment_restricted"] = compartment_restricted
                 rows[0]["centroid_lineage_agreement"] = bool(
                     cancer_lineage_group(rows[0]["code"]) == cen_coarse
                 )

@@ -169,3 +169,100 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
     # the data still says Sarcoma; the epithelial call disagrees
     assert rows[0].get("centroid_coarse_lineage") == "Sarcoma"
     assert rows[0].get("centroid_lineage_agreement") is False
+    # entirely-out-of-compartment constrained set must NOT be restricted to empty
+    assert rows[0].get("centroid_compartment_restricted") is False
+    assert rows[0].get("compartment_in_set") is False
+
+
+# --------------------------------------------------------------------------- #
+# Stage 1 — compartment_call + leaf restriction.
+# --------------------------------------------------------------------------- #
+def test_compartment_call_sarc_is_confident_sarcoma():
+    from trufflepig.cancer_type_centroid import compartment_call
+
+    call = compartment_call(_bulk_cohort_as_sample("SARC"))
+    assert call["compartment"] == "Sarcoma"
+    assert call["confident"] is True
+    assert call["margin"] > 0
+
+
+def test_compartment_call_coad_is_confident_epithelial():
+    from trufflepig.cancer_type_centroid import compartment_call
+
+    call = compartment_call(_bulk_cohort_as_sample("COAD"))
+    assert call["compartment"] == "Epithelial"
+    assert call["confident"] is True
+
+
+def test_compartment_call_empty_input_abstains():
+    from trufflepig.cancer_type_centroid import compartment_call
+
+    call = compartment_call({})
+    assert call["compartment"] is None
+    assert call["confident"] is False
+
+
+def test_compartment_call_reuses_precomputed_correlations():
+    """Passing _corr must give the same compartment as the from-scratch call (and
+    avoids a second centroid pass in the ranker)."""
+    from trufflepig.cancer_type_centroid import centroid_correlations, compartment_call
+
+    sample = _bulk_cohort_as_sample("BLCA")
+    corr = centroid_correlations(sample)
+    assert compartment_call(sample, _corr=corr)["compartment"] == (
+        compartment_call(sample)["compartment"]
+    )
+
+
+def test_in_compartment_sarcoma_is_broad():
+    from trufflepig.cancer_type_centroid import in_compartment
+
+    # every sarcoma subtype is in the Sarcoma compartment...
+    assert in_compartment("SARC", "Sarcoma")
+    assert in_compartment("SARC_LMS", "Sarcoma")
+    # ...and a carcinoma is not
+    assert not in_compartment("COAD", "Sarcoma")
+    assert in_compartment("COAD", "Epithelial")
+    # unknown lineage / no compartment -> fail-open (never excluded)
+    assert in_compartment("COAD", None)
+
+
+def test_restrict_rows_floats_in_compartment_leaf_when_confident():
+    """The core stage-1 behavior: a confident compartment call floats in-compartment
+    leaves above out-of-compartment ones, preserving within-tier order (stable)."""
+    from trufflepig.cancer_type_centroid import restrict_rows_to_compartment
+
+    # marker-panel order put an epithelial leaf on top of a sarcoma leaf (saturation)
+    rows = [
+        {"code": "HNSC"},      # out (Epithelial)
+        {"code": "SARC_LMS"},  # in  (Sarcoma)
+        {"code": "COAD"},      # out (Epithelial)
+        {"code": "SARC"},      # in  (Sarcoma)
+    ]
+    out, restricted = restrict_rows_to_compartment(rows, "Sarcoma", confident=True)
+    assert restricted is True
+    assert [r["code"] for r in out] == ["SARC_LMS", "SARC", "HNSC", "COAD"]
+    assert out[0]["compartment_in_set"] is True
+    assert out[-1]["compartment_in_set"] is False
+
+
+def test_restrict_rows_abstains_when_not_confident():
+    from trufflepig.cancer_type_centroid import restrict_rows_to_compartment
+
+    rows = [{"code": "HNSC"}, {"code": "SARC_LMS"}]
+    out, restricted = restrict_rows_to_compartment(rows, "Sarcoma", confident=False)
+    assert restricted is False
+    assert [r["code"] for r in out] == ["HNSC", "SARC_LMS"]  # order untouched
+    # annotation still added even when not restricting
+    assert out[0]["compartment_in_set"] is False
+    assert out[1]["compartment_in_set"] is True
+
+
+def test_restrict_rows_never_restricts_to_empty():
+    """If every candidate is out-of-compartment, do not reorder (and never empty)."""
+    from trufflepig.cancer_type_centroid import restrict_rows_to_compartment
+
+    rows = [{"code": "COAD"}, {"code": "HNSC"}]
+    out, restricted = restrict_rows_to_compartment(rows, "Sarcoma", confident=True)
+    assert restricted is False
+    assert [r["code"] for r in out] == ["COAD", "HNSC"]

@@ -377,7 +377,15 @@ def test_synthetic_prad_lymph_mix_stays_primary_not_lymphoma():
 
 
 def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
-    """Soft mesenchymal fallback should not outrank a strong prostate family signal."""
+    """Soft mesenchymal fallback should not outrank a strong prostate family signal.
+
+    The strong, prostate-specific signal (KLK3 etc.) survives 80% smooth-muscle
+    admixture: PRAD stays #1 and the whole-profile compartment gate (#83) confidently
+    pins **Epithelial**, so the mesenchymal SARC fallback is *suppressed* — demoted
+    below the epithelial candidates and flagged out-of-compartment — rather than
+    surfaced as a top alternative. (Pre-hierarchy this test asserted SARC appeared in
+    the top-4; the compartment gate strengthens the property it was guarding.)
+    """
     df = _mix_samples(
         [
             (0.2, _tcga_sample("PRAD")),
@@ -385,7 +393,7 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
         ]
     )
 
-    candidates = rank_cancer_type_candidates(df, top_k=4)
+    candidates = rank_cancer_type_candidates(df, top_k=8)
     results = decompose_sample(
         df,
         cancer_types=["PRAD"],
@@ -394,7 +402,10 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
     )
 
     assert candidates[0]["code"] == "PRAD"
-    assert "SARC" in {row["code"] for row in candidates}
+    # the gate pinned the epithelial compartment and suppressed the SARC fallback
+    assert candidates[0].get("centroid_coarse_lineage") == "Epithelial"
+    sarc = next((row for row in candidates if row["code"] == "SARC"), None)
+    assert sarc is None or sarc.get("compartment_in_set") is False
     assert results[0].template == "solid_primary"
     assert results[0].score > results[1].score
 

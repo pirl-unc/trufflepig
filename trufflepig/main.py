@@ -2678,6 +2678,11 @@ def _analyze_body(run: AnalyzeRun):
                 "support_fraction_of_top": row["support_fraction_of_top"],
                 "centroid_correlation": row.get("centroid_correlation"),
                 "range_plausibility": row.get("range_plausibility"),
+                "compartment_in_set": row.get("compartment_in_set"),
+                "centroid_coarse_lineage": row.get("centroid_coarse_lineage"),
+                "centroid_compartment_restricted": row.get(
+                    "centroid_compartment_restricted"
+                ),
             }
             for idx, row in enumerate(analysis.get("candidate_trace", []))
         ]
