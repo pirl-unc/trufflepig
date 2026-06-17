@@ -238,7 +238,7 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
 # samples.) Purity is reported separately, never as cancer-type evidence. The
 # geomean exponent must track the factor count so support_geomean stays
 # comparable across the post-rescue recomputations below.
-_SUPPORT_FACTOR_COUNT = 4
+_SUPPORT_FACTOR_COUNT = 5
 _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 
 _CANCER_FAMILY_DISPLAY = {
@@ -3169,6 +3169,7 @@ def _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol):
 
 def _candidate_support_score(
     signature_score,
+    purity_estimate,
     lineage_support_factor,
     signature_stability,
     family_factor,
@@ -3176,16 +3177,26 @@ def _candidate_support_score(
 ):
     """THE single definition of a candidate's cancer-type support score.
 
-    The GEOMETRIC MEAN of the per-candidate evidence factors. purity_estimate is
-    deliberately not one of them (see ``_SUPPORT_FACTOR_COUNT``). Using the geomean
+    The GEOMETRIC MEAN of the per-candidate evidence factors. Using the geomean
     rather than the naked product keeps the score in [0, 1] and comparable across
     candidates instead of collapsing toward zero with every extra factor — and
     living in one function means the initial ranking and every post-rescue
-    recompute cannot drift (they once did: purity was removed from one copy of the
+    recompute cannot drift (they once did: a factor was changed in one copy of the
     product but not the other).
+
+    NOTE: ``purity_estimate`` is included here. It is a *known-imperfect* term —
+    per-candidate purity rewards the sample's dominant compartment (stroma -> SARC)
+    — but removing it standalone net-regressed the local truth set (it was a
+    bad-but-load-bearing crutch). Its principled removal, paired with the
+    data-derived centroid + sample decomposition that replace its role, is tracked
+    in the cancer-type re-architecture issue and lands in that PR, not here.
     """
     factors = (
         float(signature_score or 0.0),
+        max(
+            float(purity_estimate or 0.0),
+            family_params["support_fraction_of_top_floor"],
+        ),
         float(lineage_support_factor if lineage_support_factor is not None else 1.0),
         max(
             float(signature_stability or 0.0),
@@ -3199,14 +3210,18 @@ def _candidate_support_score(
 
 
 def _candidate_raw_support(row, family_params):
-    """Candidate evidence before family/orphan weighting (signature × lineage).
+    """Candidate evidence before family/orphan weighting.
 
     A distinct internal pre-family quantity used only in same-units ratios
-    (coarse vs top); excludes purity_estimate and family weighting on purpose.
+    (coarse vs top); excludes family weighting on purpose.
     """
 
     return (
         float(row.get("signature_score") or 0.0)
+        * max(
+            float(row.get("purity_estimate") or 0.0),
+            family_params["support_fraction_of_top_floor"],
+        )
         * float(row.get("lineage_support_factor") or 1.0)
     )
 
@@ -3219,6 +3234,7 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
     row["family_factor"] = factor
     score = _candidate_support_score(
         row.get("signature_score"),
+        row.get("purity_estimate"),
         row.get("lineage_support_factor"),
         row.get("signature_stability"),
         factor,
@@ -3585,6 +3601,7 @@ def rank_cancer_type_candidates(
             family_factor = 1.0
         support_score = _candidate_support_score(
             signature_score,
+            purity_estimate,
             lineage_support_factor,
             signature_stability,
             family_factor,
@@ -3737,6 +3754,7 @@ def rank_cancer_type_candidates(
                     row["code"],
                 )
             )
+
     rows = _promote_same_family_alternatives(rows)
 
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
