@@ -3773,6 +3773,8 @@ def rank_cancer_type_candidates(
             from .cancer_type_centroid import (
                 centroid_correlations,
                 compartment_call,
+                hallmark_fit,
+                hallmark_veto,
                 range_plausibility,
                 restrict_rows_to_compartment,
             )
@@ -3787,6 +3789,7 @@ def rank_cancer_type_candidates(
                     cen_corr.get(row["code"], float("nan"))
                 )
                 row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
+                row["hallmark_fit"] = hallmark_fit(row["code"], sample_tpm)
 
             # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
             # above out-of-compartment ones (stable -> within-tier order preserved).
@@ -3794,12 +3797,36 @@ def rank_cancer_type_candidates(
                 rows, cen_coarse, comp["confident"]
             )
 
+            # Hallmark veto: drop candidates whose DEFINING markers are near-absent
+            # AND that belong to a different compartment than the sample's best — e.g.
+            # a Melanoma/SKCM candidate with MLANA/PMEL/TYR ~0 on a carcinoma. Gated to
+            # CROSS-compartment so a subtype variant is never dropped against its broad
+            # type's subtype-averaged hallmarks (basal breast vs luminal-biased BRCA).
+            # Never empties the list (a fully-vetoed set is left intact).
+            hallmark_vetoed: list = []
+            if cen_coarse is not None:
+                survivors = [
+                    r
+                    for r in rows
+                    if not (
+                        cancer_lineage_group(r["code"]) not in (None, cen_coarse)
+                        and hallmark_veto(r["code"], sample_tpm)
+                    )
+                ]
+                if survivors and len(survivors) < len(rows):
+                    survivor_ids = {id(r) for r in survivors}
+                    hallmark_vetoed = [
+                        r["code"] for r in rows if id(r) not in survivor_ids
+                    ]
+                    rows = survivors
+
             if rows and cen_coarse is not None:
                 rows[0]["centroid_top_code"] = cen_top_code
                 rows[0]["centroid_coarse_lineage"] = cen_coarse
                 rows[0]["centroid_lineage_margin"] = comp["margin"]
                 rows[0]["centroid_lineage_confident"] = comp["confident"]
                 rows[0]["centroid_compartment_restricted"] = compartment_restricted
+                rows[0]["hallmark_vetoed"] = hallmark_vetoed
                 rows[0]["centroid_lineage_agreement"] = bool(
                     cancer_lineage_group(rows[0]["code"]) == cen_coarse
                 )

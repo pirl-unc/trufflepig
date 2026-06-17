@@ -27,6 +27,30 @@ def _bulk_cohort_as_sample(code):
     return dict(zip(pan["Symbol"].astype(str), pan[col].astype(float)))
 
 
+def _ref_cohort_as_sample(code):
+    """Build a {symbol: tpm} sample from a cohort's own column in the (expanded,
+    subtype-aware) centroid reference — the self-recovery source that matches whatever
+    reference :func:`centroid_correlations` actually uses."""
+    from trufflepig.cancer_type_centroid import _bulk_centroids
+
+    bulk, _ = _bulk_centroids()
+    col = np.expm1(bulk[code])
+    return {str(g): float(v) for g, v in col.items()}
+
+
+def _a_sarcoma_cohort():
+    """A sarcoma cohort code present in the expanded reference (SARC subtypes only —
+    the bare broad SARC pseudo-cohort is intentionally dropped)."""
+    from trufflepig.cancer_type_centroid import _bulk_centroids
+    from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+    bulk, _ = _bulk_centroids()
+    for c in bulk.columns:
+        if cancer_lineage_group(str(c)) == "Sarcoma":
+            return str(c)
+    return None
+
+
 def _dec_cohort_as_sample(code):
     """Build a {symbol: tpm} sample from a cohort's deconvolved tumor-only median."""
     dec = tcga_deconvolved_expression(technical_rna_normalize=True)
@@ -34,10 +58,13 @@ def _dec_cohort_as_sample(code):
     return dict(zip(sub["symbol"].astype(str), sub["tumor_tpm_median"].astype(float)))
 
 
-@pytest.mark.parametrize("code", ["COAD", "SARC", "PRAD", "BLCA", "BRCA"])
+@pytest.mark.parametrize("code", ["COAD", "PRAD", "BLCA", "BRCA", "BRCA_Basal"])
 def test_cohort_centroid_matches_itself(code):
-    """A cohort's own bulk profile must correlate highest with its own centroid."""
-    corr = centroid_correlations(_bulk_cohort_as_sample(code))
+    """A cohort's own reference profile must correlate highest with its own centroid —
+    self-recovery against the expanded, subtype-aware reference (incl. BRCA_Basal,
+    which is the reference a basal/TNBC tumor should match, not the luminal-biased
+    broad BRCA bulk centroid)."""
+    corr = centroid_correlations(_ref_cohort_as_sample(code))
     assert not corr.empty
     assert corr.index[0] == code, f"{code}: top centroid was {corr.index[0]}, top3={list(corr.head(3).items())}"
     # self-correlation is (near) perfect
@@ -177,12 +204,19 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
 # --------------------------------------------------------------------------- #
 # Stage 1 — compartment_call + leaf restriction.
 # --------------------------------------------------------------------------- #
-def test_compartment_call_sarc_is_confident_sarcoma():
+def test_compartment_call_sarc_profile_is_sarcoma():
+    """A sarcoma subtype's own profile resolves to the Sarcoma compartment. (Whether
+    it clears the *confidence* margin is subtype-dependent — a melanocytic-adjacent
+    subtype like PEComa sits near Melanoma — so we assert the compartment, not the
+    margin; the structured fields must still be populated.)"""
     from trufflepig.cancer_type_centroid import compartment_call
 
-    call = compartment_call(_bulk_cohort_as_sample("SARC"))
+    code = _a_sarcoma_cohort()
+    assert code, "no sarcoma cohort in the expanded reference"
+    call = compartment_call(_ref_cohort_as_sample(code))
     assert call["compartment"] == "Sarcoma"
-    assert call["confident"] is True
+    assert isinstance(call["confident"], bool)
+    assert call["margin"] >= 0.0
     assert call["margin"] > 0
 
 
@@ -266,3 +300,34 @@ def test_restrict_rows_never_restricts_to_empty():
     out, restricted = restrict_rows_to_compartment(rows, "Sarcoma", confident=True)
     assert restricted is False
     assert [r["code"] for r in out] == ["COAD", "HNSC"]
+
+
+# --------------------------------------------------------------------------- #
+# Hallmark-gene veto.
+# --------------------------------------------------------------------------- #
+def test_hallmark_fit_high_for_own_cohort():
+    """A cohort's own reference profile expresses (essentially) all of its own
+    hallmark markers — fit ~1.0, never vetoed."""
+    from trufflepig.cancer_type_centroid import hallmark_fit, hallmark_veto
+
+    s = _ref_cohort_as_sample("SKCM")
+    assert hallmark_fit("SKCM", s) > 0.8
+    assert hallmark_veto("SKCM", s) is False
+
+
+def test_hallmark_veto_drops_melanoma_on_carcinoma():
+    """The canonical case: a carcinoma profile has MLANA/PMEL/TYR/SOX10 ~0, so a
+    Melanoma/SKCM candidate is a horrible fit and is vetoed."""
+    from trufflepig.cancer_type_centroid import hallmark_fit, hallmark_veto
+
+    coad = _ref_cohort_as_sample("COAD")
+    assert hallmark_fit("SKCM", coad) < 0.2
+    assert hallmark_veto("SKCM", coad) is True
+    # ...but the carcinoma's own type is not vetoed
+    assert hallmark_veto("COAD", coad) is False
+
+
+def test_hallmark_veto_abstains_for_unknown_code():
+    from trufflepig.cancer_type_centroid import hallmark_veto
+
+    assert hallmark_veto("NOT_A_REAL_CODE", {"TP53": 50.0}) is False
