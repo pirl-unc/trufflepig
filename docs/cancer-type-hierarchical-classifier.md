@@ -26,24 +26,65 @@ to the pinned compartment.
 
 `cancer_type_centroid.compartment_call(sample_tpm_by_symbol)`.
 
-Whole-profile **Spearman correlation** of the sample against each bulk TCGA cohort
-centroid (median per gene, all informative genes — *not* a discriminative subset,
-which sharpened some calls but dropped a real sarcoma to rank 5), then **aggregated
-by histogenesis compartment** via pirlygenes `cancer_lineage_group`:
+Whole-profile **Spearman correlation** of the sample against the **full
+subtype-aware cohort reference** (all informative genes — *not* a discriminative
+subset, which sharpened some calls but dropped a real sarcoma to rank 5), then
+**aggregated by histogenesis compartment** via pirlygenes `cancer_lineage_group`:
 
 > Epithelial · Sarcoma · Hematolymphoid · Melanoma · Neuroendocrine · CNS ·
 > Germ cell · Embryonal
 
-The compartment score is the best cohort rho within the group. Why it is immune to
-the saturation that breaks the leaf screen: correlating the *whole* expression
-profile against a reference centroid that *carries the same compartments the sample
-does* (the bulk reference includes stroma/TME) cannot be flipped by a few
-non-specific markers — the stromal program matches stroma on both sides and washes
-out.
+**The reference is NOT the 33 TCGA bulk centroids.** A bulk pan-cancer centroid is
+subtype-averaged — the BRCA column is luminal-dominated — so a subtype-shifted tumor
+mis-correlates. `cancer_type_centroid._bulk_centroids` loads the full
+`available_representative_cohorts()` set from pirlygenes (~118 medoids **including**
+BRCA_Basal / BRCA_LumA / …, the SARC_* subtypes, and the rare/non-TCGA types). The
+bare broad `SARC` pseudo-cohort is dropped (sarcoma is a grouping, never a single
+centroid).
 
-On the local blind truth set (15 samples, below) this is **15/15** at the
-compartment level. It returns a confidence margin (top rho − runner-up rho); a call
-is `confident` when the margin ≥ `_COMPARTMENT_CONFIDENT_MARGIN` (0.02 rho).
+**Robust aggregation.** Each compartment's score is the **mean of its top-3
+best-correlating cohorts**, not its single best. With the expanded reference a few
+rare medoids are *promiscuous* — a noisy profile like SARC_PEC free-rides on the
+housekeeping bulk of a whole-transcriptome Spearman and correlates ~0.8 with almost
+anything. Taking the single best cohort lets one such cohort define a whole
+compartment; requiring the top-3 to agree means a prostate tumor can't summon three
+sarcoma cohorts, so the spurious win collapses.
+
+It returns a confidence margin (top compartment − runner-up); a call is `confident`
+when the margin ≥ `_COMPARTMENT_CONFIDENT_MARGIN` (**0.025** rho). On the local truth
+set the compartment is right 15/18, and — the property that makes it safe to *act* —
+**every confident call is correct**, while the residual near-ties (basal/EMT or
+pure-cell-line profiles grazing an adjacent compartment) fall below the margin and
+defer to the marker ranker rather than restricting wrongly.
+
+**Sarcoma is a broad grouping, never a leaf** (the SARC-is-broad rule). Stage 1 may
+*pin* the Sarcoma compartment, but it never resolves a single sarcoma type; every
+`SARC`/`SARC_*` subtype is in-compartment, and the TCGA `SARC` pseudo-leaf is never
+emitted as a call.
+
+### Why the 33-centroid version was scrapped (hcc1395 case study)
+
+The first cut used the 33 TCGA bulk centroids and a 0.02 margin. The eval on the
+regenerated reports showed it **regressed** leaf accuracy (gated 0.50 < ungated
+marker 0.61): it *confidently* mis-called hcc1395 (a basal/EMT triple-negative breast
+line) → **Melanoma**, and the hard restriction then demoted the correct **BRCA** leaf
+to **SKCM**. Diagnosis: hcc1395 expresses **zero** melanocytic identity
+(MLANA/PMEL/TYR/SOX10 ≈ 0) — it did not look like melanoma, it fell *out* of the
+**luminal-dominated** bulk BRCA centroid (it has shed ESR1/FOXA1/GATA3/EPCAM/luminal
+keratins) and rank-correlated marginally closer to SKCM by elimination. The
+subtype-aware reference (BRCA_Basal present) + robust aggregation fixes it: hcc1395
+→ Epithelial, and the near-tie defers. This is why we never again reduce to the 33
+bulk centroids.
+
+### Hallmark-gene veto
+
+A complementary sanity gate (`hallmark_fit` / `hallmark_veto`): a candidate whose
+DEFINING, type-specific markers are near-absent is a horrible fit no matter how the
+whole-profile correlation lands — a Melanoma/SKCM candidate on a sample with
+MLANA/PMEL/TYR ≈ 0 is a reference artifact. `rank_cancer_type_candidates` drops such
+candidates, **gated to cross-compartment** ones so a subtype variant is never dropped
+against its broad type's subtype-averaged hallmarks (basal breast keeps BRCA), and
+never empties the candidate set.
 
 **Sarcoma is a broad grouping, never a leaf** (the SARC-is-broad rule). Stage 1 may
 *pin* the Sarcoma compartment, but it never resolves a single sarcoma type; every
@@ -62,7 +103,7 @@ compartment.
 
 Guard rails:
 
-- **Abstain below the margin.** An ambiguous profile (margin < 0.02) gets no
+- **Abstain below the margin.** An ambiguous profile (margin < 0.025) gets no
   restriction — we never risk excluding the true leaf on a genuine near-tie.
 - **Never restrict to empty.** The re-rank only fires when there is at least one
   in-compartment *and* one out-of-compartment candidate; a caller-constrained set
@@ -78,8 +119,8 @@ Every candidate is annotated with `centroid_correlation`, `range_plausibility`, 
 ## Stage 2 — leaf within the pinned compartment (bake-off)
 
 Once the compartment is pinned, *which* leaf method discriminates best? We ran a
-bake-off restricted to the **true** compartment's leaves (stage 1 is perfect, so
-this isolates the stage-2 question). Sarcoma is scored as broad (any `SARC_*`
+bake-off restricted to the **true** compartment's leaves (holding the compartment
+fixed isolates the stage-2 question). Sarcoma is scored as broad (any `SARC_*`
 counts); the real discrimination test is the 12 **Epithelial** samples
 (COAD/READ · BRCA · PRAD · BLCA · NUTM). `epi-leaf` = fraction of those 12 whose
 leaf family is correct; `all` includes the 3 sarcomas (always satisfiable).

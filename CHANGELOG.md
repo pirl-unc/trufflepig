@@ -13,35 +13,45 @@ under the merging PR title and the date the breaking change landed on
 
 ### Behavior change
 
-- The cancer-type ranker now runs a **hierarchical** call. A locked
-  stage-1 *compartment* classifier
-  (`cancer_type_centroid.compartment_call`) decides the histogenesis
-  compartment (Epithelial / Sarcoma / Hematolymphoid / Melanoma /
-  Neuroendocrine / CNS / Germ cell / Embryonal) by whole-profile
-  correlation against the bulk TCGA centroids — a signal immune to the
-  marker-panel saturation that mis-routes stroma-heavy / squamous-
-  contaminated tumors to SARC/HNSC (15/15 on the local blind truth set).
-- When that compartment call is **confident** (clear rho margin),
-  `rank_cancer_type_candidates` restricts the leaves considered at
-  stage 2 to that compartment: a stable two-tier re-rank floats
-  in-compartment leaves above out-of-compartment ones, so the top call
-  and the candidate set are drawn from the pinned compartment. Below the
-  margin it abstains (no restriction). **Sarcoma stays broad** — every
-  `SARC_*` subtype is in-compartment and no single sarcoma leaf is ever
-  promoted by the gate. Stage-2 leaf ranking remains the existing
-  geomean support score, now operating on the reduced candidate set.
+- The cancer-type ranker now runs a **hierarchical** call. A stage-1
+  *compartment* classifier (`cancer_type_centroid.compartment_call`)
+  decides the histogenesis compartment (Epithelial / Sarcoma /
+  Hematolymphoid / Melanoma / Neuroendocrine / CNS / Germ cell /
+  Embryonal) by whole-profile correlation against the **full
+  subtype-aware cohort reference** (~118 representative-cohort medoids
+  incl. BRCA_Basal / SARC_* subtypes / rare types — **never** the 33
+  subtype-averaged TCGA bulk centroids, which mis-place subtype-shifted
+  tumors like basal breast), aggregated per compartment by a robust
+  top-3-mean (so one promiscuous rare cohort can't carry a group).
+- When that compartment call is **confident** (top-3-mean rho margin
+  ≥ 0.025), `rank_cancer_type_candidates` restricts the leaves considered
+  at stage 2 to that compartment: a stable two-tier re-rank floats
+  in-compartment leaves above out-of-compartment ones. Below the margin
+  it abstains and defers to the marker ranker — on the local set every
+  *confident* compartment call is correct, so the gate never demotes a
+  correct leaf. **Sarcoma stays broad** — no single sarcoma leaf is ever
+  promoted. Stage-2 leaf ranking remains the existing geomean support
+  score, now on the reduced candidate set.
+- A **hallmark-gene veto** drops candidates whose defining type-specific
+  markers are near-absent (e.g. a Melanoma/SKCM candidate with
+  MLANA/PMEL/TYR ≈ 0 on a carcinoma), gated to cross-compartment
+  candidates so a subtype variant is never dropped against its broad
+  type's hallmarks. Never empties the candidate set.
 
 ### New surface
 
-- `cancer_type_centroid.compartment_call`, `in_compartment`, and
-  `restrict_rows_to_compartment` — the stage-1 API.
-- Candidate rows gain `compartment_in_set`; the top row gains
-  `centroid_coarse_lineage`, `centroid_lineage_margin`,
-  `centroid_lineage_confident`, and `centroid_compartment_restricted`.
-  The cancer-candidates TSV surfaces `compartment_in_set`,
-  `centroid_coarse_lineage`, and `centroid_compartment_restricted`.
-- Architecture + stage-2 bake-off recorded in
-  `docs/cancer-type-hierarchical-classifier.md`.
+- `cancer_type_centroid.compartment_call`, `in_compartment`,
+  `restrict_rows_to_compartment`, `hallmark_fit`, `hallmark_veto` — the
+  stage-1 + veto API. The centroid reference is now the full subtype-aware
+  representative-cohort set (pirlygenes `cohort_expression_views`).
+- Candidate rows gain `compartment_in_set` and `hallmark_fit`; the top row
+  gains `centroid_coarse_lineage`, `centroid_lineage_margin`,
+  `centroid_lineage_confident`, `centroid_compartment_restricted`, and
+  `hallmark_vetoed`. The cancer-candidates TSV surfaces
+  `compartment_in_set`, `centroid_coarse_lineage`, and
+  `centroid_compartment_restricted`.
+- Architecture, the hcc1395 reference-bias case study, and the stage-2
+  bake-off recorded in `docs/cancer-type-hierarchical-classifier.md`.
 
 ## Unreleased — lineage panels wiring (PR #44)
 
