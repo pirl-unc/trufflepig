@@ -1777,18 +1777,6 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
     )
 
 
-def _signature_top_code(analysis) -> str:
-    candidates = analysis.get("signature_top_cancers") or []
-    if not candidates:
-        return ""
-    top = candidates[0]
-    if isinstance(top, dict):
-        return str(top.get("code") or top.get("cancer_type") or "").strip()
-    if isinstance(top, (list, tuple)) and top:
-        return str(top[0] or "").strip()
-    return ""
-
-
 def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     """Concise ordered alternatives for RNA-inferred, non-rare report scopes."""
     constraints = analysis.get("analysis_constraints") or {}
@@ -1817,7 +1805,18 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     if not chunks:
         return ""
 
-    sig_top = _signature_top_code(analysis)
+    # "raw-signature top" must agree with the candidate table the reader is looking
+    # at: take the highest signature_score from the SAME candidate_trace, not the
+    # separate signature_top_cancers ranking (which used the un-floored screen and
+    # surfaced inflated rare types like PCPG — a "same biology, two ways"
+    # inconsistency, e.g. alvin showed "raw-signature top PCPG" while the table's
+    # top signature was BRCA).
+    sig_top = ""
+    if candidate_trace:
+        _top_sig = max(
+            candidate_trace, key=lambda r: float(r.get("signature_score") or 0.0)
+        )
+        sig_top = str(_top_sig.get("code") or "").strip()
     sig_clause = ""
     if sig_top and sig_top != str(cancer_code or "").strip():
         sig_clause = f"; raw-signature top {sig_top}"
