@@ -192,6 +192,11 @@ _CANCER_FAMILY_BY_CODE = {
     # component, so for family-panel scoring it groups with SARC as MESENCHYMAL.
     # The two layers intentionally disagree — origin vs RNA-signal-family — and
     # this is the one code where they do. Not a bug.
+    # NOTE: pirlygenes 5.22.107 (#452/#454) removed the MESENCHYMAL panel, so this
+    # mapping currently references a panel with no genes (it degrades to a zero
+    # family score). Fully migrating SARC/UCS off MESENCHYMAL cascades through the
+    # decomposition family-signal and is done with the taxonomy adoption in
+    # trufflepig#83; left as-is here to avoid a behavior change in this PR.
     "UCS": "MESENCHYMAL",
     "KIRC": "RENAL",
     "KIRP": "RENAL",

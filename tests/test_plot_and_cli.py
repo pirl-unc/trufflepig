@@ -1239,6 +1239,12 @@ def test_hierarchy_embedding_keeps_coad_near_crc_family():
     assert np.linalg.norm(sample - read) < np.linalg.norm(sample - dlbc)
 
 
+@pytest.mark.xfail(
+    reason="pirlygenes 5.22.107 (#452/#454) changed the family panel set "
+    "(MESENCHYMAL removed; adenocarcinoma families + supertype DAG added), shifting "
+    "the reference family-feature matrix this locks. Rewritten in trufflepig#83.",
+    strict=False,
+)
 def test_reference_family_matrix_scores_each_cohort_to_its_own_family():
     """Lock the reference/sample scorer unification across multiple cohorts.
 

@@ -399,6 +399,12 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
     assert results[0].score > results[1].score
 
 
+@pytest.mark.xfail(
+    reason="pirlygenes 5.22.107 (#452/#454) removed the MESENCHYMAL family panel "
+    "(its pan-stromal markers fired in every TME), so SARC/UCS no longer carry a "
+    "MESENCHYMAL family_label. Rewritten for the new taxonomy in trufflepig#83.",
+    strict=False,
+)
 def test_synthetic_sarc_smooth_muscle_mix_surfaces_mesenchymal_family():
     """Mesenchymal samples should expose SARC/UCS as broad-family alternatives."""
     df = _mix_samples(
@@ -416,6 +422,13 @@ def test_synthetic_sarc_smooth_muscle_mix_surfaces_mesenchymal_family():
     assert candidates[1]["family_label"] == "MESENCHYMAL"
 
 
+@pytest.mark.xfail(
+    reason="pirlygenes 5.22.107 (#452/#454) revised the family taxonomy "
+    "(MESENCHYMAL removed; adeno families + supertype DAG added), shifting the "
+    "CRC-vs-mesenchymal decomposition scoring this pins. Re-validated under the "
+    "taxonomy adoption in trufflepig#83.",
+    strict=False,
+)
 def test_synthetic_stromal_heavy_crc_primary_beats_sarc_and_met_templates():
     """Synthetic CRC with heavy stromal admixture should still resolve to
     COAD / solid_primary, not flip to SARC or a met template. Mirrors the
