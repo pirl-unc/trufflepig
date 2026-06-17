@@ -19,10 +19,13 @@ Multiple gene sets are scored independently:
 Higher stromal/immune scores → lower tumor purity.
 """
 
+import logging
 from collections import Counter
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 from pirlygenes.gene_sets_cancer import (
 
@@ -3762,6 +3765,49 @@ def rank_cancer_type_candidates(
 
     rows = _promote_same_family_alternatives(rows)
 
+    # Data-derived centroid cross-check (#83). Annotate each candidate with its
+    # whole-profile centroid correlation and range-restriction plausibility, and
+    # flag when the marker-panel call's coarse lineage disagrees with the
+    # data-derived one. REPORTED ONLY — it does not change the ranking here (the
+    # marker-panel call still wins); it is the foundation for the centroid-anchored
+    # gating in the re-architecture and a mis-call detector for review.
+    #
+    # Cost: one centroid pass (33 cohort rank-correlations over the shared genes) +
+    # one plausibility check per candidate, run once per rank call. Intentional —
+    # the references are cached module-side, so the per-call cost is the correlation
+    # itself (~tens of ms). Fail-open: any error leaves the annotations absent (the
+    # marker-panel ranking already stands) but is logged so it can't hide a bug.
+    if sample_tpm:
+        try:
+            from .cancer_type_centroid import centroid_correlations, range_plausibility
+            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+            cen_corr = centroid_correlations(sample_tpm)  # all cohorts, computed once
+            coarse_by_group: dict = {}
+            for code, rho in cen_corr.items():
+                grp = cancer_lineage_group(code)
+                if grp and float(rho) > coarse_by_group.get(grp, -2.0):
+                    coarse_by_group[grp] = float(rho)
+            cen_top_code = cen_corr.index[0] if len(cen_corr) else None
+            cen_coarse = (
+                max(coarse_by_group, key=coarse_by_group.get)
+                if coarse_by_group
+                else None
+            )
+            for row in rows:
+                row["centroid_correlation"] = float(
+                    cen_corr.get(row["code"], float("nan"))
+                )
+                row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
+            if rows and cen_coarse is not None:
+                rows[0]["centroid_top_code"] = cen_top_code
+                rows[0]["centroid_coarse_lineage"] = cen_coarse
+                rows[0]["centroid_lineage_agreement"] = bool(
+                    cancer_lineage_group(rows[0]["code"]) == cen_coarse
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug("centroid cross-check failed", exc_info=True)
+
     # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
     # all candidates). The top candidate always has 1.0; the runner-up's
     # value reads as "fraction of the leader's RNA support". Not a
@@ -3955,7 +4001,6 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     top_cancer_geomean = [
         (row["code"], row.get("support_geomean", 0.0)) for row in candidate_trace[:5]
     ]
-    signature_top_cancers = [(s["code"], s["score"]) for s in stats[:5]]
 
     return {
         "cancer_type": cancer_code,
@@ -3964,7 +4009,6 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         "top_cancers": top_cancers,
         "top_cancers_raw_support": top_cancers_raw_support,
         "top_cancer_geomean": top_cancer_geomean,
-        "signature_top_cancers": signature_top_cancers,
         "candidate_trace": candidate_trace,
         "cancer_call_rescue": cancer_call_rescue,
         "family_summary": family_summary,

@@ -440,12 +440,15 @@ def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
     analysis = _make_analysis()
     analysis["analysis_constraints"] = {}
     analysis["cancer_type_source"] = "auto-detected"
+    # raw-signature top is now derived from the SAME candidate_trace shown in the
+    # table (highest signature_score), not a separate signature_top_cancers field —
+    # so the report can't say "raw-signature top X" for an X absent from / ranked
+    # differently in the candidate table.
     analysis["candidate_trace"] = [
-        {"code": "PRAD", "support_geomean": 0.50},
-        {"code": "BLCA", "support_geomean": 0.40},
-        {"code": "COAD", "support_geomean": 0.25},
+        {"code": "PRAD", "support_geomean": 0.50, "signature_score": 0.40},
+        {"code": "BLCA", "support_geomean": 0.40, "signature_score": 0.91},
+        {"code": "COAD", "support_geomean": 0.25, "signature_score": 0.20},
     ]
-    analysis["signature_top_cancers"] = [("BLCA", 0.91)]
     ranges_df = _make_ranges_df()
 
     md = build_summary(

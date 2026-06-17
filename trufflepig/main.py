@@ -2683,6 +2683,8 @@ def _analyze_body(run: AnalyzeRun):
                 "support_score": row["support_score"],
                 "support_geomean": row.get("support_geomean"),
                 "support_fraction_of_top": row["support_fraction_of_top"],
+                "centroid_correlation": row.get("centroid_correlation"),
+                "range_plausibility": row.get("range_plausibility"),
             }
             for idx, row in enumerate(analysis.get("candidate_trace", []))
         ]
@@ -8343,7 +8345,16 @@ def _build_target_report(
         for _, row in best_cta.iterrows():
             badge = _reliability_badge(row)
             reasons = target_reliability_reasons(row, category="CTA")
-            caveat = f" — {badge} {reasons[0]}" if badge and reasons else ""
+            # Don't print the badge twice when the first reason IS the badge
+            # (e.g. badge "background-dominant" + reason "background-dominant"
+            # rendered "— background-dominant background-dominant").
+            caveat = ""
+            if badge and reasons:
+                caveat = (
+                    f" — {badge}"
+                    if reasons[0] == badge
+                    else f" — {badge} {reasons[0]}"
+                )
             lines.append(
                 f"- **{row['symbol']}** ({row['median_est']:.0f} TPM, "
                 f"TCGA {row['tcga_percentile']:.0%}){caveat}"
