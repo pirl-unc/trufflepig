@@ -45,6 +45,7 @@ _P99_Z = 2.3263478740408408  # norm.ppf(0.99)
 
 _bulk_cache: dict = {}
 _dec_cache: dict = {}
+_deconv_centroid_cache: dict = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -119,6 +120,84 @@ def _deconvolved_range():
 def _rankdata(arr):
     """Average-rank transform (Spearman = Pearson on ranks). numpy/pandas only."""
     return pd.Series(arr).rank(method="average").to_numpy()
+
+
+# --------------------------------------------------------------------------- #
+# Tumor-only (deconvolved) centroids — the #83 increment-4 uniform space.
+# --------------------------------------------------------------------------- #
+def _deconvolved_centroids():
+    """``(log1p tumor-only reference [symbol x code], code list)`` across EVERY
+    deconvolved cohort, cached.
+
+    Combines the TCGA (``tcga_deconvolved``) and subtype/observed-bulk
+    (``subtype_deconvolved``) tumor-only medians — ~63 codes including the subtypes
+    and rare/non-TCGA types (NUTM, RB, ATRT, the SARC_* subtypes, …) that the 33
+    bulk centroids can't reach. This is the reference side of increment 4: a sample
+    whose tumor compartment has been recovered (``attr_tumor_tpm``) is matched here,
+    in a uniform tumor-only space — broadening coverage AND removing the stroma
+    confound (both sides are tumor-only, so the bulk-vs-deconvolved mismatch is gone).
+    """
+    if "ref" in _deconv_centroid_cache:
+        return _deconv_centroid_cache["ref"]
+    frames = []
+    try:
+        from .reference import (
+            tcga_deconvolved_expression,
+            subtype_deconvolved_expression,
+        )
+
+        for fn in (tcga_deconvolved_expression, subtype_deconvolved_expression):
+            d = fn(technical_rna_normalize=True)
+            frames.append(
+                d.pivot_table(
+                    index="symbol", columns="cancer_code",
+                    values="tumor_tpm_median", aggfunc="median",
+                )
+            )
+    except Exception:  # noqa: BLE001
+        frames = []
+    if not frames:
+        out = (pd.DataFrame(), [])
+        _deconv_centroid_cache["ref"] = out
+        return out
+    combined = frames[0]
+    for f in frames[1:]:
+        extra = [c for c in f.columns if c not in combined.columns]
+        combined = combined.join(f[extra], how="outer")
+    out = (np.log1p(combined), list(combined.columns))
+    _deconv_centroid_cache["ref"] = out
+    return out
+
+
+def tumor_only_correlations(tumor_sample_by_symbol, restrict_to=None):
+    """Spearman of a TUMOR-ONLY sample profile (the deconvolved tumor compartment,
+    e.g. ``attr_tumor_tpm``) against the tumor-only reference centroids for every
+    deconvolved cohort (~63 codes incl. subtypes / NUTM).
+
+    The uniform-space match of #83 increment 4: because both the sample and the
+    references are tumor-only, the stroma confound that mis-calls bulk samples to
+    SARC/HNSC is gone, and coverage extends to the subtypes/rare types absent from
+    the bulk centroids. Returns ``{code: rho}`` sorted descending.
+    """
+    ref, codes = _deconvolved_centroids()
+    if ref.empty or not tumor_sample_by_symbol:
+        return pd.Series(dtype=float)
+    sample = pd.Series(tumor_sample_by_symbol, dtype=float)
+    sample = np.log1p(sample[sample.index.notna()].clip(lower=0))
+    shared = sample.index.intersection(ref.index)
+    if len(shared) < 200:
+        return pd.Series(dtype=float)
+    sample_ranks = _rankdata(sample.loc[shared].to_numpy())
+    R = ref.loc[shared]
+    scored = codes if restrict_to is None else [c for c in codes if c in set(restrict_to)]
+    out = {}
+    for code in scored:
+        v = R[code].to_numpy()
+        ok = ~np.isnan(v)
+        if ok.sum() < 100:
+            continue
+        out[code] = float(np.corrcoef(sample_ranks[ok], _rankdata(v[ok]))[0, 1])
+    return pd.Series(out).sort_values(ascending=False)
 
 
 def centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
