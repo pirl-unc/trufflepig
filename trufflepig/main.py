@@ -8026,11 +8026,11 @@ def _build_target_report(
             "signals active signaling; a ≤0.5× up-panel drop with elevated "
             "down-panel genes signals therapy exposure (e.g. ADT in PRAD).\n"
         )
-        for cls, s in ts_to_show:
+        # Render one axis: bold header + the top-8 most-divergent per-gene rows
+        # (concrete evidence chain without overflowing the report).
+        def _emit_axis(s, label):
             verb = "active" if s.state == "up" else "suppressed"
-            lines.append(f"**{cls.replace('_', ' ')}** — {verb}. {s.message}\n")
-            # Show the top 8 most-divergent per-gene rows so the chain
-            # of evidence is concrete without overflowing the report.
+            lines.append(f"**{label}** — {verb}. {s.message}\n")
             entries = sorted(
                 s.per_gene,
                 key=lambda e: abs((e["fold_vs_cohort"] or 1.0) - 1.0),
@@ -8049,6 +8049,33 @@ def _build_target_report(
                     f"{e['fold_vs_cohort']:.2f}× | {e['mechanism']} |"
                 )
             lines.append("")
+
+        # The aPD1_* axes are not separate agents — they are distinct response /
+        # resistance sub-programs under ONE checkpoint marker. Group them so the
+        # "aPD1" prefix isn't repeated on every line, and state the regimen
+        # implication once (monotherapy vs combination) rather than per axis.
+        _CHECKPOINT_PREFIX = "aPD1_"
+        checkpoint_axes = [
+            (cls, s) for cls, s in ts_to_show if cls.startswith(_CHECKPOINT_PREFIX)
+        ]
+        for cls, s in ts_to_show:
+            if cls.startswith(_CHECKPOINT_PREFIX):
+                continue
+            _emit_axis(s, cls.replace("_", " "))
+        if checkpoint_axes:
+            lines.append(
+                "### Checkpoint-immunotherapy response axis (anti-PD-1 / anti-PD-L1)\n"
+            )
+            lines.append(
+                "One checkpoint marker, several response/resistance sub-programs below "
+                "— not separate agents. Active T-cell-exclusion programs (Wnt, "
+                "angiogenesis, adenosine, TGF-β) argue for *combination* "
+                "(anti-PD-1 + anti-CTLA-4, +anti-VEGF, or adenosine blockade) over "
+                "anti-PD-(L)1 monotherapy; antigen-presentation / B2M loss signals "
+                "intrinsic checkpoint resistance.\n"
+            )
+            for cls, s in checkpoint_axes:
+                _emit_axis(s, cls[len(_CHECKPOINT_PREFIX):].replace("_", " "))
 
     # --- CTAs: vaccination targets ---
     lines.append("## Cancer-Testis Antigens (Vaccination Targets)\n")
