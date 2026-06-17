@@ -516,6 +516,19 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_pathology_literature",
         "ependymoma glial/ependymal program (GFAP, ZFTA-RELA context)",
     ),
+    # Astroblastoma (MN1-altered) / CNS HGNET-MN1 — defined by the MN1::BEND2
+    # fusion, whose transcriptomic hallmark is BEND2 over-expression; GFAP+/
+    # EMA(MUC1)+ glial-epithelial program. No direct cohort: expression resolves
+    # via the cns-glial family fallback to MBL (pirlygenes#461), so MBL is the
+    # required parent context here.
+    LiteratureSignature(
+        "ASTB",
+        ("MBL",),
+        ("BEND2", "MN1", "GFAP", "MUC1", "S100B"),
+        "PMID:26919435",
+        "astroblastoma MN1-altered (CNS HGNET-MN1): MN1::BEND2 -> BEND2 "
+        "over-expression, GFAP+/EMA(MUC1)+ glial-epithelial program",
+    ),
     LiteratureSignature(
         "PITNET",
         ("THCA", "PCPG", "ACC"),
