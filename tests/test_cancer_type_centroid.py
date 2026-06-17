@@ -5,6 +5,7 @@ only the shipped reference matrices (no ~/data dependency), so they're
 deterministic and CI-safe.
 """
 import numpy as np
+import pandas as pd
 import pytest
 
 from trufflepig.cancer_type_centroid import (
@@ -70,3 +71,58 @@ def test_centroid_correlations_empty_on_empty_input():
 def test_range_plausibility_abstains_for_unknown_code():
     # a code with no deconvolved reference returns 1.0 (abstain, never invents)
     assert range_plausibility("NOT_A_REAL_CODE", {"TP53": 10.0}) == 1.0
+
+
+def _cohort_sample_df(code):
+    """A gene-expression frame built from a cohort's own bulk centroid column."""
+    ref = pan_cancer_expression(technical_rna_normalize=True).drop_duplicates(
+        subset="Ensembl_Gene_ID"
+    )
+    return pd.DataFrame(
+        {
+            "ensembl_gene_id": ref["Ensembl_Gene_ID"],
+            "gene_symbol": ref["Symbol"],
+            "TPM": ref[f"{code}_TPM"].astype(float),
+        }
+    )
+
+
+def test_ranker_annotates_centroid_crosscheck_and_stays_additive():
+    """The centroid cross-check wiring in rank_cancer_type_candidates must annotate
+    every candidate (additive — new keys only) and must NOT change the call.
+
+    A cohort's own median classifies as itself (the marker-panel ranking), and on a
+    SARC profile the data-derived coarse lineage is Sarcoma and agrees with the
+    SARC call.
+    """
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    rows = rank_cancer_type_candidates(_cohort_sample_df("SARC"), top_k=5)
+    assert rows
+    # additive: the cross-check adds these to every candidate
+    for r in rows:
+        assert "centroid_correlation" in r
+        assert "range_plausibility" in r
+        assert 0.0 <= float(r["range_plausibility"]) <= 1.0
+    top = rows[0]
+    # the marker-panel call (SARC on its own median) is unchanged by the cross-check
+    assert top["code"] == "SARC"
+    # data-derived coarse lineage is computed and agrees with the call
+    assert top.get("centroid_coarse_lineage") == "Sarcoma"
+    assert top.get("centroid_lineage_agreement") is True
+    assert top.get("centroid_top_code")
+
+
+def test_ranker_crosscheck_flags_cross_lineage_disagreement():
+    """When the call's lineage disagrees with the data-derived one, the flag is
+    False — the mis-call detector. A SARC-profile sample CONSTRAINED to call COAD
+    (epithelial) must flag the disagreement (Sarcoma vs Epithelial)."""
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("SARC"), candidate_codes=["COAD"], top_k=3
+    )
+    assert rows and rows[0]["code"] == "COAD"
+    # the data still says Sarcoma; the epithelial call disagrees
+    assert rows[0].get("centroid_coarse_lineage") == "Sarcoma"
+    assert rows[0].get("centroid_lineage_agreement") is False
