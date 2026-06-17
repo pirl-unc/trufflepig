@@ -366,7 +366,10 @@ def test_resolver_pair_selection_prefers_applicable_pair():
 def test_fusion_surrogate_genes_for_ewing():
     hits = fusion_surrogate_genes_for("SARC_EWS")
     genes = {h["gene"] for h in hits}
-    for required in ("FATE1", "NR0B1", "PHOX2B"):
+    # PHOX2B was dropped from the Ewing surrogate set in pirlygenes 5.22.107 (it is a
+    # neuroblastoma marker, not Ewing-specific); FATE1/NR0B1 remain the Ewing
+    # fusion-target surrogates.
+    for required in ("FATE1", "NR0B1"):
         assert required in genes, f"EWS surrogate missing: {required}"
 
 
