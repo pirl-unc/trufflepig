@@ -303,6 +303,22 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
                 f"by only {gap_to_second * 100:.0f}% on geomean "
                 f"({top_gm:.3f} vs {second_gm:.3f}) — call is ambiguous"
             )
+            try:
+                second_concordance = float(second.get("lineage_concordance"))
+            except (TypeError, ValueError):
+                second_concordance = None
+            if (
+                concordance is not None
+                and second_concordance is not None
+                and second_concordance >= concordance + 0.25
+            ):
+                tier = "low"
+                reasons.append(
+                    f"runner-up {second_code} has much stronger lineage-pattern "
+                    f"concordance than {top_code} ({second_concordance:.2f} vs "
+                    f"{concordance:.2f}) in a near-tied call — treat the top label "
+                    f"as provisional"
+                )
             # 3-way tie: third-place is also within threshold. The top-1
             # call is provisional regardless of which one of the three
             # the classifier picked.

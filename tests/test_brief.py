@@ -348,9 +348,9 @@ def test_summary_marks_supplied_cancer_type_rna_discordance():
         disease_state="",
     )
 
-    assert "expression-reference context is discordant with supplied COAD" in md
+    assert "fallback broad expression reference is discordant with supplied COAD" in md
     assert (
-        "top expression-reference match is SARC (Sarcoma) while "
+        "top broad-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
     assert "Keep the supplied label as the report label" in md
@@ -376,9 +376,9 @@ def test_summary_marks_supplied_cancer_type_rna_ambiguity():
         disease_state="",
     )
 
-    assert "expression-reference context is ambiguous against supplied COAD" in md
+    assert "fallback broad expression reference is ambiguous against supplied COAD" in md
     assert (
-        "top expression-reference match is SARC (Sarcoma) while "
+        "top broad-reference match is SARC (Sarcoma) while "
         "COAD (Colon Adenocarcinoma) is rank 2"
     ) in md
 
@@ -1024,6 +1024,64 @@ def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
     assert "none modeled" in md
 
 
+def test_source_trace_starts_with_approved_shortlist_rows():
+    approved = pd.Series(
+        {
+            "symbol": "EGFR",
+            "phase": "approved",
+            "agent": "cetuximab",
+            "agent_class": "antibody",
+            "treatment_path_tier": "approved_biomarker",
+        }
+    )
+    approved_expr = pd.Series(
+        {
+            "symbol": "EGFR",
+            "observed_tpm": 64.0,
+            "attr_tumor_tpm": 39.0,
+            "attr_tumor_fraction": 0.61,
+            "attr_top_compartment": "mesothelial",
+            "attr_top_compartment_tpm": 9.0,
+            "tme_dominant": False,
+            "tme_explainable": False,
+        }
+    )
+    omitted = pd.Series(
+        {
+            "symbol": "ERBB2",
+            "phase": "approved",
+            "agent": "trastuzumab + tucatinib",
+            "agent_class": "antibody",
+        }
+    )
+    omitted_expr = pd.Series(
+        {
+            "symbol": "ERBB2",
+            "observed_tpm": 56.0,
+            "attr_tumor_tpm": 0.0,
+            "attr_tumor_fraction": 0.0,
+            "attr_top_compartment": "mesothelial",
+            "attr_top_compartment_tpm": 12.0,
+            "tme_dominant": True,
+            "tme_explainable": True,
+        }
+    )
+
+    md = _shortlist_omission_note(
+        pd.DataFrame([approved, omitted]),
+        pd.DataFrame([approved_expr, omitted_expr]),
+        [(approved, approved_expr)],
+    )
+
+    data_lines = [
+        line
+        for line in md.splitlines()
+        if line.startswith("| ") and not line.startswith("| Gene") and not line.startswith("|---")
+    ]
+    assert data_lines[0].startswith("| EGFR ")
+    assert any(line.startswith("| ERBB2 ") for line in data_lines[1:])
+
+
 def test_source_trace_does_not_call_non_lineage_component_lineage_background():
     top = pd.Series(
         {
@@ -1226,3 +1284,53 @@ def test_actionable_renders_tumor_band_without_attribution_dict():
         "| **FOLH1** | 177Lu-PSMA-617 | radioligand | Approved | mCRPC | 142.0 | 128 (128-128) |"
         in md
     )
+
+
+def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
+    import trufflepig.brief as brief_mod
+
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "SARC"
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "observed_tpm": 19.0,
+                "attribution": {},
+                "attr_tumor_tpm": 8.0,
+                "attr_tumor_fraction": 0.42,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }
+        ]
+    )
+    targets_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGE-A4",
+                "agent": "afami-cel",
+                "agent_class": "TCR-T",
+                "phase": "approved",
+                "indication": "MAGE-A4+ HLA-A*02+ synovial sarcoma",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        brief_mod,
+        "_curated_target_panel_for_sample",
+        lambda *a, **k: ("SARC", None, targets_df),
+    )
+
+    md = build_actionable(
+        analysis,
+        ranges_df,
+        cancer_code="SARC",
+        disease_state="",
+        sample_id="sample_X",
+    )
+
+    assert "| **MAGEA4** | afami-cel |" in md
+    assert "| **MAGE-A4** |" not in md
+    assert "gene symbol not present in input file" not in md

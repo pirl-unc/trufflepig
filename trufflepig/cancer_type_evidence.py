@@ -270,6 +270,7 @@ class RareRnaPolicy:
     min_related_context_support: float = 0.60
     require_top_context: bool = False
     required_top_context_codes: frozenset[str] = frozenset()
+    required_top_lineages: frozenset[str] = frozenset()
     top_context_promotes_to_full: bool = True
 
     def effective_context_support(
@@ -295,6 +296,11 @@ class RareRnaPolicy:
         if self.require_top_context:
             return top_is_context
         return top_is_context or related_context_support >= self.min_related_context_support
+
+    def top_lineage_passes(self, *, top_code: str) -> bool:
+        if not self.required_top_lineages:
+            return True
+        return _broad_lineage_for_code(top_code) in self.required_top_lineages
 
 
 _FINE_REFERENCE_SPECS = (
@@ -340,7 +346,8 @@ _RARE_RNA_POLICIES = {
     "NUTM": RareRnaPolicy(
         marker_weight=0.55,
         context_weight=0.40,
-        required_top_context_codes=_SQUAMOUS_CONTEXT_CODES,
+        min_related_context_support=0.70,
+        required_top_lineages=frozenset({"epithelial"}),
     ),
     **{
         code: RareRnaPolicy(
@@ -384,6 +391,20 @@ def _safe_bool(value: object, default: bool = False) -> bool:
     if not text or text == "nan":
         return bool(default)
     return text in {"1", "true", "yes", "y"}
+
+
+def _broad_lineage_for_code(code: str) -> str:
+    code = _clean(code)
+    if not code:
+        return ""
+    try:
+        from .cancer_type_ontology import broad_lineage
+    except ImportError:
+        return ""
+    try:
+        return _clean(broad_lineage(code))
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _split_semicolon(value: object) -> list[str]:
@@ -1636,7 +1657,8 @@ def _add_rare_marker_features(
         + policy.context_weight * effective_context
         + policy.top_context_weight * float(top_is_context)
     )
-    context_passes = policy.context_passes(
+    top_lineage_passes = policy.top_lineage_passes(top_code=top)
+    context_passes = top_lineage_passes and policy.context_passes(
         top_code=top,
         top_is_context=top_is_context,
         related_context_support=context_support,
@@ -1644,7 +1666,13 @@ def _add_rare_marker_features(
     blockers: list[str] = []
     if not rule_promotes:
         blockers.append("rule is a diagnostic prompt only")
-    if not context_passes:
+    if not top_lineage_passes:
+        allowed = ", ".join(sorted(policy.required_top_lineages))
+        observed = _broad_lineage_for_code(top) or "unknown"
+        blockers.append(
+            f"top expression-reference lineage {observed} is not one of {allowed}"
+        )
+    if top_lineage_passes and not context_passes:
         if context_codes:
             allowed = ", ".join(sorted(context_codes))
             blockers.append(f"expression-reference context is not one of {allowed}")

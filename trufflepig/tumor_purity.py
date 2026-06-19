@@ -3235,6 +3235,86 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
     row["support_geomean"] = score
 
 
+def _candidate_codes_from_family_panels(
+    ranked_families,
+    *,
+    family_params,
+    soft_families,
+    top_family_score,
+    top_signature_family,
+):
+    """Return candidate cohorts from the top code-bearing family panels.
+
+    Family-panel scoring includes local/rare families that do not have a TCGA
+    broad cohort in ``_CANCER_FAMILY_BY_CODE``. Those panels are useful for
+    downstream evidence, but they must not consume the small expansion quota
+    that decides which broad cohorts reach the full ranker.
+    """
+    expanded_family_panels = 0
+    max_family_panels = int(family_params["candidate_panel_top_n"])
+    candidate_codes = []
+    for family, score in ranked_families:
+        if expanded_family_panels >= max_family_panels:
+            break
+        if score < family_params["candidate_panel_min_score"]:
+            break
+        family_codes = [
+            code
+            for code, family_label in _CANCER_FAMILY_BY_CODE.items()
+            if family_label == family
+        ]
+        if not family_codes:
+            continue
+        if (
+            family in soft_families
+            and top_family_score >= family_params["presence_scale"]
+            and family != top_signature_family
+        ):
+            continue
+        candidate_codes.extend(family_codes)
+        expanded_family_panels += 1
+    return candidate_codes
+
+
+def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
+    """Attach final ranking support fields after all rank-changing gates.
+
+    ``support_score`` is the raw marker/geomean support and remains untouched for
+    auditability. ``support_rank_score`` is the post-gate score used for
+    ``support_fraction_of_top`` so the first row is always the normalized leader,
+    even when a confident compartment gate has floated a lower-raw-support row
+    above an out-of-compartment marker-panel winner.
+    """
+    raw_max = max(
+        (float(row.get("support_score") or 0.0) for row in rows),
+        default=0.0,
+    )
+    tier_stride = raw_max + 1e-12
+    for row in rows:
+        raw = float(row.get("support_score") or 0.0)
+        rank_tier = 1 if compartment_restricted and row.get("compartment_in_set") else 0
+        row["support_raw_fraction_of_max"] = raw / raw_max if raw_max > 0 else 0.0
+        row["support_rank_tier"] = rank_tier
+        row["support_rank_score"] = raw + rank_tier * tier_stride
+
+    rows.sort(
+        key=lambda row: (
+            -float(row.get("support_rank_score") or 0.0),
+            -float(row.get("signature_score") or 0.0),
+            str(row.get("code") or ""),
+        )
+    )
+    rank_max = max(
+        (float(row.get("support_rank_score") or 0.0) for row in rows),
+        default=0.0,
+    )
+    for row in rows:
+        row["support_fraction_of_top"] = (
+            float(row["support_rank_score"] / rank_max) if rank_max > 0 else 0.0
+        )
+    return rows
+
+
 def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     """Let strong tissue-composition context suspend an orphan cancer-type penalty.
 
@@ -3441,29 +3521,15 @@ def rank_cancer_type_candidates(
         # soft family's expansion is warranted.
         top_signature_code = candidate_codes[0] if candidate_codes else None
         top_signature_family = _CANCER_FAMILY_BY_CODE.get(top_signature_code)
-        for family, score in ranked_families[: family_params["candidate_panel_top_n"]]:
-            if score < family_params["candidate_panel_min_score"]:
-                continue
-            if (
-                family in soft_families
-                and top_family_score >= family_params["presence_scale"]
-                and family != top_signature_family
-            ):
-                # Skip a *soft* (non-penalizing) family's expansion when a hard
-                # family is present UNLESS the soft family is the leading
-                # candidate's own family. A stromal-heavy epithelial sample
-                # (e.g. CRC + smooth-muscle admixture) inflates MESENCHYMAL from
-                # the stroma alone — we must NOT pull SARC/UCS in there. But when
-                # the top signature candidate is itself mesenchymal (SARC), we DO
-                # expand so its family sibling (UCS) reaches the scored pool and
-                # can be surfaced as a broad-family alternative.
-                continue
-            family_codes = [
-                code
-                for code, family_label in _CANCER_FAMILY_BY_CODE.items()
-                if family_label == family
-            ]
-            candidate_codes.extend(family_codes)
+        candidate_codes.extend(
+            _candidate_codes_from_family_panels(
+                ranked_families,
+                family_params=family_params,
+                soft_families=soft_families,
+                top_family_score=top_family_score,
+                top_signature_family=top_signature_family,
+            )
+        )
         # Always include cohorts with subtype data, even if their broad
         # signature doesn't crack the top-8. The whole point of the
         # subtype-aware scoring path is that a basal-BRCA sample fails
@@ -3721,6 +3787,7 @@ def rank_cancer_type_candidates(
     # gate previously lived only in the ontology walk, which ``analyze()`` never
     # invokes (a disconnect no test caught); a live characterization test now
     # guards this wiring.
+    compartment_restricted = False
     if sample_tpm:
         from .cancer_type_ontology import broad_lineage
         from .lineage_evidence import lineage_exclusion_evidence
@@ -3797,14 +3864,17 @@ def rank_cancer_type_candidates(
                 rows, cen_coarse, comp["confident"]
             )
 
-            # Hallmark veto: drop candidates whose DEFINING markers are near-absent
-            # AND that belong to a different compartment than the sample's best — e.g.
-            # a Melanoma/SKCM candidate with MLANA/PMEL/TYR ~0 on a carcinoma. Gated to
-            # CROSS-compartment so a subtype variant is never dropped against its broad
-            # type's subtype-averaged hallmarks (basal breast vs luminal-biased BRCA).
+            # Hallmark veto: when the compartment call is confident, drop
+            # candidates whose DEFINING markers are near-absent AND that belong
+            # to a different compartment than the sample's best — e.g. a
+            # Melanoma/SKCM candidate with MLANA/PMEL/TYR ~0 on a carcinoma.
+            # The confidence gate is load-bearing: on near-ties (for example
+            # basal/EMT breast profiles grazing Sarcoma/Epithelial), the
+            # compartment call is review evidence only and must not delete a
+            # plausible leaf from the adjacent compartment.
             # Never empties the list (a fully-vetoed set is left intact).
             hallmark_vetoed: list = []
-            if cen_coarse is not None:
+            if cen_coarse is not None and comp["confident"]:
                 survivors = [
                     r
                     for r in rows
@@ -3833,17 +3903,16 @@ def rank_cancer_type_candidates(
         except Exception:  # noqa: BLE001
             logger.debug("centroid cross-check failed", exc_info=True)
 
-    # ``support_fraction_of_top`` = ``support_score`` / max(support_score over
-    # all candidates). The top candidate always has 1.0; the runner-up's
-    # value reads as "fraction of the leader's RNA support". Not a
-    # probability, not a sum-to-one share — purely relative-to-top scaling
-    # so downstream consumers can compare candidates without re-fetching
-    # the absolute geomean scale.
-    max_support = max((row["support_score"] for row in rows), default=0.0)
-    for row in rows:
-        row["support_fraction_of_top"] = (
-            float(row["support_score"] / max_support) if max_support > 0 else 0.0
-        )
+    # ``support_fraction_of_top`` is the final post-gate ranking support scaled
+    # to the selected row. Raw marker support is retained separately as
+    # ``support_score`` / ``support_raw_fraction_of_max``. This distinction is
+    # load-bearing after a confident compartment gate: an out-of-compartment raw
+    # marker winner may be demoted below an in-compartment candidate, and
+    # downstream code expects row 0 to carry normalized support 1.0.
+    rows = _finalize_candidate_rank_support(
+        rows,
+        compartment_restricted=compartment_restricted,
+    )
 
     return rows[:top_k]
 

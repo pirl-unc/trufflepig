@@ -109,6 +109,21 @@ def test_2way_tied_but_3rd_diverges_stays_at_moderate():
     assert not any("3-way" in r for r in tier.reasons)
 
 
+def test_2way_tie_with_stronger_runner_up_lineage_is_low():
+    """A close top-vs-runner-up call is provisional when the runner-up
+    better matches the lineage panel by a large margin."""
+    analysis = {
+        "candidate_trace": [
+            _candidate("SARC", support_geomean=0.434, lineage_concordance=0.56),
+            _candidate("COAD", support_geomean=0.412, lineage_concordance=0.98),
+            _candidate("SKCM", support_geomean=0.20, lineage_concordance=0.30),
+        ],
+    }
+    tier = compute_call_confidence(analysis)
+    assert tier.tier == "low"
+    assert any("stronger lineage-pattern concordance" in r for r in tier.reasons)
+
+
 def test_step0_mismatch_downgrades_to_moderate():
     """Step-0 correlation favors a cohort the classifier didn't pick
     — surface the mismatch."""
@@ -144,7 +159,9 @@ def test_multiple_contradictions_all_surface_at_low_tier():
     }
     tier = compute_call_confidence(analysis)
     assert tier.tier == "low"
-    assert len(tier.reasons) == 3
+    assert any("lineage-pattern concordance" in r for r in tier.reasons)
+    assert any("beats runner-up" in r for r in tier.reasons)
+    assert any("Tissue composition screen" in r for r in tier.reasons)
 
 
 def test_missing_candidate_trace_returns_unknown():

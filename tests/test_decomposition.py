@@ -48,6 +48,29 @@ def _mix_samples(parts):
     return out
 
 
+def _candidate_row(code="HNSC", purity=0.25, support=1.0, signature=0.8):
+    return {
+        "code": code,
+        "signature_score": signature,
+        "purity_estimate": purity,
+        "support_fraction_of_top": support,
+        "purity_result": {
+            "overall_lower": max(0.01, purity - 0.1),
+            "overall_estimate": purity,
+            "overall_upper": min(1.0, purity + 0.1),
+        },
+    }
+
+
+def _set_symbol_tpm(df, values):
+    out = df.copy()
+    for symbol, value in values.items():
+        mask = out["gene_symbol"].astype(str) == symbol
+        if mask.any():
+            out.loc[mask, "TPM"] = float(value)
+    return out
+
+
 def test_lymph_node_template_uses_broad_t_cell_only():
     components = get_template_components("met_lymph_node", "PRAD")
     assert "T_cell" in components
@@ -335,6 +358,74 @@ def test_synthetic_coad_liver_mix_uses_liver_background():
     assert results[0].cancer_type in {"COAD", "READ"}
     assert results[0].fractions["hepatocyte"] > 0.5
     assert results[0].template_extra_fraction > 0.5
+
+
+def test_met_bone_requires_hard_bone_evidence_not_generic_ecm():
+    """Generic stromal/ECM signal can fit a background, but should not
+    become a site-supported bone-met call without osteogenic anchors."""
+
+    df = _set_symbol_tpm(
+        _tcga_sample("HNSC"),
+        {
+            "COL1A1": 1200,
+            "SPP1": 300,
+            "CXCL12": 120,
+            "KITLG": 15,
+            "VCAM1": 15,
+            # IBSP/RUNX2/ALPL can be strong in invasive squamous or
+            # mesenchymal programs; they should not be enough without a
+            # more specific mineralized-bone/osteocyte anchor.
+            "IBSP": 60,
+            "RUNX2": 16,
+            "ALPL": 6,
+            "BGLAP": 1,
+            "SOST": 1,
+            "DMP1": 1,
+            "PHEX": 2,
+            "SP7": 1,
+            "MEPE": 1,
+        },
+    )
+
+    result = decompose_sample(
+        df,
+        cancer_types=["HNSC"],
+        candidate_rows=[_candidate_row("HNSC", purity=0.22)],
+        templates=["met_bone"],
+        top_k=1,
+    )[0]
+
+    assert result.template == "met_bone"
+    assert result.site_evidence["site_supported"] is False
+    assert result.site_evidence["status"] == "fit_only"
+    assert "bone_specific_markers" in result.site_evidence["missing"]
+    assert any("Metastatic-site evidence below" in w for w in result.warnings)
+
+
+def test_met_bone_site_hint_is_site_supported_external_context():
+    df = _set_symbol_tpm(
+        _tcga_sample("HNSC"),
+        {
+            "COL1A1": 1200,
+            "SPP1": 300,
+            "ALPL": 4,
+            "BGLAP": 1,
+        },
+    )
+
+    result = decompose_sample(
+        df,
+        cancer_types=["HNSC"],
+        candidate_rows=[_candidate_row("HNSC", purity=0.22)],
+        templates=["met_bone"],
+        site_hint="bone",
+        top_k=1,
+    )[0]
+
+    assert result.site_evidence["site_supported"] is True
+    assert result.site_evidence["status"] == "site_supported"
+    assert result.site_evidence["basis"] == "site_hint"
+    assert not any("Metastatic-site evidence below" in w for w in result.warnings)
 
 
 def test_synthetic_prad_lymph_mix_stays_primary_not_lymphoma():

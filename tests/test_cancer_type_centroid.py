@@ -201,6 +201,76 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
     assert rows[0].get("compartment_in_set") is False
 
 
+def test_ranker_does_not_hallmark_veto_on_unconfident_compartment(monkeypatch):
+    """A near-tie compartment call may annotate disagreement but must not delete
+    cross-compartment leaves. This is the HCC1395-shaped failure mode: a basal/EMT
+    BRCA profile can graze Sarcoma vs Epithelial by whole-profile rho, but the
+    margin is below the action threshold, so BRCA must remain in the candidate
+    trace even if the cross-compartment hallmark veto would otherwise fire."""
+    import trufflepig.cancer_type_centroid as ctc
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda sample, _corr=None: {
+            "compartment": "Sarcoma",
+            "score": 0.50,
+            "runner_up": "Epithelial",
+            "margin": 0.001,
+            "confident": False,
+            "scores": pd.Series({"Sarcoma": 0.50, "Epithelial": 0.499}),
+        },
+    )
+    monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: code == "BRCA")
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("BRCA"),
+        candidate_codes=["BRCA", "ESCA"],
+        top_k=4,
+    )
+    codes = [r["code"] for r in rows]
+    assert "BRCA" in codes
+    brca = next(r for r in rows if r["code"] == "BRCA")
+    assert brca.get("compartment_in_set") is False
+    assert rows[0].get("centroid_lineage_confident") is False
+    assert rows[0].get("hallmark_vetoed") == []
+
+
+def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
+    """When a confident compartment call promotes a lower-raw-support row, the
+    normalized support metric must follow the final rank order, not the demoted
+    raw marker-panel winner."""
+    import trufflepig.cancer_type_centroid as ctc
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda sample, _corr=None: {
+            "compartment": "Epithelial",
+            "score": 0.90,
+            "runner_up": "Sarcoma",
+            "margin": 0.20,
+            "confident": True,
+            "scores": pd.Series({"Epithelial": 0.90, "Sarcoma": 0.70}),
+        },
+    )
+    monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("SARC"),
+        candidate_codes=["SARC", "COAD"],
+        top_k=2,
+    )
+    by_code = {r["code"]: r for r in rows}
+    assert by_code["SARC"]["support_score"] > by_code["COAD"]["support_score"]
+    assert rows[0]["code"] == "COAD"
+    assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert by_code["SARC"]["support_raw_fraction_of_max"] == pytest.approx(1.0)
+    assert by_code["SARC"]["support_fraction_of_top"] < 1.0
+
+
 # --------------------------------------------------------------------------- #
 # Stage 1 — compartment_call + leaf restriction.
 # --------------------------------------------------------------------------- #

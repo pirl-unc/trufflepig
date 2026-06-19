@@ -82,6 +82,10 @@ def _bulk_centroids():
         view = cohort_expression_views(reps).clean_tpm
         if "Symbol" in getattr(view, "columns", []):
             view = view.set_index("Symbol")
+        view = view.drop(
+            columns=[c for c in ("Ensembl_Gene_ID", "Description") if c in view.columns],
+            errors="ignore",
+        )
         view = view[~view.index.duplicated(keep="first")].apply(
             pd.to_numeric, errors="coerce"
         )

@@ -39,6 +39,7 @@ from .reporting import (
     analysis_site_template_for_subtype,
     cancer_code_display_name,
     cancer_key_genes_lookup_for_analysis,
+    canonical_target_symbol,
     candidate_winning_subtype_for_analysis,
     clinical_maturity_summary,
     context_expression_band_cell,
@@ -1069,22 +1070,21 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
                     "reason": _source_trace_reason(target, expr, in_shortlist=False),
                 }
             )
-        if len(omitted) >= 4:
+        if len(omitted) >= 5:
             break
     shortlist_context = []
+    seen_shortlist = set()
     for target, expr in top_rows:
         if expr is None:
             continue
-        phase = str(target.get("phase") or "")
-        source = tumor_attribution_context(expr)
-        if phase == "approved" and source["tier"] == "tumor_supported":
+        sym = str(target.get("symbol") or "").strip()
+        if not sym or sym in seen_shortlist:
             continue
-        if phase == "approved":
-            continue
+        seen_shortlist.add(sym)
         comp_label, comp_tpm = _top_non_tumor_attribution(expr)
         shortlist_context.append(
             {
-                "symbol": str(target.get("symbol") or ""),
+                "symbol": sym,
                 "bulk": _brief_float(expr.get("observed_tpm"), 0.0),
                 "tumor": _brief_float(expr.get("attr_tumor_tpm"), 0.0),
                 "fraction": _brief_float(expr.get("attr_tumor_fraction"), 0.0),
@@ -1093,10 +1093,11 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
                 "reason": _source_trace_reason(target, expr, in_shortlist=True),
             }
         )
-        if len(shortlist_context) >= 2:
+        if len(shortlist_context) >= 3:
             break
 
-    rows = shortlist_context + omitted
+    max_rows = 5
+    rows = shortlist_context + omitted[: max(0, max_rows - len(shortlist_context))]
     if not rows:
         return ""
     lines = [
@@ -1662,8 +1663,9 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
             )
             return (
                 f"**RNA classifier check:** {cancer_code} is an RNA-inferred "
-                f"rare-cancer hypothesis; closest expression reference is "
-                f"{top_code or 'unresolved'}{alt_clause}. Use the expression "
+                f"rare-cancer hypothesis; fallback broad expression reference is "
+                f"{top_code or 'unresolved'}{alt_clause}. Prefer exact "
+                f"{cancer_code} expression where available; use the fallback "
                 "reference for cohort comparisons, not as the diagnosis."
             )
         fine_inference = analysis.get("fine_report_scope_inference") or {}
@@ -1763,14 +1765,14 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
             else ""
         )
         return (
-            f"**RNA classifier check:** expression-reference context is {top_label}, giving "
-            f"{compatibility} for supplied {supplied_label}; the expression-reference classifier "
+            f"**RNA classifier check:** fallback broad expression reference is {top_label}, giving "
+            f"{compatibility} for supplied {supplied_label}; the broad-reference classifier "
             f"does not independently resolve the refined label{alt_clause}. "
             f"Keep {supplied_label} as the report label."
         )
     return (
-        f"**RNA classifier check:** expression-reference context is {status} supplied "
-        f"{supplied_label}; top expression-reference match is {top_label or 'unresolved'} "
+        f"**RNA classifier check:** fallback broad expression reference is {status} supplied "
+        f"{supplied_label}; top broad-reference match is {top_label or 'unresolved'} "
         f"while {comparison_label} is {rank_clause}. "
         "Keep the supplied label as the report label and review pathology/subtype context"
         f"{caveat_clause}."
@@ -2815,7 +2817,7 @@ def build_actionable(
 
             for t in sorted_df.to_dict("records"):
                 raw_sym = t.get("symbol")
-                sym = _cell(raw_sym)
+                sym = canonical_target_symbol(_cell(raw_sym))
                 # Agent-only rows (no gene target — e.g. doxorubicin, pazopanib,
                 # trabectedin for sarcoma) have a blank ``symbol``; sym_to_row
                 # keying by "nan" would always miss, so skip the lookup and
@@ -2946,7 +2948,7 @@ def build_actionable(
     # known binder isn't silently dropped just because it's off-label here.
     panel_symbols = set()
     if targets_df is not None and "symbol" in getattr(targets_df, "columns", []):
-        panel_symbols = {str(s) for s in targets_df["symbol"]}
+        panel_symbols = {canonical_target_symbol(s) for s in targets_df["symbol"]}
     offcontext = offcontext_known_targets(ranges_df, panel_symbols)
     if offcontext:
         # The figure's "Approved elsewhere / generic target" tier

@@ -547,9 +547,9 @@ class CancerTypeContext:
                 )
         if self.fine_expression_available and self.uses_distinct_reference:
             lines.append(
-                "- **Context caveat**: subtype-aware modules may use the fine-grained "
+                "- **Context caveat**: subtype-aware modules prefer the fine-grained "
                 "reference; coarse pan-reference modules explicitly use the broad "
-                "reference."
+                "fallback reference."
             )
         return lines
 

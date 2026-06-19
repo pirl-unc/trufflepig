@@ -223,6 +223,58 @@ DECOMPOSITION_PARAMETERS = {
         # Penalty: score *= max(purity, floor) / floor  → smooth ramp
         # that effectively zeroes out near-zero-purity candidates.
         "min_tumor_fraction": 0.02,
+        # Site-specific met templates should mean "this looks like that
+        # metastatic host site", not only "this template subtracts residual
+        # expression well". Templates that do not clear their evidence gate
+        # stay visible as fit hypotheses, but lose site-specific dominance
+        # boosting and are downweighted before sorting.
+        "weak_met_site_factor": 0.35,
+        "site_evidence": {
+            "default": {
+                "min_host_tissue_score": 0.40,
+                "min_extra_fraction": 0.03,
+                "min_no_extra_host_tissue_score": 0.80,
+            },
+            # Bone is stricter because the HPA "osteoblast" proxy is an
+            # undifferentiated/mesenchymal profile and otherwise absorbs
+            # generic ECM genes such as COL1A1/SPP1. Require hard
+            # osteogenic markers before treating met_bone as evidence for
+            # a bone metastatic site.
+            "met_bone": {
+                "min_host_tissue_score": 0.50,
+                "min_extra_fraction": 0.05,
+                "hard_markers": [
+                    "ALPL",
+                    "BGLAP",
+                    "IBSP",
+                    "SOST",
+                    "DMP1",
+                    "PHEX",
+                    "SP7",
+                    "RUNX2",
+                    "MEPE",
+                ],
+                "hard_marker_min_tpm": 5.0,
+                "hard_marker_sum_min_tpm": 25.0,
+                "min_hard_markers": 2,
+                # IBSP/RUNX2/ALPL can be high in invasive squamous or
+                # mesenchymal programs. Require at least one more specific
+                # mineralized-bone/osteocyte anchor before using met_bone as
+                # a literal bone-site call.
+                "site_specific_markers": [
+                    "BGLAP",
+                    "SOST",
+                    "DMP1",
+                    "PHEX",
+                    "SP7",
+                    "MEPE",
+                ],
+                "site_specific_marker_min_tpm": 5.0,
+                "site_specific_marker_sum_min_tpm": 10.0,
+                "min_site_specific_markers": 1,
+                "weak_met_site_factor": 0.25,
+            },
+        },
     },
 }
 
@@ -256,6 +308,15 @@ def _normalize_site_hint(site_hint):
         return None
     norm = str(site_hint).strip().lower().replace("-", "_").replace(" ", "_")
     return norm or None
+
+
+def _site_template_for_hint(site_hint):
+    site_hint_norm = _normalize_site_hint(site_hint)
+    if site_hint_norm is None:
+        return None
+    return DECOMPOSITION_PARAMETERS["sample_mode"]["site_hint_templates"].get(
+        site_hint_norm
+    )
 
 
 def _resolve_templates(
@@ -310,9 +371,7 @@ def _resolve_templates(
     site_template = None
     site_hint_norm = _normalize_site_hint(site_hint)
     if site_hint_norm is not None:
-        site_template = DECOMPOSITION_PARAMETERS["sample_mode"][
-            "site_hint_templates"
-        ].get(site_hint_norm)
+        site_template = _site_template_for_hint(site_hint_norm)
         if site_template is None:
             valid_hints = sorted(
                 DECOMPOSITION_PARAMETERS["sample_mode"]["site_hint_templates"]
@@ -370,6 +429,7 @@ class DecompositionResult:
     lineage_tumor_fraction: dict[str, Any] | None = None
     purity_source: str = "signature"
     n_measured_in_fit: int = 0
+    site_evidence: dict[str, Any] = field(default_factory=dict)
 
 
 def _hk_normalize(values, genes, hk_gene_set):
@@ -665,6 +725,157 @@ def _build_component_trace(marker_trace, comp_names, comp_mix, tumor_fraction):
     return component_df
 
 
+_WEAK_MET_SITE_WARNING = "Metastatic-site evidence below template-specific threshold"
+
+
+def _hard_marker_values(sample_raw_by_symbol, markers):
+    sample_raw_by_symbol = sample_raw_by_symbol or {}
+    return {
+        str(marker): float(sample_raw_by_symbol.get(marker, 0.0) or 0.0)
+        for marker in markers
+    }
+
+
+def _evaluate_met_site_evidence(
+    *,
+    template_name,
+    site_hint_template=None,
+    template_tissue_score=0.0,
+    origin_tissue_score=0.0,
+    extra_sample_fraction=0.0,
+    extra_components=None,
+    sample_raw_by_symbol=None,
+):
+    """Return site-support metadata for a metastatic-site template.
+
+    A met template can be a useful subtraction model without being a reliable
+    site call. This evaluator separates those meanings so scoring, reports,
+    and downstream background modeling use the same support decision.
+    """
+
+    template_name = str(template_name or "")
+    if not template_name.startswith("met_"):
+        return {"site_supported": True, "status": "not_site_specific"}
+
+    if site_hint_template == template_name:
+        return {
+            "site_supported": True,
+            "status": "site_supported",
+            "basis": "site_hint",
+            "template": template_name,
+            "template_tissue_score": float(template_tissue_score or 0.0),
+            "origin_tissue_score": float(origin_tissue_score or 0.0),
+            "extra_fraction": float(extra_sample_fraction or 0.0),
+        }
+
+    scoring = DECOMPOSITION_PARAMETERS["template_scoring"]
+    policies = scoring.get("site_evidence", {})
+    default_policy = policies.get("default", {})
+    policy = {**default_policy, **policies.get(template_name, {})}
+    template_tissue_score = float(template_tissue_score or 0.0)
+    origin_tissue_score = float(origin_tissue_score or 0.0)
+    extra_sample_fraction = float(extra_sample_fraction or 0.0)
+    extra_components = set(extra_components or ())
+
+    checks = {
+        "host_tissue": template_tissue_score
+        >= float(policy.get("min_host_tissue_score", 0.0) or 0.0),
+    }
+    details = {
+        "template": template_name,
+        "template_tissue_score": template_tissue_score,
+        "origin_tissue_score": origin_tissue_score,
+        "extra_fraction": extra_sample_fraction,
+        "min_host_tissue_score": float(
+            policy.get("min_host_tissue_score", 0.0) or 0.0
+        ),
+    }
+
+    if extra_components:
+        min_extra = float(policy.get("min_extra_fraction", 0.0) or 0.0)
+        checks["extra_component"] = extra_sample_fraction >= min_extra
+        details["min_extra_fraction"] = min_extra
+    else:
+        min_no_extra = float(
+            policy.get("min_no_extra_host_tissue_score", 1.0) or 1.0
+        )
+        checks["site_tissue_without_extra_component"] = (
+            template_tissue_score >= min_no_extra
+        )
+        details["min_no_extra_host_tissue_score"] = min_no_extra
+
+    if template_name == "met_bone":
+        hard_markers = list(policy.get("hard_markers", []))
+        marker_values = _hard_marker_values(sample_raw_by_symbol, hard_markers)
+        min_tpm = float(policy.get("hard_marker_min_tpm", 0.0) or 0.0)
+        min_sum = float(policy.get("hard_marker_sum_min_tpm", 0.0) or 0.0)
+        min_count = int(policy.get("min_hard_markers", 0) or 0)
+        detected = [gene for gene, value in marker_values.items() if value >= min_tpm]
+        marker_sum = float(sum(marker_values.values()))
+        checks["bone_hard_markers"] = (
+            len(detected) >= min_count and marker_sum >= min_sum
+        )
+        details.update(
+            {
+                "hard_marker_min_tpm": min_tpm,
+                "hard_marker_sum_min_tpm": min_sum,
+                "min_hard_markers": min_count,
+                "hard_marker_count": len(detected),
+                "hard_marker_sum_tpm": marker_sum,
+                "hard_markers_detected": detected,
+                "hard_marker_values": marker_values,
+            }
+        )
+        site_specific_markers = list(policy.get("site_specific_markers", []))
+        specific_values = _hard_marker_values(
+            sample_raw_by_symbol, site_specific_markers
+        )
+        specific_min_tpm = float(
+            policy.get("site_specific_marker_min_tpm", 0.0) or 0.0
+        )
+        specific_min_sum = float(
+            policy.get("site_specific_marker_sum_min_tpm", 0.0) or 0.0
+        )
+        specific_min_count = int(policy.get("min_site_specific_markers", 0) or 0)
+        specific_detected = [
+            gene for gene, value in specific_values.items() if value >= specific_min_tpm
+        ]
+        specific_sum = float(sum(specific_values.values()))
+        checks["bone_specific_markers"] = (
+            len(specific_detected) >= specific_min_count
+            and specific_sum >= specific_min_sum
+        )
+        details.update(
+            {
+                "site_specific_marker_min_tpm": specific_min_tpm,
+                "site_specific_marker_sum_min_tpm": specific_min_sum,
+                "min_site_specific_markers": specific_min_count,
+                "site_specific_marker_count": len(specific_detected),
+                "site_specific_marker_sum_tpm": specific_sum,
+                "site_specific_markers_detected": specific_detected,
+                "site_specific_marker_values": specific_values,
+            }
+        )
+
+    site_supported = all(checks.values())
+    missing = [name for name, ok in checks.items() if not ok]
+    factor = float(
+        policy.get(
+            "weak_met_site_factor",
+            scoring.get("weak_met_site_factor", 0.35),
+        )
+    )
+    return {
+        "site_supported": site_supported,
+        "status": "site_supported" if site_supported else "fit_only",
+        "basis": "template_evidence",
+        "checks": checks,
+        "missing": missing,
+        "weak_score_factor": factor,
+        **details,
+    }
+
+
 def _fit_one_hypothesis(
     df_gene_expr,
     sample_by_eid,
@@ -674,6 +885,7 @@ def _fit_one_hypothesis(
     purity_override=None,
     sample_raw_by_symbol=None,
     sample_context=None,
+    site_hint_template=None,
 ):
     """Fit one (cancer_type, template) broad-compartment hypothesis."""
     hk_ids = housekeeping_gene_ids()
@@ -814,6 +1026,7 @@ def _fit_one_hypothesis(
             lineage_tumor_fraction=lineage_fraction_info,
             purity_source=purity_source,
             n_measured_in_fit=0,
+            site_evidence={"site_supported": True, "status": "not_site_specific"},
         )
 
     gene_subset = set(sample_by_eid.keys())
@@ -953,6 +1166,16 @@ def _fit_one_hypothesis(
     )
     extra_sample_fraction = extra_fraction * max(0.0, 1.0 - tumor_fraction)
 
+    site_evidence = _evaluate_met_site_evidence(
+        template_name=template_name,
+        site_hint_template=site_hint_template,
+        template_tissue_score=template_tissue_score,
+        origin_tissue_score=origin_tissue_score,
+        extra_sample_fraction=extra_sample_fraction,
+        extra_components=extra_components,
+        sample_raw_by_symbol=sample_raw_by_symbol,
+    )
+
     matched_normal_mix = 0.0
     if matched_normal_name is not None and matched_normal_name in comp_names:
         mn_idx = comp_names.index(matched_normal_name)
@@ -1026,10 +1249,16 @@ def _fit_one_hypothesis(
         * (scoring["fit_score_base"] + scoring["fit_score_gain"] * cancer_support)
         * template_factor
     )
+    if template_name.startswith("met_") and not site_evidence.get(
+        "site_supported", False
+    ):
+        score *= float(site_evidence.get("weak_score_factor", 0.35) or 0.35)
+        warnings.append(_WEAK_MET_SITE_WARNING)
     if template_name.startswith("met_") and extra_components:
         site_delta = float(template_tissue_score - origin_tissue_score)
         if (
-            site_delta >= scoring["met_site_dominance_min_delta"]
+            site_evidence.get("site_supported", False)
+            and site_delta >= scoring["met_site_dominance_min_delta"]
             and extra_sample_fraction >= scoring["met_site_dominance_min_extra_fraction"]
         ):
             site_boost = float(
@@ -1086,6 +1315,7 @@ def _fit_one_hypothesis(
         lineage_tumor_fraction=lineage_fraction_info,
         purity_source=purity_source,
         n_measured_in_fit=n_measured_in_fit,
+        site_evidence=site_evidence,
     )
 
 
@@ -1161,6 +1391,7 @@ def decompose_sample(
         tumor_context=tumor_context,
         site_hint=site_hint,
     )
+    site_hint_template = _site_template_for_hint(site_hint)
 
     tissue_score_map = {
         tissue: score
@@ -1179,6 +1410,7 @@ def decompose_sample(
                 purity_override=purity_override,
                 sample_raw_by_symbol=sample_raw_by_symbol,
                 sample_context=sample_context,
+                site_hint_template=site_hint_template,
             )
             results.append(result)
 

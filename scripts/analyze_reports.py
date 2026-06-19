@@ -56,6 +56,11 @@ _CALL_LINE = re.compile(r"\*\*Working cancer call\*\*:\s*(.+)")
 # Handles single calls ("KIRC (Kidney...)") and abstentions
 # ("provisional between LGG (Lower Grade Glioma) and GBM (Glioblastoma...)").
 _CODE_BEFORE_PAREN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(")
+_EXPECTED_CODE_ALIASES = {
+    # pirlygenes 5.13 renamed the osteosarcoma atom from OS to SARC_OS.
+    # Local truth manifests may still carry the historical short code.
+    "OS": ("SARC_OS",),
+}
 
 
 def _registry_parent_map():
@@ -160,14 +165,29 @@ def _load_truth(path: Path):
     """Load a sample-id/group -> {expected, notes} mapping from JSON or CSV."""
     if path.suffix.lower() == ".json":
         raw = json.loads(path.read_text(encoding="utf-8"))
-        data = raw.get("samples", raw) if isinstance(raw, dict) else {}
+        if isinstance(raw, dict) and isinstance(raw.get("samples"), dict):
+            data = raw["samples"]
+        elif (
+            isinstance(raw, dict)
+            and isinstance(raw.get("local_no_override"), dict)
+            and isinstance(raw["local_no_override"].get("per_sample"), list)
+        ):
+            data = {
+                str(row.get("name") or ""): row
+                for row in raw["local_no_override"]["per_sample"]
+                if row.get("name")
+            }
+        else:
+            data = raw if isinstance(raw, dict) else {}
         out = {}
         for key, val in data.items():
             if isinstance(val, str):
                 out[key] = {"expected": val, "notes": ""}
             else:
                 out[key] = {
-                    "expected": str(val.get("expected", "")),
+                    "expected": str(
+                        val.get("expected") or val.get("expected_cancer_type") or ""
+                    ),
                     "notes": str(val.get("notes", "")),
                 }
         return out
@@ -178,7 +198,12 @@ def _load_truth(path: Path):
             if not key:
                 continue
             out[key] = {
-                "expected": str(row.get("expected") or row.get("expected_code") or ""),
+                "expected": str(
+                    row.get("expected")
+                    or row.get("expected_code")
+                    or row.get("expected_cancer_type")
+                    or ""
+                ),
                 "notes": str(row.get("notes") or ""),
             }
     return out
@@ -218,8 +243,25 @@ def main(argv=None):
     truth = _load_truth(args.truth) if args.truth else {}
     compat = Compat(_registry_parent_map(), _broad_lineage_fn())
 
+    def expected_codes(expected):
+        codes = [e.strip() for e in str(expected).split("|") if e.strip()]
+        out = []
+        for code in codes:
+            out.append(code)
+            out.extend(_EXPECTED_CODE_ALIASES.get(code, ()))
+        return list(dict.fromkeys(out))
+
+    def headline_has_expected(calls, expected):
+        return any(
+            called == exp
+            or called.startswith(exp + "_")
+            or exp.startswith(called + "_")
+            for called in calls
+            for exp in expected_codes(expected)
+        )
+
     def compat_any(calls, expected):
-        return any(compat(c, expected) for c in calls)
+        return any(compat(c, e) for c in calls for e in expected_codes(expected))
 
     rows = []
     for group, sample_id, md in _iter_samples(args.reports):
@@ -246,9 +288,14 @@ def main(argv=None):
     scored = [r for r in rows if r["expected"]]
     n = len(scored)
     new_ok = sum(compat_any(r["_new"], r["expected"]) for r in scored)
+    expected_in_call = sum(headline_has_expected(r["_new"], r["expected"]) for r in scored)
     print(f"reports scored: {n} (of {len(rows)} found; {len(rows) - n} without a known expected)")
     if n:
         print(f"compatible-call rate (new): {new_ok}/{n} ({100 * new_ok / n:.0f}%)")
+        print(
+            "expected-code-in-headline rate (new): "
+            f"{expected_in_call}/{n} ({100 * expected_in_call / n:.0f}%)"
+        )
 
     if args.baseline:
         have_both = [r for r in scored if r["_base"] and r["_new"]]
@@ -279,7 +326,17 @@ def main(argv=None):
         with args.per_sample.open("w", newline="", encoding="utf-8") as fh:
             w = csv.DictWriter(
                 fh,
-                fieldnames=["group", "sample", "expected", "baseline_call", "new_call", "provisional", "compatible", "notes"],
+                fieldnames=[
+                    "group",
+                    "sample",
+                    "expected",
+                    "baseline_call",
+                    "new_call",
+                    "provisional",
+                    "compatible",
+                    "expected_in_headline",
+                    "notes",
+                ],
             )
             w.writeheader()
             for r in rows:
@@ -288,7 +345,14 @@ def main(argv=None):
                         k: r[k]
                         for k in ("group", "sample", "expected", "baseline_call", "new_call", "provisional", "notes")
                     }
-                    | {"compatible": compat_any(r["_new"], r["expected"]) if r["expected"] else ""}
+                    | {
+                        "compatible": compat_any(r["_new"], r["expected"]) if r["expected"] else "",
+                        "expected_in_headline": (
+                            headline_has_expected(r["_new"], r["expected"])
+                            if r["expected"]
+                            else ""
+                        ),
+                    }
                 )
         print(f"\nper-sample CSV -> {args.per_sample}")
 

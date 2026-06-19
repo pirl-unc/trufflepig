@@ -26,7 +26,9 @@ where present (each comparison runs through ``trufflepig compare``).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import gc
 import json
 import os
 import subprocess
@@ -194,6 +196,47 @@ def _run(name, cmd, log_path: Path) -> tuple[int, float]:
     return rc, elapsed
 
 
+def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
+    """Run a translated trufflepig CLI command in this process.
+
+    The report sweeps are dominated by reference-table loading and normalization.
+    Keeping the CLI in-process lets the module-level caches survive across
+    samples while still writing the same per-run logs as the subprocess path.
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+    argv = list(cmd)
+    try:
+        module_idx = argv.index("trufflepig.cli")
+        cli_argv = argv[module_idx + 1:]
+    except ValueError:
+        cli_argv = argv[1:] if argv and argv[0] == sys.executable else argv
+
+    with log_path.open("w") as f:
+        f.write("$ " + " ".join(cmd) + "\n")
+        f.write("$ # in-process replay: trufflepig.cli " + " ".join(cli_argv) + "\n\n")
+        f.flush()
+        with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
+            try:
+                from trufflepig.cli import main as cli_main
+
+                rc = cli_main(cli_argv)
+                if rc is None:
+                    rc = 0
+            except SystemExit as exc:
+                rc = int(exc.code or 0) if isinstance(exc.code, int) else 1
+            except Exception:
+                import traceback
+
+                traceback.print_exc()
+                rc = 1
+            finally:
+                gc.collect()
+    elapsed = round(time.time() - start, 1)
+    print(f"[{name}] rc={rc} elapsed={elapsed}s log={log_path}")
+    return int(rc), elapsed
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -228,6 +271,14 @@ def main():
             "Strip --cancer-type from every run so the report scope is driven "
             "by the RNA-inferred top candidate instead of the clinically-known "
             "diagnosis. Use to evaluate blind classification end-to-end."
+        ),
+    )
+    parser.add_argument(
+        "--in-process",
+        action="store_true",
+        help=(
+            "Replay commands through trufflepig.cli in this Python process so "
+            "heavy reference caches are reused across local reports."
         ),
     )
     args = parser.parse_args()
@@ -272,6 +323,7 @@ def main():
     }
 
     run_dirs: dict[str, Path] = {}
+    runner = _run_in_process if args.in_process else _run
     for run in source_manifest.get("runs", []):
         name = run["name"]
         if only is not None and name not in only:
@@ -285,7 +337,7 @@ def main():
         run_dirs[name] = ws
         cmd = _translate_command(name, run, ws, blind=args.blind)
         log_path = logs / f"{name}.log"
-        rc, elapsed = _run(name, cmd, log_path)
+        rc, elapsed = runner(name, cmd, log_path)
         manifest["runs"].append({
             "name": name,
             "input": run.get("input"),
@@ -304,7 +356,7 @@ def main():
             ws = root / name
             cmd = _translate_comparison(comp, ws, run_dirs)
             log_path = logs / f"{name}.log"
-            rc, elapsed = _run(name, cmd, log_path)
+            rc, elapsed = runner(name, cmd, log_path)
             manifest["comparisons"].append({
                 "name": name,
                 "workspace": str(ws),

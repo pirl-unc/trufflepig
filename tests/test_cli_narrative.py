@@ -14,6 +14,7 @@ from trufflepig.main import (
     compose_disease_state_narrative,
     annotate_surface_targets_with_cross_signals,
     _candidate_label_options,
+    _integrated_evidence_bullets,
     _summarize_sample_call,
     _CORE_ISG_SURFACE,
 )
@@ -208,6 +209,57 @@ def test_candidate_label_respects_forced_cancer_type():
     assert _candidate_label_options(analysis) == ["COAD"]
 
 
+def test_candidate_label_uses_selected_report_scope_when_candidates_miss_it():
+    analysis = {
+        "report_scope_cancer_type": "COAD",
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "COAD",
+                "selected_by": "tumor_label_refinement",
+            }
+        },
+        "candidate_trace": [{"code": "SARC"}, {"code": "STAD"}],
+        "fit_quality": {"label": "weak"},
+    }
+    assert _candidate_label_options(analysis) == ["COAD"]
+
+
+def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
+    analysis = _base_analysis(
+        cancer_type="COAD",
+        cancer_type_source="auto-detected",
+        report_scope_cancer_type="COAD",
+        cancer_type_evidence={
+            "selected": {
+                "cancer_type": "COAD",
+                "selected_by": "tumor_label_refinement",
+            }
+        },
+        candidate_trace=[
+            {
+                "code": "SARC",
+                "signature_score": 0.72,
+                "support_fraction_of_top": 1.0,
+                "lineage_concordance": 1.0,
+            },
+            {
+                "code": "STAD",
+                "signature_score": 0.65,
+                "support_fraction_of_top": 0.95,
+                "lineage_concordance": 0.8,
+            },
+        ],
+        call_summary={"label_options": ["COAD"], "label_display": "COAD"},
+    )
+
+    bullets = _integrated_evidence_bullets(analysis)
+    text = "\n".join(bullets)
+    assert "**RNA classifier line**" in text
+    assert "SARC (Sarcoma) is the leading broad RNA candidate" in text
+    assert "integrated evidence selected COAD (Colon Adenocarcinoma)" in text
+    assert "SARC (Sarcoma) is the leading label" not in text
+
+
 def test_candidate_label_empty_trace():
     analysis = {"candidate_trace": [], "fit_quality": {}}
     assert _candidate_label_options(analysis) == []
@@ -282,3 +334,71 @@ def test_summarize_call_low_site_factor_is_indeterminate():
     )
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
     assert result["site_indeterminate"] is True
+
+
+def test_summarize_call_fit_only_met_template_is_indeterminate():
+    analysis = _base_analysis(
+        cancer_type="COAD",
+        fit_quality={"label": "strong"},
+    )
+    best = _mock_decomp_result(
+        template="met_bone",
+        template_site_factor=0.9,
+        template_tissue_score=0.8,
+        site_evidence={"site_supported": False, "status": "fit_only"},
+        warnings=[],
+    )
+    result = _summarize_sample_call(analysis, [best], sample_mode="solid")
+    assert result["site_indeterminate"] is True
+    assert result["reported_site"] is None
+    assert "fit is useful" in result["site_note"]
+
+
+def test_summarize_call_divergent_overexplained_met_template_is_indeterminate():
+    analysis = _base_analysis(
+        cancer_type="NUTM",
+        reference_cancer_type="ESCA",
+        expression_reference_cancer_type="NUTM",
+        cancer_type_context={
+            "report_code": "NUTM",
+            "reference_code": "ESCA",
+            "expression_code": "NUTM",
+        },
+        fit_quality={"label": "strong"},
+    )
+    best = _mock_decomp_result(
+        cancer_type="HNSC",
+        template="met_bone",
+        template_site_factor=0.9,
+        template_tissue_score=0.8,
+        site_evidence={"site_supported": True, "status": "site_supported"},
+        warnings=["Many genes are overexplained by the TME background"],
+    )
+    result = _summarize_sample_call(analysis, [best], sample_mode="solid")
+    assert result["site_indeterminate"] is True
+    assert result["reported_site"] is None
+    assert result["reported_context"] is None
+
+
+def test_summarize_call_explicit_site_hint_survives_divergent_warning():
+    analysis = _base_analysis(
+        cancer_type="NUTM",
+        reference_cancer_type="ESCA",
+        expression_reference_cancer_type="NUTM",
+        fit_quality={"label": "strong"},
+    )
+    best = _mock_decomp_result(
+        cancer_type="HNSC",
+        template="met_bone",
+        template_site_factor=0.9,
+        template_tissue_score=0.8,
+        site_evidence={
+            "site_supported": True,
+            "status": "site_supported",
+            "basis": "site_hint",
+        },
+        warnings=["Many genes are overexplained by the TME background"],
+    )
+    result = _summarize_sample_call(analysis, [best], sample_mode="solid")
+    assert result["site_indeterminate"] is False
+    assert result["reported_site"] == "bone-associated host context"

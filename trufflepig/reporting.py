@@ -443,6 +443,19 @@ def expression_independent_rna_context(expression_row) -> str:
     )
 
 
+_TARGET_SYMBOL_ALIASES = {
+    "MAGE-A4": "MAGEA4",
+}
+
+
+def canonical_target_symbol(sym) -> str:
+    """Return the expression-table gene symbol for curated target labels."""
+    text = _clean_text(sym)
+    if not text or text == "—":
+        return text
+    return _TARGET_SYMBOL_ALIASES.get(text, text)
+
+
 def target_observation_state(sym, ranges_df) -> str:
     """Three-state observation classifier for a target symbol.
 
@@ -456,6 +469,7 @@ def target_observation_state(sym, ranges_df) -> str:
           ``ranges_df`` (legacy callers, malformed DataFrame). Conservative
           fall-through that preserves the historical "not measured" label.
     """
+    sym = canonical_target_symbol(sym)
     if not isinstance(sym, str) or sym in ("", "—"):
         return "unknown"
     input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")

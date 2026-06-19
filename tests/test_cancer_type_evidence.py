@@ -68,6 +68,82 @@ def test_nutm_rna_surrogate_promotes_in_squamous_context():
     assert result["selected"]["metrics"]["rna_marker_support"] == 1.0
 
 
+def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    finding = {
+        "cancer_type": "NUTM",
+        "rule_id": "nutm_nutm1",
+        "surrogate": "NUTM1",
+        "surrogate_tpm": 33.8,
+        "threshold_tpm": 1.0,
+        "support_genes": [],
+    }
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("BRCA", 1.0), ("ESCA", 0.95), ("HNSC", 0.75)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "NUTM"
+    assert result["selected"]["selected_by"] == "rare_marker"
+    nutm = next(row for row in result["evidence"] if row["cancer_type"] == "NUTM")
+    assert nutm["metrics"]["related_context_support"] == 0.95
+    assert nutm["top_is_context"] is False
+
+
+def test_nutm_rna_surrogate_blocks_from_mesenchymal_top_context():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    finding = {
+        "cancer_type": "NUTM",
+        "rule_id": "nutm_nutm1",
+        "surrogate": "NUTM1",
+        "surrogate_tpm": 9.0,
+        "threshold_tpm": 1.0,
+        "support_genes": [],
+    }
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("SARC", 1.0), ("HNSC", 0.75), ("ESCA", 0.72)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "SARC"
+    nutm = next(row for row in result["evidence"] if row["cancer_type"] == "NUTM")
+    assert nutm["label_decision"]["status"] == "blocked"
+    assert any(
+        "top expression-reference lineage mesenchymal" in reason
+        for reason in nutm["blocking_reasons"]
+    )
+
+
+def test_nutm_rna_surrogate_blocks_when_squamous_context_is_weak():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    finding = {
+        "cancer_type": "NUTM",
+        "rule_id": "nutm_nutm1",
+        "surrogate": "NUTM1",
+        "surrogate_tpm": 33.8,
+        "threshold_tpm": 1.0,
+        "support_genes": [],
+    }
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("BRCA", 1.0), ("ESCA", 0.55), ("HNSC", 0.40)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    nutm = next(row for row in result["evidence"] if row["cancer_type"] == "NUTM")
+    assert nutm["label_decision"]["status"] == "blocked"
+    assert any("expression-reference context" in reason for reason in nutm["blocking_reasons"])
+
+
 def test_broad_context_is_part_of_unified_evidence_view():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
