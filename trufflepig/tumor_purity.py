@@ -3284,6 +3284,12 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
     ``support_fraction_of_top`` so the first row is always the normalized leader,
     even when a confident compartment gate has floated a lower-raw-support row
     above an out-of-compartment marker-panel winner.
+
+    The incoming row order is already biologically curated by earlier gates:
+    raw marker support chooses the leader, same-family promotion keeps plausible
+    sibling diagnoses adjacent, and compartment restriction only tiers leaves by
+    broad histogenesis. Finalization must not collapse that back to a plain raw
+    sort; it should only enforce the compartment tier when such a tier exists.
     """
     raw_max = max(
         (float(row.get("support_score") or 0.0) for row in rows),
@@ -3297,13 +3303,15 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
         row["support_rank_tier"] = rank_tier
         row["support_rank_score"] = raw + rank_tier * tier_stride
 
-    rows.sort(
-        key=lambda row: (
-            -float(row.get("support_rank_score") or 0.0),
-            -float(row.get("signature_score") or 0.0),
-            str(row.get("code") or ""),
+    if compartment_restricted:
+        indexed_rows = list(enumerate(rows))
+        indexed_rows.sort(
+            key=lambda item: (
+                -int(item[1].get("support_rank_tier") or 0),
+                item[0],
+            )
         )
-    )
+        rows[:] = [row for _, row in indexed_rows]
     rank_max = max(
         (float(row.get("support_rank_score") or 0.0) for row in rows),
         default=0.0,

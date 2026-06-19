@@ -271,6 +271,71 @@ def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
     assert by_code["SARC"]["support_fraction_of_top"] < 1.0
 
 
+def test_final_support_preserves_same_family_display_order_without_compartment():
+    from trufflepig.tumor_purity import _finalize_candidate_rank_support
+
+    rows = [
+        {
+            "code": "COAD",
+            "family_label": "CRC",
+            "support_score": 1.0,
+            "signature_score": 1.0,
+        },
+        {
+            "code": "READ",
+            "family_label": "CRC",
+            "support_score": 0.70,
+            "signature_score": 0.70,
+        },
+        {
+            "code": "STAD",
+            "family_label": "GASTRIC",
+            "support_score": 0.90,
+            "signature_score": 0.90,
+        },
+    ]
+
+    _finalize_candidate_rank_support(rows, compartment_restricted=False)
+
+    assert [row["code"] for row in rows] == ["COAD", "READ", "STAD"]
+    assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert rows[1]["support_fraction_of_top"] == pytest.approx(0.70)
+    assert rows[2]["support_fraction_of_top"] == pytest.approx(0.90)
+
+
+def test_final_support_compartment_tier_preserves_order_within_tier():
+    from trufflepig.tumor_purity import _finalize_candidate_rank_support
+
+    rows = [
+        {
+            "code": "SARC",
+            "compartment_in_set": False,
+            "support_score": 1.0,
+            "signature_score": 1.0,
+        },
+        {
+            "code": "COAD",
+            "compartment_in_set": True,
+            "support_score": 0.80,
+            "signature_score": 0.80,
+        },
+        {
+            "code": "READ",
+            "compartment_in_set": True,
+            "support_score": 0.70,
+            "signature_score": 0.70,
+        },
+    ]
+
+    _finalize_candidate_rank_support(rows, compartment_restricted=True)
+
+    assert [row["code"] for row in rows] == ["COAD", "READ", "SARC"]
+    assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert rows[1]["support_fraction_of_top"] < 1.0
+    assert rows[2]["support_raw_fraction_of_max"] == pytest.approx(1.0)
+    assert rows[2]["support_fraction_of_top"] < rows[1]["support_fraction_of_top"]
+
+
 # --------------------------------------------------------------------------- #
 # Stage 1 — compartment_call + leaf restriction.
 # --------------------------------------------------------------------------- #
