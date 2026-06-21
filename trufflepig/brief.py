@@ -619,9 +619,9 @@ def _format_therapy_bullet(
 ) -> str:
     """One standardized therapy bullet for the brief."""
     sym = str(target_row.get("symbol") or "")
-    agent = str(target_row.get("agent") or "—")
-    phase = _phase_label(str(target_row.get("phase") or ""))
-    indication = str(target_row.get("indication") or "")
+    agent = _therapy_agent_label(target_row)
+    phase = _phase_label(_clean_display_value(target_row.get("phase")))
+    indication = _clean_display_value(target_row.get("indication"))
     indication_clause = f", {indication}" if indication else ""
     expr_independent = expression_independent_indication(target_row)
     path_context = therapy_path_context(
@@ -949,6 +949,27 @@ def _top_non_tumor_attribution(expression_row) -> tuple[str, float]:
         if candidates:
             return max(candidates, key=lambda item: item[1])
     return "—", 0.0
+
+
+def _clean_display_value(value) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() == "nan":
+        return ""
+    return text
+
+
+def _therapy_agent_label(target_row) -> str:
+    agent = _clean_display_value(target_row.get("agent"))
+    if agent:
+        return agent
+    agent_class = _clean_display_value(target_row.get("agent_class"))
+    if agent_class:
+        return (
+            agent_class
+            if agent_class.lower().endswith("therapy")
+            else f"{agent_class} therapy"
+        )
+    return "—"
 
 
 def _trace_phase_label(target_row) -> str:
@@ -1623,7 +1644,12 @@ def _candidate_trace_rank(
 def _candidate_support_score(row: dict | None) -> float | None:
     if not row:
         return None
-    for key in ("support_geomean", "support_score", "support_fraction_of_top"):
+    for key in (
+        "support_fraction_of_top",
+        "support_rank_score",
+        "support_geomean",
+        "support_score",
+    ):
         if row.get(key) is not None:
             try:
                 return float(row.get(key))
@@ -1802,7 +1828,12 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
         score = _candidate_support_score(row)
         ratio = ""
         if idx > 1 and top_score and score is not None:
-            ratio = f", {score / top_score:.2f}x top support"
+            support_ratio = score / top_score
+            ratio = (
+                ", tied with top support"
+                if support_ratio >= 0.995
+                else f", {support_ratio:.2f}x top support"
+            )
         chunks.append(f"{code} (rank {idx}{ratio})")
     if not chunks:
         return ""
@@ -2483,7 +2514,7 @@ def build_summary(
         )
         if panel_code != cancer_code or panel_subtype:
             lines.append(
-                "*Subtype-resolved therapy curation:* "
+                "*Therapy curation scope:* "
                 + subtype_curation_scope_note(
                     panel_code,
                     panel_subtype=panel_subtype,
@@ -2752,7 +2783,7 @@ def build_actionable(
             lines.append("## Therapy Prioritization\n")
             if panel_code != cancer_code or panel_subtype:
                 lines.append(
-                    "*Subtype-resolved therapy curation:* "
+                    "*Therapy curation scope:* "
                     + subtype_curation_scope_note(
                         panel_code,
                         panel_subtype=panel_subtype,

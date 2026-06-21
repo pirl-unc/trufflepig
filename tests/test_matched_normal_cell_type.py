@@ -11,7 +11,7 @@ from trufflepig.decomposition.signature import (
 
 def test_direct_mappings_hit_real_hpa_cell_types():
     """Every cell type listed in the direct map must exist in
-    hpa-cell-type-expression.csv — prevents silent typos."""
+    the dependency-provided HPA atlas — prevents silent typos."""
     hpa_columns = set(_load_hpa_cell_types().columns)
     for tissue, cell_types in MATCHED_NORMAL_CELL_TYPE.items():
         for cell_type in cell_types:

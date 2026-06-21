@@ -982,9 +982,17 @@ def _fit_one_hypothesis(
                 purity_to_store["purity_source"] = purity_source
         else:
             tumor_fraction = float(purity_result.get("overall_estimate") or 0.5)
-            purity_to_store = purity_result
+            purity_to_store = dict(purity_result or {})
+            if purity_to_store.get("overall_estimate") is None:
+                purity_to_store["overall_estimate"] = tumor_fraction
+                purity_to_store["overall_lower"] = min(0.05, tumor_fraction)
+                purity_to_store["overall_upper"] = max(0.95, tumor_fraction)
+                purity_to_store["purity_source"] = "neutral_decomposition_prior"
+                warnings.append(
+                    "Purity was not numerically estimated; used a neutral 50% "
+                    "prior for decomposition and target-background modeling"
+                )
             if lineage_fraction_info is not None:
-                purity_to_store = dict(purity_result or {})
                 purity_to_store["lineage_tumor_fraction"] = lineage_fraction_info
     else:
         tumor_fraction = float(np.clip(purity_override, 0.0, 1.0))
@@ -996,6 +1004,19 @@ def _fit_one_hypothesis(
         }
         purity_source = "override"
     if not comp_names or tumor_fraction >= 0.999:
+        warnings = ["No non-tumor components in template"]
+        site_evidence = {"site_supported": True, "status": "not_site_specific"}
+        score = float(candidate_row["support_fraction_of_top"])
+        if template_name.startswith("met_"):
+            scoring = DECOMPOSITION_PARAMETERS["template_scoring"]
+            site_evidence = {
+                "site_supported": False,
+                "status": "fit_only",
+                "basis": "no_non_tumor_components",
+                "weak_score_factor": scoring.get("weak_met_site_factor", 0.35),
+            }
+            score *= float(site_evidence["weak_score_factor"] or 0.35)
+            warnings.append(_WEAK_MET_SITE_WARNING)
         return DecompositionResult(
             template=template_name,
             cancer_type=cancer_type,
@@ -1014,9 +1035,9 @@ def _fit_one_hypothesis(
             marker_trace=pd.DataFrame(),
             gene_attribution=pd.DataFrame(),
             tme_background_hk={},
-            score=float(candidate_row["support_fraction_of_top"]),
+            score=float(score),
             description=f"{cancer_type} — {TEMPLATES.get(template_name, {}).get('description', template_name)}",
-            warnings=["No non-tumor components in template"],
+            warnings=warnings,
             matched_normal_tissue=(
                 EPITHELIAL_MATCHED_NORMAL_TISSUE.get(cancer_type)
                 if matched_normal_name
@@ -1026,7 +1047,7 @@ def _fit_one_hypothesis(
             lineage_tumor_fraction=lineage_fraction_info,
             purity_source=purity_source,
             n_measured_in_fit=0,
-            site_evidence={"site_supported": True, "status": "not_site_specific"},
+            site_evidence=site_evidence,
         )
 
     gene_subset = set(sample_by_eid.keys())
@@ -1319,6 +1340,17 @@ def _fit_one_hypothesis(
     )
 
 
+def _is_uninformative_met_fit(result) -> bool:
+    template = str(getattr(result, "template", "") or "")
+    if not template.startswith("met_"):
+        return False
+    site_evidence = getattr(result, "site_evidence", {}) or {}
+    if str(site_evidence.get("basis") or "") != "no_non_tumor_components":
+        return False
+    warnings = [str(warning) for warning in (getattr(result, "warnings", None) or [])]
+    return any("No non-tumor components in template" in warning for warning in warnings)
+
+
 def decompose_sample(
     df_gene_expr,
     cancer_types=None,
@@ -1377,9 +1409,31 @@ def decompose_sample(
             use_subtype_signatures=use_subtype_signatures,
         )
     else:
+        candidate_rows = list(candidate_rows)
         if cancer_types is not None:
-            requested = set(cancer_types)
-            candidate_rows = [row for row in candidate_rows if row["code"] in requested]
+            requested_order = [
+                str(code).strip()
+                for code in cancer_types
+                if str(code or "").strip()
+            ]
+            requested = set(requested_order)
+            existing = {str(row.get("code") or "").strip() for row in candidate_rows}
+            missing = [code for code in requested_order if code not in existing]
+            if missing:
+                missing_rows = rank_cancer_type_candidates(
+                    df_gene_expr,
+                    candidate_codes=missing,
+                    top_k=len(missing),
+                    use_subtype_signatures=use_subtype_signatures,
+                )
+                for row in missing_rows:
+                    row["decomposition_scope_source"] = "requested_scope"
+                candidate_rows.extend(missing_rows)
+            candidate_rows = [
+                row
+                for row in candidate_rows
+                if str(row.get("code") or "").strip() in requested
+            ]
     if not candidate_rows:
         return []
 
@@ -1415,4 +1469,9 @@ def decompose_sample(
             results.append(result)
 
     results.sort(key=lambda row: (-row.score, row.cancer_type, row.template))
+    informative_results = [
+        result for result in results if not _is_uninformative_met_fit(result)
+    ]
+    if informative_results:
+        results = informative_results
     return results[:top_k]

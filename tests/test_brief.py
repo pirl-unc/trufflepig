@@ -464,6 +464,40 @@ def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
     assert "raw-signature top BLCA" in md
 
 
+def test_summary_rna_alternatives_use_post_gate_support_fraction():
+    analysis = _make_analysis()
+    analysis["analysis_constraints"] = {}
+    analysis["cancer_type_source"] = "auto-detected"
+    # Compartment gating can promote a biologically compatible row above a raw
+    # higher-support row. The summary must explain the final/post-gate ranking,
+    # not report a rank-2 candidate as >1x the top call.
+    analysis["candidate_trace"] = [
+        {
+            "code": "SARC",
+            "support_geomean": 0.42,
+            "support_fraction_of_top": 1.0,
+            "signature_score": 0.64,
+        },
+        {
+            "code": "UCS",
+            "support_geomean": 0.44,
+            "support_fraction_of_top": 0.51,
+            "signature_score": 0.54,
+        },
+    ]
+    ranges_df = _make_ranges_df()
+
+    md = build_summary(
+        analysis,
+        ranges_df,
+        cancer_code="SARC",
+        disease_state="",
+    )
+
+    assert "UCS (rank 2, 0.51x top support)" in md
+    assert "1.03x top support" not in md
+
+
 def test_summary_does_not_list_rna_alternatives_for_supplied_label():
     analysis = _make_analysis()
     analysis["analysis_constraints"] = {"cancer_type": "PRAD"}
@@ -719,6 +753,38 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
     assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
+
+
+def test_therapy_bullet_uses_agent_class_when_agent_is_missing():
+    target = pd.Series(
+        {
+            "symbol": "PGR",
+            "agent": float("nan"),
+            "agent_class": "hormone",
+            "phase": "approved",
+            "indication": "ER+/HER2- BRCA",
+        }
+    )
+    expression = pd.Series(
+        {
+            "symbol": "PGR",
+            "observed_tpm": 30.0,
+            "attr_tumor_tpm": 25.0,
+            "attr_tumor_tpm_low": 10.0,
+            "attr_tumor_tpm_high": 30.0,
+            "attr_tumor_fraction": 0.83,
+            "attr_tumor_fraction_high": 0.90,
+            "attr_top_compartment": "",
+            "attr_top_compartment_tpm": 0.0,
+            "tme_dominant": False,
+            "tme_explainable": False,
+        }
+    )
+
+    line = _format_therapy_bullet(target, expression)
+
+    assert "**PGR** — hormone therapy (Approved, ER+/HER2- BRCA)" in line
+    assert "nan" not in line.lower()
 
 
 def test_expression_independent_therapy_distinguishes_generic_fusion_file_from_supporting_call():

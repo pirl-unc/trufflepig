@@ -317,6 +317,21 @@ def test_trial_ids_are_not_misread_as_hla_restrictions():
     assert hla_eligibility_context(row) == ""
 
 
+def test_chemo_backbone_rows_are_not_expression_gated():
+    from trufflepig.reporting import expression_independent_indication
+
+    row = {
+        "cancer_code": "WILMS",
+        "symbol": "TYMS",
+        "agent": "vincristine + actinomycin + doxorubicin",
+        "agent_class": "small_molecule",
+        "indication": "favorable-histology Wilms",
+        "rationale": "COG / SIOP chemo backbone - risk-stratified intensity",
+    }
+
+    assert expression_independent_indication(row)
+
+
 def test_subtype_scope_note_avoids_duplicate_parent_label():
     note = subtype_curation_scope_note(
         "SARC",
@@ -326,6 +341,16 @@ def test_subtype_scope_note_avoids_duplicate_parent_label():
     )
     assert "synovial sarcoma-specific therapy evidence" in note
     assert "synovial sarcoma sarcoma" not in note
+
+
+def test_parent_panel_fallback_scope_note_is_directional():
+    note = subtype_curation_scope_note(
+        "HNSC",
+        base_code="HNSC_HPVpos",
+        noun="therapy evidence",
+    )
+    assert "Using parent head and neck squamous cell carcinoma therapy evidence" in note
+    assert "broader hpv+ hnsc" not in note
 
 
 def test_subtype_call_falls_back_to_parent_therapy_panel():

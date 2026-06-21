@@ -156,6 +156,21 @@ def _cancer_registry_display_names():
     return mapping
 
 
+@lru_cache(maxsize=1)
+def _cancer_registry_parent_codes():
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        df = cancer_type_registry()
+    except Exception:
+        return {}
+    return {
+        _clean_text(row.get("code")): _clean_text(row.get("parent_code"))
+        for _, row in df.iterrows()
+        if _clean_text(row.get("code"))
+    }
+
+
 def cancer_code_display_name(code, fallback=None):
     text = _clean_text(code)
     if not text:
@@ -190,6 +205,19 @@ def subtype_curation_scope_note(
         focus = panel_name
     if not base_label or focus == base_label:
         return f"Using {focus}-specific {noun}."
+    parents = _cancer_registry_parent_codes()
+    panel_text = _clean_text(panel_code)
+    base_text = _clean_text(base_code)
+    if (
+        not subtype_label
+        and panel_text
+        and base_text
+        and parents.get(base_text) == panel_text
+    ):
+        return (
+            f"Using parent {panel_name} {noun}; no separate {base_label} "
+            "curation list is available."
+        )
     return f"Using {focus}-specific {noun} rather than the broader {base_label} list."
 
 
@@ -363,6 +391,14 @@ _MMR_PROFICIENT = re.compile(
     r"\b(pmmr|mmr[- ]?proficient|mismatch\s+repair\s+proficient|mss|msi[- ]?stable)\b",
     re.IGNORECASE,
 )
+_HISTOLOGY_ONLY_THERAPY_CONTEXT = re.compile(
+    r"\b("
+    r"chemo(?:therapy)?\s+backbone|"
+    r"standard[^.;,]*chemo|"
+    r"risk[- ]?stratified\s+intensity"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def indication_biomarker(target_row) -> str:
@@ -401,6 +437,10 @@ def indication_biomarker(target_row) -> str:
         return "tmb_high"
     if _MUTATION_INDICATION.search(text):
         return "mutation"
+    if _HISTOLOGY_ONLY_THERAPY_CONTEXT.search(
+        low
+    ) and not _TARGET_EXPRESSION_INDICATION.search(low):
+        return "histology_only"
 
     if _IMMUNE_CHECKPOINT_AGENTS.search(
         agent
@@ -1206,8 +1246,10 @@ def offcontext_known_targets(
         index = cross_cancer_target_index()
     panel = {str(s).strip().upper() for s in (panel_symbols or [])}
 
-    if hasattr(ranges_df, "to_dict"):
-        records = ranges_df.to_dict("records")
+    if hasattr(ranges_df, "to_numpy"):
+        from .common import ranges_records
+
+        records = ranges_records(ranges_df)
     else:
         records = list(ranges_df or [])
 
@@ -1829,7 +1871,9 @@ def partition_tumor_core_rows(ranges_df, min_tumor_tpm=1.0):
         empty = eligible.iloc[0:0]
         return empty, empty, empty
 
-    statuses = [target_reliability_status(row) for row in eligible.to_dict("records")]
+    from .common import ranges_records
+
+    statuses = [target_reliability_status(row) for row in ranges_records(eligible)]
     eligible["_report_reliability"] = statuses
     supported = eligible[eligible["_report_reliability"] == "supported"].copy()
     provisional = eligible[eligible["_report_reliability"] == "provisional"].copy()
@@ -1841,8 +1885,10 @@ def summarize_reliability_reasons(rows, top_n=3):
     """Summarize the most common reliability caveats in a row set."""
     if rows is None or len(rows) == 0:
         return ""
+    from .common import ranges_records
+
     counter = Counter()
-    for row in rows.to_dict("records"):
+    for row in ranges_records(rows):
         counter.update(target_reliability_reasons(row))
     if not counter:
         return ""

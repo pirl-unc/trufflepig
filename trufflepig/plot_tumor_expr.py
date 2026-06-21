@@ -1804,7 +1804,9 @@ def estimate_tumor_expression_ranges(
     # "below detection (measured as ~0)" from "not in input file" — the two
     # have very different clinical meaning (the former is a real negative for
     # the target; the latter is a coverage gap that needs investigation).
-    result.attrs["sample_input_symbols"] = set(sample_raw)
+    from .common import NoDeepcopyFrozenSet
+
+    result.attrs["sample_input_symbols"] = NoDeepcopyFrozenSet(sample_raw)
     return result
 
 

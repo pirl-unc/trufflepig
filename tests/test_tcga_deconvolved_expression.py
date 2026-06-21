@@ -97,6 +97,123 @@ def test_pan_cancer_wrapper_overrides_pirlygenes_default_to_tpm(monkeypatch):
         gsc._PAN_CANCER_CACHE.clear()
 
 
+def test_dependency_owned_reference_mirrors_are_not_local_csv_sources(monkeypatch):
+    """Pan-cancer/HPA/ESTIMATE are dependency-owned mirrors.
+
+    Trufflepig may transform their public pirlygenes frames into a stable local
+    schema, but it must not read stale local CSV snapshots for these references.
+    HPA still passes through the same normalize/assert-clean path used for
+    sample-comparable expression.
+    """
+    import pandas as pd
+
+    gsc._PAN_CANCER_CACHE.clear()
+    gsc._hpa_cell_type_expression_cached.cache_clear()
+    hpa_source = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG000001"],
+            "Symbol": ["GENE1"],
+            "Cell type A": [5.0],
+        }
+    )
+    estimate_source = pd.DataFrame({"gene": ["GENE1"], "signature": ["immune"]})
+    calls = []
+    real_read_csv = gsc.pd.read_csv
+    forbidden_mirrors = {
+        str(gsc.TRUFFLEPIG_DATA_DIR / "pan-cancer-expression.csv"),
+        str(gsc.TRUFFLEPIG_DATA_DIR / "hpa-cell-type-expression.csv"),
+        str(gsc.TRUFFLEPIG_DATA_DIR / "estimate-signatures.csv"),
+    }
+
+    def forbid_local_mirror_csv(path, *args, **kwargs):
+        if str(path) in forbidden_mirrors:
+            raise AssertionError(f"unexpected local mirror CSV read: {path!r}")
+        return real_read_csv(path, *args, **kwargs)
+
+    def fake_pan_cancer_expression(**kwargs):
+        calls.append(("pan", kwargs))
+        return pd.DataFrame(
+            {
+                "Ensembl_Gene_ID": ["ENSG000001"],
+                "Symbol": ["GENE1"],
+                "COAD_TPM_raw": [100.0],
+                "COAD_TPM_clean": [75.0],
+            }
+        )
+
+    def fake_hpa_cell_type_expression():
+        calls.append(("hpa", {}))
+        return hpa_source.copy()
+
+    def fake_estimate_signatures():
+        calls.append(("estimate", {}))
+        return estimate_source.copy()
+
+    def fake_normalize_expression(df, *, label_col, id_col, value_cols, **kwargs):
+        calls.append(
+            (
+                "normalize",
+                {
+                    "label_col": label_col,
+                    "id_col": id_col,
+                    "value_cols": tuple(value_cols),
+                },
+            )
+        )
+        return df.copy(), {"method": "fake"}
+
+    def fake_assert_clean_tpm(df, *, value_cols, context, **kwargs):
+        calls.append(
+            (
+                "assert_clean",
+                {
+                    "context": context,
+                    "value_cols": tuple(value_cols),
+                },
+            )
+        )
+
+    monkeypatch.setattr(gsc.pd, "read_csv", forbid_local_mirror_csv)
+    monkeypatch.setattr(gsc._pirlygenes, "pan_cancer_expression", fake_pan_cancer_expression)
+    monkeypatch.setattr(
+        gsc._pirlygenes,
+        "hpa_cell_type_expression",
+        fake_hpa_cell_type_expression,
+    )
+    monkeypatch.setattr(gsc._pirlygenes, "estimate_signatures", fake_estimate_signatures)
+    monkeypatch.setattr(gsc._pirlygenes, "normalize_expression", fake_normalize_expression)
+    monkeypatch.setattr(gsc, "assert_clean_tpm", fake_assert_clean_tpm)
+    try:
+        pan = gsc.pan_cancer_expression()
+        hpa = gsc.hpa_cell_type_expression()
+        estimate = gsc.estimate_signatures()
+    finally:
+        gsc._PAN_CANCER_CACHE.clear()
+        gsc._hpa_cell_type_expression_cached.cache_clear()
+
+    assert pan.loc[0, "COAD_TPM"] == 75.0
+    assert hpa.loc[0, "Cell type A"] == 5.0
+    assert estimate.equals(estimate_source)
+    assert ("pan", {"genes": None, "normalize": ["tpm", "tpm_clean"]}) in calls
+    assert ("hpa", {}) in calls
+    assert ("estimate", {}) in calls
+    assert (
+        "normalize",
+        {
+            "label_col": "Symbol",
+            "id_col": "Ensembl_Gene_ID",
+            "value_cols": ("Cell type A",),
+        },
+    ) in calls
+    assert (
+        "assert_clean",
+        {
+            "context": "hpa_cell_type_expression",
+            "value_cols": ("Cell type A",),
+        },
+    ) in calls
+
+
 def test_pan_cancer_expression_rejects_legacy_unit_prefix_columns():
     import pandas as pd
 

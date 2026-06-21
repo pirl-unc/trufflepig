@@ -21,6 +21,7 @@ Higher stromal/immune scores → lower tumor purity.
 
 import logging
 from collections import Counter
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -830,6 +831,28 @@ def _summarize_lineage_support(lineage_per_gene):
     }
 
 
+def _subtype_deconvolved_lookup_codes(subtype_code):
+    seen = []
+    for code in (subtype_code,):
+        text = str(code or "").strip()
+        if text and text not in seen:
+            seen.append(text)
+    try:
+        from .analyze.cancer_type_context import expression_reference_options
+
+        for record in expression_reference_options(subtype_code, include_fallback=False):
+            if record.source_kind != "deconvolved_tumor_reference":
+                continue
+            for code in (record.source_code, record.reference_code):
+                text = str(code or "").strip()
+                if text and text not in seen:
+                    seen.append(text)
+    except Exception:
+        pass
+    return tuple(seen)
+
+
+@lru_cache(maxsize=128)
 def _subtype_tumor_tpm_lookup(subtype_code):
     """Return dict of {symbol: tumor_tpm_median} for a subtype.
 
@@ -842,7 +865,11 @@ def _subtype_tumor_tpm_lookup(subtype_code):
     sub_df = subtype_deconvolved_expression(technical_rna_normalize=True)
     if sub_df is None:
         return {}
-    matched = sub_df[sub_df["cancer_code"] == subtype_code]
+    matched = pd.DataFrame()
+    for code in _subtype_deconvolved_lookup_codes(subtype_code):
+        matched = sub_df[sub_df["cancer_code"] == code]
+        if not matched.empty:
+            break
     if matched.empty:
         return {}
     return dict(zip(matched["symbol"], matched["tumor_tpm_median"].astype(float)))
@@ -3440,6 +3467,7 @@ def rank_cancer_type_candidates(
     top_k=5,
     tissue_signal=None,
     use_subtype_signatures=True,
+    precomputed_signature_stats=None,
 ):
     """Rank cancer-type hypotheses by signature evidence and purity plausibility.
 
@@ -3463,10 +3491,25 @@ def rank_cancer_type_candidates(
         resolved_candidate_codes = [
             resolve_cancer_type(code) for code in candidate_codes
         ]
-    stats = _compute_cancer_type_signature_stats(
-        df_gene_expr,
-        candidate_codes=resolved_candidate_codes,
-    )
+    stats = None
+    if precomputed_signature_stats is not None:
+        cached_stats = [dict(row) for row in precomputed_signature_stats]
+        if unconstrained:
+            stats = cached_stats
+        else:
+            requested = set(resolved_candidate_codes or [])
+            cached_codes = {str(row.get("code") or "") for row in cached_stats}
+            if requested.issubset(cached_codes):
+                stats = [
+                    row
+                    for row in cached_stats
+                    if str(row.get("code") or "") in requested
+                ]
+    if stats is None:
+        stats = _compute_cancer_type_signature_stats(
+            df_gene_expr,
+            candidate_codes=resolved_candidate_codes,
+        )
     signature_score_map = {row["code"]: float(row["score"]) for row in stats}
 
     # Subtype-aware signature scoring: for cohorts with subtype data
@@ -4055,6 +4098,7 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
             candidate_codes=[cancer_code] + default_candidates,
             top_k=8,
             tissue_signal=tissue_signal,
+            precomputed_signature_stats=stats,
         )
     else:
         candidate_trace = rank_cancer_type_candidates(
@@ -4062,6 +4106,7 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
             candidate_codes=None,
             top_k=8,
             tissue_signal=tissue_signal,
+            precomputed_signature_stats=stats,
         )
         cancer_code = (
             candidate_trace[0]["code"] if candidate_trace else stats[0]["code"]

@@ -14,6 +14,16 @@ per-stage extraction (trufflepig#2..#14) so a web UI can run and stream
 single stages independently.
 """
 
+import warnings
+
 from .version import __version__
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Downcasting object dtype arrays on \.fillna, \.ffill, \.bfill "
+    r"is deprecated.*",
+    category=FutureWarning,
+    module=r"pirlygenes\.gene_sets_cancer",
+)
 
 __all__ = ["__version__"]

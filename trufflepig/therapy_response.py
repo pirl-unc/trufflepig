@@ -337,7 +337,9 @@ def _candidate_sources_from_rna(ranges_df, *, max_sources: int = 4) -> list[dict
         return []
 
     rows: list[dict[str, Any]] = []
-    for _, row in ranges_df.iterrows():
+    from .common import ranges_records
+
+    for row in ranges_records(ranges_df):
         symbol = _clean_symbol(row.get("symbol"))
         if symbol not in _MAPK_RNA_SOURCE_GENES:
             continue

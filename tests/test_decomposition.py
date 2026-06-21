@@ -668,6 +668,36 @@ def test_all_tumor_when_purity_is_one():
     assert "No non-tumor components" in result.warnings[0]
 
 
+def test_all_tumor_met_template_is_fit_only_and_suppressed_when_primary_available():
+    df = _tcga_sample("PRAD")
+
+    results = decompose_sample(
+        df,
+        cancer_types=["PRAD"],
+        templates=["met_adrenal", "solid_primary"],
+        top_k=2,
+        purity_override=1.0,
+    )
+
+    assert [row.template for row in results] == ["solid_primary"]
+
+
+def test_all_tumor_met_template_remains_available_when_explicitly_requested():
+    df = _tcga_sample("PRAD")
+
+    results = decompose_sample(
+        df,
+        cancer_types=["PRAD"],
+        templates=["met_adrenal"],
+        top_k=1,
+        purity_override=1.0,
+    )
+
+    assert results[0].template == "met_adrenal"
+    assert results[0].site_evidence["site_supported"] is False
+    assert results[0].site_evidence["basis"] == "no_non_tumor_components"
+
+
 def test_invalid_template_name_raises():
     """Explicit template names should be validated against known templates."""
     df = _tcga_sample("COAD")
@@ -1013,3 +1043,67 @@ def test_candidate_composition_segments_sum_to_one():
             assert 0 <= tumor <= 1
             assert 0 <= tmpl <= 1
             assert 0 <= shared <= 1
+
+
+def test_decompose_sample_scores_requested_scope_missing_from_reused_trace(monkeypatch):
+    """A selected/report scope must reach decomposition even when the CLI
+    reuses a broad first-pass candidate trace.
+
+    The broad trace is an optimization, not the full universe of hypotheses.
+    If a selected local/fine scope is passed through ``cancer_types`` but is
+    absent from ``candidate_rows``, decompose_sample should score just that
+    missing code and include it in the fit set.
+    """
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from trufflepig.decomposition import engine
+
+    broad_row = {
+        "code": "BROAD",
+        "support_fraction_of_top": 1.0,
+        "signature_score": 0.8,
+        "purity_estimate": 0.6,
+        "purity_result": {"overall_estimate": 0.6},
+    }
+    local_row = {
+        "code": "LOCAL",
+        "support_fraction_of_top": 0.7,
+        "signature_score": 0.5,
+        "purity_estimate": 0.5,
+        "purity_result": {"overall_estimate": 0.5},
+    }
+    ranked_requests = []
+
+    def fake_rank(_df, *, candidate_codes, **_kwargs):
+        ranked_requests.append(tuple(candidate_codes))
+        assert tuple(candidate_codes) == ("LOCAL",)
+        return [dict(local_row)]
+
+    def fake_fit(_df, _sample_by_eid, candidate_row, _tissue_score_map, template_name, **_kwargs):
+        return SimpleNamespace(
+            cancer_type=candidate_row["code"],
+            template=template_name,
+            score=float(candidate_row["support_fraction_of_top"]),
+            scope_source=candidate_row.get("decomposition_scope_source", ""),
+        )
+
+    monkeypatch.setattr(engine, "rank_cancer_type_candidates", fake_rank)
+    monkeypatch.setattr(engine, "_fit_one_hypothesis", fake_fit)
+    monkeypatch.setattr(engine, "_score_host_tissues", lambda *_a, **_k: [])
+
+    rows = engine.decompose_sample(
+        pd.DataFrame({"Symbol": [], "TPM": []}),
+        cancer_types=["LOCAL", "BROAD"],
+        templates=["solid_primary"],
+        top_k=5,
+        candidate_rows=[broad_row],
+        sample_raw_by_symbol={},
+        sample_by_eid={},
+    )
+
+    assert ranked_requests == [("LOCAL",)]
+    assert {row.cancer_type for row in rows} == {"BROAD", "LOCAL"}
+    local = next(row for row in rows if row.cancer_type == "LOCAL")
+    assert local.scope_source == "requested_scope"

@@ -25,6 +25,7 @@ def named(_name):  # noqa: D401 - argh-style decorator shim
 
     return _wrap
 import logging
+from functools import lru_cache
 from pathlib import Path
 import re
 from typing import Optional, Set
@@ -1850,32 +1851,15 @@ def _analyze_body(run: AnalyzeRun):
         aspect=plot_aspect,
         deprecated_figures=bool(config.deprecated_figures),
     )
-    # ``--no-figures`` propagation: the per-call-site figure-context
-    # refactor is in progress (see PlottingContext docstring) so the
-    # ~75 existing plot_* call sites in _analyze_body still call the
-    # underlying plot functions directly. Pre-import every plot module
-    # the body lazily imports, then walk those modules and rebind every
-    # plot_* callable to a no-op. The originals are appended to
+    # ``--no-figures`` propagation: call sites now check
+    # ``plot_ctx.enabled`` before doing plot work, but keep this as a
+    # safety net for already-imported plotting functions while the
+    # figure-context migration continues. The originals are appended to
     # ``_NOOP_PLOT_RESTORE_QUEUE`` so ``analyze()``'s try/finally
     # restores them on exit — a second invocation in the same process
     # (tests, batch runners, the upcoming service mode) does not
     # inherit the no-op state.
     if not plot_ctx.enabled:
-        for _mod_name in (
-            "trufflepig.plot",
-            "trufflepig.plot_therapy",
-            "trufflepig.plot_subtype_signature",
-            "trufflepig.plot_target_deep_dive",
-            "trufflepig.plot_tumor_expr",
-            "trufflepig.plot_embedding",
-            "trufflepig.plot_context",
-            "trufflepig.tumor_purity",
-            "trufflepig.provenance",
-        ):
-            try:
-                __import__(_mod_name)
-            except Exception:  # noqa: BLE001
-                pass
         import sys as _sys
         def _noop_plot(*_a, **_k):
             return None
@@ -2114,13 +2098,14 @@ def _analyze_body(run: AnalyzeRun):
         healthy_vs_tumor = None
 
     context_png = "%s-sample-context.png" % prefix if prefix else "sample-context.png"
-    try:
-        plot_sample_context(
-            sample_context, save_to_filename=context_png, save_dpi=output_dpi
-        )
-        print(f"[plot] Saved sample-context diagnostic to {context_png}")
-    except Exception as exc:  # noqa: BLE001 — plotting must not break analyze
-        print(f"[plot] sample-context plot failed: {exc}")
+    if plot_ctx.enabled:
+        try:
+            plot_sample_context(
+                sample_context, save_to_filename=context_png, save_dpi=output_dpi
+            )
+            print(f"[plot] Saved sample-context diagnostic to {context_png}")
+        except Exception as exc:  # noqa: BLE001 — plotting must not break analyze
+            print(f"[plot] sample-context plot failed: {exc}")
 
     concentration_top_png = (
         "%s-expression-top-features-qc.png" % prefix
@@ -2132,63 +2117,66 @@ def _analyze_body(run: AnalyzeRun):
         if prefix
         else "expression-concentration-curve-qc.png"
     )
-    try:
-        out = plot_expression_concentration_top_features_qc(
-            df_expr_raw,
-            save_to_filename=concentration_top_png,
-            save_dpi=output_dpi,
-        )
-        if out:
-            print(
-                f"[plot] Saved expression top-feature QC to {concentration_top_png}"
+    if plot_ctx.enabled:
+        try:
+            out = plot_expression_concentration_top_features_qc(
+                df_expr_raw,
+                save_to_filename=concentration_top_png,
+                save_dpi=output_dpi,
             )
-        out = plot_expression_concentration_curve_qc(
-            df_expr_raw,
-            save_to_filename=concentration_curve_png,
-            save_dpi=output_dpi,
-        )
-        if out:
-            print(
-                "[plot] Saved expression concentration curve QC to "
-                f"{concentration_curve_png}"
+            if out:
+                print(
+                    f"[plot] Saved expression top-feature QC to {concentration_top_png}"
+                )
+            out = plot_expression_concentration_curve_qc(
+                df_expr_raw,
+                save_to_filename=concentration_curve_png,
+                save_dpi=output_dpi,
             )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[plot] expression concentration QC plot failed: {exc}")
+            if out:
+                print(
+                    "[plot] Saved expression concentration curve QC to "
+                    f"{concentration_curve_png}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[plot] expression concentration QC plot failed: {exc}")
 
     reference_mtdna_qc_png = (
         "%s-qc-reference-mtdna.png" % prefix
         if prefix
         else "qc-reference-mtdna.png"
     )
-    try:
-        out = plot_reference_mtdna_fraction_qc(
-            df_expr_raw,
-            save_to_filename=reference_mtdna_qc_png,
-            save_dpi=output_dpi,
-        )
-        if out:
-            print(f"[plot] Saved mtDNA reference QC to {reference_mtdna_qc_png}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[plot] mtDNA reference QC plot failed: {exc}")
+    if plot_ctx.enabled:
+        try:
+            out = plot_reference_mtdna_fraction_qc(
+                df_expr_raw,
+                save_to_filename=reference_mtdna_qc_png,
+                save_dpi=output_dpi,
+            )
+            if out:
+                print(f"[plot] Saved mtDNA reference QC to {reference_mtdna_qc_png}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[plot] mtDNA reference QC plot failed: {exc}")
 
     burden_qc_png = (
         "%s-qc-reference-technical-rna-burden.png" % prefix
         if prefix
         else "qc-reference-technical-rna-burden.png"
     )
-    try:
-        out = plot_reference_technical_rna_burden_qc(
-            df_expr_raw,
-            save_to_filename=burden_qc_png,
-            save_dpi=output_dpi,
-        )
-        if out:
-            print(
-                "[plot] Saved combined technical-RNA burden QC to "
-                f"{burden_qc_png}"
+    if plot_ctx.enabled:
+        try:
+            out = plot_reference_technical_rna_burden_qc(
+                df_expr_raw,
+                save_to_filename=burden_qc_png,
+                save_dpi=output_dpi,
             )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[plot] technical-RNA burden QC plot failed: {exc}")
+            if out:
+                print(
+                    "[plot] Saved combined technical-RNA burden QC to "
+                    f"{burden_qc_png}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[plot] technical-RNA burden QC plot failed: {exc}")
 
     # #27: gene-pair degradation index scatter. Emitted whenever any
     # degradation signal is available (including the "none" call, so
@@ -2197,17 +2185,18 @@ def _analyze_body(run: AnalyzeRun):
     degradation_png = (
         "%s-degradation-index.png" % prefix if prefix else "degradation-index.png"
     )
-    try:
-        out = plot_degradation_index(
-            df_expr_raw,
-            sample_context,
-            save_to_filename=degradation_png,
-            save_dpi=output_dpi,
-        )
-        if out:
-            print(f"[plot] Saved degradation-index scatter to {degradation_png}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[plot] degradation-index plot failed: {exc}")
+    if plot_ctx.enabled:
+        try:
+            out = plot_degradation_index(
+                df_expr_raw,
+                sample_context,
+                save_to_filename=degradation_png,
+                save_dpi=output_dpi,
+            )
+            if out:
+                print(f"[plot] Saved degradation-index scatter to {degradation_png}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[plot] degradation-index plot failed: {exc}")
 
     # Strip plot: therapy modalities. The per-category strip plots
     # (Immune_checkpoints / Oncogenes / CTAs / ...) are emitted
@@ -2235,20 +2224,21 @@ def _analyze_body(run: AnalyzeRun):
     strip_plots = [
         ("treatments", therapy_sets),
     ]
-    for i, (name, gene_sets) in enumerate(strip_plots):
-        output_image = "%s-%s.png" % (prefix, name) if prefix else "%s.png" % name
-        print(f"[plot] Generating {name} strip plot...")
-        plot_gene_expression(
-            df_expr,
-            gene_sets=gene_sets,
-            save_to_filename=output_image,
-            save_dpi=output_dpi,
-            plot_height=plot_height,
-            plot_aspect=plot_aspect,
-            always_label_genes=forced_labels,
-            verbose=(i == 0),  # only log remaps on first call
-            source_file=input_path,
-        )
+    if plot_ctx.enabled:
+        for i, (name, gene_sets) in enumerate(strip_plots):
+            output_image = "%s-%s.png" % (prefix, name) if prefix else "%s.png" % name
+            print(f"[plot] Generating {name} strip plot...")
+            plot_gene_expression(
+                df_expr,
+                gene_sets=gene_sets,
+                save_to_filename=output_image,
+                save_dpi=output_dpi,
+                plot_height=plot_height,
+                plot_aspect=plot_aspect,
+                always_label_genes=forced_labels,
+                verbose=(i == 0),  # only log remaps on first call
+                source_file=input_path,
+            )
 
     import matplotlib.pyplot as _plt
 
@@ -2420,6 +2410,11 @@ def _analyze_body(run: AnalyzeRun):
         analysis,
         supplied_cancer_type=cancer_type,
     )
+    _apply_cancer_type_context_roles(analysis, cancer_type_context)
+    cancer_type_context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type=cancer_type,
+    )
     analysis["cancer_type_context"] = cancer_type_context.to_dict()
     cancer_code = cancer_type_context.code_for("report")
     reference_cancer_code = cancer_type_context.code_for("cohort")
@@ -2471,9 +2466,14 @@ def _analyze_body(run: AnalyzeRun):
     print(f"[analysis] Sample mode: {_sample_mode_display(analysis['sample_mode'])}")
     if analysis["analysis_constraints"]:
         print(f"[analysis] Constraints: {analysis['analysis_constraints']}")
+    purity_text = _format_purity_interval(
+        purity.get("overall_estimate"),
+        purity.get("overall_lower"),
+        purity.get("overall_upper"),
+    )
     print(
-        f"[analysis] {_purity_metric_label(analysis['sample_mode']).capitalize()}: {purity['overall_estimate']:.0%} "
-        f"[{purity['overall_lower']:.0%}-{purity['overall_upper']:.0%}]"
+        f"[analysis] {_purity_metric_label(analysis['sample_mode']).capitalize()}: "
+        f"{purity_text}"
     )
     print(
         f"[analysis] Stromal enrichment: {render_fold(purity['components']['stromal']['enrichment'])} vs TCGA"
@@ -2597,22 +2597,25 @@ def _analyze_body(run: AnalyzeRun):
     # Individual summary panels (replaces the crowded 4-panel composite, #97)
     summary_png = "%s-sample-summary.png" % prefix if prefix else "sample-summary.png"
     # Keep the composite for backward compatibility but also emit standalone PNGs
-    plot_sample_summary(
-        df_expr,
-        cancer_type=reference_cancer_code,
-        sample_mode=analysis["sample_mode"],
-        save_to_filename=summary_png,
-        save_dpi=output_dpi,
-        analysis=analysis,
-    )
     hypotheses_png = "%s-cancer-hypotheses.png" % prefix
-    plot_cancer_type_hypotheses(
-        analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
-    )
     tissues_png = "%s-background-tissues.png" % prefix
-    plot_background_tissues(analysis, save_to_filename=tissues_png, save_dpi=output_dpi)
     mhc_png = "%s-mhc-expression.png" % prefix
-    plot_mhc_expression(analysis, save_to_filename=mhc_png, save_dpi=output_dpi)
+    if plot_ctx.enabled:
+        plot_sample_summary(
+            df_expr,
+            cancer_type=reference_cancer_code,
+            sample_mode=analysis["sample_mode"],
+            save_to_filename=summary_png,
+            save_dpi=output_dpi,
+            analysis=analysis,
+        )
+        plot_cancer_type_hypotheses(
+            analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
+        )
+        plot_background_tissues(
+            analysis, save_to_filename=tissues_png, save_dpi=output_dpi
+        )
+        plot_mhc_expression(analysis, save_to_filename=mhc_png, save_dpi=output_dpi)
 
     # #136: one-figure therapy-pathway state readout. Renders the
     # disease-state narrative visually — dumbbells for each AR / NE /
@@ -2624,20 +2627,23 @@ def _analyze_body(run: AnalyzeRun):
         if prefix
         else "therapy-pathway-state.png"
     )
-    try:
-        from .plot_therapy import plot_therapy_pathway_state
+    if plot_ctx.enabled:
+        try:
+            from .plot_therapy import plot_therapy_pathway_state
 
-        fig_ps = plot_therapy_pathway_state(
-            therapy_response_scores=therapy_scores,
-            cancer_code=reference_cancer_code,
-            disease_state_caption=compose_disease_state_narrative(analysis),
-            save_to_filename=pathway_state_png,
-            save_dpi=output_dpi,
-        )
-        if fig_ps is None:
+            fig_ps = plot_therapy_pathway_state(
+                therapy_response_scores=therapy_scores,
+                cancer_code=reference_cancer_code,
+                disease_state_caption=compose_disease_state_narrative(analysis),
+                save_to_filename=pathway_state_png,
+                save_dpi=output_dpi,
+            )
+            if fig_ps is None:
+                pathway_state_png = None
+        except Exception as _tps_err:
+            print(f"[warn] Therapy-pathway state plot failed: {_tps_err}")
             pathway_state_png = None
-    except Exception as _tps_err:
-        print(f"[warn] Therapy-pathway state plot failed: {_tps_err}")
+    else:
         pathway_state_png = None
 
     print("[analysis] Running broad-compartment decomposition...")
@@ -2645,7 +2651,28 @@ def _analyze_body(run: AnalyzeRun):
     composition_png = None
     components_png = None
     candidates_png = None
-    candidate_codes = [row["code"] for row in analysis.get("candidate_trace", [])[:4]]
+    candidate_codes = []
+    candidate_trace_codes = [
+        str(row.get("code") or "").strip()
+        for row in analysis.get("candidate_trace", [])
+        if row.get("code")
+    ]
+    expression_reference_code = str(
+        analysis.get("expression_reference_cancer_type") or ""
+    ).strip()
+    scoped_decomposition_codes = [reference_cancer_code]
+    for code in (expression_reference_code, cancer_code):
+        code = str(code or "").strip()
+        if not code or code in scoped_decomposition_codes:
+            continue
+        if _is_defining_fusion_label(code):
+            continue
+        if _has_operational_analysis_reference(code):
+            scoped_decomposition_codes.append(code)
+    for code in (*scoped_decomposition_codes, *candidate_trace_codes[:4]):
+        code = str(code or "").strip()
+        if code and code not in candidate_codes:
+            candidate_codes.append(code)
     decomposition_site_hint = site_hint or (
         inferred_site_context.get("site") if inferred_site_context else None
     )
@@ -2711,7 +2738,7 @@ def _analyze_body(run: AnalyzeRun):
     decomp_results = decompose_sample(
         df_expr,
         cancer_types=candidate_codes or [cancer_code],
-        top_k=6,
+        top_k=24,
         sample_mode=analysis["sample_mode"],
         tumor_context=decomposition_tumor_context,
         site_hint=decomposition_site_hint,
@@ -2722,6 +2749,13 @@ def _analyze_body(run: AnalyzeRun):
         # re-ranking (which internally re-runs estimate_tumor_purity
         # per candidate).
         candidate_rows=analysis.get("candidate_trace"),
+    )
+    decomp_results = _prioritize_report_compatible_decomposition(
+        decomp_results,
+        reference_code=reference_cancer_code,
+        report_code=cancer_code,
+        enabled=bool(cancer_type or report_scope_cancer_type),
+        analysis=analysis,
     )
     call_summary = _summarize_sample_call(
         analysis,
@@ -2925,23 +2959,25 @@ def _analyze_body(run: AnalyzeRun):
             if prefix
             else "decomposition-composition.png"
         )
-        plot_decomposition_composition(
-            best_decomp,
-            save_to_filename=composition_png,
-            save_dpi=output_dpi,
-            title=composition_title,
-        )
+        if plot_ctx.enabled:
+            plot_decomposition_composition(
+                best_decomp,
+                save_to_filename=composition_png,
+                save_dpi=output_dpi,
+                title=composition_title,
+            )
         components_png = (
             "%s-decomposition-components.png" % prefix
             if prefix
             else "decomposition-components.png"
         )
-        plot_decomposition_component_breakdown(
-            best_decomp,
-            save_to_filename=components_png,
-            save_dpi=output_dpi,
-            title=component_title,
-        )
+        if plot_ctx.enabled:
+            plot_decomposition_component_breakdown(
+                best_decomp,
+                save_to_filename=components_png,
+                save_dpi=output_dpi,
+                title=component_title,
+            )
         # Sample decomposition candidate bars — one row per (cancer × template)
         # candidate, showing the 3-segment composition (tumor / template-
         # specific / shared immune+stroma). Replaces the "extra=..." text
@@ -2951,19 +2987,20 @@ def _analyze_body(run: AnalyzeRun):
             if prefix
             else "decomposition-candidates.png"
         )
-        plot_decomposition_candidates(
-            decomp_results,
-            save_to_filename=candidates_png,
-            save_dpi=output_dpi,
-            labels=[
-                _hypothesis_display_label(
-                    row,
-                    primary_code=analysis.get("cancer_type"),
-                    analysis=analysis,
-                )
-                for row in decomp_results[:6]
-            ],
-        )
+        if plot_ctx.enabled:
+            plot_decomposition_candidates(
+                decomp_results,
+                save_to_filename=candidates_png,
+                save_dpi=output_dpi,
+                labels=[
+                    _hypothesis_display_label(
+                        row,
+                        primary_code=analysis.get("cancer_type"),
+                        analysis=analysis,
+                    )
+                    for row in decomp_results[:6]
+                ],
+            )
 
         hypotheses_tsv = (
             "%s-decomposition-hypotheses.tsv" % prefix
@@ -3018,20 +3055,21 @@ def _analyze_body(run: AnalyzeRun):
                 index=False,
             )
 
-    print("[plot] Generating tumor purity detail plot...")
     purity_png = "%s-purity.png" % prefix if prefix else "purity.png"
-    plot_tumor_purity(
-        df_expr,
-        cancer_type=effective_cancer_type,
-        sample_mode=analysis["sample_mode"],
-        save_to_filename=purity_png,
-        save_dpi=output_dpi,
-        # #86: render the harmonized purity (may be lineage-panel-
-        # adopted) so the figure agrees with the rest of the report
-        # instead of silently recomputing a signature-only estimate.
-        purity_result=analysis["purity"],
-    )
-    _plt.close("all")
+    if plot_ctx.enabled:
+        print("[plot] Generating tumor purity detail plot...")
+        plot_tumor_purity(
+            df_expr,
+            cancer_type=effective_cancer_type,
+            sample_mode=analysis["sample_mode"],
+            save_to_filename=purity_png,
+            save_dpi=output_dpi,
+            # #86: render the harmonized purity (may be lineage-panel-
+            # adopted) so the figure agrees with the rest of the report
+            # instead of silently recomputing a signature-only estimate.
+            purity_result=analysis["purity"],
+        )
+        _plt.close("all")
 
     # #124: side-by-side comparison of every purity estimation method
     # on a single purity axis. The existing plot_tumor_purity panel
@@ -3040,77 +3078,80 @@ def _analyze_body(run: AnalyzeRun):
     # figure renders signature / lineage / ESTIMATE stromal / ESTIMATE
     # immune / ESTIMATE combined / decomposition / adopted overall on
     # one purity axis with CI bars, plus TCGA cohort median reference.
-    print("[plot] Generating purity-method comparison plot...")
     methods_png = "%s-purity-methods.png" % prefix if prefix else "purity-methods.png"
     best_for_methods = decomp_results[0] if decomp_results else None
-    plot_purity_method_comparison(
-        analysis["purity"],
-        save_to_filename=methods_png,
-        save_dpi=output_dpi,
-        decomposition_result=best_for_methods,
-    )
-    _plt.close("all")
+    if plot_ctx.enabled:
+        print("[plot] Generating purity-method comparison plot...")
+        plot_purity_method_comparison(
+            analysis["purity"],
+            save_to_filename=methods_png,
+            save_dpi=output_dpi,
+            decomposition_result=best_for_methods,
+        )
+        _plt.close("all")
 
     # Scatter plots: sample vs pan-cancer reference
-    print("[plot] Generating sample vs cancer scatter plots...")
     scatter_pdf = "%s-vs-cancer.pdf" % prefix if prefix else "vs-cancer.pdf"
-    plot_sample_vs_cancer(
-        df_expr,
-        # #83: use the resolved (possibly auto-detected and decomp-
-        # promoted) cancer type so the scatter agrees with the
-        # summary/purity outputs. Previously fell back to the raw CLI
-        # argument, which for the default auto-detect path meant the
-        # pan-cancer mean instead of the inferred tumor type.
-        cancer_type=effective_cancer_type,
-        save_to_filename=scatter_pdf,
-        save_dpi=output_dpi,
-        always_label_genes=forced_labels,
-    )
-    _plt.close("all")
+    if plot_ctx.enabled:
+        print("[plot] Generating sample vs cancer scatter plots...")
+        plot_sample_vs_cancer(
+            df_expr,
+            # #83: use the resolved (possibly auto-detected and decomp-
+            # promoted) cancer type so the scatter agrees with the
+            # summary/purity outputs. Previously fell back to the raw CLI
+            # argument, which for the default auto-detect path meant the
+            # pan-cancer mean instead of the inferred tumor type.
+            cancer_type=effective_cancer_type,
+            save_to_filename=scatter_pdf,
+            save_dpi=output_dpi,
+            always_label_genes=forced_labels,
+        )
+        _plt.close("all")
 
     # Therapy target tissue expression / safety
-    print("[plot] Generating therapy target tissue expression...")
     tissue_pdf = "%s-target-tissues.pdf" % prefix if prefix else "target-tissues.pdf"
     curated_target_symbols = set(forced_labels or [])
-    try:
-        panel_code_for_tissues, panel_subtype_for_tissues = (
-            cancer_key_genes_lookup_for_analysis(effective_cancer_type, analysis)
-        )
-        target_panel_for_tissues = (
-            cancer_therapy_targets(
-                panel_code_for_tissues, subtype=panel_subtype_for_tissues
+    if plot_ctx.enabled:
+        print("[plot] Generating therapy target tissue expression...")
+        try:
+            panel_code_for_tissues, panel_subtype_for_tissues = (
+                cancer_key_genes_lookup_for_analysis(effective_cancer_type, analysis)
             )
-            if panel_subtype_for_tissues
-            else cancer_therapy_targets(panel_code_for_tissues)
-        )
-        target_panel_for_tissues = filter_current_therapy_targets(
-            target_panel_for_tissues
-        )
-        if target_panel_for_tissues is not None and not target_panel_for_tissues.empty:
+            target_panel_for_tissues = (
+                cancer_therapy_targets(
+                    panel_code_for_tissues, subtype=panel_subtype_for_tissues
+                )
+                if panel_subtype_for_tissues
+                else cancer_therapy_targets(panel_code_for_tissues)
+            )
+            target_panel_for_tissues = filter_current_therapy_targets(
+                target_panel_for_tissues
+            )
+            if target_panel_for_tissues is not None and not target_panel_for_tissues.empty:
+                curated_target_symbols.update(
+                    str(sym).strip()
+                    for sym in target_panel_for_tissues.get("symbol", [])
+                    if str(sym).strip()
+                )
             curated_target_symbols.update(
-                str(sym).strip()
-                for sym in target_panel_for_tissues.get("symbol", [])
-                if str(sym).strip()
+                cancer_biomarker_genes(
+                    panel_code_for_tissues, subtype=panel_subtype_for_tissues
+                )
+                if panel_subtype_for_tissues
+                else cancer_biomarker_genes(panel_code_for_tissues)
             )
-        curated_target_symbols.update(
-            cancer_biomarker_genes(
-                panel_code_for_tissues, subtype=panel_subtype_for_tissues
-            )
-            if panel_subtype_for_tissues
-            else cancer_biomarker_genes(panel_code_for_tissues)
+        except Exception:
+            pass
+        plot_therapy_target_tissues(
+            df_expr,
+            top_k=therapy_target_top_k,
+            tpm_threshold=therapy_target_tpm_threshold,
+            extra_symbols=curated_target_symbols,
+            save_to_filename=tissue_pdf,
+            save_dpi=output_dpi,
         )
-    except Exception:
-        pass
-    plot_therapy_target_tissues(
-        df_expr,
-        top_k=therapy_target_top_k,
-        tpm_threshold=therapy_target_tpm_threshold,
-        extra_symbols=curated_target_symbols,
-        save_to_filename=tissue_pdf,
-        save_dpi=output_dpi,
-    )
     deprecated_figures_dir = Path(prefix).parent / "figures" / "deprecated"
-    if deprecated_figures:
+    if plot_ctx.enabled and deprecated_figures:
         deprecated_figures_dir.mkdir(parents=True, exist_ok=True)
         deprecated_tissue_png = (
             deprecated_figures_dir / f"{Path(prefix).name}-target-tissues.png"
@@ -3143,7 +3184,8 @@ def _analyze_body(run: AnalyzeRun):
             )
         except Exception as exc:
             print(f"[plot] deprecated target-safety failed: {exc}")
-    _plt.close("all")
+    if plot_ctx.enabled:
+        _plt.close("all")
 
     # Cancer-type signature gene grids (``plot_cancer_type_genes`` +
     # ``plot_cancer_type_disjoint_genes``) were removed from the default
@@ -3154,72 +3196,85 @@ def _analyze_body(run: AnalyzeRun):
     # Sample-among-reference context: emit a global normal-inclusive MDS plus
     # a ranked nearest-reference distance plot. The MDS gives spatial context;
     # the ranked plot preserves the actual sample-to-reference distances.
-    print("[plot] Generating pan-reference MDS embedding...")
     mds_png = "%s-reference-mds.png" % prefix
-    plot_cancer_type_mds(
-        df_expr,
-        method="panref",
-        include_normals=True,
-        include_subtypes=True,
-        label_nearest_cancers=5,
-        label_nearest_normals=5,
-        label_all=False,
-        save_to_filename=mds_png,
-        save_dpi=output_dpi,
-    )
     neighborhood_png = "%s-reference-neighborhood.png" % prefix
-    print("[plot] Generating nearest-reference distance ranking...")
-    plot_cancer_type_neighborhood(
-        df_expr,
-        method="panref",
-        include_normals=True,
-        include_subtypes=True,
-        label_nearest_cancers=5,
-        label_nearest_normals=5,
-        label_all=False,
-        focus_nearest_cancers=25,
-        focus_nearest_normals=10,
-        save_to_filename=neighborhood_png,
-        save_dpi=output_dpi,
-    )
     embedding_pngs = [mds_png, neighborhood_png]
-    _plt.close("all")
+    if plot_ctx.enabled:
+        print("[plot] Generating pan-reference MDS embedding...")
+        plot_cancer_type_mds(
+            df_expr,
+            method="panref",
+            include_normals=True,
+            include_subtypes=True,
+            label_nearest_cancers=5,
+            label_nearest_normals=5,
+            label_all=False,
+            save_to_filename=mds_png,
+            save_dpi=output_dpi,
+        )
+        print("[plot] Generating nearest-reference distance ranking...")
+        plot_cancer_type_neighborhood(
+            df_expr,
+            method="panref",
+            include_normals=True,
+            include_subtypes=True,
+            label_nearest_cancers=5,
+            label_nearest_normals=5,
+            label_all=False,
+            focus_nearest_cancers=25,
+            focus_nearest_normals=10,
+            save_to_filename=neighborhood_png,
+            save_dpi=output_dpi,
+        )
+        _plt.close("all")
 
     # Canonical target screen plus CTA/subtype drill-down plots.
-    from .plot_target_deep_dive import (
-        plot_actionable_targets,
-        plot_cta_deep_dive,
-    )
-    from .plot_subtype_signature import plot_subtype_signature
-
     p_est = purity.get("overall_estimate")
-    try:
-        targets_deep_png = "%s-actionable-targets.png" % prefix
-        plot_actionable_targets(
-            df_expr,
-            cancer_type=effective_cancer_type,
-            purity_estimate=p_est,
-            save_to_filename=targets_deep_png,
-            save_dpi=output_dpi,
+    targets_deep_png = None
+    cta_deep_png = None
+    subtype_png = None
+    if plot_ctx.enabled:
+        from .plot_target_deep_dive import (
+            plot_actionable_targets,
+            plot_cta_deep_dive,
         )
-        print(f"[plot] Saved actionable targets to {targets_deep_png}")
-    except Exception as exc:
-        print(f"[plot] actionable targets failed: {exc}")
-        targets_deep_png = None
+        from .plot_subtype_signature import plot_subtype_signature
 
-    try:
-        cta_deep_png = "%s-cta-deep-dive.png" % prefix
-        plot_cta_deep_dive(
-            df_expr,
-            cancer_type=effective_cancer_type,
-            purity_estimate=p_est,
-            save_to_filename=cta_deep_png,
-            save_dpi=output_dpi,
-        )
-        print(f"[plot] Saved CTA deep dive to {cta_deep_png}")
-    except Exception as exc:
-        print(f"[plot] CTA deep dive failed: {exc}")
-        cta_deep_png = None
+        try:
+            targets_deep_png = "%s-actionable-targets.png" % prefix
+            fig = plot_actionable_targets(
+                df_expr,
+                cancer_type=effective_cancer_type,
+                purity_estimate=p_est,
+                save_to_filename=targets_deep_png,
+                save_dpi=output_dpi,
+            )
+            if fig is not None:
+                print(f"[plot] Saved actionable targets to {targets_deep_png}")
+            else:
+                targets_deep_png = None
+            _plt.close("all")
+        except Exception as exc:
+            print(f"[plot] actionable targets failed: {exc}")
+            targets_deep_png = None
+
+        try:
+            cta_deep_png = "%s-cta-deep-dive.png" % prefix
+            fig = plot_cta_deep_dive(
+                df_expr,
+                cancer_type=effective_cancer_type,
+                purity_estimate=p_est,
+                save_to_filename=cta_deep_png,
+                save_dpi=output_dpi,
+            )
+            if fig is not None:
+                print(f"[plot] Saved CTA deep dive to {cta_deep_png}")
+            else:
+                cta_deep_png = None
+            _plt.close("all")
+        except Exception as exc:
+            print(f"[plot] CTA deep dive failed: {exc}")
+            cta_deep_png = None
 
     # The pre-#108 ``plot_tumor_attribution`` (reference-based 2-color
     # tumor-vs-TME view) was removed from the default plot set in
@@ -3231,22 +3286,23 @@ def _analyze_body(run: AnalyzeRun):
     attrib_targets_png = None
     attrib_cta_png = None
 
-    subtype_png = None
-    try:
-        subtype_png = "%s-subtype-signature.png" % prefix
-        fig = plot_subtype_signature(
-            df_expr,
-            cancer_type=effective_cancer_type,
-            save_to_filename=subtype_png,
-            save_dpi=output_dpi,
-        )
-        if fig is None:
+    if plot_ctx.enabled:
+        try:
+            subtype_png = "%s-subtype-signature.png" % prefix
+            fig = plot_subtype_signature(
+                df_expr,
+                cancer_type=effective_cancer_type,
+                save_to_filename=subtype_png,
+                save_dpi=output_dpi,
+            )
+            if fig is None:
+                subtype_png = None
+            else:
+                print(f"[plot] Saved subtype signature to {subtype_png}")
+            _plt.close("all")
+        except Exception as exc:
+            print(f"[plot] subtype signature failed: {exc}")
             subtype_png = None
-        else:
-            print(f"[plot] Saved subtype signature to {subtype_png}")
-    except Exception as exc:
-        print(f"[plot] subtype signature failed: {exc}")
-        subtype_png = None
 
     _plt.close("all")
 
@@ -3265,7 +3321,7 @@ def _analyze_body(run: AnalyzeRun):
     # Cancer-type-specific gene set plot (only when --cancer-type specified
     # and backed by the pan-cancer expression reference).
     ct_png = None
-    if analysis_cancer_type:
+    if plot_ctx.enabled and analysis_cancer_type:
         from .plot import resolve_cancer_type
 
         code = resolve_cancer_type(analysis_cancer_type)
@@ -3288,7 +3344,7 @@ def _analyze_body(run: AnalyzeRun):
             )
 
     # Purity-adjusted tumor expression analysis (9-point ranges, one PNG per category)
-    print("[plot] Generating tumor expression range analysis...")
+    print("[analysis] Generating tumor expression range analysis...")
     purity_dict = effective_purity
     adj_pngs = []
     audit_only_pngs = []
@@ -3339,23 +3395,24 @@ def _analyze_body(run: AnalyzeRun):
             "alteration_effects",
             outputs=alteration_effect_summary,
         )
-        for cat_key, cat_slug in _range_plot_categories:
-            cat_png = (
-                "%s-purity-%s.png" % (prefix, cat_slug)
-                if prefix
-                else "purity-%s.png" % cat_slug
-            )
-            plot_tumor_expression_ranges(
-                ranges_df,
-                purity_result=purity_dict,
-                cancer_type=effective_cancer_type,
-                top_n=15,
-                categories=[cat_key],
-                save_to_filename=cat_png,
-                save_dpi=output_dpi,
-            )
-            adj_pngs.append(cat_png)
-            _plt.close("all")
+        if plot_ctx.enabled:
+            for cat_key, cat_slug in _range_plot_categories:
+                cat_png = (
+                    "%s-purity-%s.png" % (prefix, cat_slug)
+                    if prefix
+                    else "purity-%s.png" % cat_slug
+                )
+                plot_tumor_expression_ranges(
+                    ranges_df,
+                    purity_result=purity_dict,
+                    cancer_type=effective_cancer_type,
+                    top_n=15,
+                    categories=[cat_key],
+                    save_to_filename=cat_png,
+                    save_dpi=output_dpi,
+                )
+                adj_pngs.append(cat_png)
+                _plt.close("all")
 
         # Per-target compositional attribution (#108). One PNG per
         # category showing the per-gene tumor + compartment
@@ -3364,7 +3421,8 @@ def _analyze_body(run: AnalyzeRun):
         # is written, which the CLI respects by not appending to
         # adj_pngs.
         if (
-            "attribution" in ranges_df.columns
+            plot_ctx.enabled
+            and "attribution" in ranges_df.columns
             and ranges_df["attribution"]
             .apply(lambda v: isinstance(v, dict) and len(v) > 0)
             .any()
@@ -3392,7 +3450,8 @@ def _analyze_body(run: AnalyzeRun):
         # This is mainly provenance/debug material, so keep it out of
         # the main all-figures packet and reserve it for figure-audit.
         if (
-            "subtype_refined" in ranges_df.columns
+            plot_ctx.enabled
+            and "subtype_refined" in ranges_df.columns
             and ranges_df["subtype_refined"].astype(bool).any()
         ):
             from .plot_tumor_expr import plot_subtype_attribution
@@ -3419,7 +3478,8 @@ def _analyze_body(run: AnalyzeRun):
         # active. Separate plots rather than a composite figure per the
         # project's crowding preference.
         if (
-            "matched_normal_tpm" in ranges_df.columns
+            plot_ctx.enabled
+            and "matched_normal_tpm" in ranges_df.columns
             and (ranges_df["matched_normal_tpm"].astype(float) > 0).any()
         ):
             for cat_key, cat_slug in _attribution_categories:
@@ -3474,7 +3534,7 @@ def _analyze_body(run: AnalyzeRun):
                     panel_code,
                     target_panel=target_panel,
                 )
-                if targets_deep_png:
+                if plot_ctx.enabled and targets_deep_png:
                     try:
                         fig = plot_actionable_targets(
                             df_expr,
@@ -3495,67 +3555,68 @@ def _analyze_body(run: AnalyzeRun):
                         print(
                             f"[plot] actionable targets refresh failed: {action_plot_err}"
                         )
-            priority_targets_png = (
-                "%s-priority-targets.png" % prefix if prefix else "priority-targets.png"
-            )
-            fig = plot_priority_targets(
-                ranges_df,
-                cancer_type=panel_code
-                if target_panel is not None
-                else effective_cancer_type,
-                target_panel=(
-                    target_panel.reset_index(drop=True)
-                    if target_panel is not None
-                    else None
-                ),
-                df_gene_expr=df_expr,
-                target_symbols=actionable_genes,
-                top_n=len(actionable_genes) if actionable_genes else 12,
-                analysis=analysis,
-                disease_state=disease_state_for_priority,
-                save_to_filename=priority_targets_png,
-                save_dpi=output_dpi,
-            )
-            if fig is not None:
-                adj_pngs.append(priority_targets_png)
-                print(f"[plot] Saved priority targets to {priority_targets_png}")
-            else:
-                priority_targets_png = None
-            _plt.close("all")
-
-            priority_target_context_png = (
-                "%s-priority-target-context.png" % prefix
-                if prefix
-                else "priority-target-context.png"
-            )
-            fig = plot_priority_target_context(
-                ranges_df,
-                cancer_type=panel_code
-                if target_panel is not None
-                else effective_cancer_type,
-                target_panel=(
-                    target_panel.reset_index(drop=True)
-                    if target_panel is not None
-                    else None
-                ),
-                df_gene_expr=df_expr,
-                target_symbols=actionable_genes,
-                top_n=len(actionable_genes) if actionable_genes else 12,
-                analysis=analysis,
-                disease_state=disease_state_for_priority,
-                save_to_filename=priority_target_context_png,
-                save_dpi=output_dpi,
-            )
-            if fig is not None:
-                adj_pngs.append(priority_target_context_png)
-                print(
-                    f"[plot] Saved priority target context to {priority_target_context_png}"
+            if plot_ctx.enabled:
+                priority_targets_png = (
+                    "%s-priority-targets.png" % prefix if prefix else "priority-targets.png"
                 )
-            else:
-                priority_target_context_png = None
-            _plt.close("all")
+                fig = plot_priority_targets(
+                    ranges_df,
+                    cancer_type=panel_code
+                    if target_panel is not None
+                    else effective_cancer_type,
+                    target_panel=(
+                        target_panel.reset_index(drop=True)
+                        if target_panel is not None
+                        else None
+                    ),
+                    df_gene_expr=df_expr,
+                    target_symbols=actionable_genes,
+                    top_n=len(actionable_genes) if actionable_genes else 12,
+                    analysis=analysis,
+                    disease_state=disease_state_for_priority,
+                    save_to_filename=priority_targets_png,
+                    save_dpi=output_dpi,
+                )
+                if fig is not None:
+                    adj_pngs.append(priority_targets_png)
+                    print(f"[plot] Saved priority targets to {priority_targets_png}")
+                else:
+                    priority_targets_png = None
+                _plt.close("all")
 
-            if deprecated_figures:
+                priority_target_context_png = (
+                    "%s-priority-target-context.png" % prefix
+                    if prefix
+                    else "priority-target-context.png"
+                )
+                fig = plot_priority_target_context(
+                    ranges_df,
+                    cancer_type=panel_code
+                    if target_panel is not None
+                    else effective_cancer_type,
+                    target_panel=(
+                        target_panel.reset_index(drop=True)
+                        if target_panel is not None
+                        else None
+                    ),
+                    df_gene_expr=df_expr,
+                    target_symbols=actionable_genes,
+                    top_n=len(actionable_genes) if actionable_genes else 12,
+                    analysis=analysis,
+                    disease_state=disease_state_for_priority,
+                    save_to_filename=priority_target_context_png,
+                    save_dpi=output_dpi,
+                )
+                if fig is not None:
+                    adj_pngs.append(priority_target_context_png)
+                    print(
+                        f"[plot] Saved priority target context to {priority_target_context_png}"
+                    )
+                else:
+                    priority_target_context_png = None
+                _plt.close("all")
+
+            if plot_ctx.enabled and deprecated_figures:
                 deprecated_figures_dir.mkdir(parents=True, exist_ok=True)
                 deprecated_purity_targets_png = (
                     deprecated_figures_dir / f"{Path(prefix).name}-purity-targets.png"
@@ -3606,7 +3667,6 @@ def _analyze_body(run: AnalyzeRun):
         # support tables.
         try:
             from .brief import build_summary
-            from .provenance import plot_provenance_funnel
 
             disease_state_for_summary = compose_disease_state_narrative(analysis)
             sample_id = sample_display_id or None
@@ -3643,16 +3703,19 @@ def _analyze_body(run: AnalyzeRun):
                 f.write(evidence_md)
             print(f"[report] Saved {summary_path}")
             print(f"[report] Saved {evidence_path}")
-            prov_png = "%s-provenance.png" % prefix if prefix else "provenance.png"
-            fig_out = plot_provenance_funnel(
-                analysis,
-                ranges_df,
-                decomp_results,
-                save_to_filename=prov_png,
-                save_dpi=output_dpi,
-            )
-            if fig_out:
-                print(f"[plot] Saved {prov_png}")
+            if plot_ctx.enabled:
+                from .provenance import plot_provenance_funnel
+
+                prov_png = "%s-provenance.png" % prefix if prefix else "provenance.png"
+                fig_out = plot_provenance_funnel(
+                    analysis,
+                    ranges_df,
+                    decomp_results,
+                    save_to_filename=prov_png,
+                    save_dpi=output_dpi,
+                )
+                if fig_out:
+                    print(f"[plot] Saved {prov_png}")
         except Exception as brief_err:
             print(f"[warn] Summary / evidence rendering failed: {brief_err}")
     except Exception as e:
@@ -3660,6 +3723,10 @@ def _analyze_body(run: AnalyzeRun):
         import traceback
 
         traceback.print_exc()
+
+    if not plot_ctx.enabled:
+        print("[output] --no-figures: skipped figure PDF collection")
+        return
 
     # Collect all figures into one PDF (native resolution)
     from PIL import Image, ImageDraw, ImageFont
@@ -3803,8 +3870,6 @@ def _analyze_body(run: AnalyzeRun):
             all_pdf, save_all=True, append_images=images[1:], resolution=output_dpi
         )
         print(f"Saved {all_pdf} ({len(images)} pages)")
-    elif not plot_ctx.enabled:
-        print("[output] --no-figures: skipped figure PDF collection")
     else:
         print("No images to collect into PDF")
 
@@ -4224,6 +4289,26 @@ def _purity_metric_label(sample_mode):
     return "tumor purity"
 
 
+def _format_percent(value) -> str:
+    try:
+        if value is None:
+            return ""
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _format_purity_interval(estimate, lower, upper) -> str:
+    estimate_text = _format_percent(estimate)
+    if not estimate_text:
+        return "not estimated"
+    lower_text = _format_percent(lower)
+    upper_text = _format_percent(upper)
+    if lower_text and upper_text:
+        return f"{estimate_text} [{lower_text}-{upper_text}]"
+    return estimate_text
+
+
 def _purity_ci_phrase(purity):
     """Render the purity estimate and heuristic range with an explicit low-confidence
     tag when the interval is so wide it provides almost no constraint
@@ -4233,6 +4318,8 @@ def _purity_ci_phrase(purity):
     est = purity["overall_estimate"]
     lo = purity["overall_lower"]
     hi = purity["overall_upper"]
+    if est is None or lo is None or hi is None:
+        return "**not estimated**"
     tier = _ci_confidence_tier(lo, hi)
     core = f"**{est:.0%}** (model interval {lo:.0%}–{hi:.0%})"
     if tier == "degenerate":
@@ -4296,6 +4383,26 @@ def _decomposition_fraction_label(sample_mode):
 
 
 def _target_report_mode_intro(sample_mode, cancer_code, p_lo, p_mid, p_hi):
+    if p_lo is None or p_mid is None or p_hi is None:
+        if sample_mode == "pure":
+            return (
+                "Population-expression range using purity-like consistency "
+                "**not estimated**. In pure mode these values are close to direct "
+                "observed cellular expression rather than a bulk tumor-vs-background "
+                f"deconvolution against {cancer_code} TCGA.\n"
+            )
+        if sample_mode == "heme":
+            return (
+                "Malignant-lineage expression range using fraction proxy "
+                "**not estimated**. In heme mode these values reflect "
+                "malignant-lineage-enriched expression under hematopoietic "
+                "background assumptions rather than a strict epithelial "
+                "tumor-vs-immune subtraction.\n"
+            )
+        return (
+            "Purity-adjusted tumor expression range using purity "
+            "**not estimated** (low / estimate / high).\n"
+        )
     if sample_mode == "pure":
         return (
             f"Population-expression range using purity-like consistency **{p_lo:.0%} / {p_mid:.0%} / {p_hi:.0%}** "
@@ -4483,6 +4590,44 @@ _MET_TEMPLATE_TO_SITE_HINT = {
 _WEAK_MET_SITE_WARNING = "Metastatic-site evidence below template-specific threshold"
 
 
+def _canonical_met_site_hint(value):
+    text = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not text:
+        return None
+    if text in set(_MET_TEMPLATE_TO_SITE_HINT.values()):
+        return text
+    if text in {"cns", "central_nervous_system", "central_nervous"}:
+        return "brain"
+    return _MET_SITE_TISSUE_TO_HINT.get(text)
+
+
+def _primary_site_hints_for_analysis(analysis=None, cancer_code=None):
+    hints = {
+        hint
+        for hint in (
+            _canonical_met_site_hint(tissue)
+            for tissue in _primary_tissues_for_analysis(
+                analysis=analysis,
+                cancer_code=cancer_code,
+            )
+        )
+        if hint
+    }
+    try:
+        desc, _ = _analysis_primary_descriptor(
+            analysis=analysis,
+            cancer_code=cancer_code,
+        )
+    except Exception:
+        desc = ""
+    desc = str(desc or "").lower().replace("-", "_").replace(" ", "_")
+    for template, site_hint in _MET_TEMPLATE_TO_SITE_HINT.items():
+        keywords = _TEMPLATE_PRIMARY_COMPATIBILITY.get(template, ())
+        if any(str(keyword).lower() in desc for keyword in keywords):
+            hints.add(site_hint)
+    return hints
+
+
 def _primary_tissues_for_analysis(analysis=None, cancer_code=None):
     lookup_code = None
     if analysis is not None:
@@ -4496,9 +4641,23 @@ def _primary_tissues_for_analysis(analysis=None, cancer_code=None):
     try:
         from .decomposition.templates import get_template_host_tissues
 
-        return get_template_host_tissues("solid_primary", cancer_type=lookup_code)
+        tissues = get_template_host_tissues("solid_primary", cancer_type=lookup_code)
+        if tissues:
+            return tissues
     except Exception:
-        return []
+        pass
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        reg = cancer_type_registry()
+        match = reg[reg["code"].astype(str) == str(lookup_code)]
+        if not match.empty:
+            tissue = str(match.iloc[0].get("primary_tissue") or "").strip()
+            if tissue and tissue.lower() != "nan":
+                return [tissue]
+    except Exception:
+        pass
+    return []
 
 
 def _infer_likely_met_site_context(
@@ -4540,6 +4699,11 @@ def _infer_likely_met_site_context(
         cancer_code=cancer_code,
     )
     if top_tissue in set(primary_tissues):
+        return None
+    if site_hint in _primary_site_hints_for_analysis(
+        analysis=analysis,
+        cancer_code=cancer_code,
+    ):
         return None
 
     score_by_tissue = {
@@ -4586,15 +4750,11 @@ def _decomposition_met_site_is_supported(decomp_result, *, analysis=None):
     template = str(getattr(decomp_result, "template", "") or "")
     if not template.startswith("met_"):
         return False
-    if analysis is not None and _template_primary_compatible(
-        template,
-        analysis=analysis,
-        cancer_code=analysis.get("cancer_type"),
-    ):
-        return False
     site_evidence = getattr(decomp_result, "site_evidence", None)
     site_supported = _site_evidence_supports_met_site(site_evidence)
     warnings = getattr(decomp_result, "warnings", None) or []
+    if any("No non-tumor components in template" in str(warning) for warning in warnings):
+        return False
     explicit_site_context = (
         isinstance(site_evidence, dict) and site_evidence.get("basis") == "site_hint"
     )
@@ -4619,13 +4779,33 @@ def _decomposition_met_site_is_supported(decomp_result, *, analysis=None):
     return True
 
 
+def _decomposition_met_site_can_propagate(decomp_result, *, analysis=None):
+    """Whether a met template should act as a literal metastatic site.
+
+    A primary-compatible template can be well-supported evidence for the
+    background/site *fit* (for example GBM with a brain template) without being
+    evidence of metastasis. Keep that propagation decision separate from the
+    evidence-support decision used by report summaries.
+    """
+    if not _decomposition_met_site_is_supported(decomp_result, analysis=analysis):
+        return False
+    template = str(getattr(decomp_result, "template", "") or "")
+    if analysis is not None and _template_primary_compatible(
+        template,
+        analysis=analysis,
+        cancer_code=analysis.get("cancer_type"),
+    ):
+        return False
+    return True
+
+
 def _supported_decomposition_met_site(analysis):
     if not isinstance(analysis, dict):
         return None
     decomp_results = analysis.get("decomposition_results") or []
     if decomp_results:
         best = decomp_results[0]
-        if _decomposition_met_site_is_supported(best, analysis=analysis):
+        if _decomposition_met_site_can_propagate(best, analysis=analysis):
             return _MET_TEMPLATE_TO_SITE_HINT.get(str(getattr(best, "template", "")))
     decomposition = analysis.get("decomposition") or {}
     supported = decomposition.get("supported_met_site")
@@ -4639,6 +4819,100 @@ def _effective_met_site_for_background(analysis):
         or ((analysis.get("inferred_site_context") or {}).get("site"))
         or _supported_decomposition_met_site(analysis)
     )
+
+
+def _decomposition_matches_report_reference(decomp_result, *, reference_code, report_code):
+    """Whether a decomposition hypothesis is compatible with the report label."""
+    code = str(getattr(decomp_result, "cancer_type", "") or "").strip()
+    reference_code = str(reference_code or "").strip()
+    report_code = str(report_code or "").strip()
+    if not code:
+        return False
+    if code in {reference_code, report_code}:
+        return True
+    try:
+        from .analyze.cancer_type_context import registry_parent_code
+
+        return bool(
+            (report_code and registry_parent_code(report_code) == code)
+            or (code and registry_parent_code(code) in {reference_code, report_code})
+        )
+    except Exception:
+        return False
+
+
+def _decomposition_is_acceptable_background_model(
+    decomp_result,
+    *,
+    analysis=None,
+    report_code=None,
+):
+    template = str(getattr(decomp_result, "template", "") or "")
+    if not template.startswith("met_"):
+        return True
+    if _template_primary_compatible(
+        template,
+        analysis=analysis,
+        cancer_code=report_code or (analysis or {}).get("cancer_type"),
+    ):
+        return True
+    return _decomposition_met_site_is_supported(decomp_result, analysis=analysis)
+
+
+def _prioritize_report_compatible_decomposition(
+    decomp_results,
+    *,
+    reference_code,
+    report_code,
+    enabled,
+    analysis=None,
+):
+    """Put the report-compatible decomposition first for target attribution.
+
+    The decomposer scores fit hypotheses, not diagnoses. For a known supplied
+    or refined report label, a discordant template can remain useful as an
+    uncertainty signal, but it should not silently become the background model
+    for target subtraction when a reference-compatible fit exists.
+    """
+    if not enabled or not decomp_results:
+        return decomp_results
+    first = decomp_results[0]
+    if _decomposition_matches_report_reference(
+        first, reference_code=reference_code, report_code=report_code
+    ) and _decomposition_is_acceptable_background_model(
+        first, analysis=analysis, report_code=report_code
+    ):
+        return decomp_results
+    compatible = [
+        row
+        for row in decomp_results
+        if _decomposition_matches_report_reference(
+            row, reference_code=reference_code, report_code=report_code
+        )
+        and _decomposition_is_acceptable_background_model(
+            row, analysis=analysis, report_code=report_code
+        )
+    ]
+    if not compatible:
+        return decomp_results
+    selected = max(compatible, key=lambda row: float(getattr(row, "score", 0.0) or 0.0))
+    selected_code = str(getattr(selected, "cancer_type", "") or "").strip()
+    reference_code = str(reference_code or "").strip()
+    report_code = str(report_code or "").strip()
+    if selected_code == reference_code and selected_code != report_code:
+        warning = (
+            "Selected fallback-reference decomposition for target/background "
+            f"attribution; raw best fit was {first.cancer_type}/{first.template}"
+        )
+    else:
+        warning = (
+            "Selected report-compatible decomposition for target/background "
+            f"attribution; raw best fit was {first.cancer_type}/{first.template}"
+        )
+    warnings = getattr(selected, "warnings", None)
+    if isinstance(warnings, list) and warning not in warnings:
+        warnings.append(warning)
+    return [selected] + [row for row in decomp_results if row is not selected]
 
 
 def _constrain_purity_interval_with_decomposition(purity, decomp_result):
@@ -4721,6 +4995,12 @@ def _template_primary_compatible(template_name, *, analysis=None, cancer_code=No
     template_text = str(template_name or "").strip()
     if not template_text.startswith("met_"):
         return False
+    site_hint = _MET_TEMPLATE_TO_SITE_HINT.get(template_text)
+    if site_hint and site_hint in _primary_site_hints_for_analysis(
+        analysis=analysis,
+        cancer_code=cancer_code,
+    ):
+        return True
     desc, _ = _analysis_primary_descriptor(analysis=analysis, cancer_code=cancer_code)
     keywords = _TEMPLATE_PRIMARY_COMPATIBILITY.get(template_text, ())
     return any(keyword in desc for keyword in keywords)
@@ -4794,8 +5074,12 @@ def _report_scope_cancer_type(cancer_type):
         from pirlygenes.gene_sets_cancer import cancer_type_registry
 
         reg = cancer_type_registry()
-        if code in set(reg["code"].astype(str)):
-            return code
+        codes_by_upper = {
+            str(reg_code).upper(): str(reg_code)
+            for reg_code in reg["code"].dropna().astype(str)
+        }
+        if code in codes_by_upper:
+            return codes_by_upper[code]
         match = reg[reg["name"].astype(str).str.lower() == norm]
         if not match.empty:
             return str(match.iloc[0]["code"])
@@ -4903,8 +5187,97 @@ def _apply_cancer_type_evidence(
     )
 
 
+def _apply_cancer_type_context_roles(analysis, cancer_type_context):
+    """Propagate resolved cancer-type roles to top-level analysis fields.
+
+    The report label, broad fallback reference, and best expression reference
+    are related but not interchangeable. Keeping them synchronized here avoids
+    downstream modules re-deriving subtly different answers.
+    """
+    report_code = cancer_type_context.code_for("report")
+    reference_code = (
+        cancer_type_context.code_for("reference")
+        or cancer_type_context.code_for("cohort")
+        or report_code
+    )
+    expression_code = (
+        cancer_type_context.code_for("expression")
+        or reference_code
+        or report_code
+    )
+    if reference_code:
+        analysis["reference_cancer_type"] = reference_code
+        analysis["fallback_expression_reference_cancer_type"] = reference_code
+    if expression_code:
+        analysis["expression_reference_cancer_type"] = expression_code
+    if expression_code == report_code and expression_code == reference_code:
+        role = "same_reference"
+    elif expression_code == report_code and cancer_type_context.best_expression_direct:
+        role = "report_label_exact"
+    elif expression_code == reference_code:
+        role = "fallback_reference"
+    else:
+        role = "related_exact_reference"
+    analysis["expression_reference_role"] = role
+    analysis["expression_reference_is_direct"] = bool(
+        cancer_type_context.best_expression_direct
+    )
+
+
+@lru_cache(maxsize=256)
+def _has_operational_analysis_reference(code):
+    """Whether ``code`` can anchor purity/decomposition analysis directly.
+
+    A TCGA-style pan-cancer column is sufficient, but not required: some
+    pirlygenes cohorts (SCLC, NBL, MBL, RT, ...) have observed/deconvolved
+    expression references plus marker support even though they are absent from
+    the broad TCGA matrix. Those should still be usable as the analysis anchor
+    for a refined child label.
+    """
+    if not code:
+        return False
+    if _has_pan_cancer_expression_cohort(code):
+        return True
+    try:
+        from .analyze.cancer_type_context import expression_reference_options
+        from .tumor_purity import _has_direct_purity_markers
+
+        direct_refs = expression_reference_options(code, include_fallback=False)
+        has_deconvolved_ref = any(
+            record.source_kind == "deconvolved_tumor_reference"
+            for record in direct_refs
+        )
+        return has_deconvolved_ref and bool(_has_direct_purity_markers(code))
+    except Exception:
+        return False
+
+
+def _is_defining_fusion_label(code):
+    """True for rare labels whose diagnosis should stay report-scoped.
+
+    These may have exact expression references, but a broad lineage fallback can
+    still be useful for cohort-normalized plots/pathway context. NUT carcinoma
+    is the canonical case: the report label is NUTM, while squamous fallback
+    context remains helpful unless the fusion/diagnostic layer asks otherwise.
+    """
+    if not code:
+        return False
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        reg = cancer_type_registry()
+        match = reg[reg["code"].astype(str) == str(code)]
+        if match.empty:
+            return False
+        return str(match.iloc[0].get("fusion_driven") or "").strip().lower() == (
+            "defining"
+        )
+    except Exception:
+        return False
+
+
 def _registry_parent_analysis_scope(report_scope):
-    """Return the TCGA parent scope for a registry child label when available."""
+    """Return an operational parent scope for a registry child label."""
     if not report_scope:
         return None
     try:
@@ -4919,21 +5292,25 @@ def _registry_parent_analysis_scope(report_scope):
         if not parent:
             return None
         parent_code = resolve_cancer_type(parent)
-        # Only promote a concrete child to its registry parent when that parent
-        # is a REAL expression cohort of its own (own pan-cancer column or local
-        # deconvolved reference). A purely abstract grouping parent — one that
-        # exists only to bucket children, e.g. CRC over COAD/READ, or any umbrella
-        # with no cohort of its own — must NOT hijack the analysis scope:
-        # promoting COAD to CRC strips it of its expression/purity reference and
-        # crashes the purity resolver on a missing CRC_TPM column. Keep the child
-        # as its own scope instead. (brief.py applies the identical guard to the
-        # comparison code via expression_reference_options; sharing the check
-        # keeps the two scope resolvers from disagreeing.)
-        from .analyze import expression_reference_options
-
-        if not expression_reference_options(parent_code, include_fallback=False):
+        if not _has_operational_analysis_reference(parent_code):
             return None
         return parent_code
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _pan_cancer_expression_cohort_codes():
+    """Codes with actual broad TPM columns in the analysis reference matrix."""
+    try:
+        from .reference import pan_cancer_expression
+
+        df = pan_cancer_expression(technical_rna_normalize=True)
+        return frozenset(
+            str(col).removesuffix("_TPM")
+            for col in df.columns
+            if str(col).endswith("_TPM")
+        )
     except Exception:
         return None
 
@@ -4942,12 +5319,12 @@ def _has_pan_cancer_expression_cohort(code):
     """True when ``code`` has a broad pan-cancer TPM column."""
     if not code:
         return False
-    try:
-        return str(code).strip().upper() in set(cancer_types())
-    except Exception:
+    codes = _pan_cancer_expression_cohort_codes()
+    if codes is None:
         # Preserve older control flow if the reference loader is unavailable;
         # the downstream lookup will surface the original failure.
         return True
+    return str(code).strip().upper() in codes
 
 
 def _analysis_input_cancer_type(cancer_type):
@@ -4984,6 +5361,14 @@ def _analysis_input_cancer_type(cancer_type):
     if not _has_pan_cancer_expression_cohort(resolved):
         report_scope = _report_scope_cancer_type(resolved)
         if report_scope:
+            parent = _registry_parent_analysis_scope(report_scope)
+            if parent:
+                return parent, report_scope
+            if (
+                _has_operational_analysis_reference(resolved)
+                and not _is_defining_fusion_label(resolved)
+            ):
+                return resolved, None
             return None, report_scope
     if _is_registry_only_label(resolved):
         return None, resolved
@@ -5010,6 +5395,18 @@ def _is_registry_only_label(code):
         return source in {"LITERATURE_CURATED", ""}
     except Exception:
         return False
+
+
+def _infer_registry_report_scope_from_rna(df_expr, analysis):
+    """Infer rare non-TCGA report scopes from strong RNA surrogates.
+
+    This is intentionally hypothesis-level. It lets expression-only runs
+    surface NUT carcinoma when NUTM1 is ectopically expressed, but the
+    report still keeps the TCGA-backed RNA classifier as a cross-check.
+    """
+    from .rare_inference import infer_rare_cancer_report_scope_from_rna
+
+    return infer_rare_cancer_report_scope_from_rna(df_expr, analysis)
 
 
 def _analysis_constraints(
@@ -5183,15 +5580,24 @@ def _cancer_type_context_line(cancer_type_context):
     expression = cancer_type_context.label_for("expression")
     if not report:
         return ""
+    source_kind = str(
+        getattr(cancer_type_context, "best_expression_source_kind", "") or ""
+    )
+    if source_kind == "deconvolved_tumor_reference":
+        same_reference_label = "direct deconvolved tumor expression reference"
+    elif source_kind == "observed_bulk_reference":
+        same_reference_label = "direct observed expression reference"
+    else:
+        same_reference_label = "broad expression reference"
     if not cancer_type_context.uses_distinct_reference:
         return (
             f"- **Cancer label context**: {report} is used as both the report "
-            "label and the broad expression reference; no finer active subtype "
+            f"label and the {same_reference_label}; no finer active subtype "
             "is being carried."
         )
     line = (
         f"- **Cancer label context**: fine/report label is {report}; "
-        f"broad/fallback expression reference is {reference}"
+        f"fallback expression reference is {reference}"
     )
     if expression and expression != reference:
         line += (
@@ -5362,8 +5768,10 @@ def _target_reliability_series(df, *, category=None):
         return pd.Series(dtype=object)
     if len(df) == 0:
         return pd.Series(dtype=object, index=df.index)
+    from .common import ranges_records
+
     return pd.Series(
-        [target_reliability_status(row, category=category) for _, row in df.iterrows()],
+        [target_reliability_status(row, category=category) for row in ranges_records(df)],
         index=df.index,
     )
 
@@ -5451,15 +5859,16 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
 
     if candidate_trace:
         best = candidate_trace[0]
+        best_code = str(best.get("code") or "").strip()
         runner = candidate_trace[1] if len(candidate_trace) > 1 else None
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         supplied_discordant = (
             analysis.get("cancer_type_source") == "user-specified"
-            and str(best.get("code") or "").strip() != str(cancer_code).strip()
+            and best_code != str(cancer_code).strip()
         )
         evidence_selected_discordant = (
             analysis.get("cancer_type_source") == "auto-detected"
-            and str(best.get("code") or "").strip() != str(cancer_code).strip()
+            and best_code != str(cancer_code).strip()
             and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
         )
         if evidence_selected_discordant:
@@ -5468,12 +5877,19 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 "leading broad RNA candidate, but integrated evidence selected "
                 f"{_cancer_label(cancer_code)} as the report label"
             )
-        elif distinct_reference_used:
+        elif distinct_reference_used and best_code == str(reference_cancer_code).strip():
             sentence = (
                 f"- **RNA reference line**: {_cancer_label(best['code'])} is the "
-                "leading broad expression context used for cohort-normalized "
-                f"downstream analyses; {_cancer_label(cancer_code)} remains the "
-                "report label"
+                "active fallback expression/reference context for cohort-normalized "
+                f"downstream analyses; {_cancer_label(cancer_code)} remains the report label"
+            )
+        elif distinct_reference_used:
+            sentence = (
+                f"- **RNA classifier line**: {_cancer_label(best['code'])} is the "
+                "leading broad RNA candidate, but "
+                f"{_cancer_label(reference_cancer_code)} is the active fallback "
+                "expression/reference context; "
+                f"{_cancer_label(cancer_code)} remains the report label"
             )
         elif supplied_discordant:
             sentence = (
@@ -6864,8 +7280,8 @@ def _generate_text_reports(
     else:
         tier_suffix = ""
     lines.append(
-        f"- **Overall estimate**: {purity['overall_estimate']:.0%} "
-        f"({purity['overall_lower']:.0%}\u2013{purity['overall_upper']:.0%})"
+        "- **Overall estimate**: "
+        f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
         f"{tier_suffix}"
     )
     components = purity.get("components", {})
@@ -7631,7 +8047,7 @@ def _build_target_report(
             )
             if panel_code != cancer_code or panel_subtype:
                 lines.append(
-                    "*Subtype-resolved curation:* "
+                    "*Curation scope:* "
                     + subtype_curation_scope_note(
                         panel_code,
                         panel_subtype=panel_subtype,

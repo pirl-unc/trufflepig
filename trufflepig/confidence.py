@@ -273,35 +273,51 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
             f"{top_code} lineage-gene pattern"
         )
 
-    # 2. Geomean gap to the runner-up and 3rd-place. Within 15% of the
-    # runner-up is a tied 2-way call (downgrade by one tier). Within 15%
-    # of the 3rd-place candidate is a tied 3-way call (downgrade all the
-    # way to low / provisional). The relative-gap metric — 1 − cand/top —
-    # is invariant to the normalization scale of ``support_geomean`` so
-    # the threshold reads identically whether the trace stores raw
-    # geomeans (0.43, 0.42, …) or normalized scores (1.000, 0.891, …).
+    def _confidence_support(row):
+        for key in ("support_fraction_of_top", "support_rank_score", "support_geomean"):
+            try:
+                value = float(row.get(key) or 0.0)
+            except (TypeError, ValueError, AttributeError):
+                value = 0.0
+            if value > 0:
+                label = "post-gate support" if key != "support_geomean" else "geomean"
+                return value, label
+        return 0.0, "support"
+
+    # 2. Post-gate support gap to the strongest competitors. Within 15% of the
+    # runner-up is a tied 2-way call (downgrade by one tier). Within 15% of the
+    # 3rd-place candidate is a tied 3-way call (downgrade all the way to low /
+    # provisional). Confidence must not assume display order is support order:
+    # candidate traces can intentionally keep same-family alternatives adjacent,
+    # while ``support_fraction_of_top`` / ``support_rank_score`` carry the
+    # support metric that should drive confidence.
     if len(candidate_trace) >= 2:
-        top_gm = float(top.get("support_geomean") or 0.0)
-        second = candidate_trace[1]
-        second_gm = float(second.get("support_geomean") or 0.0)
-        third = candidate_trace[2] if len(candidate_trace) >= 3 else None
-        third_gm = float(third.get("support_geomean") or 0.0) if third else 0.0
+        top_support, support_label = _confidence_support(top)
+        competitors = sorted(
+            candidate_trace[1:],
+            key=lambda row: _confidence_support(row)[0],
+            reverse=True,
+        )
+        second = competitors[0]
+        second_support, _ = _confidence_support(second)
+        third = competitors[1] if len(competitors) >= 2 else None
+        third_support = _confidence_support(third)[0] if third else 0.0
 
-        def _rel_gap(cand_gm: float) -> float:
-            return 1.0 - cand_gm / top_gm if top_gm > 0 else 1.0
+        def _rel_gap(candidate_support: float) -> float:
+            return 1.0 - candidate_support / top_support if top_support > 0 else 1.0
 
-        gap_to_second = _rel_gap(second_gm)
-        gap_to_third = _rel_gap(third_gm) if third else 1.0
+        gap_to_second = _rel_gap(second_support)
+        gap_to_third = _rel_gap(third_support) if third else 1.0
         TIED_GAP_THRESHOLD = 0.15
 
-        if second_gm > 0 and gap_to_second <= TIED_GAP_THRESHOLD:
+        if second_support > 0 and gap_to_second <= TIED_GAP_THRESHOLD:
             second_code = second.get("code")
             if tier == "high":
                 tier = "moderate"
             reasons.append(
                 f"top candidate {top_code} beats runner-up {second_code} "
-                f"by only {gap_to_second * 100:.0f}% on geomean "
-                f"({top_gm:.3f} vs {second_gm:.3f}) — call is ambiguous"
+                f"by only {gap_to_second * 100:.0f}% on {support_label} "
+                f"({top_support:.3f} vs {second_support:.3f}) — call is ambiguous"
             )
             try:
                 second_concordance = float(second.get("lineage_concordance"))
@@ -322,13 +338,13 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
             # 3-way tie: third-place is also within threshold. The top-1
             # call is provisional regardless of which one of the three
             # the classifier picked.
-            if third and third_gm > 0 and gap_to_third <= TIED_GAP_THRESHOLD:
+            if third and third_support > 0 and gap_to_third <= TIED_GAP_THRESHOLD:
                 third_code = third.get("code")
                 tier = "low"
                 reasons.append(
                     f"3-way tied call: {top_code} / {second.get('code')} / "
                     f"{third_code} all within {TIED_GAP_THRESHOLD * 100:.0f}% on "
-                    f"geomean ({top_gm:.3f} / {second_gm:.3f} / {third_gm:.3f}) — "
+                    f"{support_label} ({top_support:.3f} / {second_support:.3f} / {third_support:.3f}) — "
                     f"treat the top label as provisional"
                 )
 

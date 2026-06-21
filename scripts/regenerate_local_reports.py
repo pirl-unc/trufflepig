@@ -30,6 +30,7 @@ import contextlib
 import datetime as dt
 import gc
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -62,7 +63,14 @@ _FLAGS_NO_VALUE = {
 }
 
 
-def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> list[str]:
+def _translate_command(
+    name,
+    run,
+    workspace: Path,
+    *,
+    blind: bool = False,
+    use_manifest_cancer_type: bool = False,
+) -> list[str]:
     """Translate a manifest ``command`` array into a trufflepig invocation.
 
     Two manifest formats are supported:
@@ -89,6 +97,12 @@ def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> li
     The output goes into ``workspace``; ``--workspace`` / ``--output-dir`` are
     substituted, and the input path comes from ``--sample`` (run form) or the
     trailing positional (analyze form).
+
+    Some current pirlygenes manifests are deliberately blind: the per-run
+    metadata has ``cancer_type`` but the replay command omits ``--cancer-type``.
+    ``use_manifest_cancer_type`` is the explicit disease-scoped QA mode for
+    those manifests: it injects the metadata label only when the command did
+    not already carry a clinical label.
     """
     cmd = [str(tok) for tok in run["command"]]
 
@@ -135,6 +149,14 @@ def _translate_command(name, run, workspace: Path, *, blind: bool = False) -> li
         if input_path is None:
             input_path = tok
         i += 1
+
+    if (
+        use_manifest_cancer_type
+        and not blind
+        and "--cancer-type" not in args_after
+        and run.get("cancer_type")
+    ):
+        args_after.extend(["--cancer-type", str(run["cancer_type"])])
 
     out = [
         sys.executable, "-m", "trufflepig.cli", "run",
@@ -196,6 +218,37 @@ def _run(name, cmd, log_path: Path) -> tuple[int, float]:
     return rc, elapsed
 
 
+def _iter_loggers():
+    yield logging.getLogger()
+    for logger in logging.Logger.manager.loggerDict.values():
+        if isinstance(logger, logging.Logger):
+            yield logger
+
+
+def _remove_logging_handlers_for_stream(stream=None) -> None:
+    """Drop logging handlers bound to a per-run log stream.
+
+    In-process report replay redirects stdout/stderr to a different file for
+    every sample. Some third-party libraries call ``logging.basicConfig`` while
+    stderr is redirected, which leaves a global handler pointing at that
+    per-sample file after it closes. The next sample can then emit noisy
+    ``ValueError: I/O operation on closed file`` logging tracebacks even though
+    the report succeeded.
+    """
+
+    for logger in _iter_loggers():
+        for handler in list(logger.handlers):
+            handler_stream = getattr(handler, "stream", None)
+            if handler_stream is stream or bool(
+                getattr(handler_stream, "closed", False)
+            ):
+                logger.removeHandler(handler)
+                try:
+                    handler.close()
+                except Exception:  # noqa: BLE001 - logging cleanup best-effort
+                    pass
+
+
 def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
     """Run a translated trufflepig CLI command in this process.
 
@@ -212,6 +265,7 @@ def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
     except ValueError:
         cli_argv = argv[1:] if argv and argv[0] == sys.executable else argv
 
+    _remove_logging_handlers_for_stream()
     with log_path.open("w") as f:
         f.write("$ " + " ".join(cmd) + "\n")
         f.write("$ # in-process replay: trufflepig.cli " + " ".join(cli_argv) + "\n\n")
@@ -231,6 +285,7 @@ def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
                 traceback.print_exc()
                 rc = 1
             finally:
+                _remove_logging_handlers_for_stream(f)
                 gc.collect()
     elapsed = round(time.time() - start, 1)
     print(f"[{name}] rc={rc} elapsed={elapsed}s log={log_path}")
@@ -274,6 +329,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--use-manifest-cancer-type",
+        action="store_true",
+        help=(
+            "When a run has cancer_type metadata but its command lacks "
+            "--cancer-type, inject that label. Use for disease-scoped report "
+            "and therapy QA, not for blind classifier evaluation."
+        ),
+    )
+    parser.add_argument(
         "--in-process",
         action="store_true",
         help=(
@@ -282,6 +346,8 @@ def main():
         ),
     )
     args = parser.parse_args()
+    if args.blind and args.use_manifest_cancer_type:
+        parser.error("--blind and --use-manifest-cancer-type are mutually exclusive")
 
     source = args.source.resolve()
     if not source.exists():
@@ -335,7 +401,13 @@ def main():
             continue
         ws = root / name
         run_dirs[name] = ws
-        cmd = _translate_command(name, run, ws, blind=args.blind)
+        cmd = _translate_command(
+            name,
+            run,
+            ws,
+            blind=args.blind,
+            use_manifest_cancer_type=args.use_manifest_cancer_type,
+        )
         log_path = logs / f"{name}.log"
         rc, elapsed = runner(name, cmd, log_path)
         manifest["runs"].append({

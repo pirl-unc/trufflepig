@@ -124,6 +124,49 @@ def test_2way_tie_with_stronger_runner_up_lineage_is_low():
     assert any("stronger lineage-pattern concordance" in r for r in tier.reasons)
 
 
+def test_compartment_promoted_call_uses_post_gate_support_for_confidence():
+    analysis = {
+        "candidate_trace": [
+            _candidate(
+                "COAD",
+                support_geomean=0.40,
+                support_fraction_of_top=1.0,
+                support_rank_score=1.40,
+                lineage_concordance=0.9,
+            ),
+            _candidate(
+                "SARC",
+                support_geomean=1.00,
+                support_fraction_of_top=0.71,
+                support_rank_score=1.00,
+                lineage_concordance=0.9,
+            ),
+        ],
+    }
+
+    tier = compute_call_confidence(analysis)
+
+    assert tier.tier == "high"
+    assert not any("ambiguous" in reason.lower() for reason in tier.reasons)
+
+
+def test_confidence_compares_strongest_support_competitor_not_display_order():
+    analysis = {
+        "candidate_trace": [
+            _candidate("COAD", support_fraction_of_top=1.0, lineage_concordance=0.9),
+            # Same-family alternative kept adjacent for display, but not the
+            # strongest support competitor.
+            _candidate("READ", support_fraction_of_top=0.70, lineage_concordance=0.9),
+            _candidate("STAD", support_fraction_of_top=0.92, lineage_concordance=0.9),
+        ],
+    }
+
+    tier = compute_call_confidence(analysis)
+
+    assert tier.tier == "moderate"
+    assert any("runner-up STAD" in reason for reason in tier.reasons)
+
+
 def test_step0_mismatch_downgrades_to_moderate():
     """Step-0 correlation favors a cohort the classifier didn't pick
     — surface the mismatch."""
