@@ -25,3 +25,48 @@ Pytest-xdist also produces *intermittent* test-isolation failures on tests that
 share module-level cache state (e.g. `_PAN_CANCER_CACHE`). If a test passes
 alone but fails in the suite, that's almost always xdist worker-affinity flake,
 not a real regression — re-run the failing file alone to confirm.
+
+## Gene-identifier key space (proteoform contract)
+
+Expression is read as a **protein-abundance proxy**, so the key is the *protein*,
+not the gene locus. Two distinct Ensembl loci encoding a byte-identical protein
+(NY-ESO-1 = `CTAG1A`+`CTAG1B`, α-globin = `HBA1`+`HBA2`, amylase = `AMY1A/B/C`,
+histone/CT47A clusters, segmental-dup paralogs — 172 groups / ~236 genes) each
+get only a *fraction* of the reads, so per-locus they under-count the protein.
+pirlygenes derives the groups (`protein-identical-gene-groups`); trufflepig
+consumes the collapse consistently at every seam.
+
+**Contract** (see `common.collapse_proteoform_loci`):
+
+- *Unique gene → protein*: key = real versionless **ENSG**; symbol = HGNC symbol.
+- *Folded proteoform (≥2 loci, SUMmed in linear space)*: members leave the key
+  space. The row is keyed in **ENSG space** by the group's **canonical member
+  ENSG** (still a real `ENSG…`, so `assert_tpm_keyed_by_gene_id` + ENSG family
+  panels keep working) and named in **symbol space** by the **proteoform id**
+  (`CTAG1A/B`; `display_name` → `NY-ESO-1`).
+
+Applied at: pan-cancer + HPA matrices (`collapse_proteoform_loci`, SUM, linear
+space, before any normalize); the **sample conform chokepoint**
+(`clean_tpm.normalize_to_reference_space`, which every analyzed sample passes
+through — folds the whole sample once so *every* consumer, canonical or ad-hoc,
+sees a proteoform-native frame and no member-locus read is ever dropped);
+deconvolved artifacts (symbol **relabel** + keep max-median, *not* summed —
+order-statistic summation must move upstream to the generator, filed as
+follow-up). `ensembl_id_to_symbol_map` re-adds member ENSGs as aliases onto the
+proteoform id, so any direct caller resolving a raw member ENSG never drops it.
+
+**TPM is conserved**: `collapse_proteoform_loci` and both `build_sample_tpm_by_*`
+assert each column total is preserved across the fold (a pure within-group SUM) —
+a regression that drops or double-counts a read fails loudly.
+
+**Curated panels stay in natural member symbols** (`HBA1`/`HBA2`, `CTAG1B`, …);
+their **accessors fold** to the proteoform key at lookup via
+`common.fold_panel_symbols`, so curation auto-adapts to whatever pirlygenes
+currently groups (no baked `HBA1/2` label to silently miss if the group changes).
+Live fold points: `signature.get_component_markers`, the
+`templates.OPTIONAL_COMPARTMENT_GATES` detection loop, and the literature-signature
+consumers (`literature_signature_rules_df`, `tumor_type_ontology` expectations).
+A consumer that reads a panel **raw** (bypassing its folding accessor) silently
+misses a folded member — route every panel→expression lookup through the accessor
+or `fold_panel_symbols`. `tests/test_proteoform_key_space.py` pins that each live
+accessor folds.

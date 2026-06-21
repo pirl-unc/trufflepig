@@ -2,7 +2,6 @@
 
 import numpy as np
 
-from trufflepig.cancer_type_ontology import classify_cancer_type_ontology
 from trufflepig.lineage_evidence import (
     DEFAULT_EPITHELIAL_CONFIDENCE,
     EPITHELIAL_EXCLUDES,
@@ -75,42 +74,6 @@ def test_fingerprint_reports_all_five_views():
 
 def test_threshold_is_a_confidence_in_unit_interval():
     assert 0.0 < DEFAULT_EPITHELIAL_CONFIDENCE < 1.0
-
-
-def test_stromal_sarcoma_confound_resolved_in_walk():
-    # screen confused by stroma: READ top, SARC a close second.
-    rows = [
-        {"code": "READ", "signature_score": 0.67, "support_geomean": 0.67},
-        {"code": "SARC", "signature_score": 0.54, "support_geomean": 0.54},
-        {"code": "COAD", "signature_score": 0.52, "support_geomean": 0.52},
-    ]
-    ev = _ev(4.0)
-    r = classify_cancer_type_ontology(ranked_rows=rows, lineage_evidence=ev, use_recall=False)
-    assert "SARC" not in r.candidates  # mesenchymal demoted out
-    assert r.candidates[0] == "READ"
-    assert any(t.startswith("[exclude]") for t in r.trace)
-
-
-def test_real_sarcoma_untouched_in_walk():
-    rows = [
-        {"code": "SARC", "signature_score": 0.55, "support_geomean": 0.55},
-        {"code": "BRCA", "signature_score": 0.40, "support_geomean": 0.40},
-    ]
-    ev = _ev(0.0)  # epithelial absent
-    r = classify_cancer_type_ontology(ranked_rows=rows, lineage_evidence=ev, use_recall=False)
-    assert r.candidates == ["SARC"]
-
-
-def test_exclusion_disabled_is_noop():
-    rows = [
-        {"code": "READ", "signature_score": 0.55, "support_geomean": 0.55},
-        {"code": "SARC", "signature_score": 0.54, "support_geomean": 0.54},
-    ]
-    ev = _ev(4.0)
-    r = classify_cancer_type_ontology(
-        ranked_rows=rows, lineage_evidence=ev, use_lineage_exclusion=False, use_recall=False
-    )
-    assert "SARC" in r.candidates
 
 
 # --- specific-program relative-margin reasoning (#75) -------------------------

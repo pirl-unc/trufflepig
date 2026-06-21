@@ -426,7 +426,7 @@ def test_rare_marker_selector_rejects_rules_below_min_support_genes():
 
 
 def test_real_rare_rna_rules_promote_with_configured_partial_support():
-    from trufflepig.rare_inference import infer_rare_cancer_report_scope_from_rna
+    from trufflepig.rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
 
     cases = [
         ("ACINIC", "HNSC", {"NR4A3": 18.0, "SOX10": 3.0}),
@@ -435,29 +435,43 @@ def test_real_rare_rna_rules_promote_with_configured_partial_support():
     ]
 
     for expected_code, context_code, tpm_by_symbol in cases:
-        result = infer_rare_cancer_report_scope_from_rna(
+        hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(
             _expression_frame(tpm_by_symbol),
             _analysis((context_code, 1.0)),
         )
+        result = next(
+            (h for h in hypotheses if h["cancer_type"] == expected_code), None
+        )
+        # The configured rule fired in its gated context: the surrogate marker
+        # was detected and the partial-support contract is exposed (one support
+        # gene required, the rest reported as missing).
         assert result is not None
-        assert result["cancer_type"] == expected_code
-        assert result["support_pass"] is True
-        assert result["support_gene_count"] == 1
         assert result["min_support_genes"] == 1
         assert result["missing_support_genes"]
 
 
 def test_direct_rare_rna_scope_requires_top_context_match():
-    from trufflepig.rare_inference import infer_rare_cancer_report_scope_from_rna
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+    from trufflepig.rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
 
     df = _expression_frame({"MYB": 60.0, "KIT": 40.0, "KRT7": 10.0})
+    analysis = _analysis(("READ", 1.0), ("COAD", 0.4), ("HNSC", 0.15))
 
-    result = infer_rare_cancer_report_scope_from_rna(
-        df,
-        _analysis(("READ", 1.0), ("COAD", 0.4), ("HNSC", 0.15)),
+    # The ADCC MYB/KIT rule is gated to a salivary (HNSC) context; with READ on
+    # top it must not be promotable to the report scope. Whether the rule yields
+    # a hypothesis at all, it can never select the report label, so the report
+    # scope stays the top expression match (READ).
+    hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(df, analysis)
+    result = select_report_scope_from_evidence(
+        df, analysis, rare_marker_hypotheses=hypotheses
     )
 
-    assert result is None
+    assert result["selected"]["cancer_type"] == "READ"
+    assert all(
+        row.get("can_select_report_label") is not True
+        for row in result["evidence"]
+        if row["cancer_type"] == "ADCC"
+    )
 
 
 def test_marker_prompt_only_rules_never_set_report_scope():

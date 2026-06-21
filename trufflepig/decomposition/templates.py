@@ -123,6 +123,7 @@ OPTIONAL_COMPARTMENT_GATES = {
         # under a distinct key so the gate config stays self-contained
         # and the engine can translate ``erythroid_solid`` → the
         # existing ``erythroid`` component when appending.
+        # HBA1/HBA2 (byte-identical α-globin) — folded to HBA1/2 at detection time.
         "markers": ["HBA1", "HBA2", "HBB", "ALAS2"],
         "min_tpm_sum": 100.0,
         "templates": {
@@ -174,8 +175,13 @@ def _detect_optional_compartments(
         if cancer_type is not None and gate.get("cancer_types") is not None:
             if cancer_type not in gate["cancer_types"]:
                 continue
+        # Fold gate markers to the proteoform key space so byte-identical-protein
+        # members (HBA1/HBA2 -> HBA1/2) match the conformed sample's folded key.
+        from trufflepig.common import fold_panel_symbols
+
         marker_sum = sum(
-            float(sample_tpm_by_symbol.get(g, 0.0) or 0.0) for g in gate["markers"]
+            float(sample_tpm_by_symbol.get(g, 0.0) or 0.0)
+            for g in fold_panel_symbols(gate["markers"])
         )
         if marker_sum >= gate["min_tpm_sum"]:
             component = _GATE_KEY_TO_COMPONENT.get(gate_key, gate_key)

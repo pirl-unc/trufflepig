@@ -277,7 +277,7 @@ COMPONENT_MARKERS = {
     "melanocyte": ["MLANA", "PMEL", "TYR", "DCT"],
     "normal_myeloid": ["LYZ", "S100A8", "S100A9", "FCER1G"],
     "normal_lymphoid": ["CD3D", "MS4A1", "NKG7", "LTB"],
-    "erythroid": ["HBA1", "HBA2", "HBB", "ALAS2"],
+    "erythroid": ["HBA1", "HBA2", "HBB", "ALAS2"],  # HBA1/HBA2 fold to HBA1/2 at lookup
     "normal_blood": ["LYZ", "S100A8", "NKG7", "MS4A1", "HBB"],
     # Optional compartments (#59). Markers match the detection gates
     # in ``templates.OPTIONAL_COMPARTMENT_GATES``.
@@ -323,8 +323,13 @@ def _signature_reference_tables():
 
 
 def get_component_markers(component):
-    """Return curated marker genes for a broad decomposition component."""
-    return list(COMPONENT_MARKERS.get(component, []))
+    """Return curated marker genes for a broad decomposition component, folded to
+    the proteoform key space so byte-identical-protein members (e.g. HBA1/HBA2 ->
+    HBA1/2) match the collapsed reference/sample. Curation stays in natural member
+    symbols and auto-adapts to whatever pirlygenes currently groups."""
+    from trufflepig.common import fold_panel_symbols
+
+    return fold_panel_symbols(list(COMPONENT_MARKERS.get(component, [])))
 
 
 def _select_best_category_tissue(category, sample_by_eid, genes, bulk_indexed):

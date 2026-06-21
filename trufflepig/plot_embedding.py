@@ -2103,45 +2103,6 @@ def _classical_mds_coordinates(distances, n_components=2):
     return coords[:, :n_components]
 
 
-def _sample_radial_embedding(X, labels, distances):
-    """Place SAMPLE at origin and preserve sample-to-reference distances.
-
-    The angle is only a layout aid: references are arranged by the first two
-    PCA components of the reference matrix. The radius is the original input
-    feature distance from SAMPLE, scaled by the median reference distance.
-    """
-    if "SAMPLE" not in labels:
-        coords, _variance = _pca_coordinates(X, n_components=2)
-        return coords
-
-    sample_idx = labels.index("SAMPLE")
-    ref_idx = [i for i in range(len(labels)) if i != sample_idx]
-    coords = np.zeros((len(labels), 2), dtype=float)
-    if not ref_idx:
-        return coords
-
-    ref_X = X[ref_idx]
-    n_components = min(2, ref_X.shape[0], ref_X.shape[1])
-    if n_components < 1:
-        ref_layout = np.zeros((len(ref_idx), 2), dtype=float)
-    else:
-        ref_layout, _variance = _pca_coordinates(ref_X, n_components=2)
-
-    angles = np.arctan2(ref_layout[:, 1], ref_layout[:, 0])
-    zero_angle = np.isclose(ref_layout[:, 0], 0.0) & np.isclose(ref_layout[:, 1], 0.0)
-    if zero_angle.any():
-        angles[zero_angle] = np.linspace(0, 2 * np.pi, zero_angle.sum(), endpoint=False)
-    sample_distances = distances[sample_idx, ref_idx]
-    positive = sample_distances[sample_distances > 0]
-    scale = float(np.median(positive)) if len(positive) else 1.0
-    if not np.isfinite(scale) or scale <= 0:
-        scale = 1.0
-    radii = sample_distances / scale
-    for j, i in enumerate(ref_idx):
-        coords[i] = [radii[j] * np.cos(angles[j]), radii[j] * np.sin(angles[j])]
-    return coords
-
-
 def plot_cancer_type_genes(
     df_gene_expr,
     n_per_tail=5,

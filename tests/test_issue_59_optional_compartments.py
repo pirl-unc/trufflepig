@@ -128,7 +128,8 @@ def test_schwann_does_not_fire_for_luad():
 
 
 def test_erythroid_fires_on_any_solid_cancer_with_hemoglobin():
-    sample = {"HBA1": 40.0, "HBA2": 40.0, "HBB": 50.0, "ALAS2": 10.0}  # sum=140 > 100
+    # A conformed sample folds HBA1+HBA2 into the HBA1/2 proteoform key.
+    sample = {"HBA1/2": 80.0, "HBB": 50.0, "ALAS2": 10.0}  # sum=140 > 100
     # Any solid cancer type works — no cancer allowlist for erythroid.
     for cancer in ("COAD", "LUAD", "BRCA", "PAAD"):
         detected = _detect_optional_compartments(
@@ -142,7 +143,7 @@ def test_erythroid_fires_on_any_solid_cancer_with_hemoglobin():
 def test_erythroid_does_not_fire_on_heme_template():
     """Heme templates already carry erythroid as a first-class
     compartment; the gate targets solid templates only."""
-    sample = {"HBA1": 500.0, "HBA2": 500.0, "HBB": 500.0}
+    sample = {"HBA1/2": 1000.0, "HBB": 500.0}
     detected = _detect_optional_compartments(
         sample,
         cancer_type="LAML",

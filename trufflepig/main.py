@@ -852,13 +852,6 @@ def _parse_always_label_genes(always_label_genes: Optional[str]) -> Set[str]:
     return {token.strip() for token in always_label_genes.split(",") if token.strip()}
 
 
-def _parse_csv_tokens(arg_value: Optional[str]):
-    if arg_value is None:
-        return None
-    tokens = [token.strip() for token in str(arg_value).split(",") if token.strip()]
-    return tokens or None
-
-
 _MT_EXPECTED_MISSING_PREPS = frozenset({"poly_a", "exome_capture"})
 
 # The AR-transactivation output panel used by the CRPC-pattern
@@ -4238,35 +4231,6 @@ def _purity_ci_phrase(purity):
     return core
 
 
-def _summary_mode_clause(sample_mode, purity, top_tissues):
-    tissue_str = ", ".join(f"{t} ({s:.2f})" for t, s, _ in top_tissues[:3])
-    ci_phrase = _purity_ci_phrase(purity)
-    if sample_mode == "pure":
-        return (
-            f"The sample was analyzed in **pure-population mode**. The reported "
-            f"purity-like estimate ({ci_phrase}) is best read as "
-            "a coherence check against the likely tissue-of-origin profile rather than as a bulk admixture fraction. "
-            f"Residual background signatures are limited ({tissue_str}). "
-        )
-    if sample_mode == "heme":
-        return (
-            f"The estimated **malignant-lineage fraction proxy** is {ci_phrase}. "
-            "In heme mode this is not a strict tumor-vs-immune split; it reflects how strongly the sample "
-            "resembles the matched malignant program relative to hematopoietic background. "
-            f"Top lineage/background contexts: {tissue_str}. "
-        )
-    return (
-        f"Estimated tumor purity is {ci_phrase}, "
-        f"with {render_fold(purity['components']['stromal']['enrichment'])} stromal "
-        f"and {render_fold(purity['components']['immune']['enrichment'])} immune enrichment "
-        f"vs TCGA median. "
-        f"Top background signatures: {tissue_str}. "
-        "These tissue matches describe residual non-tumor background; strong off-primary "
-        "organ signal can support an inferred host-site context, but the scores are not "
-        "composition percentages. "
-    )
-
-
 def _background_section_config(sample_mode):
     if sample_mode == "pure":
         return (
@@ -4926,18 +4890,6 @@ def _is_registry_only_label(code):
         return source in {"LITERATURE_CURATED", ""}
     except Exception:
         return False
-
-
-def _infer_registry_report_scope_from_rna(df_expr, analysis):
-    """Infer rare non-TCGA report scopes from strong RNA surrogates.
-
-    This is intentionally hypothesis-level. It lets expression-only runs
-    surface NUT carcinoma when NUTM1 is ectopically expressed, but the
-    report still keeps the TCGA-backed RNA classifier as a cross-check.
-    """
-    from .rare_inference import infer_rare_cancer_report_scope_from_rna
-
-    return infer_rare_cancer_report_scope_from_rna(df_expr, analysis)
 
 
 def _analysis_constraints(
@@ -8366,22 +8318,6 @@ def _build_target_report(
     lines.append("")
 
     return "\n".join(lines)
-
-
-def _generate_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
-    """Back-compat wrapper that writes the standalone target report."""
-    target_md = _build_target_report(
-        ranges_df,
-        analysis,
-        cancer_type=cancer_type,
-        purity_result=purity_result,
-        decomp_results=analysis.get("decomposition_results"),
-    )
-    target_path = "%s-targets.md" % prefix if prefix else "targets.md"
-    with open(target_path, "w") as f:
-        f.write(target_md)
-    print(f"[report] Saved {target_path}")
-    return target_md
 
 
 @named("plot-expression")

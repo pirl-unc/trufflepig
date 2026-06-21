@@ -189,8 +189,14 @@ def _build_qc_sample_tpm_by_symbol(df_gene_expr):
         if tpm_col is None:
             raise KeyError(f"No TPM column found. Columns: {list(df_gene_expr.columns)}")
 
-        ref = pan_cancer_expression()
-        id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
+        # Member-aware reference map (proteoform members alias to their proteoform
+        # id) so a byte-identical-protein locus is labelled consistently with the
+        # rest of the pipeline even on this raw, pre-conform QC frame, rather than
+        # falling back to the bare member symbol.
+        from .common import _versionless_id_to_symbol_map
+
+        pan_cancer_expression()  # ensure reference is loadable (raises early if not)
+        id_to_sym = _versionless_id_to_symbol_map()
         gene_ids = df_gene_expr[gene_id_col].astype(str).map(_strip_ensembl_version)
         fallback = df_gene_expr[gene_name_col].fillna("").astype(str)
         symbols = gene_ids.map(id_to_sym).fillna(fallback)

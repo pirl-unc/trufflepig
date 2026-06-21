@@ -171,13 +171,35 @@ def _canonicalize_cancer_code_column(df: pd.DataFrame) -> pd.DataFrame:
 @lru_cache(maxsize=1)
 def _tcga_deconvolved_expression_cached() -> pd.DataFrame:
     df = pd.read_csv(_TCGA_DECONV_PATH, low_memory=False)
-    return _canonicalize_cancer_code_column(df)
+    df = _canonicalize_cancer_code_column(df)
+    # Relabel byte-identical-protein members to the proteoform id BEFORE the
+    # normalize→renormalize-to-1e6 pipeline, so the per-cancer TPM-1e6 invariant
+    # is preserved after the member rows are folded out (see
+    # common.relabel_proteoform_symbols_long — medians are not summed, the
+    # dominant-locus row is kept; true summation belongs to the upstream generator).
+    from trufflepig.common import relabel_proteoform_symbols_long
+
+    return relabel_proteoform_symbols_long(
+        df,
+        symbol_col="symbol",
+        id_col="Ensembl_Gene_ID" if "Ensembl_Gene_ID" in df.columns else None,
+        dedup_keys=("symbol", "cancer_code"),
+        value_col="tumor_tpm_median",
+    )
 
 
 @lru_cache(maxsize=1)
 def _subtype_deconvolved_expression_cached() -> pd.DataFrame:
     df = pd.read_csv(_SUBTYPE_DECONV_PATH, low_memory=False)
-    return _canonicalize_cancer_code_column(df)
+    df = _canonicalize_cancer_code_column(df)
+    from trufflepig.common import relabel_proteoform_symbols_long
+
+    return relabel_proteoform_symbols_long(
+        df,
+        symbol_col="symbol",
+        dedup_keys=("symbol", "cancer_code", "subtype", "source_cohort"),
+        value_col="tumor_tpm_median",
+    )
 
 
 @lru_cache(maxsize=1)
@@ -199,6 +221,11 @@ def _hpa_cell_type_expression_cached() -> pd.DataFrame:
         if col not in {"Ensembl_Gene_ID", "Symbol"}
         and pd.api.types.is_numeric_dtype(df[col])
     ]
+    # Proteoform-collapse (SUM) the linear cell-type nTPM matrix before normalize.
+    from trufflepig.common import collapse_proteoform_loci
+
+    if value_cols:
+        df = collapse_proteoform_loci(df, value_cols=value_cols)
     df, _ = _pirlygenes.normalize_expression(
         df,
         label_col="Symbol",
@@ -268,12 +295,6 @@ def _clean_companion_value_cols(df: pd.DataFrame) -> list[str]:
 
 def _all_wide_tpm_value_cols(df: pd.DataFrame) -> list[str]:
     return _raw_value_cols(df) + _clean_companion_value_cols(df) + _analysis_value_cols(df)
-
-
-def _renormalize_wide_to_million(df: pd.DataFrame) -> pd.DataFrame:
-    value_cols = _all_wide_tpm_value_cols(df)
-    out, _ = _pirlygenes.renormalize_to_million(df, value_cols=value_cols)
-    return out
 
 
 def _apply_trufflepig_pan_normalize(
@@ -544,6 +565,14 @@ def pan_cancer_expression(
         remove_noncoding=remove_noncoding,
     )
     df = _standardize_pan_cancer_columns(df)
+    # Collapse byte-identical-protein loci to the proteoform key space (SUM in
+    # linear TPM/nTPM space — must precede any log/percentile transform). See
+    # common.collapse_proteoform_loci. Sample conform + panels fold to match.
+    from trufflepig.common import collapse_proteoform_loci
+
+    wide_value_cols = _all_wide_tpm_value_cols(df)
+    if wide_value_cols:
+        df = collapse_proteoform_loci(df, value_cols=wide_value_cols)
     df = _apply_trufflepig_pan_normalize(df, normalize, log_transform)
     clean_companion_cols = _clean_companion_value_cols(df)
     if not clean_companion_cols:

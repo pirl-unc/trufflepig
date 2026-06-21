@@ -136,15 +136,6 @@ _HOST_SITE_BACKGROUND_TISSUES = {
 
 # Broad-family signature panels loaded from data/cancer-family-panels.csv.
 # The CSV is the source of truth; this dict is a view built once on import.
-#
-# Note: trufflepig/family_extensions.py defines extension panels for
-# cohorts the CSV does not yet cover (BRCA, BLCA, LUAD, OV, UCEC, etc.)
-# but those are NOT wired in here — wiring them flat into this dict
-# regresses family_specificity 17× across all rows (each new panel
-# competes in the (top - second) / top formula). The correct path is
-# a tiered scoring redesign (see docs/CANCER_CALL_DECISION_FLOW.md
-# Stages 2-4 + pirlygenes #266). Until then, the extension data
-# stays as design documentation, not active scoring input.
 _CANCER_FAMILY_PANELS = cancer_family_panels()
 
 
@@ -445,16 +436,6 @@ def _compile_excluded_gene_matcher():
         return bool(regex.fullmatch(str(symbol)))
 
     return is_excluded
-
-
-def _is_excluded_signature_gene(symbol):
-    """Compatibility wrapper — compiles the matcher per call.
-
-    Kept so external callers (tests, plot.py fallback) can ask without
-    needing to know about the compiled cache. For tight loops prefer
-    `_compile_excluded_gene_matcher()` and call its returned predicate.
-    """
-    return _compile_excluded_gene_matcher()(symbol)
 
 
 def get_tumor_purity_parameters():

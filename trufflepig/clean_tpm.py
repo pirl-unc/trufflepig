@@ -101,16 +101,36 @@ def normalize_to_reference_space(
     A frame with no technical-RNA compartment (a partial frame / synthetic fixture,
     or one lacking an id column) is left as-is rather than forced through the
     transform.
+
+    Conforming to the reference space also conforms to its **proteoform key
+    space**: byte-identical-protein loci are folded to one canonical-ENSG /
+    proteoform-id row (SUM in linear TPM space) here, once, so every downstream
+    consumer — the canonical sample-TPM builders AND any ad-hoc one — sees a
+    sample that already agrees with the (collapsed) reference and curated panels,
+    and no member-locus read can be silently dropped. The fold is TPM-conserving
+    (asserted in :func:`common.collapse_proteoform_loci`) and idempotent (an
+    already-folded frame has no member loci left to merge).
     """
     cols = [col for col in value_cols if col in df.columns]
     if not cols:
         return df
     if not id_col or id_col not in df.columns:
         return df
+    # Proteoform collapse first (linear space, before any rescale), symmetric with
+    # the reference loaders. See common.collapse_proteoform_loci.
+    from .common import collapse_proteoform_loci
+
+    df = collapse_proteoform_loci(
+        df,
+        id_col=id_col,
+        symbol_col=label_col,
+        value_cols=cols,
+    )
     # Partial frame / synthetic fixture (no technical compartment) — leave as-is
     # rather than force a rescale. (The only trufflepig-side check; the transform
     # itself is entirely pirlygenes'.)
-    if not bool(technical_rna_mask(df, label_col=label_col, id_col=id_col).any()):
+    mask = technical_rna_mask(df, label_col=label_col, id_col=id_col)
+    if not bool(mask.any()):
         return df
     # Defer the ENTIRE clean-TPM conform to pirlygenes' df-level entry point
     # (16/9/75 fixed_fraction): df in, cleaned df out, no masks/tables/fractions

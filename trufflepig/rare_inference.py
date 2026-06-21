@@ -358,28 +358,6 @@ def infer_rare_cancer_report_scope_from_fusions(fusion_records, analysis=None):
     return None
 
 
-def infer_rare_cancer_report_scope_from_rna(df_expr, analysis):
-    """Return a rare-cancer report-scope hypothesis, or ``None``.
-
-    This compatibility helper now delegates the report-scope decision to
-    the unified cancer-type evidence selector. Marker prompts are still
-    generated here from the data-backed rare-cancer rule table.
-    """
-    from .cancer_type_evidence import select_report_scope_from_evidence
-
-    marker_hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis)
-    if not marker_hypotheses:
-        return None
-    selected = select_report_scope_from_evidence(
-        df_expr,
-        analysis,
-        rare_marker_hypotheses=marker_hypotheses,
-    ).get("selected")
-    if selected and "rare_marker" in set(selected.get("evidence_sources") or []):
-        return selected
-    return None
-
-
 def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict[str, Any]]:
     """Return non-promoting rare-cancer RNA marker hypotheses.
 

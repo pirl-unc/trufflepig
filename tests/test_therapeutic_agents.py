@@ -52,9 +52,15 @@ def test_every_druggable_target_has_at_least_one_agent():
 
 def test_druggable_targets_are_known_gene_symbols_so_they_are_rankable():
     # "Reasoning-available": a target must resolve to a real gene symbol so the
-    # engine can rank it by expression (#47 availability criterion).
+    # engine can rank it by expression (#47 availability criterion). A target on
+    # a byte-identical-protein locus resolves through its proteoform key (NY-ESO-1
+    # "CTAG1B" -> "CTAG1A/B"), so fold before checking membership.
+    from trufflepig.common import fold_panel_symbols
+
     known = set(ensembl_id_to_symbol_map().values())
-    unresolved = sorted(g for g in druggable_target_genes() if g not in known)
+    unresolved = sorted(
+        g for g in druggable_target_genes() if fold_panel_symbols([g])[0] not in known
+    )
     assert not unresolved, f"druggable targets not resolvable to a gene symbol: {unresolved}"
 
 

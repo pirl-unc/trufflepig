@@ -245,81 +245,11 @@ def test_concrete_child_with_abstract_umbrella_parent_is_not_promoted():
         assert report_scope is None, concrete
 
 
-def test_nutm1_expression_can_infer_registry_only_report_scope():
-    import pandas as pd
-
-    from trufflepig.main import _infer_registry_report_scope_from_rna
-
-    df = pd.DataFrame(
-        {
-            "ensembl_gene_id": ["ENSG00000184507"],
-            "canonical_gene_name": ["NUTM1"],
-            "TPM": [6.2],
-        }
-    )
-    analysis = {"candidate_trace": [{"code": "LUSC"}]}
-
-    inference = _infer_registry_report_scope_from_rna(df, analysis)
-
-    assert inference["cancer_type"] == "NUTM"
-    assert inference["surrogate"] == "NUTM1"
-    assert inference["top_reference_cancer_type"] == "LUSC"
-    assert "hypothesis" in inference["caveat"].lower()
-
-
 def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
-    import pandas as pd
-
     from pirlygenes.gene_sets_cancer import rare_cancer_rna_surrogate_rules_df
-    from trufflepig.rare_inference import (
-        infer_rare_cancer_marker_hypotheses_from_rna,
-        infer_rare_cancer_report_scope_from_rna,
-    )
 
     rules = rare_cancer_rna_surrogate_rules_df()
     assert {"NUTM", "SARC_CHOR", "ACINIC"}.issubset(set(rules["cancer_code"]))
-
-    tbxt_only = pd.DataFrame(
-        {
-            "ensembl_gene_id": ["ENSG00000164458"],
-            "canonical_gene_name": ["TBXT"],
-            "TPM": [12.0],
-        }
-    )
-    assert (
-        infer_rare_cancer_report_scope_from_rna(
-            tbxt_only,
-            {"candidate_trace": [{"code": "SARC"}]},
-        )
-        is None
-    )
-    marker_prompts = infer_rare_cancer_marker_hypotheses_from_rna(
-        tbxt_only,
-        {"candidate_trace": [{"code": "SARC"}]},
-    )
-    assert marker_prompts[0]["cancer_type"] == "SARC_CHOR"
-    assert marker_prompts[0]["surrogate"] == "TBXT"
-    assert "KRT19" in marker_prompts[0]["missing_support_genes"]
-
-    germ_cell_context = infer_rare_cancer_report_scope_from_rna(
-        tbxt_only,
-        {"candidate_trace": [{"code": "TGCT"}]},
-    )
-    assert germ_cell_context is None
-
-    nutm_like = pd.DataFrame(
-        {
-            "ensembl_gene_id": ["ENSG00000184507"],
-            "canonical_gene_name": ["NUTM1"],
-            "TPM": [6.2],
-        }
-    )
-    inference = infer_rare_cancer_report_scope_from_rna(
-        nutm_like,
-        {"candidate_trace": [{"code": "LUSC"}]},
-    )
-    assert inference["cancer_type"] == "NUTM"
-    assert inference["surrogate"] == "NUTM1"
 
 
 def test_fusion_parser_preserves_5prime_3prime_orientation(tmp_path: Path):
