@@ -29,11 +29,25 @@ def _ev(marker_ratio, **kw):
     return lineage_exclusion_evidence(_sample(marker_ratio), HK, cohort_reference=COHORT, **kw)
 
 
-def test_silent_when_epithelial_absent():
+def test_epithelial_absent_demotes_epithelial_branch():
+    """#69: a confident epithelial absence (a real sarcoma) demotes the EPITHELIAL
+    branch so a stroma-matched carcinoma can't out-compete the sarcoma — the inverse
+    of the present-arm. (The dead band 0.15..0.45 leaves borderline low-purity
+    carcinomas untouched.)"""
     ev = _ev(0.0)  # real sarcoma: epithelial program off
-    assert ev.factors == {}
-    assert ev.notes == []
+    assert set(ev.factors) == {"epithelial"}
+    assert ev.factors["epithelial"] < 1.0
+    assert ev.notes
     assert ev.signal.call == "absent"
+
+
+def test_epithelial_borderline_is_in_the_dead_band():
+    """A weak/borderline epithelial signal (between the absent and present
+    thresholds) fires neither arm — so a stroma-rich carcinoma isn't wrongly
+    demoted out of the epithelial branch."""
+    ev = _ev(0.3)  # mid-band
+    if 0.15 < ev.signal.confidence < 0.45:
+        assert "epithelial" not in ev.factors
 
 
 def test_demotes_non_epithelial_when_epithelial_present():

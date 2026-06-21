@@ -79,6 +79,15 @@ DEFAULT_EPITHELIAL_CONFIDENCE = 0.45
 _DEMOTE_SLOPE = 0.9
 _DEMOTE_FLOOR = 0.35
 
+# Epithelial-*absent* arm (#69): the inverse of the present gate. A confident
+# absence of the tumour-intrinsic epithelial program means the tumour is NOT a
+# carcinoma, so the epithelial branch is demoted — fixing the sarcoma->carcinoma
+# cluster where a stroma-matched carcinoma out-competes a true sarcoma. The two
+# thresholds leave a deliberate dead band (0.15..0.45): carcinomas sit well above
+# (median ~0.62), real sarcomas well below (~0.07, HK-ratio 0.01-0.07x), so only
+# a *confident* absence fires and a borderline low-purity carcinoma is untouched.
+_EPITHELIAL_ABSENT_CONFIDENCE = 0.15
+
 # Specific-program demotion is *stronger* than the epithelial gate's: epithelial
 # markers (keratins) are shared/co-expressed so its demotion is deliberately
 # gentle, but a lineage-*defining* program (NE / melanocytic — markers ≈0 outside
@@ -160,6 +169,19 @@ def lineage_exclusion_evidence(
         )
         for flag in sig.flags:
             notes.append(f"epithelial signal: {flag}")
+    elif sig.confidence <= _EPITHELIAL_ABSENT_CONFIDENCE:
+        # Epithelial program confidently ABSENT -> not a carcinoma. Demote the
+        # epithelial branch so a true sarcoma / lymphoma isn't out-competed by a
+        # stroma-matched carcinoma (#69). Confidence-proportional via the *absence*
+        # (1 - confidence); a deeper absence demotes harder, floored at _DEMOTE_FLOOR.
+        absence = 1.0 - float(sig.confidence)
+        demote = max(_DEMOTE_FLOOR, 1.0 - _DEMOTE_SLOPE * absence)
+        factors["epithelial"] = min(factors.get("epithelial", 1.0), demote)
+        notes.append(
+            f"Epithelial differentiation absent — not a carcinoma; epithelial "
+            f"candidates demoted ×{demote:.2f} (a stroma-rich carcinoma would still "
+            f"express the tumour-intrinsic epithelial program). [{_fingerprint(sig)}]"
+        )
 
     # Specific-lineage arms (#71/#75): the lineage-defining programs are COMPETING
     # hypotheses about the tumour's lineage. Survey them all, then demote each
