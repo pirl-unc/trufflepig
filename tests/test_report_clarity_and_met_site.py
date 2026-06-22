@@ -192,6 +192,42 @@ def test_infers_likely_met_site_from_strong_off_primary_background():
     ) == "liver"
 
 
+def test_supported_decomposition_site_feeds_background_met_site():
+    analysis = {
+        "cancer_type": "COAD",
+        "analysis_constraints": {},
+        "decomposition_results": [
+            SimpleNamespace(
+                template="met_liver",
+                site_evidence={"site_supported": True, "status": "site_supported"},
+                warnings=[],
+                template_site_factor=0.9,
+                template_tissue_score=0.8,
+            )
+        ],
+    }
+
+    assert _effective_met_site_for_background(analysis) == "liver"
+
+
+def test_fit_only_decomposition_site_does_not_feed_background_met_site():
+    analysis = {
+        "cancer_type": "COAD",
+        "analysis_constraints": {},
+        "decomposition_results": [
+            SimpleNamespace(
+                template="met_bone",
+                site_evidence={"site_supported": False, "status": "fit_only"},
+                warnings=[],
+                template_site_factor=0.9,
+                template_tissue_score=0.8,
+            )
+        ],
+    }
+
+    assert _effective_met_site_for_background(analysis) is None
+
+
 def test_does_not_infer_met_site_when_background_matches_primary():
     analysis = {
         "cancer_type": "BLCA",

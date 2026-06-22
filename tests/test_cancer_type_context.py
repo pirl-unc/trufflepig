@@ -27,6 +27,22 @@ def test_context_keeps_prad_as_single_active_label_when_no_refined_label_exists(
     assert not context.uses_distinct_reference
 
 
+def test_context_names_direct_reference_when_same_code_is_not_pan_cancer():
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "WILMS",
+            "reference_cancer_type": "WILMS",
+            "cancer_type_source": "user-specified",
+        }
+    )
+
+    lines = "\n".join(context.markdown_lines())
+
+    assert context.best_expression_source_kind == "deconvolved_tumor_reference"
+    assert "direct expression reference is available" in lines
+    assert "Broad reference context" not in lines
+
+
 def test_context_exposes_refined_child_and_parent_reference():
     context = cancer_type_context_from_analysis(
         {
@@ -74,6 +90,30 @@ def test_context_prefers_fine_expression_reference_when_available():
     assert context.best_expression_source == "TREEHOUSE_POLYA_25_01"
     assert context.best_expression_gene_key == "symbol_only"
     assert context.best_expression_direct
+    exported = context.to_dict()
+    assert exported["expression_code"] == "SARC_OS"
+    assert exported["fallback_expression_code"] == "SARC"
+
+
+def test_context_separates_nutm_report_label_from_fallback_reference():
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "NUTM",
+            "reference_cancer_type": "LUSC",
+            "report_scope_cancer_type": "NUTM",
+            "cancer_type_source": "user-specified",
+        }
+    )
+
+    lines = "\n".join(context.markdown_lines())
+
+    assert context.code_for("report") == "NUTM"
+    assert context.code_for("reference") == "LUSC"
+    assert context.code_for("expression") == "NUTM"
+    assert context.best_expression_direct
+    assert "Fallback expression/reference context" in lines
+    assert "Best expression reference" in lines
+    assert "expression data are available for the report label" in lines
 
 
 def test_context_uses_documented_fallback_when_fine_expression_is_missing():

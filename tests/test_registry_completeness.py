@@ -85,6 +85,10 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "MENINGIOMA",
         "CHOROID_PLEXUS",
         "THYMCA",
+        # ASTB (astroblastoma, MN1-altered) — new pirlygenes 5.22.109 CNS leaf;
+        # no matched-normal panel. Expression resolves via the cns-glial fallback
+        # to MBL (pirlygenes#461); literature signature added trufflepig-side.
+        "ASTB",
     }
 )
 
@@ -155,6 +159,8 @@ _MISSING_THERAPY_AXIS = frozenset(
         "MENINGIOMA",
         "CHOROID_PLEXUS",
         "THYMCA",
+        # ASTB — no therapy-response axis panel yet (rare CNS leaf).
+        "ASTB",
     }
 )
 
@@ -244,6 +250,10 @@ _TOLERATED_GAPS_EXPLICIT = {
     # deposited for these rare entities. Tracked in pirlygenes#369.
     "MENINGIOMA": {"lineage", "biomarker", "therapy"},
     "CHOROID_PLEXUS": {"lineage", "biomarker", "therapy"},
+    # ASTB (astroblastoma, MN1-altered): expression via MBL fallback + a
+    # literature signature (BEND2/MN1/GFAP), biomarker supplied by pirlygenes;
+    # lineage panel + therapy targets not yet deposited for this rare leaf.
+    "ASTB": {"lineage", "therapy"},
 }
 
 

@@ -10,6 +10,12 @@ This document is the **inference ledger**: the reasoning each decision is built
 from, and the running ground-truth check, so we can see whether changes drift
 relative to the (small) set of samples we actually know the answer for.
 
+The engine this layer sits on now runs a **hierarchical compartment→leaf** call:
+stage 1 pins the histogenesis compartment (15/15 on the local truth set) and
+restricts the leaves stage 2 considers. That architecture and its stage-2 bake-off
+are documented in
+[cancer-type-hierarchical-classifier.md](./cancer-type-hierarchical-classifier.md).
+
 ## Why a layer, not a new scorer
 
 A repeatedly-confirmed lesson: scoring lineage from **within-sample marker

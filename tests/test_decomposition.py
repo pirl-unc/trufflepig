@@ -48,6 +48,29 @@ def _mix_samples(parts):
     return out
 
 
+def _candidate_row(code="HNSC", purity=0.25, support=1.0, signature=0.8):
+    return {
+        "code": code,
+        "signature_score": signature,
+        "purity_estimate": purity,
+        "support_fraction_of_top": support,
+        "purity_result": {
+            "overall_lower": max(0.01, purity - 0.1),
+            "overall_estimate": purity,
+            "overall_upper": min(1.0, purity + 0.1),
+        },
+    }
+
+
+def _set_symbol_tpm(df, values):
+    out = df.copy()
+    for symbol, value in values.items():
+        mask = out["gene_symbol"].astype(str) == symbol
+        if mask.any():
+            out.loc[mask, "TPM"] = float(value)
+    return out
+
+
 def test_lymph_node_template_uses_broad_t_cell_only():
     components = get_template_components("met_lymph_node", "PRAD")
     assert "T_cell" in components
@@ -337,6 +360,74 @@ def test_synthetic_coad_liver_mix_uses_liver_background():
     assert results[0].template_extra_fraction > 0.5
 
 
+def test_met_bone_requires_hard_bone_evidence_not_generic_ecm():
+    """Generic stromal/ECM signal can fit a background, but should not
+    become a site-supported bone-met call without osteogenic anchors."""
+
+    df = _set_symbol_tpm(
+        _tcga_sample("HNSC"),
+        {
+            "COL1A1": 1200,
+            "SPP1": 300,
+            "CXCL12": 120,
+            "KITLG": 15,
+            "VCAM1": 15,
+            # IBSP/RUNX2/ALPL can be strong in invasive squamous or
+            # mesenchymal programs; they should not be enough without a
+            # more specific mineralized-bone/osteocyte anchor.
+            "IBSP": 60,
+            "RUNX2": 16,
+            "ALPL": 6,
+            "BGLAP": 1,
+            "SOST": 1,
+            "DMP1": 1,
+            "PHEX": 2,
+            "SP7": 1,
+            "MEPE": 1,
+        },
+    )
+
+    result = decompose_sample(
+        df,
+        cancer_types=["HNSC"],
+        candidate_rows=[_candidate_row("HNSC", purity=0.22)],
+        templates=["met_bone"],
+        top_k=1,
+    )[0]
+
+    assert result.template == "met_bone"
+    assert result.site_evidence["site_supported"] is False
+    assert result.site_evidence["status"] == "fit_only"
+    assert "bone_specific_markers" in result.site_evidence["missing"]
+    assert any("Metastatic-site evidence below" in w for w in result.warnings)
+
+
+def test_met_bone_site_hint_is_site_supported_external_context():
+    df = _set_symbol_tpm(
+        _tcga_sample("HNSC"),
+        {
+            "COL1A1": 1200,
+            "SPP1": 300,
+            "ALPL": 4,
+            "BGLAP": 1,
+        },
+    )
+
+    result = decompose_sample(
+        df,
+        cancer_types=["HNSC"],
+        candidate_rows=[_candidate_row("HNSC", purity=0.22)],
+        templates=["met_bone"],
+        site_hint="bone",
+        top_k=1,
+    )[0]
+
+    assert result.site_evidence["site_supported"] is True
+    assert result.site_evidence["status"] == "site_supported"
+    assert result.site_evidence["basis"] == "site_hint"
+    assert not any("Metastatic-site evidence below" in w for w in result.warnings)
+
+
 def test_synthetic_prad_lymph_mix_stays_primary_not_lymphoma():
     """Immune-rich prostate should stay PRAD and primary-like, not nodal/heme."""
     df = _mix_samples(
@@ -377,7 +468,15 @@ def test_synthetic_prad_lymph_mix_stays_primary_not_lymphoma():
 
 
 def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
-    """Soft mesenchymal fallback should not outrank a strong prostate family signal."""
+    """Soft mesenchymal fallback should not outrank a strong prostate family signal.
+
+    The strong, prostate-specific signal (KLK3 etc.) survives 80% smooth-muscle
+    admixture: PRAD stays #1 and the whole-profile compartment gate (#83) confidently
+    pins **Epithelial**, so the mesenchymal SARC fallback is *suppressed* — demoted
+    below the epithelial candidates and flagged out-of-compartment — rather than
+    surfaced as a top alternative. (Pre-hierarchy this test asserted SARC appeared in
+    the top-4; the compartment gate strengthens the property it was guarding.)
+    """
     df = _mix_samples(
         [
             (0.2, _tcga_sample("PRAD")),
@@ -385,7 +484,7 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
         ]
     )
 
-    candidates = rank_cancer_type_candidates(df, top_k=4)
+    candidates = rank_cancer_type_candidates(df, top_k=8)
     results = decompose_sample(
         df,
         cancer_types=["PRAD"],
@@ -394,7 +493,10 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
     )
 
     assert candidates[0]["code"] == "PRAD"
-    assert "SARC" in {row["code"] for row in candidates}
+    # the gate pinned the epithelial compartment and suppressed the SARC fallback
+    assert candidates[0].get("centroid_coarse_lineage") == "Epithelial"
+    sarc = next((row for row in candidates if row["code"] == "SARC"), None)
+    assert sarc is None or sarc.get("compartment_in_set") is False
     assert results[0].template == "solid_primary"
     assert results[0].score > results[1].score
 
@@ -564,6 +666,36 @@ def test_all_tumor_when_purity_is_one():
     result = results[0]
     assert result.fractions == {"tumor": 1.0}
     assert "No non-tumor components" in result.warnings[0]
+
+
+def test_all_tumor_met_template_is_fit_only_and_suppressed_when_primary_available():
+    df = _tcga_sample("PRAD")
+
+    results = decompose_sample(
+        df,
+        cancer_types=["PRAD"],
+        templates=["met_adrenal", "solid_primary"],
+        top_k=2,
+        purity_override=1.0,
+    )
+
+    assert [row.template for row in results] == ["solid_primary"]
+
+
+def test_all_tumor_met_template_remains_available_when_explicitly_requested():
+    df = _tcga_sample("PRAD")
+
+    results = decompose_sample(
+        df,
+        cancer_types=["PRAD"],
+        templates=["met_adrenal"],
+        top_k=1,
+        purity_override=1.0,
+    )
+
+    assert results[0].template == "met_adrenal"
+    assert results[0].site_evidence["site_supported"] is False
+    assert results[0].site_evidence["basis"] == "no_non_tumor_components"
 
 
 def test_invalid_template_name_raises():
@@ -911,3 +1043,67 @@ def test_candidate_composition_segments_sum_to_one():
             assert 0 <= tumor <= 1
             assert 0 <= tmpl <= 1
             assert 0 <= shared <= 1
+
+
+def test_decompose_sample_scores_requested_scope_missing_from_reused_trace(monkeypatch):
+    """A selected/report scope must reach decomposition even when the CLI
+    reuses a broad first-pass candidate trace.
+
+    The broad trace is an optimization, not the full universe of hypotheses.
+    If a selected local/fine scope is passed through ``cancer_types`` but is
+    absent from ``candidate_rows``, decompose_sample should score just that
+    missing code and include it in the fit set.
+    """
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from trufflepig.decomposition import engine
+
+    broad_row = {
+        "code": "BROAD",
+        "support_fraction_of_top": 1.0,
+        "signature_score": 0.8,
+        "purity_estimate": 0.6,
+        "purity_result": {"overall_estimate": 0.6},
+    }
+    local_row = {
+        "code": "LOCAL",
+        "support_fraction_of_top": 0.7,
+        "signature_score": 0.5,
+        "purity_estimate": 0.5,
+        "purity_result": {"overall_estimate": 0.5},
+    }
+    ranked_requests = []
+
+    def fake_rank(_df, *, candidate_codes, **_kwargs):
+        ranked_requests.append(tuple(candidate_codes))
+        assert tuple(candidate_codes) == ("LOCAL",)
+        return [dict(local_row)]
+
+    def fake_fit(_df, _sample_by_eid, candidate_row, _tissue_score_map, template_name, **_kwargs):
+        return SimpleNamespace(
+            cancer_type=candidate_row["code"],
+            template=template_name,
+            score=float(candidate_row["support_fraction_of_top"]),
+            scope_source=candidate_row.get("decomposition_scope_source", ""),
+        )
+
+    monkeypatch.setattr(engine, "rank_cancer_type_candidates", fake_rank)
+    monkeypatch.setattr(engine, "_fit_one_hypothesis", fake_fit)
+    monkeypatch.setattr(engine, "_score_host_tissues", lambda *_a, **_k: [])
+
+    rows = engine.decompose_sample(
+        pd.DataFrame({"Symbol": [], "TPM": []}),
+        cancer_types=["LOCAL", "BROAD"],
+        templates=["solid_primary"],
+        top_k=5,
+        candidate_rows=[broad_row],
+        sample_raw_by_symbol={},
+        sample_by_eid={},
+    )
+
+    assert ranked_requests == [("LOCAL",)]
+    assert {row.cancer_type for row in rows} == {"BROAD", "LOCAL"}
+    local = next(row for row in rows if row.cancer_type == "LOCAL")
+    assert local.scope_source == "requested_scope"

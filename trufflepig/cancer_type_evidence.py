@@ -28,7 +28,9 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "fine_reference": 5,
     "local_expression_reference": 4,
     "lineage_panel": 4,
+    "contrast_discriminator": 3,
     "tumor_label_refinement": 3,
+    "coarse_composition_reference": 2,
     "rare_marker": 2,
     "primary_expression_match": 1,
 }
@@ -48,6 +50,11 @@ _LINEAGE_PANEL_ALL_LIMIT = 5
 
 _SQUAMOUS_CONTEXT_CODES = frozenset({"HNSC", "LUSC", "ESCA", "CESC", "THYM"})
 _SALIVARY_CODES = frozenset({"ADCC", "ACINIC"})
+_RHABDOID_CODES = frozenset({"ATRT", "RT"})
+_RHABDOID_SMARCB1_MAX_TPM_BY_CODE = {
+    "RT": 5.0,
+    "ATRT": 40.0,
+}
 _OS_OSTEOGENIC_MARKERS = (
     "RUNX2",
     "SATB2",
@@ -83,6 +90,9 @@ _LOCAL_REFERENCE_MIN_TPM = 5.0
 _LOCAL_REFERENCE_MIN_LOG2_VS_PAN = 1.0
 _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT = 0.45
 _LOCAL_REFERENCE_MIN_MARKER_FRACTION = 0.45
+_LOCAL_REFERENCE_MIN_MARKER_FRACTION_BY_CODE = {
+    "MBL": 0.85,
+}
 _LOCAL_REFERENCE_MIN_BURDEN_RATIO = 0.10
 # Anchor used to turn the burden ratio into a [0,1] score in the
 # local-reference support computation. ``burden_support = min(burden_ratio
@@ -94,7 +104,104 @@ _LOCAL_REFERENCE_MIN_BURDEN_RATIO = 0.10
 # panel fires at all.
 _LOCAL_REFERENCE_BURDEN_SCORE_ANCHOR = 0.35
 _LOCAL_REFERENCE_MIN_SUPPORT = 0.65
-_LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare", "salivary"})
+_LOCAL_REFERENCE_NEAR_TOP_CONTEXT_MIN_SUPPORT = 0.90
+_LOCAL_REFERENCE_NEAR_TOP_MAX_TOP_RATIO = 1.10
+_LOCAL_REFERENCE_DECONVOLVED_PRIORITY_BONUS = 0.06
+_LOCAL_REFERENCE_CONTEXT_FOCUS_PRIORITY_BONUS = 0.08
+_LOCAL_REFERENCE_FAMILY_SPECIFICITY_PRIORITY_BONUS = 0.03
+_LOCAL_REFERENCE_STATUS_PARENT_PRIORITY_PENALTY = 0.05
+_LOCAL_REFERENCE_HIGH_CONFIDENCE_SUPPORT = 0.90
+_LOCAL_REFERENCE_HIGH_CONFIDENCE_CONTEXT_SUPPORT = 0.85
+_LOCAL_REFERENCE_HIGH_CONFIDENCE_MARKER_FRACTION = 0.75
+_LOCAL_REFERENCE_HIGH_CONFIDENCE_BURDEN_RATIO = 0.50
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SUPPORT = 0.90
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_MARKER_FRACTION = 0.80
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_BURDEN_RATIO = 0.50
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_MARKERS = 2
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_FRACTION = 0.30
+_LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare"})
+_LOCAL_REFERENCE_CROSS_LINEAGE_MARKER_STATUSES = frozenset({"consistent", "mixed"})
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_GENERIC_PRIMARY_TISSUES = frozenset(
+    {"", "soft_tissue", "connective_tissue", "smooth_muscle"}
+)
+_LOCAL_REFERENCE_SIGNATURE_ANCHOR_BLOCKED_LINEAGES_BY_PRIMARY_TISSUE = {
+    "": frozenset({"epithelial"}),
+    "soft_tissue": frozenset({"epithelial"}),
+    "connective_tissue": frozenset({"epithelial"}),
+    "smooth_muscle": frozenset({"epithelial"}),
+    # SOX10/S100B/peripheral-nerve programs overlap CNS glial and melanocytic
+    # tumors. Without explicit sarcoma/SARC context they are useful annotation,
+    # not enough to relabel a coherent GBM/LGG/SKCM/UVM first-pass call.
+    "nerve_sheath": frozenset({"epithelial", "melanocytic", "neural"}),
+    # Retinal differentiation can overlap neuroendocrine programs; require
+    # CNS/embryonal-compatible context before it can displace SCLC/PCPG-like
+    # broad RNA evidence.
+    "retina": frozenset({"neuroendocrine"}),
+}
+_LOCAL_REFERENCE_GENERIC_ANCHOR_MARKERS = frozenset(
+    {
+        "ACTA2",
+        "CD34",
+        "CDK4",
+        "COL1A1",
+        "COL1A2",
+        "EPCAM",
+        "FRS2",
+        "HMGA2",
+        "KRT5",
+        "KRT8",
+        "KRT14",
+        "KRT18",
+        "MDM2",
+        "PTPRC",
+        "SOX2",
+        "TP63",
+        "TSPAN31",
+        "VIM",
+        "YEATS4",
+    }
+)
+_COARSE_REFERENCE_MIN_RHO = 0.75
+_COARSE_REFERENCE_MIN_MARGIN = 0.03
+_COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS = 2
+_COARSE_REFERENCE_TISSUE_TIE_WINDOW = 0.02
+_COARSE_REFERENCE_MIN_TISSUE_TIE_SCORE = 0.75
+_CONTRAST_DISCRIMINATOR_MIN_CONTEXT_SUPPORT = 0.60
+_CONTRAST_DISCRIMINATOR_MIN_SCORE = 0.65
+_CONTRAST_DISCRIMINATOR_MIN_MARGIN = 0.25
+_CONTRAST_DISCRIMINATOR_MIN_PRIMARY_HITS = 1
+_CONTRAST_DISCRIMINATOR_MIN_TOTAL_HITS = 2
+_CONTRAST_DISCRIMINATOR_STRONG_SCORE = 0.80
+_CONTRAST_DISCRIMINATOR_STRONG_MARGIN = 0.35
+_CONTRAST_DISCRIMINATOR_STRONG_TOTAL_HITS = 3
+_CONTRAST_DISCRIMINATOR_PRIMARY_HIGH_TPM = 5.0
+_CONTRAST_DISCRIMINATOR_SUPPORTING_HIGH_TPM = 2.0
+_CONTRAST_DISCRIMINATOR_LOW_TPM = 1.0
+_ADCC_PROMOTING_MIN_MYB_TPM = 20.0
+_ADCC_STRONG_MYB_AXIS_TPM = 75.0
+_ADCC_LOW_MYB_BASAL_BREAST_MIN_SCORE = 0.75
+_ADCC_LUMINAL_BREAST_MIN_SCORE = 0.60
+_ADCC_LUMINAL_BREAST_MIN_POSITIVE_HITS = 4
+_ADCC_LOW_MYB_BASAL_BREAST_MIN_BRCA_CONTEXT = 0.75
+_MTC_NEURAL_CREST_CONTEXT_CODES = frozenset({"PCPG"})
+_MTC_NEURAL_CREST_COMPETITOR_CODES = ("NBL_MYCNnonamp", "NBL_MYCNamp", "PCPG")
+_MTC_SPECIFIC_ANCHOR_MIN_TPM = {
+    "CEACAM5": 5.0,
+    "CALCR": 5.0,
+    "RET": 50.0,
+}
+_HEPB_ADULT_LIVER_CONTEXT_CODES = frozenset({"LIHC"})
+_HEPB_FETAL_ANCHOR_MIN_TPM = {
+    "DLK1": 5.0,
+    "SALL4": 5.0,
+    "IGF2": 100.0,
+}
+_FUSION_DEFINED_NATIVE_TISSUE_MIN_SCORE = 0.75
+_FUSION_DEFINED_NATIVE_TISSUE_TIE_WINDOW = 0.02
+_FUSION_DEFINED_STRONG_RNA_SURROGATES = {
+    "ADCC": (("MYB", _ADCC_STRONG_MYB_AXIS_TPM), ("MYBL1", _ADCC_STRONG_MYB_AXIS_TPM)),
+    "NUTM": (("NUTM1", 10.0),),
+}
 # Keyed on pirlygenes' lineage-only family ontology (5.12+). Retired
 # ``pediatric-*`` / ``net`` keys are kept as harmless back-compat aliases (older
 # pirlygenes); ``test_taxonomy_robustness`` guarantees every *live* family is
@@ -103,13 +210,18 @@ _LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY = {
     "sarcoma": ("SARC",),
     "pediatric-bone": ("SARC",),
     "pediatric-soft": ("SARC",),
+    # No TCGA salivary cohort exists. Use the broad epithelial cohorts that
+    # salivary/lacrimal/breast ADCC medoids actually project onto, then require
+    # the ADCC marker/fusion axis before a fusion-defined salivary code can
+    # become the report label.
+    "salivary": ("HNSC", "LUAD", "BRCA"),
     "heme-bcell": ("DLBC", "LAML", "THYM"),
     "heme-plasma": ("DLBC", "LAML", "THYM"),
     "heme-tcell": ("DLBC", "LAML", "THYM"),
     "heme-myeloid": ("LAML", "DLBC", "THYM"),
     "cns": ("GBM", "LGG"),
     "pediatric-cns": ("GBM", "LGG"),
-    "embryonal": ("LIHC", "CHOL", "GBM"),
+    "embryonal": ("GBM",),
     "pediatric-liver": ("LIHC", "CHOL"),
     "neuroendocrine": ("PCPG", "LUAD", "LUSC", "PAAD"),
     "net": ("PCPG", "LUAD", "LUSC", "PAAD"),
@@ -134,6 +246,8 @@ class CancerTypeEvidence:
     direct_fusion_support: float = 0.0
     family_marker_support: float = 0.0
     background_label_support: float = 0.0
+    coarse_composition_support: float = 0.0
+    contrast_discriminator_support: float = 0.0
     report_label_candidate: bool = False
     can_select_report_label: bool = False
     blocking_reasons: tuple[str, ...] = ()
@@ -196,6 +310,14 @@ class CancerTypeEvidence:
             "direct_fusion_support": round(float(self.direct_fusion_support), 4),
             "family_marker_support": round(float(self.family_marker_support), 4),
             "background_label_support": round(float(self.background_label_support), 4),
+            "coarse_composition_support": round(
+                float(self.coarse_composition_support),
+                4,
+            ),
+            "contrast_discriminator_support": round(
+                float(self.contrast_discriminator_support),
+                4,
+            ),
         }
         row = {
             "cancer_type": self.cancer_type,
@@ -270,6 +392,7 @@ class RareRnaPolicy:
     min_related_context_support: float = 0.60
     require_top_context: bool = False
     required_top_context_codes: frozenset[str] = frozenset()
+    required_top_lineages: frozenset[str] = frozenset()
     top_context_promotes_to_full: bool = True
 
     def effective_context_support(
@@ -295,6 +418,11 @@ class RareRnaPolicy:
         if self.require_top_context:
             return top_is_context
         return top_is_context or related_context_support >= self.min_related_context_support
+
+    def top_lineage_passes(self, *, top_code: str) -> bool:
+        if not self.required_top_lineages:
+            return True
+        return _broad_lineage_for_code(top_code) in self.required_top_lineages
 
 
 _FINE_REFERENCE_SPECS = (
@@ -340,14 +468,18 @@ _RARE_RNA_POLICIES = {
     "NUTM": RareRnaPolicy(
         marker_weight=0.55,
         context_weight=0.40,
-        required_top_context_codes=_SQUAMOUS_CONTEXT_CODES,
+        min_related_context_support=0.70,
+        required_top_lineages=frozenset({"epithelial"}),
     ),
     **{
         code: RareRnaPolicy(
-            marker_weight=0.25,
-            context_weight=0.60,
-            top_context_weight=0.15,
-            require_top_context=True,
+            marker_weight=0.45,
+            context_weight=0.45,
+            top_context_weight=0.10,
+            min_marker_context_support=0.80,
+            min_related_context_support=0.80,
+            required_top_lineages=frozenset({"epithelial"}),
+            top_context_promotes_to_full=False,
         )
         for code in _SALIVARY_CODES
     },
@@ -386,6 +518,20 @@ def _safe_bool(value: object, default: bool = False) -> bool:
     return text in {"1", "true", "yes", "y"}
 
 
+def _broad_lineage_for_code(code: str) -> str:
+    code = _clean(code)
+    if not code:
+        return ""
+    try:
+        from .cancer_type_ontology import broad_lineage
+    except ImportError:
+        return ""
+    try:
+        return _clean(broad_lineage(code))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _split_semicolon(value: object) -> list[str]:
     text = str(value or "").strip()
     if not text or text.lower() == "nan":
@@ -401,8 +547,10 @@ def _selection_method_label(selected_by: str) -> str:
     return {
         "primary_expression_match": "primary_expression_match",
         "tumor_label_refinement": "tumor_label_refinement",
+        "coarse_composition_reference": "coarse_composition_reference",
         "local_expression_reference": "local_expression_reference",
         "fine_reference": "fine_reference",
+        "contrast_discriminator": "contrast_discriminator",
         "rare_marker": "rna_marker_with_expression_context",
         "direct_fusion": "direct_fusion",
     }.get(selected_by, selected_by)
@@ -421,11 +569,1279 @@ def _candidate_support_by_code(analysis: Mapping[str, Any]) -> dict[str, float]:
     return out
 
 
+def _coarse_reference_pairs(analysis: Mapping[str, Any]) -> list[tuple[str, float]]:
+    signal = analysis.get("healthy_vs_tumor")
+    cohorts = list(getattr(signal, "top_tcga_cohorts", None) or [])
+    if not cohorts and isinstance(signal, Mapping):
+        cohorts = list(signal.get("top_tcga_cohorts") or [])
+    pairs: list[tuple[str, float]] = []
+    for item in cohorts:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        code = _clean(str(item[0]).removesuffix("_TPM"))
+        rho = _safe_float(item[1])
+        if code and rho > 0:
+            pairs.append((code, rho))
+    return pairs
+
+
+def _coarse_reference_support_by_code(analysis: Mapping[str, Any]) -> dict[str, float]:
+    pairs = _coarse_reference_pairs(analysis)
+    top_rho = max((rho for _, rho in pairs), default=0.0)
+    if top_rho <= 0:
+        return {}
+    out: dict[str, float] = {}
+    for code, rho in pairs:
+        out[code] = max(out.get(code, 0.0), float(np.clip(rho / top_rho, 0.0, 1.0)))
+    return out
+
+
+def _tissue_composition_signal_value(
+    signal: object,
+    attr: str,
+    default: Any = None,
+) -> Any:
+    if isinstance(signal, Mapping):
+        return signal.get(attr, default)
+    return getattr(signal, attr, default)
+
+
+def _normal_tissue_score_by_name(analysis: Mapping[str, Any]) -> dict[str, float]:
+    signal = analysis.get("healthy_vs_tumor")
+    tissues = list(_tissue_composition_signal_value(signal, "top_normal_tissues", []) or [])
+    out: dict[str, float] = {}
+    for item in tissues:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        tissue = str(item[0] or "").strip().removesuffix("_nTPM")
+        score = _safe_float(item[1])
+        if tissue and score > 0:
+            out[tissue] = max(out.get(tissue, 0.0), score)
+    return out
+
+
+def _primary_tissue_for_code(code: str) -> str:
+    try:
+        from .tumor_purity import CANCER_TO_TISSUE
+    except ImportError:
+        return ""
+    return str(CANCER_TO_TISSUE.get(_clean(code)) or "").strip()
+
+
+def _resolved_coarse_reference(analysis: Mapping[str, Any]) -> dict[str, Any]:
+    pairs = _coarse_reference_pairs(analysis)
+    if not pairs:
+        return {}
+    top_code, top_rho = pairs[0]
+    normal_scores = _normal_tissue_score_by_name(analysis)
+    close = [
+        (code, rho)
+        for code, rho in pairs[:3]
+        if float(top_rho - rho) <= _COARSE_REFERENCE_TISSUE_TIE_WINDOW
+    ]
+    selected_code = top_code
+    selected_rho = top_rho
+    tissue_tiebreak_applied = False
+    selected_tissue = _primary_tissue_for_code(top_code)
+    selected_tissue_score = _normal_tissue_lookup_score(normal_scores, selected_tissue)
+    if len(close) > 1 and normal_scores:
+        best = max(
+            close,
+            key=lambda item: (
+                _normal_tissue_lookup_score(
+                    normal_scores,
+                    _primary_tissue_for_code(item[0]),
+                ),
+                item[1],
+            ),
+        )
+        best_tissue = _primary_tissue_for_code(best[0])
+        best_tissue_score = _normal_tissue_lookup_score(normal_scores, best_tissue)
+        if (
+            best[0] != top_code
+            and best_tissue_score >= _COARSE_REFERENCE_MIN_TISSUE_TIE_SCORE
+            and best_tissue_score > selected_tissue_score
+        ):
+            selected_code, selected_rho = best
+            selected_tissue = best_tissue
+            selected_tissue_score = best_tissue_score
+            tissue_tiebreak_applied = True
+    second_rho = max((rho for code, rho in pairs if code != selected_code), default=0.0)
+    # When the tissue tie-break deliberately picks a close non-top cohort, this
+    # margin can be negative. Consumers must read it with tissue_tiebreak_applied.
+    return {
+        "code": selected_code,
+        "rho": float(selected_rho),
+        "top_code": top_code,
+        "top_rho": float(top_rho),
+        "second_rho": float(second_rho),
+        "margin": float(selected_rho - second_rho),
+        "primary_tissue": selected_tissue,
+        "primary_tissue_score": float(selected_tissue_score),
+        "tissue_tiebreak_applied": bool(tissue_tiebreak_applied),
+        "close_codes": [code for code, _rho in close],
+    }
+
+
+def _marker_coherence(
+    code: str,
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    code = _clean(code)
+    if not code or not sample_tpm_by_symbol:
+        return {}
+    try:
+        from .tumor_type_ontology import tumor_type_sanity_check
+    except ImportError:
+        return {}
+    try:
+        sanity = tumor_type_sanity_check(code, sample_tpm_by_symbol)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("tumor-type marker coherence failed for %s", code, exc_info=True)
+        return {}
+    if not sanity:
+        return {}
+    return {
+        "code": _clean(sanity.get("code")),
+        "status": _clean(sanity.get("status")),
+        "detected": len(sanity.get("expected_high_detected") or []),
+        "total": len(sanity.get("expected_high") or []),
+        "required_for_consistent": _safe_int(
+            sanity.get("required_high_for_consistent"),
+            0,
+        ),
+        "detected_fraction": round(
+            _safe_float(sanity.get("expected_high_detected_fraction")),
+            4,
+        ),
+        "detected_genes": [
+            _clean(row.get("gene") or row.get("symbol"))
+            for row in (sanity.get("expected_high_detected") or [])
+            if _clean(row.get("gene") or row.get("symbol"))
+        ],
+        "summary": sanity.get("summary") or "",
+    }
+
+
+def _marker_coherence_selection_grade(coherence: Mapping[str, Any]) -> bool:
+    status = _clean(coherence.get("status"))
+    # Mixed means the positive lineage program is present but expected-low
+    # genes are also seen, usually from background/TME; it should add caution,
+    # not erase a coherent tumor-lineage call.
+    return status in {"consistent", "mixed", "not_evaluable", ""}
+
+
+def _marker_coherence_strong(coherence: Mapping[str, Any]) -> bool:
+    status = _clean(coherence.get("status"))
+    detected = _safe_int(coherence.get("detected"), 0)
+    total = _safe_int(coherence.get("total"), 0)
+    required = _safe_int(coherence.get("required_for_consistent"), 0)
+    fraction = _safe_float(coherence.get("detected_fraction"))
+    return bool(
+        status in {"consistent", "mixed"}
+        and total >= 4
+        and detected >= max(required, 3)
+        and fraction >= 0.75
+    )
+
+
+def _mtc_neural_crest_conflict(
+    *,
+    top_code: str,
+    support_by_code: Mapping[str, float],
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    """Return why an MTC RNA prompt is not specific enough in neural-crest context."""
+    pcpg_support = max(
+        float(top_code in _MTC_NEURAL_CREST_CONTEXT_CODES),
+        max(
+            (
+                _safe_float(support_by_code.get(context_code))
+                for context_code in _MTC_NEURAL_CREST_CONTEXT_CODES
+            ),
+            default=0.0,
+        ),
+    )
+    if pcpg_support < 0.90:
+        return {}
+    anchors = {
+        symbol: _safe_float(sample_tpm_by_symbol.get(symbol))
+        for symbol, threshold in _MTC_SPECIFIC_ANCHOR_MIN_TPM.items()
+        if _safe_float(sample_tpm_by_symbol.get(symbol)) >= threshold
+    }
+    if anchors:
+        return {}
+    competitors: list[dict[str, Any]] = []
+    for competitor_code in _MTC_NEURAL_CREST_COMPETITOR_CODES:
+        coherence = _marker_coherence(competitor_code, sample_tpm_by_symbol)
+        if _marker_coherence_strong(coherence):
+            competitors.append(
+                {
+                    "code": competitor_code,
+                    "status": coherence.get("status"),
+                    "detected": coherence.get("detected"),
+                    "total": coherence.get("total"),
+                    "detected_genes": coherence.get("detected_genes") or [],
+                }
+            )
+    if not competitors:
+        return {}
+    return {
+        "context_code": "PCPG",
+        "context_support": round(float(pcpg_support), 4),
+        "specific_anchor_thresholds": dict(_MTC_SPECIFIC_ANCHOR_MIN_TPM),
+        "competing_marker_programs": competitors,
+    }
+
+
+def _hepb_adult_liver_context_conflict(
+    *,
+    top_code: str,
+    context_codes: tuple[str, ...],
+    support_by_code: Mapping[str, float],
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    """Return details when an HEPB reference lacks fetal-liver anchors.
+
+    Adult LIHC and HEPB share liver/oncofetal markers such as AFP, GPC3,
+    EPCAM, KRT8 and KRT18. When the broad RNA context is already coherent
+    LIHC, the pediatric label needs at least one fetal-liver anchor before it
+    replaces the adult liver call.
+    """
+    active_contexts = {
+        code
+        for code in context_codes
+        if code in _HEPB_ADULT_LIVER_CONTEXT_CODES
+        and _safe_float(support_by_code.get(code)) > 0
+    }
+    if top_code in _HEPB_ADULT_LIVER_CONTEXT_CODES:
+        active_contexts.add(top_code)
+    if not active_contexts:
+        return {}
+    context_support = max(
+        (_safe_float(support_by_code.get(code)) for code in active_contexts),
+        default=0.0,
+    )
+    if context_support < 0.75:
+        return {}
+    observed = {
+        symbol: _safe_float(sample_tpm_by_symbol.get(symbol))
+        for symbol in _HEPB_FETAL_ANCHOR_MIN_TPM
+    }
+    passing = {
+        symbol: tpm
+        for symbol, tpm in observed.items()
+        if tpm >= _HEPB_FETAL_ANCHOR_MIN_TPM[symbol]
+    }
+    if passing:
+        return {}
+    return {
+        "context_codes": sorted(active_contexts),
+        "context_support": round(float(context_support), 4),
+        "observed_anchor_tpm": {
+            symbol: round(float(tpm), 3) for symbol, tpm in observed.items()
+        },
+        "anchor_thresholds": dict(_HEPB_FETAL_ANCHOR_MIN_TPM),
+    }
+
+
+def _local_reference_cross_lineage_conflict(
+    code: str,
+    context_codes: tuple[str, ...],
+    coherence: Mapping[str, Any],
+) -> dict[str, Any]:
+    registry = _registry_by_code()
+    code_family = _clean(registry.get(_clean(code), {}).get("family")).lower()
+    context_families = {
+        _clean(registry.get(_clean(context_code), {}).get("family")).lower()
+        for context_code in context_codes
+    }
+    if code_family.startswith("cns-") and any(
+        family.startswith("cns-") for family in context_families
+    ):
+        return {}
+    code_lineage = _broad_lineage_for_code(code)
+    context_lineages = {
+        _broad_lineage_for_code(context_code)
+        for context_code in context_codes
+        if _broad_lineage_for_code(context_code)
+    }
+    if not code_lineage or not context_lineages or code_lineage in context_lineages:
+        return {}
+    total = _safe_int(coherence.get("total"), 0)
+    if total <= 0:
+        return {}
+    status = _clean(coherence.get("status"))
+    if status in _LOCAL_REFERENCE_CROSS_LINEAGE_MARKER_STATUSES:
+        return {}
+    detected = _safe_int(coherence.get("detected"), 0)
+    required = _safe_int(coherence.get("required_for_consistent"), 0)
+    return {
+        "code": _clean(code),
+        "code_lineage": code_lineage,
+        "context_codes": list(context_codes),
+        "context_lineages": sorted(context_lineages),
+        "marker_status": status or "not_evaluable",
+        "detected": detected,
+        "total": total,
+        "required_for_consistent": required,
+    }
+
+
+def _strong_conflicting_coarse_reference(
+    analysis: Mapping[str, Any],
+    code: str,
+) -> dict[str, Any]:
+    resolved = _resolved_coarse_reference(analysis)
+    if not resolved:
+        return {}
+    top_code = _clean(resolved.get("code"))
+    top_rho = _safe_float(resolved.get("rho"))
+    code = _clean(code)
+    if not top_code or top_code == code or top_rho < _COARSE_REFERENCE_MIN_RHO:
+        return {}
+    signal = analysis.get("healthy_vs_tumor")
+    cancer_hint = _clean(
+        _tissue_composition_signal_value(signal, "cancer_hint", "")
+    ).lower()
+    if cancer_hint not in {"tumor-consistent", "possibly-tumor"}:
+        return {}
+    fit_quality = analysis.get("fit_quality") or {}
+    fit_label = ""
+    if isinstance(fit_quality, Mapping):
+        fit_label = _clean(fit_quality.get("label")).lower()
+    if fit_label not in {"weak", "ambiguous"}:
+        return {}
+    second_rho = _safe_float(resolved.get("second_rho"))
+    margin = _safe_float(resolved.get("margin"))
+    type_specific_cohort = _clean(
+        str(
+            _tissue_composition_signal_value(signal, "type_specific_cohort", "")
+            or ""
+        ).removesuffix("_TPM")
+    )
+    type_specific_hits = list(
+        _tissue_composition_signal_value(signal, "type_specific_hits", []) or []
+    )
+    type_specific_count = (
+        len(type_specific_hits) if type_specific_cohort == top_code else 0
+    )
+    if (
+        margin < _COARSE_REFERENCE_MIN_MARGIN
+        and type_specific_count < _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        and not bool(resolved.get("tissue_tiebreak_applied"))
+    ):
+        return {}
+    return {
+        "code": top_code,
+        "rho": round(float(top_rho), 4),
+        "second_rho": round(float(second_rho), 4),
+        "margin": round(float(margin), 4),
+        "type_specific_hit_count": type_specific_count,
+        "fit_label": fit_label,
+        "primary_tissue": resolved.get("primary_tissue") or "",
+        "primary_tissue_score": round(_safe_float(resolved.get("primary_tissue_score")), 4),
+        "tissue_tiebreak_applied": bool(resolved.get("tissue_tiebreak_applied")),
+    }
+
+
+def _top_coarse_reference_code(analysis: Mapping[str, Any]) -> str:
+    pairs = _coarse_reference_pairs(analysis)
+    return pairs[0][0] if pairs else ""
+
+
+def _context_support_by_code(analysis: Mapping[str, Any]) -> dict[str, float]:
+    out = _candidate_support_by_code(analysis)
+    for code, support in _coarse_reference_support_by_code(analysis).items():
+        out[code] = max(out.get(code, 0.0), support)
+    return out
+
+
+@lru_cache(maxsize=1)
+def _contrast_discriminator_rows() -> tuple[dict[str, Any], ...]:
+    """Curated two-way expression discriminators shipped by pirlygenes."""
+    try:
+        from pirlygenes import get_data
+    except ImportError:
+        return ()
+    try:
+        df = get_data("cancer-type-discriminators")
+    except (FileNotFoundError, KeyError, ValueError):
+        _LOGGER.warning(
+            "pirlygenes cancer-type discriminator table unavailable",
+            exc_info=True,
+        )
+        return ()
+    if df is None or getattr(df, "empty", True):
+        return ()
+    rows: list[dict[str, Any]] = []
+    for row in df.to_dict("records"):
+        contrast = _clean(row.get("contrast"))
+        type_a = _clean(row.get("type_a")).upper()
+        type_b = _clean(row.get("type_b")).upper()
+        favors = _clean(row.get("favors")).upper()
+        symbol = _clean(row.get("Symbol") or row.get("symbol"))
+        if not contrast or not type_a or not type_b or favors not in {type_a, type_b}:
+            continue
+        if not symbol:
+            continue
+        rows.append(
+            {
+                "contrast": contrast,
+                "type_a": type_a,
+                "type_b": type_b,
+                "favors": favors,
+                "symbol": symbol,
+                "direction": _clean(row.get("direction")).lower() or "high",
+                "tier": _clean(row.get("tier")).lower() or "supporting",
+                "separability": _clean(row.get("separability")).lower(),
+                "source": _clean(row.get("source")),
+                "support_type": _clean(row.get("support_type")),
+                "source_anchor": _clean(row.get("source_anchor")),
+            }
+        )
+    return tuple(rows)
+
+
+def _contrast_marker_weight(row: Mapping[str, Any]) -> float:
+    return 2.0 if _clean(row.get("tier")).lower() == "primary" else 1.0
+
+
+def _contrast_marker_passes(row: Mapping[str, Any], observed_tpm: float) -> bool:
+    direction = _clean(row.get("direction")).lower()
+    tier = _clean(row.get("tier")).lower()
+    if direction == "low":
+        return observed_tpm <= _CONTRAST_DISCRIMINATOR_LOW_TPM
+    threshold = (
+        _CONTRAST_DISCRIMINATOR_PRIMARY_HIGH_TPM
+        if tier == "primary"
+        else _CONTRAST_DISCRIMINATOR_SUPPORTING_HIGH_TPM
+    )
+    return observed_tpm >= threshold
+
+
+def _contrast_side_signal(
+    rows: list[Mapping[str, Any]],
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    total_weight = 0.0
+    hit_weight = 0.0
+    primary_hits = 0
+    total_hits = 0
+    marker_details: list[dict[str, Any]] = []
+    high_burden = 0.0
+    sources: set[str] = set()
+    support_types: set[str] = set()
+    separability: set[str] = set()
+    for row in rows:
+        symbol = _clean(row.get("symbol"))
+        if not symbol:
+            continue
+        observed = _safe_float(sample_tpm_by_symbol.get(symbol))
+        weight = _contrast_marker_weight(row)
+        passes = _contrast_marker_passes(row, observed)
+        total_weight += weight
+        if passes:
+            hit_weight += weight
+            total_hits += 1
+            if _clean(row.get("tier")).lower() == "primary":
+                primary_hits += 1
+        if _clean(row.get("direction")).lower() != "low":
+            high_burden += observed
+        source = _clean(row.get("source"))
+        support_type = _clean(row.get("support_type"))
+        sep = _clean(row.get("separability")).lower()
+        if source:
+            sources.add(source)
+        if support_type:
+            support_types.add(support_type)
+        if sep:
+            separability.add(sep)
+        marker_details.append(
+            {
+                "gene": symbol,
+                "tpm": round(float(observed), 3),
+                "direction": _clean(row.get("direction")).lower() or "high",
+                "tier": _clean(row.get("tier")).lower() or "supporting",
+                "passes": bool(passes),
+            }
+        )
+    marker_details.sort(
+        key=lambda item: (
+            not bool(item.get("passes")),
+            0 if item.get("tier") == "primary" else 1,
+            -_safe_float(item.get("tpm")),
+            str(item.get("gene") or ""),
+        )
+    )
+    return {
+        "score": float(hit_weight / total_weight) if total_weight > 0 else 0.0,
+        "primary_hits": primary_hits,
+        "total_hits": total_hits,
+        "total_markers": len(marker_details),
+        "high_burden_tpm": round(float(high_burden), 3),
+        "markers": marker_details,
+        "sources": sorted(sources),
+        "support_types": sorted(support_types),
+        "separability": sorted(separability),
+    }
+
+
+def _contrast_minimums_for_signal(signal: Mapping[str, Any]) -> tuple[float, float, int]:
+    separability = set(signal.get("separability") or [])
+    min_score = _CONTRAST_DISCRIMINATOR_MIN_SCORE
+    min_margin = _CONTRAST_DISCRIMINATOR_MIN_MARGIN
+    min_total_hits = _CONTRAST_DISCRIMINATOR_MIN_TOTAL_HITS
+    if "poor" in separability:
+        min_score += 0.10
+        min_margin += 0.10
+        min_total_hits += 1
+    return min_score, min_margin, min_total_hits
+
+
+def _contrast_signal_is_strong(signal: Mapping[str, Any], margin: float) -> bool:
+    return bool(
+        _safe_float(signal.get("score")) >= _CONTRAST_DISCRIMINATOR_STRONG_SCORE
+        and margin >= _CONTRAST_DISCRIMINATOR_STRONG_MARGIN
+        and _safe_int(signal.get("primary_hits"), 0)
+        >= _CONTRAST_DISCRIMINATOR_MIN_PRIMARY_HITS
+        and _safe_int(signal.get("total_hits"), 0)
+        >= _CONTRAST_DISCRIMINATOR_STRONG_TOTAL_HITS
+    )
+
+
+def _contrast_context_code(
+    type_a: str,
+    type_b: str,
+    support_by_code: Mapping[str, float],
+    top_code: str,
+) -> tuple[str, float]:
+    candidates = [(type_a, _safe_float(support_by_code.get(type_a)))]
+    candidates.append((type_b, _safe_float(support_by_code.get(type_b))))
+    if top_code in {type_a, type_b}:
+        candidates.append((top_code, max(1.0, _safe_float(support_by_code.get(top_code)))))
+    code, support = max(candidates, key=lambda item: (item[1], item[0]))
+    return (code, float(support)) if support > 0 else ("", 0.0)
+
+
+def _add_contrast_discriminator_features(
+    hypotheses: dict[str, CancerTypeEvidence],
+    sample_tpm_by_symbol: Mapping[str, float],
+    analysis: Mapping[str, Any],
+) -> None:
+    """Apply pirlygenes two-way discriminators as interpretable contrast evidence."""
+    if not sample_tpm_by_symbol:
+        return
+    rows = _contrast_discriminator_rows()
+    if not rows:
+        return
+    registry = _registry_by_code()
+    support_by_code = _context_support_by_code(analysis)
+    top_code = _top_code(analysis)
+    primary_contexts = _primary_context_codes(analysis)
+    fit_quality = analysis.get("fit_quality") or {}
+    fit_label = (
+        _clean(fit_quality.get("label")).lower()
+        if isinstance(fit_quality, Mapping)
+        else ""
+    )
+    broad_uncertain = fit_label in {"weak", "ambiguous"}
+    consensus_context = _broad_coarse_consensus_context(analysis)
+
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(_clean(row.get("contrast")), []).append(row)
+
+    for contrast, contrast_rows in grouped.items():
+        first = contrast_rows[0]
+        type_a = _clean(first.get("type_a")).upper()
+        type_b = _clean(first.get("type_b")).upper()
+        if type_a not in registry or type_b not in registry:
+            continue
+        context_code, context_support = _contrast_context_code(
+            type_a,
+            type_b,
+            support_by_code,
+            top_code,
+        )
+        if (
+            not context_code
+            or context_support < _CONTRAST_DISCRIMINATOR_MIN_CONTEXT_SUPPORT
+        ):
+            continue
+
+        by_side = {
+            code: [row for row in contrast_rows if _clean(row.get("favors")).upper() == code]
+            for code in (type_a, type_b)
+        }
+        signal_by_side = {
+            code: _contrast_side_signal(side_rows, sample_tpm_by_symbol)
+            for code, side_rows in by_side.items()
+        }
+        winner_code = max(
+            (type_a, type_b),
+            key=lambda code: (
+                _safe_float(signal_by_side[code].get("score")),
+                _safe_int(signal_by_side[code].get("primary_hits"), 0),
+                _safe_float(signal_by_side[code].get("high_burden_tpm")),
+                -1 if code == context_code else 0,
+                code,
+            ),
+        )
+        loser_code = type_b if winner_code == type_a else type_a
+        winner_signal = signal_by_side[winner_code]
+        loser_signal = signal_by_side[loser_code]
+        winner_score = _safe_float(winner_signal.get("score"))
+        loser_score = _safe_float(loser_signal.get("score"))
+        margin = winner_score - loser_score
+        min_score, min_margin, min_total_hits = _contrast_minimums_for_signal(
+            winner_signal
+        )
+        if winner_score < min_score or margin < min_margin:
+            continue
+        if (
+            _safe_int(winner_signal.get("primary_hits"), 0)
+            < _CONTRAST_DISCRIMINATOR_MIN_PRIMARY_HITS
+            or _safe_int(winner_signal.get("total_hits"), 0) < min_total_hits
+        ):
+            continue
+
+        same_context = winner_code == context_code
+        same_top = winner_code == top_code
+        top_participates = top_code in {type_a, type_b}
+        context_is_top = context_code == top_code
+        context_is_primary = context_code in primary_contexts
+        strong_signal = _contrast_signal_is_strong(winner_signal, margin)
+        marker_coherence = _marker_coherence(winner_code, sample_tpm_by_symbol)
+        context_marker_coherence = _marker_coherence(context_code, sample_tpm_by_symbol)
+        context_marker_incoherent = bool(
+            context_marker_coherence
+            and not _marker_coherence_selection_grade(context_marker_coherence)
+        )
+        blockers: list[str] = []
+        # If the contrast agrees with the current top broad RNA label, it is
+        # explanatory support only. Let the existing primary-expression row
+        # carry that label; otherwise a same-top contrast can accidentally
+        # outrank exact rare-reference evidence without changing the code.
+        can_select = False if same_top else same_context
+        if can_select and (not top_participates or not context_is_top):
+            blockers.append(
+                "contrast marker evidence is outside the active top-code "
+                "ambiguity; coarse-only or secondary-context contrasts are "
+                "recorded but do not set the report label"
+            )
+            can_select = False
+        if not can_select and not same_top:
+            can_select = bool(
+                top_participates
+                and context_is_top
+                and (broad_uncertain or context_marker_incoherent)
+            )
+            if not top_participates or not context_is_top:
+                blockers.append(
+                    f"contrast {contrast} does not resolve the active top RNA "
+                    f"context {top_code}; cross-code contrast promotion "
+                    "requires the top RNA call to be one side of the contrast"
+                )
+            if not can_select:
+                blockers.append(
+                    f"contrast favors {winner_code}, but first-pass context "
+                    f"{context_code} is not uncertain or marker-incoherent"
+                )
+        if (
+            can_select
+            and not same_context
+            and consensus_context
+            and consensus_context == context_code
+            and not strong_signal
+        ):
+            blockers.append(
+                "broad RNA ranking and coarse reference matching both support "
+                f"{context_code}; contrast marker evidence is recorded but does "
+                "not override that consensus"
+            )
+            can_select = False
+        if (
+            can_select
+            and marker_coherence
+            and not _marker_coherence_selection_grade(marker_coherence)
+        ):
+            blockers.append(
+                f"{winner_code} marker program is {marker_coherence.get('status')} "
+                f"({marker_coherence.get('detected')}/"
+                f"{marker_coherence.get('total')} expected high markers; "
+                f"{marker_coherence.get('required_for_consistent')} required)"
+            )
+            can_select = False
+
+        support = float(
+            np.clip(
+                0.55 * winner_score
+                + 0.25 * max(margin, 0.0)
+                + 0.20 * min(context_support, 1.0),
+                0.0,
+                1.0,
+            )
+        )
+        hypothesis = _hypothesis(hypotheses, winner_code)
+        hypothesis.add_source("contrast_discriminator")
+        hypothesis.expression_reference_cancer_type = (
+            hypothesis.expression_reference_cancer_type or winner_code
+        )
+        hypothesis.reference_cancer_type = (
+            hypothesis.reference_cancer_type or context_code or winner_code
+        )
+        hypothesis.related_context_code = hypothesis.related_context_code or context_code
+        hypothesis.related_context_support = max(
+            hypothesis.related_context_support,
+            context_support,
+        )
+        hypothesis.contrast_discriminator_support = max(
+            hypothesis.contrast_discriminator_support,
+            support,
+        )
+        hypothesis.basis = hypothesis.basis or (
+            f"{contrast} contrast marker program favors {winner_code} over "
+            f"{loser_code} in a {context_code} expression context"
+        )
+        hypothesis.details.update(
+            {
+                "contrast_discriminator": contrast,
+                "contrast_discriminator_context_code": context_code,
+                "contrast_discriminator_context_support": round(
+                    float(context_support),
+                    4,
+                ),
+                "contrast_discriminator_context_is_primary": bool(context_is_primary),
+                "contrast_discriminator_winner": winner_code,
+                "contrast_discriminator_loser": loser_code,
+                "contrast_discriminator_winner_score": round(float(winner_score), 4),
+                "contrast_discriminator_loser_score": round(float(loser_score), 4),
+                "contrast_discriminator_margin": round(float(margin), 4),
+                "contrast_discriminator_strong_signal": bool(strong_signal),
+                "contrast_discriminator_broad_fit_label": fit_label,
+                "contrast_discriminator_sources": winner_signal.get("sources") or [],
+                "contrast_discriminator_support_types": (
+                    winner_signal.get("support_types") or []
+                ),
+                "contrast_discriminator_winner_markers": (
+                    winner_signal.get("markers") or []
+                )[:8],
+                "contrast_discriminator_loser_markers": (
+                    loser_signal.get("markers") or []
+                )[:8],
+            }
+        )
+        if marker_coherence:
+            hypothesis.details["contrast_discriminator_marker_coherence"] = (
+                marker_coherence
+            )
+        if context_marker_coherence:
+            hypothesis.details["contrast_discriminator_context_marker_coherence"] = (
+                context_marker_coherence
+            )
+        hypothesis.consider_for_report_label(
+            selected_by="contrast_discriminator",
+            can_select=can_select,
+            blocking_reasons=blockers,
+            priority=(1, support),
+        )
+
+
 def _top_code(analysis: Mapping[str, Any]) -> str:
     rows = _candidate_rows(analysis)
     if rows:
         return _clean(rows[0].get("code"))
     return _clean(analysis.get("cancer_type"))
+
+
+def _primary_context_codes(analysis: Mapping[str, Any]) -> tuple[str, ...]:
+    codes: list[str] = []
+    for code in (_top_code(analysis),):
+        if code and code not in codes:
+            codes.append(code)
+    top_coarse = _top_coarse_reference_code(analysis)
+    if top_coarse and top_coarse not in codes:
+        codes.append(top_coarse)
+    return tuple(codes)
+
+
+def _matched_local_reference_context(
+    context_codes: tuple[str, ...],
+    primary_contexts: tuple[str, ...],
+    support_by_code: Mapping[str, float],
+    *,
+    context_is_top: bool,
+) -> str:
+    if context_is_top:
+        primary_match = next(
+            (context for context in primary_contexts if context in context_codes),
+            "",
+        )
+        if primary_match:
+            return primary_match
+    return max(
+        context_codes,
+        key=lambda context_code: _safe_float(support_by_code.get(context_code)),
+    )
+
+
+def _broad_coarse_consensus_context(analysis: Mapping[str, Any]) -> str:
+    top = _top_code(analysis)
+    top_coarse = _top_coarse_reference_code(analysis)
+    if top and top == top_coarse:
+        return top
+    return ""
+
+
+def _adcc_breast_program_conflict(
+    sample_tpm_by_gene_id: Mapping[str, float],
+    analysis: Mapping[str, Any],
+    *,
+    myb_tpm: float,
+) -> dict[str, Any]:
+    """Return mammary-program conflict evidence for no-fusion ADCC RNA calls.
+
+    This is intentionally a combined-program veto, not a single-marker
+    exception: ADCC can still be RNA-provisional without a fusion when the
+    sample matches the exact ADCC cohort cleanly, but exact-reference support
+    should not override a coherent conventional mammary program in
+    BRCA-compatible expression context without direct fusion support.
+    """
+    if not sample_tpm_by_gene_id:
+        return {}
+    brca_context_support = _safe_float(_context_support_by_code(analysis).get("BRCA"))
+    if brca_context_support < _ADCC_LOW_MYB_BASAL_BREAST_MIN_BRCA_CONTEXT:
+        return {}
+    try:
+        from .lineage_panels import LINEAGE_PANELS, score_panel
+    except ImportError:
+        return {}
+    panels = {
+        p.name: p
+        for p in LINEAGE_PANELS
+        if p.name in {"BRCA_BASAL", "BRCA_LUMINAL"}
+    }
+    if not panels:
+        return {}
+    try:
+        sample_hk_median = _sample_hk_median(sample_tpm_by_gene_id)
+        evidence_by_panel = {
+            name: score_panel(panel, sample_tpm_by_gene_id, sample_hk_median)
+            for name, panel in panels.items()
+        }
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "BRCA conflict check failed; continuing without ADCC veto",
+            exc_info=True,
+        )
+        return {}
+
+    evidence = evidence_by_panel.get("BRCA_BASAL")
+    if (
+        myb_tpm < _ADCC_PROMOTING_MIN_MYB_TPM
+        and evidence is not None
+        and _safe_float(evidence.score) >= _ADCC_LOW_MYB_BASAL_BREAST_MIN_SCORE
+    ):
+        return {
+            "program": evidence.panel_name,
+            "score": round(_safe_float(evidence.score), 4),
+            "brca_context_support": round(float(brca_context_support), 4),
+            "rationale": evidence.rationale,
+            "reason": "low_myb_basal_mammary",
+        }
+
+    evidence = evidence_by_panel.get("BRCA_LUMINAL")
+    if evidence is None:
+        return {}
+    score = _safe_float(evidence.score)
+    positive_hits = len(getattr(evidence, "high_hits", ()) or ())
+    if (
+        score < _ADCC_LUMINAL_BREAST_MIN_SCORE
+        or positive_hits < _ADCC_LUMINAL_BREAST_MIN_POSITIVE_HITS
+    ):
+        return {}
+    return {
+        "program": evidence.panel_name,
+        "score": round(score, 4),
+        "positive_hits": positive_hits,
+        "brca_context_support": round(float(brca_context_support), 4),
+        "rationale": evidence.rationale,
+        "reason": "luminal_mammary_program",
+    }
+
+
+def _normal_tissue_lookup_score(
+    scores_by_name: Mapping[str, float],
+    tissue: str,
+) -> float:
+    tissue = _clean(tissue).lower()
+    if not tissue:
+        return 0.0
+    normalized_scores = {
+        _clean(name).lower(): _safe_float(score)
+        for name, score in scores_by_name.items()
+    }
+    variants = {
+        tissue,
+        tissue.replace("_", " "),
+        tissue.replace(" ", "_"),
+    }
+    return max(
+        (normalized_scores.get(variant, 0.0) for variant in variants),
+        default=0.0,
+    )
+
+
+def _strong_fusion_defined_rna_surrogate(
+    code: str,
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    markers = _FUSION_DEFINED_STRONG_RNA_SURROGATES.get(_clean(code), ())
+    if not markers:
+        return {}
+    best_gene = ""
+    best_tpm = 0.0
+    best_threshold = 0.0
+    for gene, threshold in markers:
+        tpm = _safe_float(sample_tpm_by_symbol.get(gene))
+        if tpm > best_tpm:
+            best_gene = gene
+            best_tpm = tpm
+            best_threshold = float(threshold)
+    return {
+        "strong": bool(best_gene and best_tpm >= best_threshold),
+        "gene": best_gene,
+        "tpm": round(float(best_tpm), 4),
+        "threshold_tpm": round(float(best_threshold), 4),
+        "markers": [
+            {"gene": gene, "threshold_tpm": threshold}
+            for gene, threshold in markers
+        ],
+    }
+
+
+def _unconfirmed_fusion_defined_context_conflict(
+    *,
+    code: str,
+    context_codes: tuple[str, ...],
+    primary_tissue: str,
+    analysis: Mapping[str, Any],
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, Any]:
+    """Return native-context conflict for fusion-defined RNA refinements.
+
+    A fusion-defined fine label may refine a broad fallback cohort without
+    direct fusion evidence when the RNA surrogate is very specific, or when
+    the sample itself has expression support for the fine label's primary
+    tissue. It should not override a broad/coarse native-context consensus on
+    ordinary lineage/background expression alone.
+    """
+    code = _clean(code)
+    if code not in _FUSION_DEFINED_STRONG_RNA_SURROGATES:
+        return {}
+    consensus_context = _broad_coarse_consensus_context(analysis)
+    if (
+        not consensus_context
+        or consensus_context == code
+        or consensus_context not in context_codes
+    ):
+        return {}
+    surrogate = _strong_fusion_defined_rna_surrogate(code, sample_tpm_by_symbol)
+    if surrogate.get("strong"):
+        return {}
+
+    normal_scores = _normal_tissue_score_by_name(analysis)
+    native_tissue = _primary_tissue_for_code(consensus_context)
+    native_score = _normal_tissue_lookup_score(normal_scores, native_tissue)
+    fine_score = _normal_tissue_lookup_score(normal_scores, primary_tissue)
+    fine_primary_tissue_supported = bool(
+        fine_score >= _FUSION_DEFINED_NATIVE_TISSUE_MIN_SCORE
+        and fine_score + _FUSION_DEFINED_NATIVE_TISSUE_TIE_WINDOW >= native_score
+    )
+    if fine_primary_tissue_supported:
+        return {}
+    return {
+        "code": code,
+        "consensus_context": consensus_context,
+        "native_tissue": native_tissue,
+        "native_tissue_score": round(float(native_score), 4),
+        "fine_primary_tissue": primary_tissue,
+        "fine_primary_tissue_score": round(float(fine_score), 4),
+        "fine_primary_tissue_supported": bool(fine_primary_tissue_supported),
+        "surrogate": surrogate,
+    }
+
+
+def _fusion_defined_context_conflict_reason(
+    conflict: Mapping[str, Any],
+) -> str:
+    code = _clean(conflict.get("code")) or "fusion-defined label"
+    context = _clean(conflict.get("consensus_context")) or "native context"
+    surrogate = conflict.get("surrogate") or {}
+    gene = _clean(surrogate.get("gene")) or "driver-axis"
+    tpm = _safe_float(surrogate.get("tpm"))
+    threshold = _safe_float(surrogate.get("threshold_tpm"))
+    return (
+        f"unconfirmed fusion-defined {code} RNA refinement conflicts with a "
+        f"native {context} broad/coarse expression consensus; direct fusion "
+        f"evidence or strong {gene} RNA surrogate is required "
+        f"({gene} {tpm:.1f} TPM < {threshold:.1f} TPM)"
+    )
+
+
+def _near_top_context_is_supported(
+    context_codes: tuple[str, ...],
+    support_by_code: Mapping[str, float],
+    analysis: Mapping[str, Any],
+    *,
+    local_support: float,
+    allow_consensus_override: bool = False,
+) -> bool:
+    if local_support < 0.90:
+        return False
+    consensus_context = _broad_coarse_consensus_context(analysis)
+    if (
+        consensus_context
+        and consensus_context not in context_codes
+    ):
+        if not allow_consensus_override:
+            return False
+        consensus_lineage = _broad_lineage_for_code(consensus_context)
+        if not consensus_lineage:
+            return False
+        if not any(
+            _broad_lineage_for_code(context_code) == consensus_lineage
+            for context_code in context_codes
+        ):
+            return False
+    top = _top_code(analysis)
+    top_support = _safe_float(support_by_code.get(top))
+    if not top or top_support <= 0:
+        return False
+    context_support = max(
+        (_safe_float(support_by_code.get(context_code)) for context_code in context_codes),
+        default=0.0,
+    )
+    if context_support < _LOCAL_REFERENCE_NEAR_TOP_CONTEXT_MIN_SUPPORT:
+        return False
+    return (top_support / max(context_support, 1e-9)) <= _LOCAL_REFERENCE_NEAR_TOP_MAX_TOP_RATIO
+
+
+def _is_high_confidence_local_reference(
+    *,
+    context_support: float,
+    marker_fraction: float,
+    burden_ratio: float,
+    local_support: float,
+) -> bool:
+    return (
+        local_support >= _LOCAL_REFERENCE_HIGH_CONFIDENCE_SUPPORT
+        and context_support >= _LOCAL_REFERENCE_HIGH_CONFIDENCE_CONTEXT_SUPPORT
+        and marker_fraction >= _LOCAL_REFERENCE_HIGH_CONFIDENCE_MARKER_FRACTION
+        and burden_ratio >= _LOCAL_REFERENCE_HIGH_CONFIDENCE_BURDEN_RATIO
+    )
+
+
+def _context_expected_high_genes(context_codes: tuple[str, ...]) -> frozenset[str]:
+    if not context_codes:
+        return frozenset()
+    try:
+        from .tumor_type_ontology import tumor_type_ontology_entry
+    except ImportError:
+        return frozenset()
+    genes: set[str] = set()
+    for context_code in context_codes:
+        try:
+            entry = tumor_type_ontology_entry(context_code)
+        except Exception:  # noqa: BLE001
+            entry = None
+        if entry is None:
+            continue
+        genes.update(getattr(entry, "expected_high_genes", ()) or ())
+    return frozenset(_clean(gene) for gene in genes if _clean(gene))
+
+
+def _local_reference_anchor_specificity(
+    marker_coherence: Mapping[str, Any],
+    context_codes: tuple[str, ...],
+) -> dict[str, Any]:
+    detected = [
+        _clean(gene)
+        for gene in (marker_coherence.get("detected_genes") or [])
+        if _clean(gene)
+    ]
+    if not detected:
+        return {
+            "detected": 0,
+            "specific": 0,
+            "specific_fraction": 0.0,
+            "specific_genes": [],
+        }
+    context_genes = _context_expected_high_genes(context_codes)
+    generic = _LOCAL_REFERENCE_GENERIC_ANCHOR_MARKERS
+    specific_genes = [
+        gene
+        for gene in detected
+        if gene not in context_genes and gene not in generic
+    ]
+    specific_fraction = float(len(specific_genes) / len(detected))
+    return {
+        "detected": len(detected),
+        "specific": len(specific_genes),
+        "specific_fraction": round(specific_fraction, 4),
+        "specific_genes": specific_genes,
+    }
+
+
+def _local_reference_signature_anchor_support(
+    *,
+    marker_fraction: float,
+    burden_ratio: float,
+    marker_coherence: Mapping[str, Any],
+    context_codes: tuple[str, ...],
+) -> float:
+    """Context-independent exact-reference support from the candidate program.
+
+    Broad TCGA context is allowed to be wrong when a rare/local reference has a
+    clean, high-burden marker program. This score is deliberately based on the
+    exact panel plus ontology marker coherence, not on the broad cohort rank, so
+    it can rescue cases like organ-background-dominated GIST liver metastasis
+    without letting weak one-off marker hits select a report label.
+    """
+    if not _marker_coherence_strong(marker_coherence):
+        return 0.0
+    if marker_fraction < _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_MARKER_FRACTION:
+        return 0.0
+    if burden_ratio < _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_BURDEN_RATIO:
+        return 0.0
+    specificity = _local_reference_anchor_specificity(
+        marker_coherence,
+        context_codes,
+    )
+    if (
+        _safe_int(specificity.get("specific"), 0)
+        < _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_MARKERS
+    ):
+        return 0.0
+    if (
+        _safe_float(specificity.get("specific_fraction"))
+        < _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_FRACTION
+    ):
+        return 0.0
+    burden_support = min(burden_ratio / _LOCAL_REFERENCE_BURDEN_SCORE_ANCHOR, 1.0)
+    coherence_fraction = _safe_float(marker_coherence.get("detected_fraction"))
+    support = (
+        0.45 * marker_fraction
+        + 0.35 * burden_support
+        + 0.20 * coherence_fraction
+    )
+    return float(support if support >= _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SUPPORT else 0.0)
+
+
+def _local_reference_signature_anchor_context_blocked(
+    primary_tissue: str,
+    context_codes: tuple[str, ...],
+) -> bool:
+    blocked_lineages = (
+        _LOCAL_REFERENCE_SIGNATURE_ANCHOR_BLOCKED_LINEAGES_BY_PRIMARY_TISSUE.get(
+            _clean(primary_tissue).lower(),
+            frozenset(),
+        )
+    )
+    if not blocked_lineages:
+        return False
+    context_lineages = {
+        _broad_lineage_for_code(context_code)
+        for context_code in context_codes
+        if _broad_lineage_for_code(context_code)
+    }
+    return bool(context_lineages & blocked_lineages)
+
+
+def _local_reference_first_pass_context_blocker(
+    primary_tissue: str,
+    primary_contexts: tuple[str, ...],
+    context_codes: tuple[str, ...],
+) -> str:
+    first_context = _clean(primary_contexts[0]) if primary_contexts else ""
+    if not first_context or first_context in context_codes:
+        return ""
+    blocked_lineages = (
+        _LOCAL_REFERENCE_SIGNATURE_ANCHOR_BLOCKED_LINEAGES_BY_PRIMARY_TISSUE.get(
+            _clean(primary_tissue).lower(),
+            frozenset(),
+        )
+    )
+    first_lineage = _broad_lineage_for_code(first_context)
+    if not first_lineage or first_lineage not in blocked_lineages:
+        return ""
+    primary = _clean(primary_tissue).lower() or "generic"
+    return (
+        f"{primary} exact-reference refinement cannot override first-pass "
+        f"{first_context} {first_lineage} context without direct compatible "
+        "first-pass expression support"
+    )
+
+
+def _local_reference_context_focus(
+    context_codes: tuple[str, ...],
+    matched_context: str,
+) -> float:
+    if not context_codes or not matched_context:
+        return 0.0
+    try:
+        from .cancer_type_ontology import broad_lineage
+    except ImportError:
+        return 0.0
+    try:
+        matched_lineage = _clean(broad_lineage(matched_context))
+    except Exception:  # noqa: BLE001
+        matched_lineage = ""
+    if not matched_lineage:
+        return 0.0
+    same_lineage = 0
+    considered = 0
+    for context in context_codes:
+        try:
+            lineage = _clean(broad_lineage(context))
+        except Exception:  # noqa: BLE001
+            continue
+        if not lineage:
+            continue
+        considered += 1
+        if lineage == matched_lineage:
+            same_lineage += 1
+    if not considered:
+        return 0.0
+    return float(same_lineage / considered)
+
+
+def _local_reference_family_specificity_bonus(family: str) -> float:
+    family = _clean(family).lower()
+    if "-" not in family:
+        return 0.0
+    return _LOCAL_REFERENCE_FAMILY_SPECIFICITY_PRIORITY_BONUS
+
+
+def _is_molecular_status_expression_source(value: object) -> bool:
+    text = _clean(value).lower()
+    if not text:
+        return False
+    normalized = text.replace(";", "/").replace(",", "/").replace("_", "/")
+    tokens = {token.strip() for token in normalized.split("/") if token.strip()}
+    status_terms = {
+        "mut",
+        "mutation",
+        "hpv",
+        "pam50",
+        "msi",
+        "cyto",
+        "cytogenetic",
+        "cytogenetics",
+        "apl",
+    }
+    return bool((tokens & status_terms) or any(token.startswith("eln") for token in tokens))
 
 
 def _hypothesis(
@@ -519,6 +1935,17 @@ def _hk_normalization_gene_ids() -> frozenset[str]:
     return frozenset(out)
 
 
+def _sample_hk_median(sample_tpm_by_gene_id: Mapping[str, float]) -> float:
+    hk_ids = _hk_normalization_gene_ids()
+    if not hk_ids:
+        return 1.0
+    hk_vals = [
+        sample_tpm_by_gene_id.get(g, 0.0) for g in hk_ids
+        if sample_tpm_by_gene_id.get(g, 0.0) > 0
+    ]
+    return float(np.median(hk_vals)) if hk_vals else 1.0
+
+
 def _local_reference_context_codes(
     code: str,
     registry_row: Mapping[str, Any],
@@ -527,7 +1954,16 @@ def _local_reference_context_codes(
     if parent:
         return (parent,)
     family = _clean(registry_row.get("family")).lower()
-    return tuple(_LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY.get(family, ()))
+    primary_tissue = _clean(registry_row.get("primary_tissue")).lower()
+    if family == "embryonal" and "liver" in primary_tissue:
+        return ("LIHC",)
+    contexts = _LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY.get(family)
+    if contexts:
+        return tuple(contexts)
+    if "-" in family:
+        root_family = family.split("-", 1)[0]
+        return tuple(_LOCAL_REFERENCE_CONTEXT_CODES_BY_FAMILY.get(root_family, ()))
+    return ()
 
 
 @lru_cache(maxsize=32)
@@ -555,6 +1991,7 @@ def _local_expression_reference_panels(
             subtype_deconvolved_expression,
         )
         from .tumor_purity import _compile_excluded_gene_matcher
+        from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
     except ImportError:
         _LOGGER.warning(
             "trufflepig.reference / tumor_purity imports failed; local "
@@ -581,6 +2018,7 @@ def _local_expression_reference_panels(
     if not cohort_cols:
         return {}
     pan_median = pan[cohort_cols].astype(float).median(axis=1)
+    pan_symbols = set(pan.index.astype(str))
     is_excluded = _compile_excluded_gene_matcher()
     registry = _registry_by_code()
     compatible_context_set = {
@@ -624,6 +2062,19 @@ def _local_expression_reference_panels(
         context_codes = _local_reference_context_codes(code, registry_row)
         if not context_codes:
             return
+        context_cols = [
+            f"{context_code}_TPM"
+            for context_code in context_codes
+            if f"{context_code}_TPM" in pan.columns
+        ]
+        if context_cols:
+            context_base = pan[context_cols].astype(float).median(axis=1)
+            base_by_symbol = pd.concat(
+                [pan_median.rename("pan"), context_base.rename("context")],
+                axis=1,
+            ).max(axis=1)
+        else:
+            base_by_symbol = pan_median
         ref = (
             ref.groupby(symbol_col, as_index=False)[value_col]
             .median()
@@ -638,10 +2089,21 @@ def _local_expression_reference_panels(
         syms_arr = ref[symbol_col].map(_clean).to_numpy()
         vals = pd.to_numeric(ref[value_col], errors="coerce").fillna(0.0).to_numpy()
         keep = (syms_arr != "") & (vals >= _LOCAL_REFERENCE_MIN_TPM)
+        keep &= np.fromiter(
+            (symbol in pan_symbols for symbol in syms_arr),
+            dtype=bool,
+            count=len(syms_arr),
+        )
         if keep.any():
             kept_idx = np.where(keep)[0]
             excluded = np.fromiter(
-                (is_excluded(syms_arr[i]) for i in kept_idx), dtype=bool, count=len(kept_idx)
+                (
+                    is_excluded(syms_arr[i])
+                    or is_extended_housekeeping_symbol(syms_arr[i], scope="markers")
+                    for i in kept_idx
+                ),
+                dtype=bool,
+                count=len(kept_idx),
             )
             keep[kept_idx[excluded]] = False
         if not keep.any():
@@ -649,7 +2111,7 @@ def _local_expression_reference_panels(
         k_syms = syms_arr[keep]
         k_vals = vals[keep]
         base = np.fromiter(
-            (_safe_float(pan_median.get(s), default=0.1) for s in k_syms),
+            (_safe_float(base_by_symbol.get(s), default=0.0) for s in k_syms),
             dtype=float,
             count=len(k_syms),
         )
@@ -660,7 +2122,6 @@ def _local_expression_reference_panels(
         f_syms = k_syms[passes]
         f_vals = k_vals[passes]
         f_log2 = log2[passes]
-        ref_by_symbol: dict[str, float] = {s: float(v) for s, v in zip(f_syms, f_vals)}
         ranked = sorted(
             (
                 (float(lg), float(v), -len(s), s)
@@ -674,6 +2135,12 @@ def _local_expression_reference_panels(
                 :_LOCAL_REFERENCE_TOP_MARKERS
             ]
         )
+        marker_set = set(markers)
+        ref_by_symbol: dict[str, float] = {
+            s: float(v)
+            for s, v in zip(f_syms, f_vals)
+            if s in marker_set
+        }
         old = panels.get(code)
         if old is not None and int(old.get("_priority", 0)) > priority:
             return
@@ -681,8 +2148,13 @@ def _local_expression_reference_panels(
             "markers": markers,
             "ref_medians": ref_by_symbol,
             "context_codes": context_codes,
+            "parent_code": _clean(registry_row.get("parent_code")),
             "family": _clean(registry_row.get("family")),
             "primary_tissue": _clean(registry_row.get("primary_tissue")),
+            "expression_source": _clean(registry_row.get("expression_source")),
+            "fusion_driven": _clean(registry_row.get("fusion_driven")),
+            "fusion_driver": _clean(registry_row.get("fusion_driver")),
+            "registry_notes": _clean(registry_row.get("notes")),
             "source_cohort": source_label,
             "reference_kind": reference_kind,
             "_priority": priority,
@@ -936,6 +2408,172 @@ def _add_broad_rna_features(
             )
 
 
+def _add_coarse_composition_reference_features(
+    hypotheses: dict[str, CancerTypeEvidence],
+    sample_tpm_by_symbol: Mapping[str, float],
+    analysis: Mapping[str, Any],
+) -> None:
+    """Promote a strong independent cancer-reference composition match.
+
+    This selector is intentionally data-derived: it uses the pan-reference
+    tissue-composition screen plus tumor-up-vs-matched-normal hits for that
+    top cohort. It is only allowed to change the report label when the
+    first-pass RNA candidate is ambiguous or marker-incoherent, so a clean
+    broad classifier call is not displaced by generic tissue background.
+    """
+    signal = analysis.get("healthy_vs_tumor")
+    if signal is None:
+        return
+    resolved = _resolved_coarse_reference(analysis)
+    if not resolved:
+        return
+    top_code = _clean(resolved.get("code"))
+    top_rho = _safe_float(resolved.get("rho"))
+    if top_rho < _COARSE_REFERENCE_MIN_RHO:
+        return
+    if top_code not in _registry_by_code():
+        return
+
+    cancer_hint = _clean(
+        _tissue_composition_signal_value(signal, "cancer_hint", "")
+    ).lower()
+    if cancer_hint not in {"tumor-consistent", "possibly-tumor"}:
+        return
+
+    second_rho = _safe_float(resolved.get("second_rho"))
+    margin = _safe_float(resolved.get("margin"))
+    type_specific_cohort = _clean(
+        str(
+            _tissue_composition_signal_value(signal, "type_specific_cohort", "")
+            or ""
+        ).removesuffix("_TPM")
+    )
+    type_specific_hits = list(
+        _tissue_composition_signal_value(signal, "type_specific_hits", []) or []
+    )
+    type_specific_count = (
+        len(type_specific_hits) if type_specific_cohort == top_code else 0
+    )
+
+    fit_quality = analysis.get("fit_quality") or {}
+    fit_label = ""
+    if isinstance(fit_quality, Mapping):
+        fit_label = _clean(fit_quality.get("label")).lower()
+    broad_uncertain = fit_label in {"weak", "ambiguous"}
+    broad_top_code = _top_code(analysis)
+    broad_top_marker_coherence = _marker_coherence(
+        broad_top_code,
+        sample_tpm_by_symbol,
+    )
+    broad_marker_incoherent = bool(
+        broad_top_marker_coherence
+        and not _marker_coherence_selection_grade(broad_top_marker_coherence)
+    )
+    same_as_broad_top = bool(broad_top_code and broad_top_code == top_code)
+    close_codes = list(resolved.get("close_codes") or [])
+    broad_top_is_close_coarse_match = bool(
+        broad_top_code
+        and broad_top_code != top_code
+        and broad_top_code in close_codes
+    )
+    has_specificity = (
+        margin >= _COARSE_REFERENCE_MIN_MARGIN
+        or type_specific_count >= _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        or bool(resolved.get("tissue_tiebreak_applied"))
+    )
+
+    blockers: list[str] = []
+    if not same_as_broad_top and not (broad_uncertain or broad_marker_incoherent):
+        blockers.append(
+            f"first-pass top-1 ({broad_top_code or 'unknown'}) is not ambiguous "
+            "or marker-incoherent, so composition remains contextual"
+        )
+    if not has_specificity:
+        blockers.append(
+            "top cancer-reference composition lacks separation or type-specific "
+            "tumor-up evidence"
+        )
+    if (
+        broad_top_is_close_coarse_match
+        and margin < _COARSE_REFERENCE_MIN_MARGIN
+        and not bool(resolved.get("tissue_tiebreak_applied"))
+    ):
+        blockers.append(
+            "top cancer-reference composition is tied with the first-pass RNA "
+            f"winner ({broad_top_code}); type-specific tumor-up evidence alone "
+            "does not override the broad RNA call"
+        )
+
+    support = float(
+        np.clip(
+            0.70 * top_rho
+            + 0.20 * min(type_specific_count / 4.0, 1.0)
+            + 0.10 * _safe_float(resolved.get("primary_tissue_score")),
+            0.0,
+            1.0,
+        )
+    )
+    hypothesis = _hypothesis(hypotheses, top_code)
+    hypothesis.add_source("coarse_composition_reference")
+    hypothesis.expression_reference_cancer_type = (
+        hypothesis.expression_reference_cancer_type or top_code
+    )
+    hypothesis.reference_cancer_type = hypothesis.reference_cancer_type or top_code
+    hypothesis.related_context_code = hypothesis.related_context_code or top_code
+    hypothesis.related_context_support = max(
+        hypothesis.related_context_support,
+        _coarse_reference_support_by_code(analysis).get(top_code, 0.0),
+    )
+    hypothesis.coarse_composition_support = max(
+        hypothesis.coarse_composition_support,
+        support,
+    )
+    hypothesis.basis = hypothesis.basis or (
+        f"independent tissue-composition screen favored {top_code} and "
+        "matched its tumor-up expression evidence"
+    )
+    top_hit_symbols: list[dict[str, Any]] = []
+    for item in type_specific_hits[:8]:
+        if isinstance(item, (list, tuple)) and len(item) >= 2:
+            top_hit_symbols.append(
+                {"gene": str(item[0]), "tpm": round(_safe_float(item[1]), 3)}
+            )
+    hypothesis.details.update(
+        {
+            "coarse_reference_rho": round(float(top_rho), 4),
+            "coarse_reference_second_rho": round(float(second_rho), 4),
+            "coarse_reference_margin": round(float(margin), 4),
+            "coarse_reference_raw_top_code": resolved.get("top_code") or top_code,
+            "coarse_reference_raw_top_rho": round(
+                _safe_float(resolved.get("top_rho")),
+                4,
+            ),
+            "coarse_reference_close_codes": close_codes,
+            "coarse_reference_primary_tissue": resolved.get("primary_tissue") or "",
+            "coarse_reference_primary_tissue_score": round(
+                _safe_float(resolved.get("primary_tissue_score")),
+                4,
+            ),
+            "coarse_reference_tissue_tiebreak_applied": bool(
+                resolved.get("tissue_tiebreak_applied")
+            ),
+            "coarse_reference_cancer_hint": cancer_hint,
+            "coarse_reference_type_specific_cohort": type_specific_cohort,
+            "coarse_reference_type_specific_hit_count": type_specific_count,
+            "coarse_reference_top_type_specific_hits": top_hit_symbols,
+            "coarse_reference_broad_top_code": broad_top_code,
+            "coarse_reference_broad_fit_label": fit_label,
+            "coarse_reference_broad_top_marker_coherence": broad_top_marker_coherence,
+        }
+    )
+    hypothesis.consider_for_report_label(
+        selected_by="coarse_composition_reference",
+        can_select=not blockers,
+        blocking_reasons=blockers,
+        priority=(1, support),
+    )
+
+
 def _family_marker_support(row: Mapping[str, Any]) -> float:
     score = _safe_float(row.get("family_score"))
     if score <= 0:
@@ -1051,7 +2689,7 @@ def _add_fine_reference_features(
     sample_tpm_by_symbol: Mapping[str, float],
     analysis: Mapping[str, Any],
 ) -> None:
-    support_by_code = _candidate_support_by_code(analysis)
+    support_by_code = _context_support_by_code(analysis)
     context_support = support_by_code.get(spec.reference_cancer_type, 0.0)
     if context_support <= 0:
         return
@@ -1112,7 +2750,7 @@ def _add_fine_reference_features(
         hypothesis.related_context_support,
         context_support,
     )
-    hypothesis.related_context_is_top = _top_code(analysis) == spec.reference_cancer_type
+    hypothesis.related_context_is_top = spec.reference_cancer_type in _primary_context_codes(analysis)
     hypothesis.fine_reference_support = max(
         hypothesis.fine_reference_support,
         fine_reference_support,
@@ -1153,10 +2791,12 @@ def _add_fine_reference_features(
 def _add_local_expression_reference_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
+    sample_tpm_by_gene_id: Mapping[str, float],
     analysis: Mapping[str, Any],
 ) -> None:
-    support_by_code = _candidate_support_by_code(analysis)
-    top = _top_code(analysis)
+    support_by_code = _context_support_by_code(analysis)
+    primary_contexts = _primary_context_codes(analysis)
+    top = primary_contexts[0] if primary_contexts else _top_code(analysis)
     if not support_by_code or not top:
         return
 
@@ -1183,14 +2823,30 @@ def _add_local_expression_reference_features(
             (support_by_code.get(context_code, 0.0) for context_code in context_codes),
             default=0.0,
         )
-        context_is_top = top in context_codes
-        matched_context = (
-            top
-            if context_is_top
-            else max(
-                context_codes,
-                key=lambda context_code: support_by_code.get(context_code, 0.0),
-            )
+        context_is_top = any(context in context_codes for context in primary_contexts)
+        matched_context = _matched_local_reference_context(
+            context_codes,
+            primary_contexts,
+            support_by_code,
+            context_is_top=context_is_top,
+        )
+        consensus_context = _broad_coarse_consensus_context(analysis)
+        context_conflicts_with_consensus = bool(
+            consensus_context and consensus_context not in context_codes
+        )
+        parent_code = _clean(panel.get("parent_code"))
+        expression_source = _clean(panel.get("expression_source"))
+        molecular_status_source = _is_molecular_status_expression_source(
+            expression_source
+        ) or _is_molecular_status_expression_source(
+            code
+        ) or _is_molecular_status_expression_source(
+            panel.get("source_cohort")
+        )
+        fusion_driven = _clean(panel.get("fusion_driven")).lower()
+        existing_hypothesis = hypotheses.get(code)
+        has_direct_fusion = bool(
+            existing_hypothesis and existing_hypothesis.direct_fusion_support > 0
         )
         markers = tuple(panel.get("markers") or ())
         ref_medians = dict(panel.get("ref_medians") or {})
@@ -1207,23 +2863,272 @@ def _add_local_expression_reference_features(
             + 0.35 * marker_fraction
             + 0.25 * burden_support
         )
+        reference_high_confidence = _is_high_confidence_local_reference(
+            context_support=context_support,
+            marker_fraction=marker_fraction,
+            burden_ratio=burden_ratio,
+            local_support=local_support,
+        )
+        code_marker_coherence: dict[str, Any] = {}
+        strong_code_marker_coherence = False
+        marker_coherence_supported_reference = False
+        if (
+            not reference_high_confidence
+            and local_support >= 0.80
+            and context_support >= 0.75
+            and marker_fraction >= 0.60
+            and burden_ratio >= 0.30
+        ):
+            code_marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+            strong_code_marker_coherence = _marker_coherence_strong(
+                code_marker_coherence
+            )
+            marker_coherence_supported_reference = bool(
+                strong_code_marker_coherence
+                and context_support >= 0.80
+                and marker_fraction >= 0.65
+                and burden_ratio >= 0.35
+            )
+        high_confidence_local_reference = bool(
+            reference_high_confidence or marker_coherence_supported_reference
+        )
+        cross_lineage_marker_conflict: dict[str, Any] = {}
+        if not code_marker_coherence:
+            code_marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+        active_context_codes = (
+            (matched_context or top,) if (matched_context or top) else context_codes
+        )
+        if code_marker_coherence:
+            cross_lineage_marker_conflict = (
+                _local_reference_cross_lineage_conflict(
+                    code,
+                    tuple(c for c in active_context_codes if c),
+                    code_marker_coherence,
+                )
+            )
+        primary_tissue = _clean(panel.get("primary_tissue")).lower()
+        signature_anchor_support = (
+            0.0
+            if (
+                molecular_status_source
+                or context_support >= _LOCAL_REFERENCE_NEAR_TOP_CONTEXT_MIN_SUPPORT
+                or primary_tissue
+                in _LOCAL_REFERENCE_SIGNATURE_ANCHOR_GENERIC_PRIMARY_TISSUES
+                or _local_reference_signature_anchor_context_blocked(
+                    primary_tissue,
+                    tuple(c for c in primary_contexts if c),
+                )
+            )
+            else _local_reference_signature_anchor_support(
+                marker_fraction=marker_fraction,
+                burden_ratio=burden_ratio,
+                marker_coherence=code_marker_coherence,
+                context_codes=tuple(c for c in active_context_codes if c),
+            )
+        )
+        signature_anchored = signature_anchor_support > 0
+        signature_anchor_specificity = (
+            _local_reference_anchor_specificity(
+                code_marker_coherence,
+                tuple(c for c in active_context_codes if c),
+            )
+            if code_marker_coherence
+            else {}
+        )
+        if (
+            not context_is_top
+            and marker_coherence_supported_reference
+            and context_support >= 0.80
+        ):
+            consensus_lineage = _broad_lineage_for_code(consensus_context)
+            context_lineages = {
+                _broad_lineage_for_code(context_code)
+                for context_code in context_codes
+            }
+            if not consensus_context or (
+                consensus_lineage and consensus_lineage in context_lineages
+            ):
+                context_is_top = True
+        if not context_is_top and _near_top_context_is_supported(
+            context_codes,
+            support_by_code,
+            analysis,
+            local_support=local_support,
+            allow_consensus_override=(
+                high_confidence_local_reference and not parent_code
+            ),
+        ):
+            context_is_top = True
+        matched_context = _matched_local_reference_context(
+            context_codes,
+            primary_contexts,
+            support_by_code,
+            context_is_top=context_is_top,
+        )
         blockers: list[str] = []
-        if not context_is_top:
+        first_pass_context_blocker = _local_reference_first_pass_context_blocker(
+            primary_tissue,
+            primary_contexts,
+            context_codes,
+        )
+        if first_pass_context_blocker:
+            blockers.append(first_pass_context_blocker)
+        if (
+            context_conflicts_with_consensus
+            and not context_is_top
+            and not signature_anchored
+        ):
+            blockers.append(
+                "broad RNA ranking and coarse reference matching both support "
+                f"{consensus_context}; exact-reference context "
+                f"{', '.join(context_codes)} is only a secondary near-match"
+            )
+        if cross_lineage_marker_conflict:
+            blockers.append(
+                "cross-lineage exact-reference refinement requires a coherent "
+                f"{code} marker program; observed "
+                f"{cross_lineage_marker_conflict['detected']}/"
+                f"{cross_lineage_marker_conflict['total']} expected high "
+                f"markers ({cross_lineage_marker_conflict['marker_status']}) "
+                "while the compatible RNA context is "
+                f"{', '.join(cross_lineage_marker_conflict['context_codes'])}"
+            )
+        molecular_status_blocker = (
+            "molecular-status expression reference requires direct molecular "
+            "evidence before it can select the report label"
+        )
+        if molecular_status_source:
+            blockers.append(
+                molecular_status_blocker
+            )
+        parent_context_required = bool(
+            parent_code
+            and parent_code != code
+            and parent_code in context_codes
+            and parent_code not in support_by_code
+            and not _primary_tissue_for_code(parent_code)
+        )
+        if parent_context_required:
+            parent_hypothesis = hypotheses.get(parent_code)
+            parent_context_established = bool(
+                parent_hypothesis
+                and parent_hypothesis.can_select_report_label
+            )
+            if not parent_context_established:
+                blockers.append(
+                    f"{code} subgroup expression reference requires established "
+                    f"{parent_code} parent-context support before it can select "
+                    "the report label"
+                )
+        smarcb1_tpm = _safe_float(sample_tpm_by_symbol.get("SMARCB1"))
+        rhabdoid_smarcb1_max = _RHABDOID_SMARCB1_MAX_TPM_BY_CODE.get(code)
+        if (
+            code in _RHABDOID_CODES
+            and rhabdoid_smarcb1_max is not None
+            and smarcb1_tpm > rhabdoid_smarcb1_max
+        ):
+            blockers.append(
+                "rhabdoid exact-reference promotion requires SMARCB1-loss-compatible "
+                f"RNA; SMARCB1 is {smarcb1_tpm:.1f} TPM"
+            )
+        hepb_adult_liver_context_conflict: dict[str, Any] = {}
+        if code == "HEPB":
+            hepb_adult_liver_context_conflict = _hepb_adult_liver_context_conflict(
+                top_code=top,
+                context_codes=context_codes,
+                support_by_code=support_by_code,
+                sample_tpm_by_symbol=sample_tpm_by_symbol,
+            )
+            if hepb_adult_liver_context_conflict:
+                blockers.append(
+                    "HEPB exact-reference promotion over a strong LIHC context "
+                    "requires fetal-liver anchor support (DLK1, SALL4, or IGF2)"
+                )
+        adcc_breast_program_conflict: dict[str, Any] = {}
+        if code == "ADCC" and fusion_driven == "defining" and not has_direct_fusion:
+            myb_tpm = _safe_float(sample_tpm_by_symbol.get("MYB"))
+            adcc_breast_program_conflict = _adcc_breast_program_conflict(
+                sample_tpm_by_gene_id,
+                analysis,
+                myb_tpm=myb_tpm,
+            )
+            if (
+                adcc_breast_program_conflict
+                or (
+                    myb_tpm < _ADCC_PROMOTING_MIN_MYB_TPM
+                    and not high_confidence_local_reference
+                )
+            ):
+                if adcc_breast_program_conflict:
+                    program = _clean(
+                        adcc_breast_program_conflict.get("program")
+                    ) or "BRCA"
+                    blockers.append(
+                        "no-fusion ADCC RNA surrogate conflicts with a strong "
+                        f"{program} lineage program in BRCA-compatible "
+                        "expression context"
+                    )
+                else:
+                    blockers.append(
+                        "ADCC MYB promoter signal "
+                        f"{myb_tpm:.1f} TPM is below "
+                        f"{_ADCC_PROMOTING_MIN_MYB_TPM:.1f} TPM"
+                    )
+        fusion_defined_context_conflict: dict[str, Any] = {}
+        if fusion_driven == "defining" and not has_direct_fusion:
+            fusion_defined_context_conflict = (
+                _unconfirmed_fusion_defined_context_conflict(
+                    code=code,
+                    context_codes=context_codes,
+                    primary_tissue=_clean(panel.get("primary_tissue")),
+                    analysis=analysis,
+                    sample_tpm_by_symbol=sample_tpm_by_symbol,
+                )
+            )
+            if fusion_defined_context_conflict:
+                blockers.append(
+                    _fusion_defined_context_conflict_reason(
+                        fusion_defined_context_conflict
+                    )
+                )
+        fusion_confirmation_caveat = ""
+        if fusion_driven == "defining" and not has_direct_fusion:
+            if high_confidence_local_reference:
+                driver = _clean(panel.get("fusion_driver")) or "the defining fusion"
+                fusion_confirmation_caveat = (
+                    f"{code} has high-confidence exact expression-reference support, "
+                    f"but this entity is fusion-defined ({driver}); confirm the "
+                    "fusion before treating the RNA label as definitive."
+                )
+            else:
+                blockers.append(
+                    "fusion-defined expression reference requires a matching fusion "
+                    "or high-confidence exact expression-reference support before it "
+                    "can select the report label"
+                )
+        if not context_is_top and not signature_anchored:
             blockers.append(
                 "expression-reference context is not the top compatible context "
                 f"({', '.join(context_codes)})"
             )
-        if context_support < _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT:
+        if (
+            context_support < _LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT
+            and not signature_anchored
+        ):
             blockers.append(
                 "compatible first-pass RNA support "
                 f"{context_support:.2f} is below "
                 f"{_LOCAL_REFERENCE_MIN_CONTEXT_SUPPORT:.2f}"
             )
-        if marker_fraction < _LOCAL_REFERENCE_MIN_MARKER_FRACTION:
+        min_marker_fraction = _LOCAL_REFERENCE_MIN_MARKER_FRACTION_BY_CODE.get(
+            code,
+            _LOCAL_REFERENCE_MIN_MARKER_FRACTION,
+        )
+        if marker_fraction < min_marker_fraction:
             blockers.append(
                 "local-reference marker fraction "
                 f"{marker_fraction:.2f} is below "
-                f"{_LOCAL_REFERENCE_MIN_MARKER_FRACTION:.2f}"
+                f"{min_marker_fraction:.2f}"
             )
         if burden_ratio < _LOCAL_REFERENCE_MIN_BURDEN_RATIO:
             blockers.append(
@@ -1231,12 +3136,24 @@ def _add_local_expression_reference_features(
                 f"{burden_ratio:.2f} is below "
                 f"{_LOCAL_REFERENCE_MIN_BURDEN_RATIO:.2f}"
             )
-        if local_support < _LOCAL_REFERENCE_MIN_SUPPORT:
+        if local_support < _LOCAL_REFERENCE_MIN_SUPPORT and not signature_anchored:
             blockers.append(
                 "local-reference support "
                 f"{local_support:.2f} is below "
                 f"{_LOCAL_REFERENCE_MIN_SUPPORT:.2f}"
             )
+        reference_kind = str(panel.get("reference_kind") or "")
+        context_focus = _local_reference_context_focus(context_codes, matched_context)
+        specificity_bonus = _local_reference_family_specificity_bonus(
+            str(panel.get("family") or "")
+        )
+        priority_support = local_support + (
+            _LOCAL_REFERENCE_DECONVOLVED_PRIORITY_BONUS
+            if reference_kind == "deconvolved_tumor_reference"
+            else 0.0
+        ) + (
+            _LOCAL_REFERENCE_CONTEXT_FOCUS_PRIORITY_BONUS * context_focus
+        ) + specificity_bonus
 
         hypothesis = _hypothesis(hypotheses, code)
         hypothesis.add_source("local_expression_reference")
@@ -1267,9 +3184,16 @@ def _add_local_expression_reference_features(
             f"{code} has an exact local expression reference inside the "
             f"{hypothesis.reference_cancer_type} RNA context"
         )
+        if fusion_confirmation_caveat and not hypothesis.caveat:
+            hypothesis.caveat = fusion_confirmation_caveat
+        if fusion_confirmation_caveat and not hypothesis.confirmatory_tests:
+            driver = _clean(panel.get("fusion_driver")) or "defining fusion"
+            hypothesis.confirmatory_tests = f"{driver} fusion testing"
         hypothesis.details.update(
             {
                 "local_reference_context_codes": list(context_codes),
+                "local_reference_parent_code": parent_code,
+                "local_reference_primary_context_codes": list(primary_contexts),
                 "local_reference_matched_context": matched_context,
                 "local_reference_context_is_top": context_is_top,
                 "local_reference_strength": round(float(local_support), 4),
@@ -1281,19 +3205,226 @@ def _add_local_expression_reference_features(
                     float(burden_ratio),
                     4,
                 ),
+                "local_reference_context_focus": round(float(context_focus), 4),
+                "local_reference_high_confidence": bool(
+                    high_confidence_local_reference
+                ),
+                "local_reference_reference_high_confidence": bool(
+                    reference_high_confidence
+                ),
+                "local_reference_marker_coherence_supported": bool(
+                    marker_coherence_supported_reference
+                ),
+                "local_reference_signature_anchored": bool(signature_anchored),
+                "local_reference_signature_anchor_support": round(
+                    float(signature_anchor_support),
+                    4,
+                ),
+                "local_reference_signature_anchor_specificity": (
+                    signature_anchor_specificity
+                ),
+                "local_reference_specificity_bonus": round(
+                    float(specificity_bonus),
+                    4,
+                ),
+                "local_reference_priority_support": round(float(priority_support), 4),
                 "local_reference_family": panel.get("family") or "",
                 "local_reference_primary_tissue": panel.get("primary_tissue") or "",
                 "local_reference_source_cohort": panel.get("source_cohort") or "",
-                "local_reference_kind": panel.get("reference_kind") or "",
+                "local_reference_kind": reference_kind,
+                "local_reference_expression_source": expression_source,
+                "local_reference_fusion_driven": panel.get("fusion_driven") or "",
+                "local_reference_fusion_driver": panel.get("fusion_driver") or "",
+                "local_reference_requires_fusion_confirmation": bool(
+                    fusion_confirmation_caveat
+                ),
+                "local_reference_cross_lineage_marker_conflict": bool(
+                    cross_lineage_marker_conflict
+                ),
+                "fusion_defined_context_conflict": bool(
+                    fusion_defined_context_conflict
+                ),
+                "hepb_adult_liver_context_conflict": bool(
+                    hepb_adult_liver_context_conflict
+                ),
+                "adcc_low_myb_basal_breast_conflict": bool(
+                    adcc_breast_program_conflict
+                    and adcc_breast_program_conflict.get("reason")
+                    == "low_myb_basal_mammary"
+                ),
+                "adcc_breast_program_conflict": bool(
+                    adcc_breast_program_conflict
+                ),
+                "local_reference_registry_notes": panel.get("registry_notes") or "",
                 "top_markers": marker_details[:8],
             }
         )
+        if adcc_breast_program_conflict:
+            hypothesis.details["adcc_breast_program_conflict_details"] = (
+                adcc_breast_program_conflict
+            )
+        if fusion_defined_context_conflict:
+            hypothesis.details["fusion_defined_context_conflict_details"] = (
+                fusion_defined_context_conflict
+            )
+        if hepb_adult_liver_context_conflict:
+            hypothesis.details["hepb_adult_liver_context_conflict_details"] = (
+                hepb_adult_liver_context_conflict
+            )
+        if code_marker_coherence:
+            hypothesis.details["local_reference_marker_coherence"] = (
+                code_marker_coherence
+            )
+        if cross_lineage_marker_conflict:
+            hypothesis.details["local_reference_cross_lineage_marker_conflict_details"] = (
+                cross_lineage_marker_conflict
+            )
         hypothesis.consider_for_report_label(
             selected_by="local_expression_reference",
             can_select=not blockers,
             blocking_reasons=blockers,
-            priority=(1, local_support),
+            priority=(
+                2 if (high_confidence_local_reference or signature_anchored) else 1,
+                max(priority_support, signature_anchor_support),
+            ),
         )
+        if (
+            parent_code
+            and parent_code != code
+            and molecular_status_source
+            and high_confidence_local_reference
+        ):
+            parent_blockers = [
+                reason for reason in blockers if reason != molecular_status_blocker
+            ]
+            parent_marker_coherence = _marker_coherence(
+                parent_code,
+                sample_tpm_by_symbol,
+            )
+            if (
+                parent_marker_coherence
+                and not _marker_coherence_selection_grade(parent_marker_coherence)
+            ):
+                parent_blockers.append(
+                    f"{parent_code} marker program is "
+                    f"{parent_marker_coherence.get('status')} "
+                    f"({parent_marker_coherence.get('detected')}/"
+                    f"{parent_marker_coherence.get('total')} expected high markers; "
+                    f"{parent_marker_coherence.get('required_for_consistent')} "
+                    "required), so a molecular/status expression subtype cannot "
+                    "promote the parent label by itself"
+                )
+            conflicting_coarse = _strong_conflicting_coarse_reference(
+                analysis,
+                parent_code,
+            )
+            if conflicting_coarse:
+                parent_blockers.append(
+                    "molecular/status expression subtype conflicts with a strong "
+                    f"independent composition reference ({conflicting_coarse['code']} "
+                    f"rho {conflicting_coarse['rho']:.2f}; "
+                    f"{conflicting_coarse['type_specific_hit_count']} "
+                    "type-specific tumor-up hits)"
+                )
+            parent = _hypothesis(hypotheses, parent_code)
+            parent.add_source("local_expression_reference")
+            parent.expression_reference_cancer_type = (
+                parent.expression_reference_cancer_type or parent_code
+            )
+            parent.reference_cancer_type = parent.reference_cancer_type or (
+                matched_context or parent_code
+            )
+            parent.related_context_code = ",".join(context_codes)
+            parent.related_context_support = max(
+                parent.related_context_support,
+                context_support,
+            )
+            parent_priority = (
+                1,
+                max(
+                    0.0,
+                    priority_support
+                    - _LOCAL_REFERENCE_STATUS_PARENT_PRIORITY_PENALTY,
+                ),
+            )
+            parent_full_priority = (
+                parent_priority[0],
+                parent_priority[1],
+                _SELECTED_BY_TIEBREAK_RANK.get("local_expression_reference", 0),
+            )
+            parent_details_match_selection = bool(
+                not parent_blockers
+                and parent_full_priority > parent.selection_priority
+            )
+            parent_has_selected_local_reference = bool(
+                parent.can_select_report_label
+                and parent.selected_by == "local_expression_reference"
+            )
+            parent_details_should_update = bool(
+                parent_details_match_selection
+                or (
+                    not parent_has_selected_local_reference
+                    and local_support > parent.fine_reference_support
+                )
+            )
+            if parent_details_should_update:
+                parent.related_context_is_top = context_is_top
+                parent.details.update(
+                    {
+                        "local_reference_status_child_code": code,
+                        "local_reference_context_codes": list(context_codes),
+                        "local_reference_primary_context_codes": list(primary_contexts),
+                        "local_reference_matched_context": matched_context,
+                        "local_reference_context_is_top": context_is_top,
+                        "local_reference_strength": round(float(local_support), 4),
+                        "local_reference_marker_fraction": round(
+                            float(marker_fraction),
+                            4,
+                        ),
+                        "local_reference_marker_burden_ratio": round(
+                            float(burden_ratio),
+                            4,
+                        ),
+                        "local_reference_context_focus": round(
+                            float(context_focus),
+                            4,
+                        ),
+                        "local_reference_high_confidence": bool(
+                            high_confidence_local_reference
+                        ),
+                        "local_reference_priority_support": round(
+                            float(priority_support),
+                            4,
+                        ),
+                        "local_reference_child_expression_source": expression_source,
+                        "local_reference_source_cohort": panel.get("source_cohort") or "",
+                        "local_reference_kind": reference_kind,
+                        "local_reference_parent_marker_coherence": parent_marker_coherence,
+                        "local_reference_conflicting_coarse_reference": conflicting_coarse,
+                        "top_markers": marker_details[:8],
+                    }
+                )
+            parent.fine_reference_support = max(
+                parent.fine_reference_support,
+                local_support,
+            )
+            parent.basis = parent.basis or (
+                f"{parent_code} is supported by a high-confidence {code} "
+                "expression reference; the molecular/status subtype itself "
+                "requires orthogonal evidence"
+            )
+            parent.consider_for_report_label(
+                selected_by="local_expression_reference",
+                can_select=not parent_blockers,
+                blocking_reasons=parent_blockers,
+                # A molecular/status child cohort can corroborate its parent
+                # cancer type, but it is not the same evidentiary object as a
+                # direct exact cancer-type reference. Keep it below
+                # high-confidence direct references so mutation- or
+                # expression-status cohorts do not overrule a coherent
+                # cancer-type cohort match.
+                priority=parent_priority,
+            )
 
 
 def _rare_rna_policy(code: str) -> RareRnaPolicy:
@@ -1422,15 +3553,7 @@ def _add_lineage_panel_features(
     # Sample-side HK median for normalization. HK genes are pulled
     # directly by ID from the cached set so the symbol → ID step is
     # skipped entirely for the normalization path.
-    hk_ids = _hk_normalization_gene_ids()
-    if hk_ids:
-        hk_vals = [
-            sample_tpm_by_gene_id.get(g, 0.0) for g in hk_ids
-            if sample_tpm_by_gene_id.get(g, 0.0) > 0
-        ]
-        sample_hk_median = float(np.median(hk_vals)) if hk_vals else 1.0
-    else:
-        sample_hk_median = 1.0
+    sample_hk_median = _sample_hk_median(sample_tpm_by_gene_id)
 
     try:
         evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_gene_id, sample_hk_median)
@@ -1566,6 +3689,30 @@ def _add_lineage_panel_features(
             "classifier is confident — the lineage panel reading is "
             "noted but the first-pass call is preserved"
         )
+    consensus_context = _broad_coarse_consensus_context(analysis)
+    if can_promote and not same_code and consensus_context and consensus_context != code:
+        blockers.append(
+            "broad RNA ranking and coarse reference matching both support "
+            f"{consensus_context}; lineage panel {top_panel} is noted as a "
+            "program signal, not a cross-site report-label override"
+        )
+        can_promote = False
+    marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+    if (
+        can_promote
+        and not same_code
+        and marker_coherence
+        and not _marker_coherence_selection_grade(marker_coherence)
+    ):
+        blockers.append(
+            f"{code} marker program is {marker_coherence.get('status')} "
+            f"({marker_coherence.get('detected')}/"
+            f"{marker_coherence.get('total')} expected high markers; "
+            f"{marker_coherence.get('required_for_consistent')} required)"
+        )
+        can_promote = False
+    if marker_coherence:
+        hypothesis.details["lineage_panel_marker_coherence"] = marker_coherence
     # Class-rank policy:
     #   - SAME-CODE REINFORCEMENT (panel agrees with broad top-1) →
     #     class 2. This lets the panel DEFEND a correct broad call
@@ -1598,6 +3745,7 @@ def _add_rare_marker_features(
     hypotheses: dict[str, CancerTypeEvidence],
     finding: Mapping[str, Any],
     analysis: Mapping[str, Any],
+    sample_tpm_by_symbol: Mapping[str, float],
 ) -> None:
     code = _clean(finding.get("cancer_type"))
     rule_id = _clean(finding.get("rule_id"))
@@ -1612,8 +3760,36 @@ def _add_rare_marker_features(
         return
     rule_promotes = _safe_bool(rule.get("promote_report_scope"), default=True)
     context_codes = set(_split_semicolon(rule.get("context_codes")))
-    support_by_code = _candidate_support_by_code(analysis)
+    support_by_code = _context_support_by_code(analysis)
     top = _top_code(analysis)
+    hypothesis = _hypothesis(hypotheses, code)
+    has_local_exact_support = (
+        "local_expression_reference" in hypothesis.evidence_sources
+        and hypothesis.fine_reference_support >= _LOCAL_REFERENCE_MIN_SUPPORT
+    )
+    has_high_confidence_local_exact_support = bool(
+        has_local_exact_support
+        and hypothesis.details.get("local_reference_high_confidence")
+    )
+    adcc_basal_breast_conflict = bool(
+        hypothesis.details.get("adcc_low_myb_basal_breast_conflict")
+    )
+    adcc_breast_program_conflict = bool(
+        hypothesis.details.get("adcc_breast_program_conflict")
+    )
+    fusion_defined_context_conflict = (
+        hypothesis.details.get("fusion_defined_context_conflict_details")
+        if hypothesis.details.get("fusion_defined_context_conflict")
+        else {}
+    )
+    cross_lineage_marker_conflict = (
+        hypothesis.details.get("local_reference_cross_lineage_marker_conflict_details")
+        if hypothesis.details.get("local_reference_cross_lineage_marker_conflict")
+        else {}
+    )
+    has_direct_fusion = hypothesis.direct_fusion_support > 0
+    registry_row = _registry_by_code().get(code, {})
+    fusion_defined_code = _clean(registry_row.get("fusion_driven")).lower() == "defining"
     context_support = max(
         (support_by_code.get(context_code, 0.0) for context_code in context_codes),
         default=0.0,
@@ -1636,7 +3812,8 @@ def _add_rare_marker_features(
         + policy.context_weight * effective_context
         + policy.top_context_weight * float(top_is_context)
     )
-    context_passes = policy.context_passes(
+    top_lineage_passes = policy.top_lineage_passes(top_code=top)
+    context_passes = top_lineage_passes and policy.context_passes(
         top_code=top,
         top_is_context=top_is_context,
         related_context_support=context_support,
@@ -1644,7 +3821,122 @@ def _add_rare_marker_features(
     blockers: list[str] = []
     if not rule_promotes:
         blockers.append("rule is a diagnostic prompt only")
-    if not context_passes:
+    if (
+        code == "ADCC"
+        and rule_promotes
+        and not has_direct_fusion
+        and adcc_breast_program_conflict
+    ):
+        details = hypothesis.details.get("adcc_breast_program_conflict_details") or {}
+        program = _clean(details.get("program")) or "BRCA"
+        blockers.append(
+            "no-fusion ADCC RNA surrogate conflicts with a strong "
+            f"{program} lineage program in BRCA-compatible expression context"
+        )
+    if (
+        fusion_defined_code
+        and rule_promotes
+        and not has_direct_fusion
+        and not fusion_defined_context_conflict
+    ):
+        primary_tissue = _clean(registry_row.get("primary_tissue"))
+        fusion_defined_context_conflict = (
+            _unconfirmed_fusion_defined_context_conflict(
+                code=code,
+                context_codes=tuple(sorted(context_codes)),
+                primary_tissue=primary_tissue,
+                analysis=analysis,
+                sample_tpm_by_symbol=sample_tpm_by_symbol,
+            )
+        )
+    if (
+        fusion_defined_code
+        and rule_promotes
+        and not has_direct_fusion
+        and fusion_defined_context_conflict
+    ):
+        blockers.append(
+            _fusion_defined_context_conflict_reason(
+                fusion_defined_context_conflict
+            )
+        )
+    if rule_promotes and not has_direct_fusion and not cross_lineage_marker_conflict:
+        marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+        if marker_coherence:
+            if top_is_context and top:
+                active_context_codes = (top,)
+            elif context_codes:
+                best_context = max(
+                    context_codes,
+                    key=lambda context_code: support_by_code.get(context_code, 0.0),
+                )
+                active_context_codes = (best_context,)
+            else:
+                active_context_codes = ()
+            cross_lineage_marker_conflict = _local_reference_cross_lineage_conflict(
+                code,
+                tuple(active_context_codes),
+                marker_coherence,
+            )
+    strong_rna_surrogate = _strong_fusion_defined_rna_surrogate(
+        code,
+        sample_tpm_by_symbol,
+    )
+    if (
+        rule_promotes
+        and not has_direct_fusion
+        and cross_lineage_marker_conflict
+        and not bool(strong_rna_surrogate.get("strong"))
+    ):
+        blockers.append(
+            "cross-lineage RNA-marker promotion requires a coherent "
+            f"{code} marker program; observed "
+            f"{cross_lineage_marker_conflict['detected']}/"
+            f"{cross_lineage_marker_conflict['total']} expected high "
+            f"markers ({cross_lineage_marker_conflict['marker_status']}) "
+            "while the compatible RNA context is "
+            f"{', '.join(cross_lineage_marker_conflict['context_codes'])}"
+        )
+    adcc_low_myb_marker = (
+        code == "ADCC"
+        and rule_promotes
+        and _clean(finding.get("surrogate")).upper() == "MYB"
+        and _safe_float(finding.get("surrogate_tpm")) < _ADCC_PROMOTING_MIN_MYB_TPM
+    )
+    if adcc_low_myb_marker and not adcc_breast_program_conflict:
+        if adcc_basal_breast_conflict:
+            blockers.append(
+                "low-MYB ADCC RNA surrogate conflicts with a strong "
+                "BRCA_BASAL lineage program in BRCA-compatible expression context"
+            )
+        elif not has_high_confidence_local_exact_support:
+            blockers.append(
+                "ADCC MYB promoter signal "
+                f"{_safe_float(finding.get('surrogate_tpm')):.1f} TPM is below "
+                f"{_ADCC_PROMOTING_MIN_MYB_TPM:.1f} TPM"
+            )
+    if (
+        code == "ADCC"
+        and rule_promotes
+        and not has_direct_fusion
+        and support_count < required_count
+        and (
+            not has_high_confidence_local_exact_support
+            or adcc_basal_breast_conflict
+            or adcc_breast_program_conflict
+        )
+    ):
+        blockers.append(
+            "ADCC RNA promotion requires a complete MYB-axis co-marker set "
+            "or high-confidence ADCC expression-reference support"
+        )
+    if not top_lineage_passes:
+        allowed = ", ".join(sorted(policy.required_top_lineages))
+        observed = _broad_lineage_for_code(top) or "unknown"
+        blockers.append(
+            f"top expression-reference lineage {observed} is not one of {allowed}"
+        )
+    if top_lineage_passes and not context_passes:
         if context_codes:
             allowed = ", ".join(sorted(context_codes))
             blockers.append(f"expression-reference context is not one of {allowed}")
@@ -1656,8 +3948,20 @@ def _add_rare_marker_features(
             f"{marker_context_support:.2f} is below "
             f"{policy.min_marker_context_support:.2f}"
         )
+    mtc_neural_crest_conflict: dict[str, Any] = {}
+    if code == "MTC" and rule_promotes and not has_direct_fusion:
+        mtc_neural_crest_conflict = _mtc_neural_crest_conflict(
+            top_code=top,
+            support_by_code=support_by_code,
+            sample_tpm_by_symbol=sample_tpm_by_symbol,
+        )
+        if mtc_neural_crest_conflict:
+            blockers.append(
+                "MTC CALCA-axis RNA prompt is not specific enough to override "
+                "a PCPG/neural-crest expression context without CEACAM5/CALCR "
+                "or high RET anchor support"
+            )
 
-    hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("rare_marker")
     hypothesis.expression_reference_cancer_type = (
         hypothesis.expression_reference_cancer_type or top
@@ -1699,13 +4003,55 @@ def _add_rare_marker_features(
             "top_reference_cancer_type": top,
             "top_is_context": top_is_context,
             "marker_context_support": round(float(marker_context_support), 4),
+            "fusion_defined_context_conflict": bool(
+                fusion_defined_context_conflict
+            ),
+            "rare_marker_cross_lineage_marker_conflict": bool(
+                cross_lineage_marker_conflict
+            ),
+            "mtc_neural_crest_context_conflict": bool(
+                mtc_neural_crest_conflict
+            ),
         }
     )
+    if fusion_defined_context_conflict:
+        hypothesis.details["fusion_defined_context_conflict_details"] = (
+            dict(fusion_defined_context_conflict)
+        )
+    if cross_lineage_marker_conflict:
+        hypothesis.details["rare_marker_cross_lineage_marker_conflict_details"] = (
+            dict(cross_lineage_marker_conflict)
+        )
+    if mtc_neural_crest_conflict:
+        hypothesis.details["mtc_neural_crest_context_conflict_details"] = (
+            dict(mtc_neural_crest_conflict)
+        )
+    priority_class = 1
+    priority_strength = marker_context_support
+    complete_context_gated_marker_axis = bool(
+        rule_promotes
+        and not has_local_exact_support
+        and required_count > 0
+        and support_count >= required_count
+        and marker_support >= 0.95
+        and (top_is_context or context_support >= 0.90)
+    )
+    if complete_context_gated_marker_axis:
+        priority_class = 3
+        priority_strength = max(marker_context_support, marker_support)
+    if fusion_defined_code and has_local_exact_support:
+        priority_class = max(priority_class, 2)
+        priority_strength = max(
+            marker_context_support,
+            0.5 * marker_context_support + 0.5 * hypothesis.fine_reference_support,
+            priority_strength,
+        )
+
     hypothesis.consider_for_report_label(
         selected_by="rare_marker",
         can_select=not blockers,
         blocking_reasons=blockers,
-        priority=(1, marker_context_support),
+        priority=(priority_class, priority_strength),
     )
 
 
@@ -1805,6 +4151,11 @@ def select_report_scope_from_evidence(
 
     hypotheses: dict[str, CancerTypeEvidence] = {}
     _add_broad_rna_features(hypotheses, analysis)
+    _add_coarse_composition_reference_features(
+        hypotheses,
+        sample_tpm_by_symbol,
+        analysis,
+    )
     _add_tumor_label_refinement_features(hypotheses, analysis)
     _add_direct_fusion_features(hypotheses, fusion_scope_inference or {}, analysis)
     for spec in _FINE_REFERENCE_SPECS:
@@ -1817,6 +4168,7 @@ def select_report_scope_from_evidence(
     _add_local_expression_reference_features(
         hypotheses,
         sample_tpm_by_symbol,
+        sample_tpm_by_gene_id,
         analysis,
     )
     lineage_panel_evidence = _add_lineage_panel_features(
@@ -1825,8 +4177,18 @@ def select_report_scope_from_evidence(
         analysis,
         sample_tpm_by_gene_id=sample_tpm_by_gene_id,
     )
+    _add_contrast_discriminator_features(
+        hypotheses,
+        sample_tpm_by_symbol,
+        analysis,
+    )
     for finding in rare_marker_hypotheses or []:
-        _add_rare_marker_features(hypotheses, finding, analysis)
+        _add_rare_marker_features(
+            hypotheses,
+            finding,
+            analysis,
+            sample_tpm_by_symbol,
+        )
 
     rows = list(hypotheses.values())
     selectable = [row for row in rows if row.can_select_report_label]

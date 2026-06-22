@@ -109,6 +109,64 @@ def test_2way_tied_but_3rd_diverges_stays_at_moderate():
     assert not any("3-way" in r for r in tier.reasons)
 
 
+def test_2way_tie_with_stronger_runner_up_lineage_is_low():
+    """A close top-vs-runner-up call is provisional when the runner-up
+    better matches the lineage panel by a large margin."""
+    analysis = {
+        "candidate_trace": [
+            _candidate("SARC", support_geomean=0.434, lineage_concordance=0.56),
+            _candidate("COAD", support_geomean=0.412, lineage_concordance=0.98),
+            _candidate("SKCM", support_geomean=0.20, lineage_concordance=0.30),
+        ],
+    }
+    tier = compute_call_confidence(analysis)
+    assert tier.tier == "low"
+    assert any("stronger lineage-pattern concordance" in r for r in tier.reasons)
+
+
+def test_compartment_promoted_call_uses_post_gate_support_for_confidence():
+    analysis = {
+        "candidate_trace": [
+            _candidate(
+                "COAD",
+                support_geomean=0.40,
+                support_fraction_of_top=1.0,
+                support_rank_score=1.40,
+                lineage_concordance=0.9,
+            ),
+            _candidate(
+                "SARC",
+                support_geomean=1.00,
+                support_fraction_of_top=0.71,
+                support_rank_score=1.00,
+                lineage_concordance=0.9,
+            ),
+        ],
+    }
+
+    tier = compute_call_confidence(analysis)
+
+    assert tier.tier == "high"
+    assert not any("ambiguous" in reason.lower() for reason in tier.reasons)
+
+
+def test_confidence_compares_strongest_support_competitor_not_display_order():
+    analysis = {
+        "candidate_trace": [
+            _candidate("COAD", support_fraction_of_top=1.0, lineage_concordance=0.9),
+            # Same-family alternative kept adjacent for display, but not the
+            # strongest support competitor.
+            _candidate("READ", support_fraction_of_top=0.70, lineage_concordance=0.9),
+            _candidate("STAD", support_fraction_of_top=0.92, lineage_concordance=0.9),
+        ],
+    }
+
+    tier = compute_call_confidence(analysis)
+
+    assert tier.tier == "moderate"
+    assert any("runner-up STAD" in reason for reason in tier.reasons)
+
+
 def test_step0_mismatch_downgrades_to_moderate():
     """Step-0 correlation favors a cohort the classifier didn't pick
     — surface the mismatch."""
@@ -144,7 +202,9 @@ def test_multiple_contradictions_all_surface_at_low_tier():
     }
     tier = compute_call_confidence(analysis)
     assert tier.tier == "low"
-    assert len(tier.reasons) == 3
+    assert any("lineage-pattern concordance" in r for r in tier.reasons)
+    assert any("beats runner-up" in r for r in tier.reasons)
+    assert any("Tissue composition screen" in r for r in tier.reasons)
 
 
 def test_missing_candidate_trace_returns_unknown():

@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from trufflepig.main import _apply_cancer_type_evidence
+from trufflepig.main import (
+    _apply_cancer_type_evidence,
+    _selected_report_scope_basis_label,
+)
 
 
 def _empty_expression_frame() -> pd.DataFrame:
@@ -30,6 +33,25 @@ def _analysis(*rows) -> dict:
             for code, support in rows
         ],
     }
+
+
+def test_selected_report_scope_basis_label_names_integrated_evidence_source():
+    assert (
+        _selected_report_scope_basis_label(
+            {
+                "cancer_type_evidence": {
+                    "selected": {"selected_by": "local_expression_reference"}
+                }
+            }
+        )
+        == "exact local expression-reference evidence"
+    )
+    assert (
+        _selected_report_scope_basis_label(
+            {"cancer_type_evidence": {"selected": {"selected_by": "rare_marker"}}}
+        )
+        == "rare RNA-marker and expression-context evidence"
+    )
 
 
 def test_primary_expression_match_populates_analysis_dict_without_promoting():

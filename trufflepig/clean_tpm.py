@@ -12,6 +12,8 @@ from pirlygenes.expression.qc import (
     classify_gene_qc,
 )
 
+from .common import without_dataframe_attrs
+
 # pirlygenes owns the gene-QC taxonomy AND the definition of which groups make up
 # the zero-and-renormalize technical-RNA compartment. Consume its PUBLIC set
 # rather than keeping a local copy (which would silently drift when the upstream
@@ -62,6 +64,9 @@ def technical_rna_mask(
     id_col: str | None = "Ensembl_Gene_ID",
 ) -> pd.Series:
     """Return rows classified as technical-RNA artifacts."""
+    if getattr(df, "attrs", None):
+        with without_dataframe_attrs(df):
+            return technical_rna_mask(df, label_col=label_col, id_col=id_col)
     if label_col and label_col in df.columns:
         labels = df[label_col].fillna("").astype(str)
     else:
@@ -176,6 +181,18 @@ def assert_clean_tpm(
       data must pass ``technical_fraction=None`` explicitly — it is no longer the
       default now that all references ship in the fixed-fraction form.
     """
+    if getattr(df, "attrs", None):
+        with without_dataframe_attrs(df):
+            return assert_clean_tpm(
+                df,
+                value_cols=value_cols,
+                label_col=label_col,
+                id_col=id_col,
+                context=context,
+                tolerance=tolerance,
+                technical_fraction=technical_fraction,
+                fraction_slack=fraction_slack,
+            )
     cols = [col for col in value_cols if col in df.columns]
     if not cols or df.empty:
         return

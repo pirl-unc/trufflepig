@@ -156,6 +156,21 @@ def _cancer_registry_display_names():
     return mapping
 
 
+@lru_cache(maxsize=1)
+def _cancer_registry_parent_codes():
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_type_registry
+
+        df = cancer_type_registry()
+    except Exception:
+        return {}
+    return {
+        _clean_text(row.get("code")): _clean_text(row.get("parent_code"))
+        for _, row in df.iterrows()
+        if _clean_text(row.get("code"))
+    }
+
+
 def cancer_code_display_name(code, fallback=None):
     text = _clean_text(code)
     if not text:
@@ -190,6 +205,19 @@ def subtype_curation_scope_note(
         focus = panel_name
     if not base_label or focus == base_label:
         return f"Using {focus}-specific {noun}."
+    parents = _cancer_registry_parent_codes()
+    panel_text = _clean_text(panel_code)
+    base_text = _clean_text(base_code)
+    if (
+        not subtype_label
+        and panel_text
+        and base_text
+        and parents.get(base_text) == panel_text
+    ):
+        return (
+            f"Using parent {panel_name} {noun}; no separate {base_label} "
+            "curation list is available."
+        )
     return f"Using {focus}-specific {noun} rather than the broader {base_label} list."
 
 
@@ -363,6 +391,14 @@ _MMR_PROFICIENT = re.compile(
     r"\b(pmmr|mmr[- ]?proficient|mismatch\s+repair\s+proficient|mss|msi[- ]?stable)\b",
     re.IGNORECASE,
 )
+_HISTOLOGY_ONLY_THERAPY_CONTEXT = re.compile(
+    r"\b("
+    r"chemo(?:therapy)?\s+backbone|"
+    r"standard[^.;,]*chemo|"
+    r"risk[- ]?stratified\s+intensity"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def indication_biomarker(target_row) -> str:
@@ -401,6 +437,10 @@ def indication_biomarker(target_row) -> str:
         return "tmb_high"
     if _MUTATION_INDICATION.search(text):
         return "mutation"
+    if _HISTOLOGY_ONLY_THERAPY_CONTEXT.search(
+        low
+    ) and not _TARGET_EXPRESSION_INDICATION.search(low):
+        return "histology_only"
 
     if _IMMUNE_CHECKPOINT_AGENTS.search(
         agent
@@ -443,6 +483,19 @@ def expression_independent_rna_context(expression_row) -> str:
     )
 
 
+_TARGET_SYMBOL_ALIASES = {
+    "MAGE-A4": "MAGEA4",
+}
+
+
+def canonical_target_symbol(sym) -> str:
+    """Return the expression-table gene symbol for curated target labels."""
+    text = _clean_text(sym)
+    if not text or text == "—":
+        return text
+    return _TARGET_SYMBOL_ALIASES.get(text, text)
+
+
 def target_observation_state(sym, ranges_df) -> str:
     """Three-state observation classifier for a target symbol.
 
@@ -456,6 +509,7 @@ def target_observation_state(sym, ranges_df) -> str:
           ``ranges_df`` (legacy callers, malformed DataFrame). Conservative
           fall-through that preserves the historical "not measured" label.
     """
+    sym = canonical_target_symbol(sym)
     if not isinstance(sym, str) or sym in ("", "—"):
         return "unknown"
     input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")
@@ -1192,8 +1246,10 @@ def offcontext_known_targets(
         index = cross_cancer_target_index()
     panel = {str(s).strip().upper() for s in (panel_symbols or [])}
 
-    if hasattr(ranges_df, "to_dict"):
-        records = ranges_df.to_dict("records")
+    if hasattr(ranges_df, "to_numpy"):
+        from .common import ranges_records
+
+        records = ranges_records(ranges_df)
     else:
         records = list(ranges_df or [])
 
@@ -1645,6 +1701,69 @@ def therapy_state_caution(target_row, *, analysis=None, disease_state=None) -> s
     return ""
 
 
+def _therapy_rna_context_inactive_rule(target_row, *, analysis=None) -> dict | None:
+    """Return the exposure rule that makes a therapy row out-of-context.
+
+    ``therapy_state_caution`` is deliberately broad: it flags possible prior or
+    current therapy exposure. This helper is narrower. It only fires when the
+    sample's own RNA state argues against using a pathway-dependent row as a
+    priority recommendation, and it backs off when supplied molecular evidence
+    directly supports the row's eligibility.
+    """
+    if not isinstance(analysis, dict) or not hasattr(target_row, "get"):
+        return None
+    if supplied_alteration_supports_target_row(target_row, analysis):
+        return None
+    for rule in _THERAPY_EXPOSURE_RULES:
+        axis = str(rule.get("axis") or "")
+        if axis not in {"ER_signaling", "HER2_signaling"}:
+            continue
+        if _therapy_axis_state(analysis, axis) != str(rule.get("state") or "").lower():
+            continue
+        if _therapy_row_matches_exposure_rule(target_row, rule):
+            return rule
+    return None
+
+
+def therapy_rna_context_conflict(target_row, *, analysis=None, disease_state=None) -> str:
+    """Reader-facing reason when RNA context argues against a therapy row.
+
+    This is stronger than the medication-reconciliation caution: the row can
+    remain visible in full context tables, but should be deprioritized unless
+    clinical HER2/ER status or a compatible supplied alteration confirms
+    eligibility.
+    """
+    rule = _therapy_rna_context_inactive_rule(target_row, analysis=analysis)
+    if rule is None:
+        return ""
+    axis = str(rule.get("axis") or "")
+    if axis == "ER_signaling":
+        return (
+            "RNA-context conflict: ER axis is suppressed/ER-low; verify "
+            "ER-positive disease and indication-specific eligibility before acting"
+        )
+    if axis == "HER2_signaling":
+        return (
+            "RNA-context conflict: HER2 axis is suppressed by RNA context; verify "
+            "HER2-positive/HER2-low protein or amplification status and "
+            "indication-specific eligibility before acting"
+        )
+    return ""
+
+
+def therapy_row_rna_context_inactive(
+    target_row, *, analysis=None, disease_state=None
+) -> bool:
+    """Whether a therapy row should be deprioritized by sample RNA context."""
+    return bool(
+        therapy_rna_context_conflict(
+            target_row,
+            analysis=analysis,
+            disease_state=disease_state,
+        )
+    )
+
+
 def hla_restrictions_for_target_row(target_row) -> list[str]:
     """Return class-I HLA restrictions encoded in a therapy row."""
     if not hasattr(target_row, "get"):
@@ -1747,6 +1866,46 @@ def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:
     return int(_therapy_path_info(target_row)["rank"])
 
 
+def interval_material_target_candidate(
+    row,
+    target_row=None,
+    *,
+    min_high_tumor_tpm=10.0,
+    min_support_fraction=0.25,
+    min_observed_tpm=10.0,
+) -> bool:
+    """Whether uncertainty still leaves a mature target row clinically reviewable.
+
+    This is not a clean tumor-source call. It keeps mature, disease-scoped
+    therapy rows visible in concise reports when the median attribution is
+    background-heavy, but the modeled interval still includes material
+    tumor-source signal. That is the right reading for broadly epithelial
+    targets such as TROP2 in basal breast cancer: RNA specificity is limited,
+    yet the clinical row should not disappear when the biology and indication
+    otherwise fit.
+    """
+    if target_row is None or expression_independent_indication(target_row):
+        return False
+    if not _clean_text(target_row.get("agent") if hasattr(target_row, "get") else ""):
+        return False
+    if _phase_text(target_row) not in {"approved", "phase_3", "phase_2"}:
+        return False
+    if therapy_path_rank(target_row) > 3:
+        return False
+    if _truthy(row.get("source_marker_non_tumor_prior")):
+        return False
+    if _truthy(row.get("matched_normal_over_predicted")):
+        return False
+    source = tumor_attribution_context(row)
+    if source["observed_tpm"] < float(min_observed_tpm):
+        return False
+    if source["attr_tumor_tpm_high"] < float(min_high_tumor_tpm):
+        return False
+    if source["attr_tumor_fraction_high"] < 0.30:
+        return False
+    return source["attr_support_fraction"] >= float(min_support_fraction)
+
+
 def target_interpretation_summary(
     target_row,
     expression_row,
@@ -1784,6 +1943,15 @@ def target_interpretation_summary(
     )
     if path_context:
         parts.append(path_context)
+    conflict = (
+        therapy_rna_context_conflict(
+            target_row, analysis=analysis, disease_state=disease_state
+        )
+        if target_row is not None
+        else ""
+    )
+    if conflict:
+        parts.append(conflict)
     caution = (
         therapy_state_caution(
             target_row, analysis=analysis, disease_state=disease_state
@@ -1815,7 +1983,9 @@ def partition_tumor_core_rows(ranges_df, min_tumor_tpm=1.0):
         empty = eligible.iloc[0:0]
         return empty, empty, empty
 
-    statuses = [target_reliability_status(row) for row in eligible.to_dict("records")]
+    from .common import ranges_records
+
+    statuses = [target_reliability_status(row) for row in ranges_records(eligible)]
     eligible["_report_reliability"] = statuses
     supported = eligible[eligible["_report_reliability"] == "supported"].copy()
     provisional = eligible[eligible["_report_reliability"] == "provisional"].copy()
@@ -1827,8 +1997,10 @@ def summarize_reliability_reasons(rows, top_n=3):
     """Summarize the most common reliability caveats in a row set."""
     if rows is None or len(rows) == 0:
         return ""
+    from .common import ranges_records
+
     counter = Counter()
-    for row in rows.to_dict("records"):
+    for row in ranges_records(rows):
         counter.update(target_reliability_reasons(row))
     if not counter:
         return ""

@@ -17,3 +17,9 @@ htmlcov/
 
 # Claude Code agent workspace
 .claude/
+
+# Reference mirrors owned by pirlygenes/oncoref-style dependencies, not trufflepig.
+# Keep these out of local builds if a scratch export lands in trufflepig/data.
+/trufflepig/data/pan-cancer-expression.csv
+/trufflepig/data/hpa-cell-type-expression.csv
+/trufflepig/data/estimate-signatures.csv

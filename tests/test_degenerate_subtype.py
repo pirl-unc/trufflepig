@@ -97,7 +97,12 @@ def test_fusion_surrogate_csv_loads():
 
 def test_fusion_surrogate_roles_are_valid():
     df = fusion_surrogate_expression()
-    valid = {"activated", "activated_ectopic", "myogenic_lineage"}
+    valid = {
+        "activated",
+        "activated_ectopic",
+        "myogenic_lineage",
+        "not_reliable_total_gene_surrogate",
+    }
     bad = set(df["surrogate_role"]) - valid
     assert not bad, f"unknown surrogate_role values: {bad}"
 
@@ -629,7 +634,7 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
         disease_state="",
         sample_id="synthetic-bone-os-panel",
     )
-    assert "Subtype-resolved therapy curation" in summary, summary
+    assert "Using osteosarcoma-specific therapy evidence" in summary, summary
     assert "ganitumab + chemo" not in summary, summary
     assert "brigimadlin" not in summary, summary
 

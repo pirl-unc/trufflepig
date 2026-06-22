@@ -664,10 +664,21 @@ def test_cross_code_uncertainty_stays_at_class_rank_1():
     if "lineage_panel" not in brca.evidence_sources:
         return
     cls, _strength, _tb = brca.selection_priority
-    assert cls == 1, (
-        f"Cross-code promotion (broad weak) should stay at class_rank=1; "
-        f"got class={cls}"
-    )
+    decision = brca.public_dict().get("label_decision", {})
+    if decision.get("status") == "blocked":
+        assert cls == 0, (
+            "Blocked cross-code panel evidence should not receive a "
+            f"selectable class rank; got class={cls}"
+        )
+        assert any(
+            "marker program" in reason
+            for reason in brca.public_dict().get("blocking_reasons", [])
+        )
+    else:
+        assert cls == 1, (
+            f"Cross-code promotion (broad weak) should stay at class_rank=1; "
+            f"got class={cls}"
+        )
 
 
 def test_unresolvable_low_marker_counts_as_violation_not_pass_through():

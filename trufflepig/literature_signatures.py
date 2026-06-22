@@ -25,6 +25,10 @@ class LiteratureSignature:
     min_primary_tpm: float = 5.0
     min_support_genes: int = 2
     support_min_tpm: float = 2.0
+    confirmatory_tests: str = (
+        "orthogonal pathology review; IHC/FISH/fusion or mutation testing "
+        "as appropriate for this entity"
+    )
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -170,6 +174,9 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         ("MYC", "BCL6", "MME", "CD79A", "MS4A1"),
         "curated_lymphoma_literature",
         "Burkitt lymphoma MYC/germinal-center B-cell program",
+        promote_report_scope=True,
+        min_support_genes=4,
+        confirmatory_tests="MYC rearrangement FISH/karyotype; lymphoma pathology review",
     ),
     LiteratureSignature(
         "MDS",
@@ -516,6 +523,19 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_pathology_literature",
         "ependymoma glial/ependymal program (GFAP, ZFTA-RELA context)",
     ),
+    # Astroblastoma (MN1-altered) / CNS HGNET-MN1 — defined by the MN1::BEND2
+    # fusion, whose transcriptomic hallmark is BEND2 over-expression; GFAP+/
+    # EMA(MUC1)+ glial-epithelial program. No direct cohort: expression resolves
+    # via the cns-glial family fallback to MBL (pirlygenes#461), so MBL is the
+    # required parent context here.
+    LiteratureSignature(
+        "ASTB",
+        ("MBL",),
+        ("BEND2", "MN1", "GFAP", "MUC1", "S100B"),
+        "PMID:26919435",
+        "astroblastoma MN1-altered (CNS HGNET-MN1): MN1::BEND2 -> BEND2 "
+        "over-expression, GFAP+/EMA(MUC1)+ glial-epithelial program",
+    ),
     LiteratureSignature(
         "PITNET",
         ("THCA", "PCPG", "ACC"),
@@ -681,10 +701,7 @@ def literature_signature_rules_df() -> pd.DataFrame:
                 "confidence": signature.confidence,
                 "promote_report_scope": signature.promote_report_scope,
                 "basis": signature.rationale,
-                "confirmatory_tests": (
-                    "orthogonal pathology review; IHC/FISH/fusion or mutation "
-                    "testing as appropriate for this entity"
-                ),
+                "confirmatory_tests": signature.confirmatory_tests,
                 "caveat": (
                     "Literature marker signature only; use as subtype evidence "
                     "inside the related expression context, not as a standalone "

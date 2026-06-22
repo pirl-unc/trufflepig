@@ -23,6 +23,7 @@ from trufflepig.tumor_purity import (
     CANCER_TO_TISSUE,
     _CANCER_FAMILY_BY_CODE,
     _apply_coarse_tcga_orphan_rescue,
+    _candidate_codes_from_family_panels,
     rank_cancer_type_candidates,
 )
 
@@ -38,6 +39,34 @@ def _cohort_median_sample(code: str) -> pd.DataFrame:
             "TPM": ref[f"{code}_TPM"].astype(float),
         }
     )
+
+
+def test_family_panel_candidate_quota_skips_unmapped_families():
+    """Unmapped local/rare family panels must not consume candidate slots.
+
+    PFO002 StringTie had strong CRC family evidence, but higher-scoring
+    unmapped panels consumed ``candidate_panel_top_n`` before CRC could add
+    COAD/READ to the first-pass candidate pool.
+    """
+    family_params = dict(TUMOR_PURITY_PARAMETERS["family_scoring"])
+    family_params["candidate_panel_top_n"] = 2
+    family_params["candidate_panel_min_score"] = 0.05
+
+    codes = _candidate_codes_from_family_panels(
+        [
+            ("SELLAR_EPITHELIAL", 2.4),
+            ("NERVE_SHEATH", 0.47),
+            ("MELANOCYTIC", 0.46),
+            ("CRC", 0.42),
+            ("GASTRIC", 0.35),
+        ],
+        family_params=family_params,
+        soft_families=set(),
+        top_family_score=0.46,
+        top_signature_family=None,
+    )
+
+    assert codes == ["SKCM", "UVM", "COAD", "READ"]
 
 
 @pytest.mark.parametrize("code", ["BLCA"])

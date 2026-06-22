@@ -13,7 +13,43 @@
 from contextlib import contextmanager
 from functools import lru_cache
 import pandas as pd
-from typing import Iterator
+from typing import Iterator, Optional
+import weakref
+
+
+class NoDeepcopyFrozenSet(frozenset):
+    """Immutable set whose deepcopy is itself.
+
+    Pandas deep-copies ``DataFrame.attrs`` during many row/subset/finalize
+    operations. Storing a large plain ``set`` there (for example all symbols
+    observed in an input expression file) can dominate runtime when renderers
+    still touch pandas rows. This wrapper preserves normal membership checks
+    while making pandas attrs copies cheap.
+    """
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def find_column(
+    df: pd.DataFrame, candidates: list[str], column_name: str
+) -> Optional[str]:
+    result = None
+    for col in df.columns:
+        if col.lower() in candidates:
+            result = col
+            break
+    if result is None:
+        raise ValueError(
+            "Unable to find a column for %s in expression data, available columns: %s"
+            % (
+                column_name,
+                list(
+                    df.columns,
+                ),
+            )
+        )
+    return result
 
 
 @contextmanager
@@ -561,9 +597,13 @@ def build_sample_tpm_by_gene_id(df_gene_expr):
 # ``Series.__finalize__`` deep-copy the cache itself — *amplifying*
 # the bug the cache was supposed to fix.
 
-_RANGES_RECORDS_CACHE: dict[int, list[dict]] = {}
-_RANGES_BY_SYMBOL_CACHE: dict[int, dict[str, dict]] = {}
-_RANGES_BY_GENE_ID_CACHE: dict[int, dict[str, dict]] = {}
+_RANGES_RECORDS_CACHE: dict[int, tuple[weakref.ReferenceType, int, tuple, list[dict]]] = {}
+_RANGES_BY_SYMBOL_CACHE: dict[
+    int, tuple[weakref.ReferenceType, int, tuple, dict[str, dict]]
+] = {}
+_RANGES_BY_GENE_ID_CACHE: dict[
+    int, tuple[weakref.ReferenceType, int, tuple, dict[str, dict]]
+] = {}
 _PANEL_SYMBOL_TO_ID_CACHE: dict[frozenset[str], dict[str, str]] = {}
 
 
@@ -574,6 +614,26 @@ def _cap_cache(cache: dict, max_size: int = 4) -> None:
         cache.pop(next(iter(cache)))
 
 
+def _ranges_cache_meta(ranges_df) -> tuple[weakref.ReferenceType, int, tuple]:
+    return weakref.ref(ranges_df), len(ranges_df), tuple(ranges_df.columns)
+
+
+def _ranges_cache_value(cache: dict, ranges_df):
+    entry = cache.get(id(ranges_df))
+    if entry is None:
+        return None
+    ref, n_rows, columns, value = entry
+    if ref() is ranges_df and n_rows == len(ranges_df) and columns == tuple(ranges_df.columns):
+        return value
+    cache.pop(id(ranges_df), None)
+    return None
+
+
+def _store_ranges_cache_value(cache: dict, ranges_df, value) -> None:
+    cache[id(ranges_df)] = (*_ranges_cache_meta(ranges_df), value)
+    _cap_cache(cache)
+
+
 def ranges_records(ranges_df) -> list[dict]:
     """Return ranges_df as a list of plain dicts (cached by id).
 
@@ -582,13 +642,13 @@ def ranges_records(ranges_df) -> list[dict]:
     """
     if ranges_df is None or len(ranges_df) == 0:
         return []
-    key = id(ranges_df)
-    cached = _RANGES_RECORDS_CACHE.get(key)
+    cached = _ranges_cache_value(_RANGES_RECORDS_CACHE, ranges_df)
     if cached is not None:
         return cached
-    records = ranges_df.to_dict("records")
-    _RANGES_RECORDS_CACHE[key] = records
-    _cap_cache(_RANGES_RECORDS_CACHE)
+    columns = list(ranges_df.columns)
+    values = ranges_df.to_numpy(copy=False)
+    records = [dict(zip(columns, row)) for row in values]
+    _store_ranges_cache_value(_RANGES_RECORDS_CACHE, ranges_df, records)
     return records
 
 
@@ -606,8 +666,7 @@ def ranges_by_symbol(ranges_df) -> dict[str, dict]:
     """
     if ranges_df is None or len(ranges_df) == 0:
         return {}
-    key = id(ranges_df)
-    cached = _RANGES_BY_SYMBOL_CACHE.get(key)
+    cached = _ranges_cache_value(_RANGES_BY_SYMBOL_CACHE, ranges_df)
     if cached is not None:
         return cached
     out: dict[str, dict] = {}
@@ -619,8 +678,7 @@ def ranges_by_symbol(ranges_df) -> dict[str, dict]:
         alt = sym.replace("-", "")
         if alt != sym:
             out.setdefault(alt, rec)
-    _RANGES_BY_SYMBOL_CACHE[key] = out
-    _cap_cache(_RANGES_BY_SYMBOL_CACHE)
+    _store_ranges_cache_value(_RANGES_BY_SYMBOL_CACHE, ranges_df, out)
     return out
 
 
@@ -642,8 +700,7 @@ def ranges_by_gene_id(ranges_df) -> dict[str, dict]:
     """
     if ranges_df is None or len(ranges_df) == 0:
         return {}
-    key = id(ranges_df)
-    cached = _RANGES_BY_GENE_ID_CACHE.get(key)
+    cached = _ranges_cache_value(_RANGES_BY_GENE_ID_CACHE, ranges_df)
     if cached is not None:
         return cached
     out: dict[str, dict] = {}
@@ -652,8 +709,7 @@ def ranges_by_gene_id(ranges_df) -> dict[str, dict]:
         if not gene_id:
             continue
         out[gene_id] = rec
-    _RANGES_BY_GENE_ID_CACHE[key] = out
-    _cap_cache(_RANGES_BY_GENE_ID_CACHE)
+    _store_ranges_cache_value(_RANGES_BY_GENE_ID_CACHE, ranges_df, out)
     return out
 
 

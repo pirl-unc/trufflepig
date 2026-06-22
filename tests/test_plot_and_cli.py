@@ -1010,6 +1010,69 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
     assert "WT1" in text
 
 
+def test_generate_target_report_canonicalizes_curated_antigen_symbols(
+    tmp_path, monkeypatch
+):
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "median_est": 28.0,
+                "est_1": 20.0,
+                "est_9": 40.0,
+                "observed_tpm": 19.0,
+                "pct_cancer_median": 6.2,
+                "tcga_percentile": 0.98,
+                "is_surface": False,
+                "is_cta": True,
+                "therapies": "TCR-T",
+                "tme_explainable": False,
+                "tme_dominant": False,
+                "excluded_from_ranking": False,
+                "category": "therapy_target",
+                "matched_normal_tpm": 0.0,
+                "matched_normal_tissue": "testis",
+                "matched_normal_fraction": 0.0,
+            }
+        ]
+    )
+    targets_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGE-A4",
+                "agent": "afami-cel",
+                "agent_class": "TCR-T",
+                "phase": "approved",
+                "indication": "MAGE-A4+ HLA-A*02+ synovial sarcoma",
+            }
+        ]
+    )
+    monkeypatch.setattr(cli_mod, "cancer_therapy_targets", lambda *a, **k: targets_df)
+    monkeypatch.setattr(cli_mod, "filter_current_therapy_targets", lambda df: df)
+
+    purity = {
+        "overall_lower": 0.42,
+        "overall_estimate": 0.51,
+        "overall_upper": 0.63,
+        "components": {},
+    }
+    analysis = {
+        "sample_mode": "solid",
+        "cancer_type": "SARC",
+        "call_summary": {"label_options": ["SARC"], "label_display": "SARC"},
+        "mhc1": {"HLA-A": 80, "HLA-B": 72, "HLA-C": 68, "B2M": 420},
+    }
+
+    prefix = str(tmp_path / "sarc")
+    _write_target_report(ranges_df, analysis, prefix, "SARC", purity)
+
+    text = (tmp_path / "sarc-targets.md").read_text()
+    assert "| **MAGEA4** |" in text
+    assert "| **MAGE-A4** |" not in text
+    assert "| MAGE-A4 | *not measured*" not in text
+    assert "gene symbol not present in input file" not in text
+
+
 def test_decomposition_plots_accept_reader_facing_titles_and_labels():
     best = SimpleNamespace(
         cancer_type="SARC",

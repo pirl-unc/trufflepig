@@ -19,7 +19,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _isolate_symbol_map_cache():
+def _isolate_reference_discovery_caches(request):
     yield
     try:
         from trufflepig.common import ensembl_id_to_symbol_map
@@ -28,6 +28,13 @@ def _isolate_symbol_map_cache():
     except Exception:
         # Never let cache teardown mask a real test result.
         pass
+    if "monkeypatch" in getattr(request, "fixturenames", ()):
+        try:
+            from trufflepig.analyze import cancer_type_context
+
+            cancer_type_context._direct_expression_reference_records.cache_clear()
+        except Exception:
+            pass
 
 
 @pytest.fixture(autouse=True)

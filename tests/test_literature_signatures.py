@@ -99,7 +99,10 @@ def test_literature_signature_rules_are_rare_surrogate_compatible():
     assert (rules["context_codes"].astype(str).str.len() > 0).all()
     assert (rules["primary_gene"].astype(str).str.len() > 0).all()
     assert (rules["required_support_genes"].astype(str).str.len() > 0).all()
-    assert set(rules["promote_report_scope"]) == {False}
+    promoting = rules[rules["promote_report_scope"].astype(bool)]
+    assert set(promoting["rule_id"]) == {"lit_bl"}
+    bl = promoting.iloc[0]
+    assert int(bl["min_support_genes"]) == 4
 
 
 def test_combined_rare_surrogate_rules_include_literature_overlay():
@@ -131,3 +134,75 @@ def test_literature_signature_can_emit_non_promoting_marker_hypothesis():
     assert gist["surrogate"] == "KIT"
     assert set(gist["support_genes"]) >= {"ANO1", "PDGFRA"}
     assert gist["promote_report_scope"] is False
+
+
+def test_literature_signature_prompt_requires_active_expression_context():
+    findings = infer_rare_cancer_marker_hypotheses_from_rna(
+        _expression_frame(
+            {
+                "CTNNB1": 150.0,
+                "KRT8": 40.0,
+                "KRT18": 45.0,
+                "BRAF": 6.0,
+                "EPCAM": 20.0,
+            }
+        ),
+        {
+            "cancer_type": "ACC",
+            "candidate_trace": [
+                {"code": "ACC", "support_fraction_of_top": 1.0},
+                {"code": "LGG", "support_fraction_of_top": 0.72},
+            ],
+        },
+    )
+
+    assert all(row["cancer_type"] != "CRANIO" for row in findings)
+
+
+def test_literature_signature_prompt_emits_when_context_is_top():
+    findings = infer_rare_cancer_marker_hypotheses_from_rna(
+        _expression_frame(
+            {
+                "CTNNB1": 150.0,
+                "KRT8": 40.0,
+                "KRT18": 45.0,
+                "BRAF": 6.0,
+                "EPCAM": 20.0,
+            }
+        ),
+        {
+            "cancer_type": "LGG",
+            "candidate_trace": [
+                {"code": "LGG", "support_fraction_of_top": 1.0},
+                {"code": "ACC", "support_fraction_of_top": 0.72},
+            ],
+        },
+    )
+
+    cranio = next(row for row in findings if row["cancer_type"] == "CRANIO")
+    assert cranio["rule_id"] == "lit_cranio"
+    assert cranio["context_match_reason"] == "top_context"
+
+
+def test_promoting_rare_surrogate_can_use_strong_near_top_parent_context():
+    findings = infer_rare_cancer_marker_hypotheses_from_rna(
+        _expression_frame(
+            {
+                "MYB": 25.0,
+                "KRT7": 15.0,
+                "SOX10": 8.0,
+                "KIT": 5.0,
+            }
+        ),
+        {
+            "cancer_type": "LUAD",
+            "candidate_trace": [
+                {"code": "LUAD", "support_fraction_of_top": 1.0},
+                {"code": "HNSC", "support_fraction_of_top": 0.93},
+            ],
+        },
+    )
+
+    adcc = next(row for row in findings if row["rule_id"] == "adcc_myb")
+    assert adcc["cancer_type"] == "ADCC"
+    assert adcc["context_match_reason"] == "near_top_context"

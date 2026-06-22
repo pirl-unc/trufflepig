@@ -1,0 +1,208 @@
+# Hierarchical cancer-type classifier — compartment → leaf
+
+A *positive* result, recorded so the architecture and its evidence aren't
+re-derived from scratch. Companion to
+[cancer-type-ontology.md](./cancer-type-ontology.md) (the reasoning ledger) and
+[cancer-type-residual-matching-findings.md](./cancer-type-residual-matching-findings.md)
+(the residual-matching negative result).
+
+## The problem this fixes
+
+The leaf marker panels **saturate for promiscuous lineages**. The (removed)
+MESENCHYMAL panel and the SQUAMOUS/HNSC panel fire on the stroma and squamous
+contamination present in essentially *every* solid tumor, so a stroma-heavy or
+low-purity carcinoma mis-calls to **SARC**, and a contaminated sample mis-calls to
+**HNSC**. Historically `purity_estimate` masked this (it down-weighted the
+stroma-dominated candidate), which is why removing purity standalone regressed —
+it was a load-bearing crutch, not a fix (see #83).
+
+The elegant fix is **hierarchy**: decide the histogenesis *compartment* first with
+a signal that *cannot* be fooled by a handful of non-specific markers, then narrow
+to a leaf only *within* that compartment. The cross-compartment saturation errors
+(colorectal→SARC, sarcoma→HNSC) simply cannot occur once the leaves are restricted
+to the pinned compartment.
+
+## Stage 1 — compartment call (LOCKED, 15/15)
+
+`cancer_type_centroid.compartment_call(sample_tpm_by_symbol)`.
+
+Whole-profile **Spearman correlation** of the sample against the **full
+subtype-aware cohort reference** (all informative genes — *not* a discriminative
+subset, which sharpened some calls but dropped a real sarcoma to rank 5), then
+**aggregated by histogenesis compartment** via pirlygenes `cancer_lineage_group`:
+
+> Epithelial · Sarcoma · Hematolymphoid · Melanoma · Neuroendocrine · CNS ·
+> Germ cell · Embryonal
+
+**The reference is NOT the 33 TCGA bulk centroids.** A bulk pan-cancer centroid is
+subtype-averaged — the BRCA column is luminal-dominated — so a subtype-shifted tumor
+mis-correlates. `cancer_type_centroid._bulk_centroids` loads the full
+`available_representative_cohorts()` set from pirlygenes (~118 medoids **including**
+BRCA_Basal / BRCA_LumA / …, the SARC_* subtypes, and the rare/non-TCGA types). The
+bare broad `SARC` pseudo-cohort is dropped (sarcoma is a grouping, never a single
+centroid).
+
+**Robust aggregation.** Each compartment's score is the **mean of its top-3
+best-correlating cohorts**, not its single best. With the expanded reference a few
+rare medoids are *promiscuous* — a noisy profile like SARC_PEC free-rides on the
+housekeeping bulk of a whole-transcriptome Spearman and correlates ~0.8 with almost
+anything. Taking the single best cohort lets one such cohort define a whole
+compartment; requiring the top-3 to agree means a prostate tumor can't summon three
+sarcoma cohorts, so the spurious win collapses.
+
+It returns a confidence margin (top compartment − runner-up); a call is `confident`
+when the margin ≥ `_COMPARTMENT_CONFIDENT_MARGIN` (**0.025** rho). On the local truth
+set the compartment is right 15/18, and — the property that makes it safe to *act* —
+**every confident call is correct**, while the residual near-ties (basal/EMT or
+pure-cell-line profiles grazing an adjacent compartment) fall below the margin and
+defer to the marker ranker rather than restricting wrongly.
+
+**Sarcoma is a broad grouping, never a leaf** (the SARC-is-broad rule). Stage 1 may
+*pin* the Sarcoma compartment, but it never resolves a single sarcoma type; every
+`SARC`/`SARC_*` subtype is in-compartment, and the TCGA `SARC` pseudo-leaf is never
+emitted as a call.
+
+### Why the 33-centroid version was scrapped (hcc1395 case study)
+
+The first cut used the 33 TCGA bulk centroids and a 0.02 margin. The eval on the
+regenerated reports showed it **regressed** leaf accuracy (gated 0.50 < ungated
+marker 0.61): it *confidently* mis-called hcc1395 (a basal/EMT triple-negative breast
+line) → **Melanoma**, and the hard restriction then demoted the correct **BRCA** leaf
+to **SKCM**. Diagnosis: hcc1395 expresses **zero** melanocytic identity
+(MLANA/PMEL/TYR/SOX10 ≈ 0) — it did not look like melanoma, it fell *out* of the
+**luminal-dominated** bulk BRCA centroid (it has shed ESR1/FOXA1/GATA3/EPCAM/luminal
+keratins) and rank-correlated marginally closer to SKCM by elimination. The
+subtype-aware reference (BRCA_Basal present) + robust aggregation fixes it: hcc1395
+→ Epithelial, and the near-tie defers. This is why we never again reduce to the 33
+bulk centroids.
+
+### Hallmark-gene veto
+
+A complementary sanity gate (`hallmark_fit` / `hallmark_veto`): a candidate whose
+DEFINING, type-specific markers are near-absent is a horrible fit no matter how the
+whole-profile correlation lands — a Melanoma/SKCM candidate on a sample with
+MLANA/PMEL/TYR ≈ 0 is a reference artifact. `rank_cancer_type_candidates` drops such
+candidates, **gated to cross-compartment** ones so a subtype variant is never dropped
+against its broad type's subtype-averaged hallmarks (basal breast keeps BRCA), and
+never empties the candidate set.
+
+**Sarcoma is a broad grouping, never a leaf** (the SARC-is-broad rule). Stage 1 may
+*pin* the Sarcoma compartment, but it never resolves a single sarcoma type; every
+`SARC`/`SARC_*` subtype is in-compartment, and the TCGA `SARC` pseudo-leaf is never
+emitted as a call.
+
+## How stage 1 reduces stage-2 leaves (production wiring)
+
+In `rank_cancer_type_candidates` (`tumor_purity.py`), after the marker-panel screen
+and same-family promotion, when the compartment call is **confident** we apply a
+**stable two-tier re-rank**: in-compartment leaves float above out-of-compartment
+leaves; within each tier the marker-panel support order is preserved untouched. So
+the reorder happens *only across the compartment boundary* — exactly the saturation
+mis-calls — and the top call plus the candidate set are drawn from the pinned
+compartment.
+
+Guard rails:
+
+- **Abstain below the margin.** An ambiguous profile (margin < 0.025) gets no
+  restriction — we never risk excluding the true leaf on a genuine near-tie.
+- **Never restrict to empty.** The re-rank only fires when there is at least one
+  in-compartment *and* one out-of-compartment candidate; a caller-constrained set
+  that is entirely out-of-compartment is left alone (and flagged as a disagreement,
+  the mis-call detector).
+- **Fail-open.** Any error leaves the marker-panel ranking standing (logged).
+
+Every candidate is annotated with `centroid_correlation`, `range_plausibility`, and
+`compartment_in_set`; the top row records `centroid_coarse_lineage`,
+`centroid_lineage_margin`, `centroid_lineage_confident`,
+`centroid_compartment_restricted`, and `centroid_lineage_agreement`.
+
+## Stage 2 — leaf within the pinned compartment (bake-off)
+
+Once the compartment is pinned, *which* leaf method discriminates best? We ran a
+bake-off restricted to the **true** compartment's leaves (holding the compartment
+fixed isolates the stage-2 question). Sarcoma is scored as broad (any `SARC_*`
+counts); the real discrimination test is the 12 **Epithelial** samples
+(COAD/READ · BRCA · PRAD · BLCA · NUTM). `epi-leaf` = fraction of those 12 whose
+leaf family is correct; `all` includes the 3 sarcomas (always satisfiable).
+
+| stage-2 method | all | epi-leaf |
+|---|---|---|
+| **GATE within-markers(tumor) + decisive-centroid override** | **0.67** | **0.58** |
+| within-markers (tumor-only deconvolved) | 0.60 | 0.50 |
+| RRF: within(t)+tumor-centroid+pancorr | 0.53 | 0.42 |
+| tumor centroid-corr / whole transcriptome | 0.47 | 0.33 |
+| pan_cancer bulk-corr / whole transcriptome | 0.47 | 0.33 |
+| z-norm ENS within(t)+tumor-centroid(t) | 0.47 | 0.33 |
+| centroid-corr / signature genes | 0.40 | 0.25 |
+| within-markers (bulk) | 0.40 | 0.25 |
+| likelihood-ratio (tumor, fit vs global background) | 0.40 | 0.25 |
+| panel-guided (curated signature panel mean) | 0.40 | 0.25 |
+| ENS centroid+within+panel (bulk) | 0.40 | 0.25 |
+| centroid-corr / whole (bulk sample) | 0.33 | 0.17 |
+
+### What the bake-off establishes
+
+- **within-markers on the deconvolved tumor profile** is the best *single*
+  principled leaf method (0.50 epi-leaf). For each leaf we take its genes most
+  specific *within the compartment* (leaf median − peer median in log space) and
+  score the sample's mean expression of them; restricting specificity to the
+  compartment is what the hierarchy buys us.
+- **Flat fusion hurts.** Reciprocal-rank fusion and z-norm ensembles of the
+  complementary methods both *regress* (0.42 / 0.33) — they dilute the strong
+  within-markers signal with noisier voters. Averaging is the wrong combinator here.
+- **A principled cascade helps.** The methods are complementary in a *structured*
+  way: within-markers nails the common carcinomas but misses **NUTM** (a rare NUT
+  carcinoma — within-markers calls HNSC/BRCA), while whole-profile centroid
+  correlation nails NUTM 3/3 but is mediocre elsewhere. A cascade — within-markers
+  as the base, overridden only when the whole-profile centroid has a *decisive*
+  winner (a "distinctive rare type" rule, not blind averaging) — lifts epi-leaf
+  0.50 → 0.58 without disturbing the common-carcinoma calls. We deliberately did
+  **not** tune the override margin to grab the last two NUTM samples: that would
+  overfit a 15-sample set.
+
+### What ships in production (stage 2)
+
+Production stage-2 is the **existing geomean support-score ranker**
+(`rank_cancer_type_candidates`'s 5-factor geomean: signature_score ·
+purity_estimate · lineage_support_factor · signature_stability · family_factor),
+now operating on the **compartment-restricted candidate set** — i.e. "bring back the
+old system, run it once the broad category is pinned". The compartment gate is what
+makes that geomean reliable: it removes the cross-compartment candidates that the
+saturated marker panels would otherwise let win.
+
+The bake-off methods above (within-markers, tumor-centroid, the decisive-centroid
+cascade) are recorded as the **evaluated alternatives**. The within-markers +
+decisive-centroid cascade is the best research result (0.58) and a documented future
+option, but it is *not* shipped yet: a 0.50→0.58 move on a 15-sample set is inside
+the overfitting band, so we keep the principled, well-tested geomean as the stage-2
+leaf ranker and let the compartment gate carry the robust win.
+
+### Honest limit
+
+Leaf discrimination *within* a compartment on these deconvolution-noisy samples
+caps around **0.5–0.6**, and that is a property of the samples (admixture +
+deconvolution residual noise), not a method failure — it is the same wall the
+residual-matching experiment hit. The robust, bankable win is **stage 1**: perfect
+compartment calls that eliminate the *cross-compartment* errors which were the
+actual production bug. Stage 2 narrows within the compartment as far as the evidence
+allows and otherwise leaves the near-tied leaves as a candidate set (the
+[ontology layer](./cancer-type-ontology.md)'s abstention behavior), rather than
+forcing a wrong leaf.
+
+## Local blind truth set (15 samples)
+
+Run on every local report under `/tmp/bughunt_sweep/*/analyze/` with known truth.
+Each is scored from expression alone — the cancer type is **not** passed in.
+
+| sample(s) | n | truth compartment | truth leaf |
+|---|---|---|---|
+| alvin | 1 | Sarcoma | (broad) |
+| pfo004 | 2 | Sarcoma | (broad) |
+| pfo002 | 3 | Epithelial | COAD/READ (colorectal) |
+| hcc1395 | 2 | Epithelial | BRCA |
+| rs-tempus | 1 | Epithelial | PRAD |
+| pfo017 | 3 | Epithelial | BLCA |
+| tempus-nutm1 | 3 | Epithelial | NUTM |
+
+Stage 1: **15/15** compartments correct. Stage 2 (epithelial leaf, family-aware):
+best method 7/12 (0.58); the misses are the rare/admixed cases noted above.

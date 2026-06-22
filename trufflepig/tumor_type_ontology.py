@@ -16,6 +16,17 @@ _HIGH_TPM_FLOOR = 2.0
 _LOW_TPM_CEILING = 10.0
 
 
+def _required_high_marker_count(total: int) -> int:
+    """Minimum breadth for a marker program to be called coherent."""
+    if total <= 0:
+        return 0
+    if total <= 2:
+        return total
+    if total <= 4:
+        return max(2, (total + 1) // 2)
+    return max(3, (total + 1) // 2)
+
+
 def _clean(value: Any) -> str:
     if value is None:
         return ""
@@ -468,7 +479,7 @@ def tumor_type_sanity_check(
     high_detected = sorted(high_detected, key=lambda row: row["tpm"], reverse=True)
     low_present = sorted(low_present, key=lambda row: row["tpm"], reverse=True)
 
-    required_high = min(2, len(high_rows))
+    required_high = _required_high_marker_count(len(high_rows))
     if not high_rows:
         status = "not_evaluable"
     elif len(high_detected) >= required_high:
@@ -496,6 +507,10 @@ def tumor_type_sanity_check(
         "status": status,
         "high_tpm_floor": float(high_tpm_floor),
         "low_tpm_ceiling": float(low_tpm_ceiling),
+        "required_high_for_consistent": int(required_high),
+        "expected_high_detected_fraction": (
+            float(len(high_detected) / len(high_rows)) if high_rows else 0.0
+        ),
         "expected_high": sorted(high_rows, key=lambda row: row["tpm"], reverse=True),
         "expected_high_detected": high_detected,
         "expected_low": sorted(low_rows, key=lambda row: row["tpm"], reverse=True),

@@ -504,7 +504,10 @@ class CancerTypeContext:
         data["reference_label"] = cancer_type_context_label(self.reference_code)
         data["fine_label"] = cancer_type_context_label(self.fine_code)
         data["coarse_label"] = cancer_type_context_label(self.coarse_code)
+        data["expression_code"] = self.best_expression_code
+        data["fallback_expression_code"] = self.reference_code
         data["best_expression_label"] = cancer_type_context_label(self.best_expression_code)
+        data["fallback_expression_label"] = cancer_type_context_label(self.reference_code)
         return data
 
     def markdown_lines(self) -> list[str]:
@@ -513,14 +516,25 @@ class CancerTypeContext:
         lines = [f"- **Report label**: {cancer_type_context_label(self.report_code)}."]
         if self.uses_distinct_reference:
             lines.append(
-                f"- **Broad reference context**: {cancer_type_context_label(self.reference_code)} "
-                "is used when a step needs a coarse cohort reference."
+                f"- **Fallback expression/reference context**: "
+                f"{cancer_type_context_label(self.reference_code)} is used when "
+                "a step needs a coarse cohort reference."
             )
         else:
-            lines.append(
-                "- **Broad reference context**: same as report label; no finer "
-                "registry label is active."
-            )
+            if (
+                self.best_expression_direct
+                and self.best_expression_source_kind
+                not in {"observed_pan_cancer_reference", ""}
+            ):
+                lines.append(
+                    "- **Reference context**: same code as report label; a direct "
+                    "expression reference is available."
+                )
+            else:
+                lines.append(
+                    "- **Broad reference context**: same as report label; no finer "
+                    "registry label is active."
+                )
         if self.parent_code:
             lines.append(
                 f"- **Hierarchy**: {cancer_type_context_label(self.report_code)} is modeled "
@@ -547,9 +561,9 @@ class CancerTypeContext:
                 )
         if self.fine_expression_available and self.uses_distinct_reference:
             lines.append(
-                "- **Context caveat**: subtype-aware modules may use the fine-grained "
+                "- **Context caveat**: subtype-aware modules prefer the fine-grained "
                 "reference; coarse pan-reference modules explicitly use the broad "
-                "reference."
+                "fallback reference."
             )
         return lines
 

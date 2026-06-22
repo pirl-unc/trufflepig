@@ -201,6 +201,64 @@ def test_registry_only_cancer_label_becomes_report_scope():
     assert report_scope == "NUTM"
 
 
+def test_observed_reference_parent_without_broad_tpm_can_anchor_child(monkeypatch):
+    import trufflepig.main as main
+
+    monkeypatch.setattr(
+        main,
+        "_pan_cancer_expression_cohort_codes",
+        lambda: frozenset({"PCPG", "SCLC", "SARC"}),
+    )
+    monkeypatch.setattr(
+        main,
+        "_has_operational_analysis_reference",
+        lambda code: str(code) == "NBL",
+    )
+
+    composition_scope, report_scope = main._analysis_input_cancer_type("NBL_MYCNamp")
+
+    assert composition_scope == "NBL"
+    assert report_scope == "NBL_MYCNamp"
+
+
+def test_observed_reference_parent_without_operational_purity_stays_report_scope(
+    monkeypatch,
+):
+    import trufflepig.main as main
+
+    monkeypatch.setattr(
+        main,
+        "_pan_cancer_expression_cohort_codes",
+        lambda: frozenset({"PCPG", "SCLC", "SARC"}),
+    )
+    monkeypatch.setattr(main, "_has_operational_analysis_reference", lambda code: False)
+
+    composition_scope, report_scope = main._analysis_input_cancer_type("NBL_MYCNamp")
+
+    assert composition_scope is None
+    assert report_scope == "NBL_MYCNamp"
+
+
+def test_sclc_subtype_uses_supported_parent_reference(monkeypatch):
+    import trufflepig.main as main
+
+    monkeypatch.setattr(
+        main,
+        "_pan_cancer_expression_cohort_codes",
+        lambda: frozenset({"PCPG", "SARC"}),
+    )
+    monkeypatch.setattr(
+        main,
+        "_has_operational_analysis_reference",
+        lambda code: str(code) == "SCLC",
+    )
+
+    composition_scope, report_scope = main._analysis_input_cancer_type("SCLC_YAP1")
+
+    assert composition_scope == "SCLC"
+    assert report_scope == "SCLC_YAP1"
+
+
 def test_registry_child_cancer_label_constrains_parent_cohort():
     from trufflepig.main import _analysis_input_cancer_type
 
@@ -243,6 +301,50 @@ def test_concrete_child_with_abstract_umbrella_parent_is_not_promoted():
         composition_scope, report_scope = _analysis_input_cancer_type(concrete)
         assert composition_scope == concrete, concrete
         assert report_scope is None, concrete
+
+
+def test_nutm1_expression_can_infer_registry_only_report_scope():
+    import pandas as pd
+
+    from trufflepig.main import _infer_registry_report_scope_from_rna
+
+    df = pd.DataFrame(
+        {
+            "ensembl_gene_id": ["ENSG00000184507"],
+            "canonical_gene_name": ["NUTM1"],
+            "TPM": [6.2],
+        }
+    )
+    analysis = {"candidate_trace": [{"code": "LUSC"}]}
+
+    inference = _infer_registry_report_scope_from_rna(df, analysis)
+
+    assert inference["cancer_type"] == "NUTM"
+    assert inference["surrogate"] == "NUTM1"
+    assert inference["top_reference_cancer_type"] == "LUSC"
+    assert "hypothesis" in inference["caveat"].lower()
+
+
+def test_context_roles_make_hint_outputs_consistent_for_nutm():
+    from trufflepig.analyze import cancer_type_context_from_analysis
+    from trufflepig.main import _apply_cancer_type_context_roles
+
+    analysis = {
+        "cancer_type": "NUTM",
+        "report_scope_cancer_type": "NUTM",
+        "reference_cancer_type": "LUSC",
+    }
+    context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type="NUTM",
+    )
+
+    _apply_cancer_type_context_roles(analysis, context)
+
+    assert analysis["reference_cancer_type"] == "LUSC"
+    assert analysis["fallback_expression_reference_cancer_type"] == "LUSC"
+    assert analysis["expression_reference_cancer_type"] == "NUTM"
+    assert analysis["expression_reference_role"] == "report_label_exact"
 
 
 def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
@@ -418,6 +520,24 @@ def test_fusion_expression_effects_use_tumor_tpm_when_available():
     assert myc["tumor_tpm"] == 60.0
 
 
+def test_rna_only_fusion_hypotheses_require_compatible_context():
+    from trufflepig.fusion_effects import infer_fusion_expression_hypotheses
+
+    sample = {"TFE3": 4.0, "ANGPTL2": 30.0, "VEGFA": 25.0}
+
+    acc_findings = infer_fusion_expression_hypotheses(sample, cancer_code="ACC")
+    assert all(
+        row["rule_id"] != "aspscr1_tfe3_asps_program" for row in acc_findings
+    )
+
+    sarc_findings = infer_fusion_expression_hypotheses(sample, cancer_code="SARC")
+    asps = next(
+        row for row in sarc_findings if row["rule_id"] == "aspscr1_tfe3_asps_program"
+    )
+    assert asps["status"] == "active"
+    assert {"ANGPTL2", "VEGFA"}.issubset(set(asps["observed_genes"]))
+
+
 def test_mutation_expression_effects_are_hypotheses_not_calls():
     from trufflepig.alteration_effects import infer_mutation_expression_hypotheses
 
@@ -554,6 +674,24 @@ def test_should_adopt_decomposition_purity_contract():
     assert not should_adopt_decomposition_purity("COAD", mismatch)
     assert not should_adopt_decomposition_purity("COAD", no_tme)
     assert not should_adopt_decomposition_purity("COAD", missing)
+
+
+def test_wilms_deconvolved_reference_uses_expression_source_code_alias():
+    import pandas as pd
+
+    from trufflepig.tumor_purity import (
+        _resolve_purity_reference,
+        _subtype_tumor_tpm_lookup,
+    )
+
+    wilms_ref = _subtype_tumor_tpm_lookup("WILMS")
+    target_wt_ref = _subtype_tumor_tpm_lookup("TARGET_WT")
+
+    assert len(wilms_ref) > 1000
+    assert wilms_ref == target_wt_ref
+    resolved = _resolve_purity_reference("WILMS", pd.DataFrame())
+    assert resolved["reference_cancer_code"] == "WILMS"
+    assert resolved["reference_expression_source"] == "subtype_deconvolved"
 
 
 def test_top_level_import_does_not_import_matplotlib_pyplot():
