@@ -119,6 +119,46 @@ def test_registry_molecular_children_are_orthogonal_axes():
     ]
 
 
+def test_registry_status_mentions_do_not_create_orthogonal_axes():
+    from trufflepig.cancer_type_evidence import (
+        _lineage_path_for_code,
+        _orthogonal_axes_for_code,
+    )
+
+    for code in ("CRC", "COAD", "READ", "STAD", "MM"):
+        assert _orthogonal_axes_for_code(code) == []
+
+    assert [
+        row.get("code") or row.get("family") for row in _lineage_path_for_code("COAD")
+    ] == [
+        "carcinoma-gi",
+        "CRC",
+        "COAD",
+    ]
+
+
+def test_broad_only_channels_require_positive_signal():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("COAD", 1.0), ("READ", 0.8)),
+    )
+
+    selected_channels = result["selected"]["evidence_channels"]
+    assert [
+        (row["channel"], row["role"]) for row in selected_channels
+    ] == [("bulk_rna", "primary_expression_candidate")]
+
+    graph_channels = [
+        row for row in result["staged_evidence_graph"]["channels"]
+        if row.get("candidate_code") == "COAD"
+    ]
+    assert [
+        (row["channel"], row["role"]) for row in graph_channels
+    ] == [("bulk_rna", "primary_expression_candidate")]
+
+
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

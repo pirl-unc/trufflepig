@@ -674,7 +674,8 @@ def _hypothesis_evidence_channels(
         status: str = "",
         details: Mapping[str, Any] | None = None,
     ) -> None:
-        if support <= 0 and not code and not context_code:
+        support_value = _safe_float(support)
+        if support_value <= 0:
             return
         channels.append(
             CancerTypeEvidenceChannel(
@@ -683,7 +684,7 @@ def _hypothesis_evidence_channels(
                 role=role,
                 code=code or hypothesis.cancer_type,
                 context_code=context_code,
-                support=support,
+                support=support_value,
                 status=status
                 or _channel_status(hypothesis, selector=selector),
                 selects_report_label=_channel_selects(hypothesis, selector),
@@ -2295,32 +2296,39 @@ def _orthogonal_axes_for_code(
             axis_row["support"] = round(float(support), 4)
         axes.append(axis_row)
 
-    if suffix_upper in {"MSI", "MSS"} or "msi" in text or "mmr" in text:
-        state = (
-            "MSS / MMR-proficient"
-            if suffix_upper == "MSS"
-            or "microsatellite-stable" in text
-            or "mmr-proficient" in text
-            else "MSI-H / dMMR"
-        )
+    mmr_state_by_suffix = {
+        "MSI": "MSI-H / dMMR",
+        "MSIH": "MSI-H / dMMR",
+        "DMMR": "MSI-H / dMMR",
+        "MMRD": "MSI-H / dMMR",
+        "MSS": "MSS / MMR-proficient",
+        "PMMR": "MSS / MMR-proficient",
+        "MMRP": "MSS / MMR-proficient",
+    }
+    if suffix_upper in mmr_state_by_suffix:
+        state = mmr_state_by_suffix[suffix_upper]
         add_axis("mismatch_repair", state, system="MSI/MMR", state_code=suffix_upper)
-    if suffix_upper == "POLE" or "pole" in text:
+    if suffix_upper == "POLE":
         add_axis("polymerase_epsilon", "POLE-ultramutated", system="TCGA molecular class")
-    if suffix_upper in {"CNH", "CNL"} or "copy-number" in text:
+    if suffix_upper in {"CNH", "CNL"}:
         add_axis(
             "copy_number_p53",
             _humanize_status_token(suffix) or "copy-number state",
             system="TCGA molecular class",
             state_code=suffix_upper,
         )
-    if suffix_upper.startswith("HPV") or viral_agent.upper() == "HPV":
+    if suffix_upper.startswith("HPV"):
         state = (
             "HPV-negative"
             if suffix_upper.endswith("NEG") or "hpv-negative" in text
             else "HPV-positive"
         )
         add_axis("viral_status", state, system="viral etiology", state_code=suffix)
-    elif viral_agent and viral_etiology in {"defining", "subtype"}:
+    elif viral_agent.upper() == "HPV" and viral_etiology == "defining":
+        add_axis("viral_status", "HPV-positive", system="viral etiology")
+    elif viral_agent and (
+        viral_etiology == "defining" or parent_code and viral_etiology == "subtype"
+    ):
         add_axis("viral_status", viral_agent, system="viral etiology")
     if (
         "pam50" in expression_source.lower()
