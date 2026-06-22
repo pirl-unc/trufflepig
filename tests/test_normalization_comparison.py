@@ -20,7 +20,6 @@ Weighting options (per-row weight in the NNLS system):
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from trufflepig.decomposition.engine import (
     _hk_normalize,
@@ -439,10 +438,7 @@ def test_comparison_runs_without_errors():
         assert errors.empty, f"{len(errors)} combos failed"
 
 
-@pytest.mark.skip(
-    reason="Diagnostic benchmark — run manually with -k test_print_comparison_table --no-header -s"
-)
-def test_print_comparison_table(capsys):
+def print_comparison_table_for_manual_review():
     """Print the full comparison table for human review."""
     df = run_comparison()
 
@@ -516,4 +512,4 @@ def test_print_comparison_table(capsys):
 
 
 if __name__ == "__main__":
-    test_print_comparison_table(None)
+    print_comparison_table_for_manual_review()

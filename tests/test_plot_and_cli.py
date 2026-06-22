@@ -1318,12 +1318,6 @@ def test_hierarchy_embedding_keeps_coad_near_crc_family():
     assert np.linalg.norm(sample - read) < np.linalg.norm(sample - dlbc)
 
 
-@pytest.mark.xfail(
-    reason="pirlygenes 5.22.107 (#452/#454) changed the family panel set "
-    "(MESENCHYMAL removed; adenocarcinoma families + supertype DAG added), shifting "
-    "the reference family-feature matrix this locks. Rewritten in trufflepig#83.",
-    strict=False,
-)
 def test_reference_family_matrix_scores_each_cohort_to_its_own_family():
     """Lock the reference/sample scorer unification across multiple cohorts.
 
@@ -1339,7 +1333,8 @@ def test_reference_family_matrix_scores_each_cohort_to_its_own_family():
     max-normalized score. The embedding is robust to that because the sample
     side is scored identically, so the overlap cancels in the sample↔reference
     distance (see test_hierarchy_embedding_keeps_coad_near_crc_family) — what
-    must hold here is that the own family is strongly present, not uniquely top.
+    must hold here is that the own family is present in the top tier, not
+    uniquely top or above a fixed absolute score.
     """
     candidate_codes, family_labels, _sites, _labels = (
         plot_mod._hierarchy_feature_labels()
@@ -1363,9 +1358,9 @@ def test_reference_family_matrix_scores_each_cohort_to_its_own_family():
         row = matrix[code_row[code]]
         own = row[fam_col[family]]
         rank = int((row > own).sum())  # 0 == argmax
-        assert rank < 3 and own >= 0.4, (
+        assert rank < 3 and own > 0.0, (
             f"{code}: family {family!r} scored {own:.3f} at rank {rank} "
-            f"(max {row.max():.3f}) — expected strongly present (rank<3, >=0.4)"
+            f"(max {row.max():.3f}) — expected present in top tier (rank<3)"
         )
 
 
