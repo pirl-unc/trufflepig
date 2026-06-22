@@ -468,6 +468,50 @@ def test_known_label_prioritizes_report_compatible_decomposition():
     assert "raw best fit was PCPG/solid_primary" in compatible.warnings[-1]
 
 
+def test_blind_report_call_prioritizes_compatible_background_decomposition():
+    raw_best = SimpleNamespace(
+        cancer_type="HNSC",
+        template="met_brain",
+        score=0.55,
+        warnings=["Many genes are overexplained by the TME background"],
+        site_evidence={"site_supported": False, "status": "fit_only"},
+    )
+    weak_report_met = SimpleNamespace(
+        cancer_type="CESC",
+        template="met_brain",
+        score=0.18,
+        warnings=[
+            "Primary tissue support exceeds metastatic-site support",
+            "Many genes are overexplained by the TME background",
+        ],
+        site_evidence={"site_supported": False, "status": "fit_only"},
+        template_site_factor=0.57,
+        template_tissue_score=0.52,
+    )
+    report_primary = SimpleNamespace(
+        cancer_type="CESC",
+        template="solid_primary",
+        score=0.12,
+        warnings=[],
+        site_evidence={},
+    )
+
+    ordered = _prioritize_report_compatible_decomposition(
+        [raw_best, weak_report_met, report_primary],
+        reference_code="CESC",
+        report_code="CESC",
+        enabled=False,
+        analysis={"cancer_type": "CESC"},
+    )
+
+    assert ordered[0] is report_primary
+    assert ordered[1] is raw_best
+    assert any(
+        "Selected report-compatible decomposition" in warning
+        for warning in report_primary.warnings
+    )
+
+
 def test_summarize_call_weak_fit_met_is_indeterminate():
     analysis = _base_analysis(
         cancer_type="COAD",

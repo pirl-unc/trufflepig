@@ -53,6 +53,7 @@ from .reporting import (
     format_missing_observation_interp,
     hla_restrictions_for_target_row,
     hla_restricted_target_supported,
+    interval_material_target_candidate,
     normal_expression_context,
     report_disease_state_text,
     target_observation_state,
@@ -62,6 +63,8 @@ from .reporting import (
     subtype_curation_scope_note,
     therapy_path_context,
     therapy_path_rank,
+    therapy_rna_context_conflict,
+    therapy_row_rna_context_inactive,
     therapy_state_caution,
     tumor_band_available,
     tumor_band_cell,
@@ -465,43 +468,6 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
     return not bool(supplied_alteration_supports_target_row(target_row, analysis))
 
 
-def _row_context_text(target_row) -> str:
-    if not hasattr(target_row, "get"):
-        return ""
-    return " ".join(
-        str(target_row.get(key) or "")
-        for key in ("indication", "rationale", "agent", "agent_class", "eligibility_note")
-    ).lower()
-
-
-def _therapy_axis_state_for_brief(analysis, axis: str) -> str:
-    if not isinstance(analysis, dict):
-        return ""
-    scores = analysis.get("therapy_response_scores") or {}
-    score = scores.get(axis) if hasattr(scores, "get") else None
-    if score is None:
-        return ""
-    if hasattr(score, "get"):
-        return str(score.get("state") or "").strip().lower()
-    return str(getattr(score, "state", "") or "").strip().lower()
-
-
-def _brca_er_dependent_row_inactive(target_row, analysis) -> bool:
-    """Whether an ER/HR-dependent BRCA row conflicts with ER-low RNA state."""
-    if not isinstance(analysis, dict) or not hasattr(target_row, "get"):
-        return False
-    cancer_code = str(target_row.get("cancer_code") or analysis.get("cancer_type") or "")
-    if cancer_code.strip().upper() != "BRCA":
-        return False
-    if _therapy_axis_state_for_brief(analysis, "ER_signaling") != "down":
-        return False
-    sym = str(target_row.get("symbol") or "").strip().upper()
-    if sym not in {"ESR1", "PGR", "CDK4", "CDK6"}:
-        return False
-    text = _row_context_text(target_row)
-    return any(token in text for token in ("er+", "hr+", "endocrine", "esr1-mut"))
-
-
 def _has_direct_eligibility_input(analysis, biomarker: str) -> bool:
     """Best-effort check for orthogonal eligibility evidence supplied to this run."""
     if not isinstance(analysis, dict):
@@ -783,7 +749,11 @@ def _top_therapies(
         expr_independent = expression_independent_indication(t)
         if _subtype_specific_row_out_of_scope(t, analysis):
             continue
-        if _brca_er_dependent_row_inactive(t, analysis):
+        if therapy_row_rna_context_inactive(
+            t,
+            analysis=analysis,
+            disease_state=disease_state,
+        ):
             continue
         supplied_alteration_rank = (
             0 if supplied_alteration_supports_target_row(t, analysis) else 1
@@ -826,15 +796,21 @@ def _top_therapies(
             expr,
             target_row=t,
         )
+        interval_material = interval_material_target_candidate(expr, target_row=t)
         # Drop rows that are mostly non-tumor from the top-3 — they
         # don't belong in the clinician handoff per #79 semantics.
         # Same-lineage clinical targets are a special case: a prostate
         # lineage marker assigned partly to matched-normal prostate is
         # source-ambiguous, not equivalent to an immune/stromal target.
-        if attr_fraction < 0.30 and not expr_independent and not lineage_material:
+        if (
+            attr_fraction < 0.30
+            and not expr_independent
+            and not lineage_material
+            and not interval_material
+        ):
             continue
         reliability_status = target_reliability_status(expr, target_row=t)
-        if reliability_status == "unsupported":
+        if reliability_status == "unsupported" and not interval_material:
             continue
         # Note (#128): we deliberately do NOT filter on
         # ``broadly_expressed`` here. The caller's ``targets_df`` is
@@ -848,7 +824,10 @@ def _top_therapies(
         # / Intracellular target tables where ranking is by raw
         # expression, not curation.
         phase = str(t.get("phase") or "")
-        reliability_rank = 0 if reliability_status == "supported" else 1
+        reliability_rank = {
+            "supported": 0,
+            "provisional": 1,
+        }.get(reliability_status, 2)
         expression_rank = 1 if expr_independent else 0
         sort_key = (
             supplied_alteration_rank,
@@ -1007,6 +986,8 @@ def _source_trace_reason(target_row, expression_row, *, in_shortlist: bool) -> s
             parts.append("same-lineage marker; tumor origin uncertain")
         elif source["tier"] == "mixed_source":
             parts.append("mixed tumor/background signal")
+        elif interval_material_target_candidate(expression_row, target_row=target_row):
+            parts.append("interval includes material tumor signal; median mostly background")
         elif source["tier"] == "background_dominant":
             parts.append("mostly background signal")
         else:
@@ -1164,6 +1145,10 @@ def _disease_state_summary_lines(disease_state_display):
     if match is None:
         return [f"**Disease state:** {text}"]
 
+    def _with_terminal_punctuation(value: str) -> str:
+        value = value.strip()
+        return value if not value or value[-1] in ".!?)" else f"{value}."
+
     before = text[: match.start()]
     after = text[match.end():]
     before = _re.sub(r"[\s;,.\*]+$", "", before).strip()
@@ -1172,7 +1157,7 @@ def _disease_state_summary_lines(disease_state_display):
 
     lines: list[str] = []
     if before:
-        lines.append(f"**Disease state:** {before}")
+        lines.append(f"**Disease state:** {_with_terminal_punctuation(before)}")
     ifn = "Active IFN response"
     if after:
         ifn = f"{ifn} — {after}"
@@ -1458,7 +1443,10 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         promoted_clause = (
             f" — supports the {promoted_code} call"
             if promoted_code == str(cancer_code or "").strip()
-            else f" — proposes {promoted_code}"
+            else (
+                f" — competing {promoted_code} lineage signal; "
+                f"did not override the {str(cancer_code or '').strip()} call"
+            )
         )
     elif blockers:
         promoted_clause = f" — noted, did not change the call ({blockers[0]})"
@@ -2823,7 +2811,11 @@ def build_actionable(
             _target_records = targets_df.to_dict("records")
             sorted_df = targets_df.assign(
                 _inactive_key=[
-                    1 if _brca_er_dependent_row_inactive(t, analysis) else 0
+                    1 if therapy_row_rna_context_inactive(
+                        t,
+                        analysis=analysis,
+                        disease_state=disease_state_display,
+                    ) else 0
                     for t in _target_records
                 ],
                 _path_key=[
@@ -2896,12 +2888,13 @@ def build_actionable(
                             )
                         if extra_parts:
                             interp_cell += "; " + "; ".join(extra_parts)
-                        if _brca_er_dependent_row_inactive(t, analysis):
-                            interp_cell += (
-                                "; RNA-context conflict: ER axis is suppressed/"
-                                "ER-low; verify ER-positive disease and "
-                                "indication-specific eligibility before acting"
-                            )
+                        conflict = therapy_rna_context_conflict(
+                            t,
+                            analysis=analysis,
+                            disease_state=disease_state_display,
+                        )
+                        if conflict:
+                            interp_cell += "; " + conflict
                     else:
                         obs_cell = f"{float(expr.get('observed_tpm') or 0):.1f}"
                         tumor_source_cell = tumor_band_cell(expr)
@@ -2917,12 +2910,13 @@ def build_actionable(
                             ]
                         else:
                             interp_parts = [source["label"], normal["label"]]
-                        if _brca_er_dependent_row_inactive(t, analysis):
-                            interp_parts.append(
-                                "RNA-context conflict: ER axis is suppressed/"
-                                "ER-low; verify ER-positive disease and "
-                                "indication-specific eligibility before acting"
+                        conflict = therapy_rna_context_conflict(
+                            t,
+                            analysis=analysis,
+                            disease_state=disease_state_display,
                             )
+                        if conflict:
+                            interp_parts.append(conflict)
                         notes = list(source.get("notes") or []) + list(
                             normal.get("details") or []
                         )

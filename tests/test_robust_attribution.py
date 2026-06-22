@@ -480,6 +480,104 @@ def test_brief_trusts_curation_over_broadly_expressed_flag():
     assert "FOLH1" in symbols
 
 
+def test_brief_does_not_prioritize_her2_therapy_when_her2_axis_is_down():
+    from trufflepig.brief import _top_therapies
+
+    targets_df = pd.DataFrame(
+        [
+            {
+                "cancer_code": "BRCA",
+                "symbol": "ERBB2",
+                "agent": "trastuzumab",
+                "agent_class": "HER2 antibody",
+                "phase": "approved",
+                "indication": "HER2-positive metastatic breast cancer",
+            },
+            {
+                "cancer_code": "BRCA",
+                "symbol": "TACSTD2",
+                "agent": "sacituzumab govitecan",
+                "agent_class": "ADC",
+                "phase": "approved",
+                "indication": "metastatic TNBC",
+            },
+        ]
+    )
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "ERBB2",
+                "observed_tpm": 80.0,
+                "attr_tumor_tpm": 60.0,
+                "attr_tumor_fraction": 0.75,
+                "attr_top_compartment": "tumor",
+                "attr_top_compartment_tpm": 60.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            },
+            {
+                "symbol": "TACSTD2",
+                "observed_tpm": 160.0,
+                "attr_tumor_tpm": 120.0,
+                "attr_tumor_fraction": 0.75,
+                "attr_top_compartment": "tumor",
+                "attr_top_compartment_tpm": 120.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            },
+        ]
+    )
+    analysis = {"therapy_response_scores": {"HER2_signaling": {"state": "down"}}}
+
+    top = _top_therapies(targets_df, ranges_df, limit=3, analysis=analysis)
+    assert [t["symbol"] for t, _ in top] == ["TACSTD2"]
+
+
+def test_brief_keeps_mature_target_when_interval_support_is_material():
+    from trufflepig.brief import _source_trace_reason, _top_therapies
+
+    target = {
+        "cancer_code": "BRCA",
+        "symbol": "TACSTD2",
+        "agent": "sacituzumab govitecan",
+        "agent_class": "ADC",
+        "phase": "approved",
+        "indication": "mTNBC / HR+/HER2-",
+        "treatment_path_tier": "approved_later_line",
+        "eligibility_note": "confirm prior therapies and indication-specific eligibility",
+    }
+    targets_df = pd.DataFrame([target])
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "TACSTD2",
+                "observed_tpm": 240.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm": 31.0,
+                "attr_tumor_tpm_high": 131.0,
+                "attr_tumor_fraction_low": 0.0,
+                "attr_tumor_fraction": 0.13,
+                "attr_tumor_fraction_high": 0.54,
+                "attr_support_fraction": 0.33,
+                "attr_top_compartment": "endothelial",
+                "attr_top_compartment_tpm": 13.0,
+                "tme_dominant": True,
+                "tme_explainable": True,
+                "matched_normal_over_predicted": False,
+                "source_marker_non_tumor_prior": False,
+            },
+        ]
+    )
+
+    top = _top_therapies(targets_df, ranges_df, limit=3, analysis={})
+    assert [t["symbol"] for t, _ in top] == ["TACSTD2"]
+    assert "interval includes material tumor signal" in _source_trace_reason(
+        target,
+        ranges_df.iloc[0],
+        in_shortlist=True,
+    )
+
+
 def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
     from trufflepig.brief import _format_therapy_bullet, _top_therapies
 

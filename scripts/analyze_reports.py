@@ -56,6 +56,7 @@ _CALL_LINE = re.compile(r"\*\*Working cancer call\*\*:\s*(.+)")
 # Handles single calls ("KIRC (Kidney...)") and abstentions
 # ("provisional between LGG (Lower Grade Glioma) and GBM (Glioblastoma...)").
 _CODE_BEFORE_PAREN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(")
+_REP_SAMPLE_SUFFIX = re.compile(r"_rep\d+$")
 _EXPECTED_CODE_ALIASES = {
     # pirlygenes 5.13 renamed the osteosarcoma atom from OS to SARC_OS.
     # Local truth manifests may still carry the historical short code.
@@ -105,27 +106,30 @@ class Compat:
     def _base(code):
         return code.split("_")[0] if code else ""
 
-    def __call__(self, called, expected):
+    def match_level(self, called, expected):
         if not called or not expected:
-            return False
+            return "none"
         if called == expected:
-            return True
+            return "exact"
         # parent <-> subtype prefix (HNSC ~ HNSC_HPV, BRCA ~ BRCA_LumA)
         if called.startswith(expected + "_") or expected.startswith(called + "_"):
-            return True
+            return "subtype_prefix"
         # same top-level registry parent (COAD/READ -> CRC, subtypes -> their parent)
         root_e = self._root(expected)
         if root_e and self._root(called) == root_e:
-            return True
+            return "registry_root"
         # same coarse base token
         base_e = self._base(expected)
         if base_e and self._base(called) == base_e:
-            return True
+            return "base_token"
         # same broad lineage (catches the cross-lineage mistakes we care about)
         bc, be = self._broad(called), self._broad(expected)
         if bc and bc == be and bc not in ("other",):
-            return True
-        return False
+            return "broad_lineage"
+        return "none"
+
+    def __call__(self, called, expected):
+        return self.match_level(called, expected) != "none"
 
 
 def _calls_of(analysis_md: Path):
@@ -215,6 +219,10 @@ def _expected_for(group, sample_id, truth, infer):
     if group in truth:
         return truth[group]["expected"], truth[group]["notes"]
     if infer:
+        if group == sample_id:
+            inferred = _REP_SAMPLE_SUFFIX.sub("", sample_id)
+            if inferred != sample_id:
+                return inferred, ""
         return group, ""
     return "", ""
 
@@ -263,6 +271,24 @@ def main(argv=None):
     def compat_any(calls, expected):
         return any(compat(c, e) for c in calls for e in expected_codes(expected))
 
+    match_level_rank = {
+        "exact": 5,
+        "subtype_prefix": 4,
+        "registry_root": 3,
+        "base_token": 2,
+        "broad_lineage": 1,
+        "none": 0,
+    }
+
+    def best_match_level(calls, expected):
+        best = "none"
+        for called in calls:
+            for exp in expected_codes(expected):
+                level = compat.match_level(called, exp)
+                if match_level_rank[level] > match_level_rank[best]:
+                    best = level
+        return best
+
     rows = []
     for group, sample_id, md in _iter_samples(args.reports):
         expected, notes = _expected_for(group, sample_id, truth, args.infer_expected)
@@ -280,6 +306,7 @@ def main(argv=None):
                 "new_call": "|".join(new_calls),
                 "_new": new_calls,
                 "_base": base_calls,
+                "match_level": best_match_level(new_calls, expected),
                 "provisional": new_prov,
                 "notes": notes,
             }
@@ -287,7 +314,7 @@ def main(argv=None):
 
     scored = [r for r in rows if r["expected"]]
     n = len(scored)
-    new_ok = sum(compat_any(r["_new"], r["expected"]) for r in scored)
+    new_ok = sum(r["match_level"] != "none" for r in scored)
     expected_in_call = sum(headline_has_expected(r["_new"], r["expected"]) for r in scored)
     print(f"reports scored: {n} (of {len(rows)} found; {len(rows) - n} without a known expected)")
     if n:
@@ -296,6 +323,21 @@ def main(argv=None):
             "expected-code-in-headline rate (new): "
             f"{expected_in_call}/{n} ({100 * expected_in_call / n:.0f}%)"
         )
+        by_match_level = Counter(r["match_level"] for r in scored)
+        level_bits = []
+        for level in (
+            "exact",
+            "subtype_prefix",
+            "registry_root",
+            "base_token",
+            "broad_lineage",
+            "none",
+        ):
+            count = by_match_level.get(level, 0)
+            if count:
+                level_bits.append(f"{level}={count}")
+        if level_bits:
+            print("match levels: " + ", ".join(level_bits))
 
     if args.baseline:
         have_both = [r for r in scored if r["_base"] and r["_new"]]
@@ -335,6 +377,7 @@ def main(argv=None):
                     "provisional",
                     "compatible",
                     "expected_in_headline",
+                    "match_level",
                     "notes",
                 ],
             )
@@ -352,6 +395,7 @@ def main(argv=None):
                             if r["expected"]
                             else ""
                         ),
+                        "match_level": r["match_level"] if r["expected"] else "",
                     }
                 )
         print(f"\nper-sample CSV -> {args.per_sample}")

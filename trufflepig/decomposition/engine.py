@@ -1120,12 +1120,13 @@ def _fit_one_hypothesis(
         symbol_to_obs_hk = {
             str(symbol): float(obs) for symbol, obs in zip(filt_symbols, observed_hk)
         }
-        marker_trace["observed_tpm"] = (
-            marker_trace["symbol"].map(symbol_to_obs).fillna(0.0)
-        )
-        marker_trace["sample_hk"] = (
-            marker_trace["symbol"].map(symbol_to_obs_hk).fillna(0.0)
-        )
+        marker_symbols = marker_trace["symbol"].astype(str).tolist()
+        marker_trace["observed_tpm"] = [
+            symbol_to_obs.get(symbol, 0.0) for symbol in marker_symbols
+        ]
+        marker_trace["sample_hk"] = [
+            symbol_to_obs_hk.get(symbol, 0.0) for symbol in marker_symbols
+        ]
         marker_trace["sample_to_ref_ratio"] = marker_trace["sample_hk"] / marker_trace[
             "reference_hk"
         ].replace(0, np.nan)

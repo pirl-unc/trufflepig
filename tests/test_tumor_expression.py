@@ -3,7 +3,14 @@
 """Tests for lineage-based purity estimation and 9-point tumor expression ranges."""
 
 import numpy as np
+import pandas as pd
 
+from trufflepig.plot_tumor_expr import (
+    HK_TISSUE_NTPM_THRESHOLD,
+    _cached_healthy_reference_metrics,
+    _cached_reference_by_symbol,
+    _row_mean_top_n,
+)
 from trufflepig.tumor_purity import (
     LINEAGE_GENES,
     lineage_purity_panel_codes,
@@ -14,6 +21,66 @@ from trufflepig.tumor_purity import (
     _summarize_gene_level_purity,
     _summarize_lineage_support,
 )
+
+
+def test_row_mean_top_n_matches_pandas_nlargest_semantics():
+    df = pd.DataFrame(
+        {
+            "a": [1.0, np.nan, np.nan, 10.0],
+            "b": [4.0, np.nan, 2.0, 1.0],
+            "c": [3.0, np.nan, np.nan, 5.0],
+            "d": [2.0, np.nan, 6.0, np.nan],
+        },
+        index=["all_values", "all_nan", "sparse", "with_nan"],
+    )
+
+    expected = {
+        idx: (
+            float(row.nlargest(3).mean())
+            if row.notna().any()
+            else 0.0
+        )
+        for idx, row in df.iterrows()
+    }
+
+    assert _row_mean_top_n(df, 3) == expected
+
+
+def test_healthy_reference_metrics_are_cached_per_reference_matrix():
+    ref_full = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["g1", "g2", "g3"],
+            "Symbol": ["A", "B", "C"],
+            "lung_nTPM": [10.0, 1.0, np.nan],
+            "liver_nTPM": [8.0, 6.0, np.nan],
+            "brain_nTPM": [1.0, 7.0, np.nan],
+            "TCGA_TEST_TPM": [2.0, 3.0, 4.0],
+        }
+    )
+
+    ref_by_symbol = _cached_reference_by_symbol(ref_full)
+    assert _cached_reference_by_symbol(ref_full) is ref_by_symbol
+
+    cols = ["lung_nTPM", "liver_nTPM", "brain_nTPM"]
+    first = _cached_healthy_reference_metrics(ref_by_symbol, cols, 2)
+    second = _cached_healthy_reference_metrics(ref_by_symbol, cols, 2)
+
+    assert first is second
+    max_healthy, n_tissues, mean_top = first
+    assert max_healthy["A"] == 10.0
+    assert max_healthy["B"] == 7.0
+    assert np.isnan(max_healthy["C"])
+    assert n_tissues == {
+        "A": 2,
+        "B": 2,
+        "C": 0,
+    }
+    assert mean_top == {
+        "A": 9.0,
+        "B": 6.5,
+        "C": 0.0,
+    }
+    assert HK_TISSUE_NTPM_THRESHOLD == 5.0
 
 
 # ── LINEAGE_GENES coverage ────────────────────────────────────────

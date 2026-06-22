@@ -1,4 +1,5 @@
 import pandas as pd
+from types import SimpleNamespace
 
 
 def _analysis(*rows):
@@ -144,6 +145,62 @@ def test_nutm_rna_surrogate_blocks_when_squamous_context_is_weak():
     assert any("expression-reference context" in reason for reason in nutm["blocking_reasons"])
 
 
+def test_weak_fusion_defined_surrogate_does_not_bypass_cross_lineage_marker_conflict(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_marker_coherence",
+        lambda code, sample: {
+            "status": "weak",
+            "detected": 1,
+            "total": 5,
+            "required_for_consistent": 3,
+            "detected_fraction": 0.2,
+        }
+        if code == "NUTM"
+        else {},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_local_reference_cross_lineage_conflict",
+        lambda code, context_codes, coherence: {
+            "code": code,
+            "code_lineage": "squamous",
+            "context_codes": list(context_codes),
+            "context_lineages": ["epithelial"],
+            "marker_status": coherence["status"],
+            "detected": coherence["detected"],
+            "total": coherence["total"],
+            "required_for_consistent": coherence["required_for_consistent"],
+        }
+        if code == "NUTM"
+        else {},
+    )
+    finding = {
+        "cancer_type": "NUTM",
+        "rule_id": "nutm_nutm1",
+        "surrogate": "NUTM1",
+        "surrogate_tpm": 2.0,
+        "threshold_tpm": 1.0,
+        "support_genes": [],
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"NUTM1": 2.0}),
+        _analysis(("LUSC", 1.0), ("HNSC", 0.9)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    nutm = next(row for row in result["evidence"] if row["cancer_type"] == "NUTM")
+    assert nutm["can_select_report_label"] is False
+    assert any("cross-lineage RNA-marker promotion" in reason for reason in nutm["blocking_reasons"])
+
+
 def test_broad_context_is_part_of_unified_evidence_view():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -161,6 +218,205 @@ def test_broad_context_is_part_of_unified_evidence_view():
     assert result["evidence"][0]["evidence_sources"] == ["broad_rna"]
     assert result["evidence"][0]["metrics"]["broad_rna_support"] == 1.0
     assert result["evidence"][0]["report_label_candidate"] is True
+
+
+def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[
+            ("BLCA_TPM", 0.86),
+            ("UCEC_TPM", 0.85),
+            ("CESC_TPM", 0.84),
+        ],
+        type_specific_cohort="BLCA_TPM",
+        type_specific_hits=[
+            ("UPK1B", 27.0),
+            ("KRT20", 18.0),
+            ("GPR87", 15.0),
+        ],
+    )
+    result = select_report_scope_from_evidence(
+        _expression_frame({"SFTPB": 450.0, "SCGB1A1": 4.5}),
+        {
+            "cancer_type": "LUAD",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "LUAD", "support_fraction_of_top": 1.0},
+                {"code": "BRCA", "support_fraction_of_top": 0.98},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "BLCA"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    assert result["selected"]["metrics"]["coarse_composition_support"] > 0.7
+    selected = next(row for row in result["evidence"] if row["cancer_type"] == "BLCA")
+    assert selected["coarse_reference_type_specific_hit_count"] == 3
+
+
+def test_composition_reference_uses_primary_tissue_to_resolve_close_cohort_tie():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("esophagus_nTPM", 0.87),
+            ("urinary_bladder_nTPM", 0.87),
+            ("vagina_nTPM", 0.85),
+        ],
+        top_tcga_cohorts=[
+            ("CESC_TPM", 0.92),
+            ("BLCA_TPM", 0.91),
+            ("HNSC_TPM", 0.91),
+        ],
+        type_specific_cohort="CESC_TPM",
+        type_specific_hits=[("KRT17", 5000.0), ("DSG3", 70.0)],
+    )
+    result = select_report_scope_from_evidence(
+        _expression_frame({"KRT17": 5000.0, "TP63": 45.0, "UPK1B": 5.0}),
+        {
+            "cancer_type": "LUSC",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "LUSC", "support_fraction_of_top": 1.0},
+                {"code": "HNSC", "support_fraction_of_top": 0.98},
+                {"code": "CESC", "support_fraction_of_top": 0.89},
+                {"code": "BLCA", "support_fraction_of_top": 0.62},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "BLCA"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    assert result["selected"]["coarse_reference_raw_top_code"] == "CESC"
+    assert result["selected"]["coarse_reference_tissue_tiebreak_applied"] is True
+
+
+def test_composition_reference_tie_with_broad_winner_stays_contextual():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("stomach_nTPM", 0.84),
+            ("pancreas_nTPM", 0.83),
+            ("salivary gland_nTPM", 0.83),
+        ],
+        top_tcga_cohorts=[
+            ("UCEC_TPM", 0.89),
+            ("CESC_TPM", 0.89),
+            ("BLCA_TPM", 0.88),
+        ],
+        type_specific_cohort="UCEC_TPM",
+        type_specific_hits=[
+            ("FOXA2", 100.0),
+            ("PAX8", 90.0),
+            ("SOX17", 80.0),
+        ],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"KRT5": 190.0, "SOX2": 50.0, "EGFR": 40.0}),
+        {
+            "cancer_type": "CESC",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "CESC", "support_fraction_of_top": 1.0},
+                {"code": "LUSC", "support_fraction_of_top": 0.85},
+                {"code": "UCEC", "support_fraction_of_top": 0.81},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "CESC"
+    ucec = next(row for row in result["evidence"] if row["cancer_type"] == "UCEC")
+    assert ucec["can_select_report_label"] is False
+    assert any("tied with the first-pass RNA winner" in r for r in ucec["blocking_reasons"])
+
+
+def test_luad_marker_sanity_requires_program_breadth_not_two_singletons():
+    from trufflepig.tumor_type_ontology import tumor_type_sanity_check
+
+    sanity = tumor_type_sanity_check(
+        "LUAD",
+        {
+            "SFTPB": 450.0,
+            "SCGB1A1": 4.5,
+            "NAPSA": 0.2,
+            "SFTPC": 0.1,
+            "NKX2-1": 0.0,
+            "SFTPA1": 0.0,
+        },
+    )
+
+    assert sanity["status"] == "partial"
+    assert len(sanity["expected_high_detected"]) == 2
+    assert sanity["required_high_for_consistent"] == 3
+
+
+def test_composition_reference_beats_status_child_when_broad_fit_is_ambiguous(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ERBB2", "GRB7", "KRT8", "EPCAM")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "BRCA_Basal": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("BRCA",),
+                "parent_code": "BRCA",
+                "family": "carcinoma-breast",
+                "primary_tissue": "breast",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_BRCA_PAM50",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TCGA/PAM50",
+            }
+        },
+    )
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[
+            ("BLCA_TPM", 0.86),
+            ("UCEC_TPM", 0.85),
+            ("CESC_TPM", 0.84),
+        ],
+        type_specific_cohort="BLCA_TPM",
+        type_specific_hits=[("UPK1B", 27.0), ("KRT20", 18.0), ("GPR87", 15.0)],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 90.0 for gene in markers},
+                "GATA3": 40.0,
+                "FOXA1": 35.0,
+                "TFF1": 25.0,
+            }
+        ),
+        {
+            "cancer_type": "BRCA",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "BRCA", "support_fraction_of_top": 1.0},
+                {"code": "CESC", "support_fraction_of_top": 0.99},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "BLCA"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    brca = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA")
+    assert brca["selected_by"] == "primary_expression_match"
+    assert brca["local_reference_conflicting_coarse_reference"]["code"] == "BLCA"
 
 
 def test_background_like_top_label_can_yield_to_supported_tumor_label():
@@ -362,6 +618,1963 @@ def test_local_expression_reference_uses_actual_top_compatible_context(monkeypat
     assert result["selected"]["local_reference_matched_context"] == "LAML"
 
 
+def test_local_reference_context_codes_fall_back_to_family_root():
+    from trufflepig.cancer_type_evidence import _local_reference_context_codes
+
+    assert _local_reference_context_codes(
+        "ATRT",
+        {"family": "cns-embryonal", "primary_tissue": "cerebellum"},
+    ) == ("GBM", "LGG")
+    assert _local_reference_context_codes(
+        "RT",
+        {"family": "embryonal", "primary_tissue": "kidney_cns_soft"},
+    ) == ("GBM",)
+    assert _local_reference_context_codes(
+        "HEPB",
+        {"family": "embryonal", "primary_tissue": "liver"},
+    ) == ("LIHC",)
+
+
+def test_split_family_local_expression_reference_can_select(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ATRT": {
+                "markers": ("GFAP", "VIM", "NES"),
+                "ref_medians": {"GFAP": 120.0, "VIM": 80.0, "NES": 100.0},
+                "context_codes": evidence._local_reference_context_codes(
+                    "ATRT",
+                    {"family": "cns-embryonal", "primary_tissue": "cerebellum"},
+                ),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"GFAP": 45.0, "VIM": 30.0, "NES": 40.0}),
+        _analysis(("GBM", 1.0), ("LGG", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "ATRT"
+    assert result["selected"]["reference_cancer_type"] == "GBM"
+    assert result["selected"]["expression_reference_cancer_type"] == "ATRT"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+
+
+def test_bl_marker_axis_unblocks_exact_expression_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("MYC", "BCL6", "MME", "CD79A", "MS4A1")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "BL": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("DLBC",),
+                "family": "heme-bcell",
+                "primary_tissue": "lymphoid",
+                "source_cohort": "CGCI_BLGSP",
+                "reference_kind": "observed_bulk_reference",
+                "fusion_driven": "defining",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "BL",
+        "rule_id": "lit_bl",
+        "surrogate": "MYC",
+        "surrogate_tpm": 300.0,
+        "threshold_tpm": 5.0,
+        "support_genes": ["BCL6", "MME", "CD79A", "MS4A1"],
+        "support_gene_count": 4,
+        "min_support_genes": 4,
+        "required_support_gene_count": 4,
+        "support_pass": True,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYC": 300.0,
+                "BCL6": 200.0,
+                "MME": 120.0,
+                "CD79A": 180.0,
+                "MS4A1": 250.0,
+            }
+        ),
+        _analysis(("DLBC", 1.0), ("LAML", 0.8)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BL"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    assert set(result["selected"]["evidence_sources"]) == {
+        "local_expression_reference",
+        "rare_marker",
+    }
+    bl = next(row for row in result["evidence"] if row["cancer_type"] == "BL")
+    assert bl["can_select_report_label"] is True
+
+
+def test_ball_exact_reference_beats_bl_myc_marker_axis(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    bl_markers = ("MYC", "BCL6", "MME", "CD79A", "MS4A1")
+    ball_markers = ("DNTT", "VPREB1", "RAG1", "CD19", "PAX5", "CD22")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "BL": {
+                "markers": bl_markers,
+                "ref_medians": {gene: 100.0 for gene in bl_markers},
+                "context_codes": ("DLBC",),
+                "family": "heme-bcell",
+                "primary_tissue": "lymphoid",
+                "source_cohort": "CGCI_BLGSP",
+                "reference_kind": "observed_bulk_reference",
+                "fusion_driven": "defining",
+                "fusion_driver": "IGH-MYC",
+            },
+            "B_ALL": {
+                "markers": ball_markers,
+                "ref_medians": {gene: 100.0 for gene in ball_markers},
+                "context_codes": ("DLBC", "LAML", "THYM"),
+                "family": "heme-bcell",
+                "primary_tissue": "bone_marrow",
+                "source_cohort": "TARGET_ALL_P3",
+                "reference_kind": "observed_bulk_reference",
+            },
+        },
+    )
+    finding = {
+        "cancer_type": "BL",
+        "rule_id": "lit_bl",
+        "surrogate": "MYC",
+        "surrogate_tpm": 300.0,
+        "threshold_tpm": 5.0,
+        "support_genes": ["BCL6", "MME", "CD79A", "MS4A1"],
+        "support_gene_count": 4,
+        "min_support_genes": 4,
+        "required_support_gene_count": 4,
+        "support_pass": True,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYC": 300.0,
+                "BCL6": 10.0,
+                "MME": 5.0,
+                "CD79A": 300.0,
+                "MS4A1": 20.0,
+                **{gene: 120.0 for gene in ball_markers},
+            }
+        ),
+        _analysis(("DLBC", 1.0), ("LAML", 0.9)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "B_ALL"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    bl = next(row for row in result["evidence"] if row["cancer_type"] == "BL")
+    ball = next(row for row in result["evidence"] if row["cancer_type"] == "B_ALL")
+    assert bl["can_select_report_label"] is True
+    assert set(bl["evidence_sources"]) == {"local_expression_reference", "rare_marker"}
+    assert ball["metrics"]["fine_reference_support"] > bl["metrics"]["fine_reference_support"]
+
+
+def test_split_family_specificity_breaks_close_exact_reference_ties(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    base_markers = (
+        "VIM",
+        "NES",
+        "SOX2",
+        "SOX9",
+        "COL1A1",
+        "KRT8",
+        "EPCAM",
+        "MKI67",
+        "CDH2",
+        "PROM1",
+        "OLIG2",
+        "AQP4",
+        "S100B",
+        "DCX",
+        "DLL3",
+        "TOP2A",
+        "HMGB2",
+        "PCNA",
+        "MCM2",
+        "MCM3",
+        "MCM4",
+        "MCM5",
+    )
+    rt_markers = base_markers + ("KRT7", "GFAP")
+    atrt_markers = base_markers + ("NTRK2", "GFAP")
+    ref_medians = {gene: 100.0 for gene in set(rt_markers + atrt_markers)}
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "RT": {
+                "markers": rt_markers,
+                "ref_medians": ref_medians,
+                "context_codes": ("GBM",),
+                "family": "embryonal",
+                "primary_tissue": "kidney_cns_soft",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            },
+            "ATRT": {
+                "markers": atrt_markers,
+                "ref_medians": ref_medians,
+                "context_codes": ("GBM", "LGG"),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            },
+        },
+    )
+    sample = {gene: 50.0 for gene in base_markers + ("KRT7",)}
+    sample.update({"NTRK2": 0.0, "GFAP": 0.0, "SMARCB1": 0.0})
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(sample),
+        _analysis(("GBM", 1.0), ("LGG", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "ATRT"
+    atrt = next(row for row in result["evidence"] if row["cancer_type"] == "ATRT")
+    rt = next(row for row in result["evidence"] if row["cancer_type"] == "RT")
+    assert atrt["local_reference_strength"] < rt["local_reference_strength"]
+    assert atrt["local_reference_specificity_bonus"] > rt["local_reference_specificity_bonus"]
+
+
+def test_high_confidence_exact_reference_can_beat_parent_lineage_reinforcement(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("AFP", "DLK1", "GPC3", "EPCAM", "KRT8", "KRT18", "KRT19", "SOX9")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+
+    def fake_lineage_panel(hypotheses, *_args, **_kwargs):
+        hypothesis = evidence._hypothesis(hypotheses, "LIHC")
+        hypothesis.add_source("lineage_panel")
+        hypothesis.expression_reference_cancer_type = "LIHC"
+        hypothesis.reference_cancer_type = "LIHC"
+        hypothesis.consider_for_report_label(
+            selected_by="lineage_panel",
+            can_select=True,
+            blocking_reasons=(),
+            priority=(2, 0.95),
+        )
+        return {"promotion": {"promoted": True, "code": "LIHC", "blockers": []}}
+
+    monkeypatch.setattr(evidence, "_add_lineage_panel_features", fake_lineage_panel)
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 80.0 for gene in markers}),
+        _analysis(("LIHC", 1.0), ("CHOL", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "HEPB"
+    assert result["selected"]["local_reference_high_confidence"] is True
+
+
+def test_hepb_reference_needs_fetal_anchor_to_override_strong_lihc_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("AFP", "DLK1", "GPC3", "EPCAM", "KRT8", "KRT18", "KRT19", "SOX9")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+
+    def fake_lineage_panel(hypotheses, *_args, **_kwargs):
+        hypothesis = evidence._hypothesis(hypotheses, "LIHC")
+        hypothesis.add_source("lineage_panel")
+        hypothesis.expression_reference_cancer_type = "LIHC"
+        hypothesis.reference_cancer_type = "LIHC"
+        hypothesis.consider_for_report_label(
+            selected_by="lineage_panel",
+            can_select=True,
+            blocking_reasons=(),
+            priority=(2, 0.95),
+        )
+        return {"promotion": {"promoted": True, "code": "LIHC", "blockers": []}}
+
+    monkeypatch.setattr(evidence, "_add_lineage_panel_features", fake_lineage_panel)
+
+    expression = {
+        "AFP": 80.0,
+        "DLK1": 0.0,
+        "GPC3": 80.0,
+        "EPCAM": 80.0,
+        "KRT8": 500.0,
+        "KRT18": 500.0,
+        "KRT19": 80.0,
+        "SOX9": 80.0,
+        "SALL4": 0.0,
+        "IGF2": 2.0,
+        "ALB": 20000.0,
+        "APOB": 300.0,
+        "CYP3A4": 1000.0,
+        "HNF4A": 60.0,
+        "F2": 500.0,
+    }
+    result = select_report_scope_from_evidence(
+        _expression_frame(expression),
+        _analysis(("LIHC", 1.0), ("CHOL", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "LIHC"
+    hepb = next(row for row in result["evidence"] if row["cancer_type"] == "HEPB")
+    assert hepb["hepb_adult_liver_context_conflict"] is True
+    assert any("fetal-liver anchor" in reason for reason in hepb["blocking_reasons"])
+
+
+def test_high_confidence_exact_reference_can_rescue_near_top_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("AFP", "DLK1", "GPC3", "EPCAM", "KRT8", "KRT18", "KRT19", "SOX9")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("LUAD", 1.0), ("LIHC", 0.94), ("HNSC", 0.88))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("LUAD_TPM", 0.87), ("PAAD_TPM", 0.85)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 80.0 for gene in markers}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "HEPB"
+    assert result["selected"]["local_reference_matched_context"] == "LIHC"
+    assert result["selected"]["local_reference_context_is_top"] is True
+
+
+def test_strong_marker_coherence_rescues_near_high_exact_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    reference_markers = ("REG3A", "DLK1", "TOMM6", "XBP1", "IGF2", "NME1-NME2")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": reference_markers,
+                "ref_medians": {gene: 100.0 for gene in reference_markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("LUAD", 1.0), ("LIHC", 0.86), ("UCS", 0.84))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("LUAD_TPM", 0.87), ("UCEC_TPM", 0.85)]
+    )
+    expression = {
+        "REG3A": 0.0,
+        "DLK1": 80.0,
+        "TOMM6": 80.0,
+        "XBP1": 80.0,
+        "IGF2": 80.0,
+        "NME1-NME2": 0.0,
+        "AFP": 40.0,
+        "GPC3": 200.0,
+        "EPCAM": 150.0,
+        "KRT8": 500.0,
+        "KRT18": 500.0,
+        "SALL4": 40.0,
+        "GLUL": 200.0,
+    }
+
+    result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
+
+    assert result["selected"]["cancer_type"] == "HEPB"
+    assert result["selected"]["local_reference_reference_high_confidence"] is False
+    assert result["selected"]["local_reference_marker_coherence_supported"] is True
+    assert result["selected"]["local_reference_context_is_top"] is True
+
+
+def test_status_child_parent_fallback_does_not_outrank_direct_exact_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    hepb_markers = (
+        "REG3A",
+        "DLK1",
+        "TOMM6",
+        "XBP1",
+        "IGF2",
+        "NME1-NME2",
+        "PGC",
+        "SOD2",
+    )
+    luad_status_markers = ("SFTPC", "SFTPA1", "SFTPA2", "SFTPB")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": hepb_markers,
+                "ref_medians": {gene: 100.0 for gene in hepb_markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            },
+            "LUAD_EGFR": {
+                "markers": luad_status_markers,
+                "ref_medians": {gene: 100.0 for gene in luad_status_markers},
+                "context_codes": ("LUAD",),
+                "parent_code": "LUAD",
+                "family": "carcinoma-lung",
+                "primary_tissue": "lung",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_LUAD_MUT",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TCGA/mut",
+            },
+        },
+    )
+
+    def fake_lineage_panel(hypotheses, *_args, **_kwargs):
+        hypothesis = evidence._hypothesis(hypotheses, "LUAD")
+        hypothesis.add_source("lineage_panel")
+        hypothesis.expression_reference_cancer_type = "LUAD"
+        hypothesis.reference_cancer_type = "LUAD"
+        hypothesis.consider_for_report_label(
+            selected_by="lineage_panel",
+            can_select=True,
+            blocking_reasons=(),
+            priority=(2, 0.94),
+        )
+        return {"promotion": {"promoted": True, "code": "LUAD", "blockers": []}}
+
+    monkeypatch.setattr(evidence, "_add_lineage_panel_features", fake_lineage_panel)
+
+    expression = {
+        "REG3A": 0.0,
+        "DLK1": 80.0,
+        "TOMM6": 80.0,
+        "XBP1": 80.0,
+        "IGF2": 80.0,
+        "NME1-NME2": 0.0,
+        "PGC": 80.0,
+        "SOD2": 80.0,
+        "AFP": 40.0,
+        "GPC3": 200.0,
+        "EPCAM": 150.0,
+        "KRT8": 500.0,
+        "KRT18": 500.0,
+        "SALL4": 40.0,
+        "GLUL": 200.0,
+        **{gene: 150.0 for gene in luad_status_markers},
+    }
+    result = select_report_scope_from_evidence(
+        _expression_frame(expression),
+        _analysis(("LUAD", 1.0), ("LIHC", 0.86), ("UCS", 0.84)),
+    )
+
+    assert result["selected"]["cancer_type"] == "HEPB"
+    assert result["selected"]["local_reference_marker_coherence_supported"] is True
+    luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
+    assert luad["can_select_report_label"] is True
+    assert luad["local_reference_status_child_code"] == "LUAD_EGFR"
+
+
+def test_secondary_context_exact_reference_stays_blocked_when_not_high_confidence(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("AFP", "DLK1", "GPC3", "EPCAM", "KRT8", "KRT18", "KRT19", "SOX9")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("LUAD", 1.0), ("LIHC", 0.94), ("HNSC", 0.88))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("LUAD_TPM", 0.87), ("PAAD_TPM", 0.85)]
+    )
+    sample = {gene: 0.0 for gene in markers}
+    sample.update({gene: 80.0 for gene in markers[:5]})
+
+    result = select_report_scope_from_evidence(_expression_frame(sample), analysis)
+
+    assert result["selected"]["cancer_type"] == "LUAD"
+    hepb = next(row for row in result["evidence"] if row["cancer_type"] == "HEPB")
+    assert hepb["local_reference_high_confidence"] is False
+    assert any("secondary near-match" in reason for reason in hepb["blocking_reasons"])
+
+
+def test_rhabdoid_reference_requires_smarcb1_loss_compatible_rna(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ATRT": {
+                "markers": ("GFAP", "VIM", "NES"),
+                "ref_medians": {"GFAP": 120.0, "VIM": 80.0, "NES": 100.0},
+                "context_codes": ("GBM", "LGG"),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {"GFAP": 45.0, "VIM": 30.0, "NES": 40.0, "SMARCB1": 100.0}
+        ),
+        _analysis(("GBM", 1.0), ("LGG", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "GBM"
+    atrt = next(row for row in result["evidence"] if row["cancer_type"] == "ATRT")
+    assert atrt["can_select_report_label"] is False
+    assert any("SMARCB1-loss-compatible" in reason for reason in atrt["blocking_reasons"])
+
+
+def test_rt_reference_requires_near_absent_smarcb1_rna(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("VIM", "EPCAM", "KRT8", "KRT18", "SALL4")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "RT": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("GBM",),
+                "family": "embryonal",
+                "primary_tissue": "kidney_cns_soft",
+                "source_cohort": "TARGET_RT_2017",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("BRCA", 1.0), ("GBM", 0.40))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("BRCA_TPM", 0.93), ("LUSC_TPM", 0.88)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 120.0 for gene in markers},
+                "SMARCB1": 38.0,
+                "GATA3": 140.0,
+                "FOXA1": 70.0,
+                "MUC1": 130.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    rt = next(row for row in result["evidence"] if row["cancer_type"] == "RT")
+    assert rt["can_select_report_label"] is False
+    assert any("SMARCB1-loss-compatible" in reason for reason in rt["blocking_reasons"])
+
+
+def test_mbl_reference_requires_broad_marker_fraction(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "MBL": {
+                "markers": ("OTX2", "ATOH1", "GABRA5", "GRM8"),
+                "ref_medians": {
+                    "OTX2": 100.0,
+                    "ATOH1": 80.0,
+                    "GABRA5": 60.0,
+                    "GRM8": 60.0,
+                },
+                "context_codes": ("GBM", "LGG"),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"OTX2": 40.0, "ATOH1": 35.0, "GABRA5": 0.0, "GRM8": 0.0}),
+        _analysis(("GBM", 1.0), ("LGG", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "GBM"
+    mbl = next(row for row in result["evidence"] if row["cancer_type"] == "MBL")
+    assert mbl["can_select_report_label"] is False
+    assert any("marker fraction" in reason for reason in mbl["blocking_reasons"])
+
+
+def test_generic_embryonal_reference_does_not_refine_chol_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "RT": {
+                "markers": ("VIM", "EPCAM", "KRT8"),
+                "ref_medians": {"VIM": 100.0, "EPCAM": 80.0, "KRT8": 80.0},
+                "context_codes": evidence._local_reference_context_codes(
+                    "RT",
+                    {"family": "embryonal", "primary_tissue": "kidney_cns_soft"},
+                ),
+                "family": "embryonal",
+                "primary_tissue": "kidney_cns_soft",
+                "source_cohort": "TARGET_RT_2017",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TARGET",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"VIM": 80.0, "EPCAM": 70.0, "KRT8": 70.0}),
+        _analysis(("CHOL", 1.0), ("LIHC", 0.3)),
+    )
+
+    assert result["selected"]["cancer_type"] == "CHOL"
+    rt = next(row for row in result["evidence"] if row["cancer_type"] == "RT")
+    assert rt["can_select_report_label"] is False
+    assert "CHOL" not in rt["local_reference_context_codes"]
+
+
+def test_local_expression_reference_can_use_coarse_reference_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ATRT": {
+                "markers": ("GFAP", "VIM", "NES"),
+                "ref_medians": {"GFAP": 120.0, "VIM": 80.0, "NES": 100.0},
+                "context_codes": ("GBM", "LGG"),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("SKCM", 1.0), ("GBM", 0.82))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("GBM_TPM", 0.84), ("OV_TPM", 0.82)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"GFAP": 45.0, "VIM": 30.0, "NES": 40.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "ATRT"
+    assert result["selected"]["reference_cancer_type"] == "GBM"
+    assert result["selected"]["local_reference_primary_context_codes"] == [
+        "SKCM",
+        "GBM",
+    ]
+
+
+def test_coarse_reference_context_preserves_ranked_order_on_ties():
+    from trufflepig.cancer_type_evidence import _primary_context_codes
+
+    analysis = _analysis(("SKCM", 1.0), ("GBM", 0.82))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("GBM_TPM", 0.84), ("OV_TPM", 0.84)]
+    )
+
+    assert _primary_context_codes(analysis) == ("SKCM", "GBM")
+
+
+def test_local_reference_does_not_override_broad_coarse_consensus(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_MYXFIB": {
+                "markers": ("COL1A2", "VIM", "COL1A1", "PDGFRA"),
+                "ref_medians": {
+                    "COL1A2": 100.0,
+                    "VIM": 100.0,
+                    "COL1A1": 100.0,
+                    "PDGFRA": 100.0,
+                },
+                "context_codes": ("SARC",),
+                "family": "sarcoma",
+                "primary_tissue": "soft_tissue",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("ACC", 1.0), ("SARC", 0.97))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("ACC_TPM", 0.86), ("SARC_TPM", 0.855)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "COL1A2": 80.0,
+                "VIM": 80.0,
+                "COL1A1": 80.0,
+                "PDGFRA": 80.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "ACC"
+    exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_MYXFIB")
+    assert exact["can_select_report_label"] is False
+    assert any(
+        "broad RNA ranking and coarse reference matching both support ACC" in reason
+        for reason in exact["blocking_reasons"]
+    )
+
+
+def test_signature_anchored_exact_reference_can_escape_wrong_broad_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    gist_markers = (
+        "KIT",
+        "ANO1",
+        "ETV1",
+        "SDHA",
+        "SDHB",
+        "NF1",
+        "BRAF",
+        "PDGFRA",
+    )
+    hepb_markers = (
+        "AFP",
+        "DLK1",
+        "GPC3",
+        "EPCAM",
+        "KRT8",
+        "KRT18",
+        "KRT19",
+        "SOX9",
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_GIST": {
+                "markers": gist_markers,
+                "ref_medians": {gene: 100.0 for gene in gist_markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "gi_wall",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "observed_bulk_reference",
+            },
+            "HEPB": {
+                "markers": hepb_markers,
+                "ref_medians": {gene: 100.0 for gene in hepb_markers},
+                "context_codes": ("LIHC",),
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            },
+        },
+    )
+    analysis = _analysis(("LIHC", 1.0), ("LUAD", 0.82), ("CHOL", 0.78))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("LIHC_TPM", 0.88), ("CHOL_TPM", 0.84)]
+    )
+    expression = {gene: 120.0 for gene in gist_markers}
+    expression.update({gene: 80.0 for gene in hepb_markers[:5]})
+
+    result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
+
+    assert result["selected"]["cancer_type"] == "SARC_GIST"
+    assert result["selected"]["reference_cancer_type"] == "SARC"
+    assert result["selected"]["local_reference_signature_anchored"] is True
+    hepb = next(row for row in result["evidence"] if row["cancer_type"] == "HEPB")
+    assert hepb["can_select_report_label"] is True
+    assert hepb["local_reference_signature_anchored"] is False
+
+
+def test_generic_soft_tissue_reference_cannot_escape_wrong_broad_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("COL1A1", "COL1A2", "VIM", "PDGFRA", "MMP2")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_MYXFIB": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "soft_tissue",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("HNSC", 1.0), ("LUSC", 0.88), ("CESC", 0.82))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("HNSC_TPM", 0.89), ("LUSC_TPM", 0.86)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 150.0 for gene in markers}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "HNSC"
+    exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_MYXFIB")
+    assert exact["can_select_report_label"] is False
+    assert exact["local_reference_signature_anchored"] is False
+
+
+def test_amplicon_like_liposarcoma_reference_cannot_escape_squamous_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("MDM2", "CDK4", "TSPAN31", "FRS2", "YEATS4", "HMGA2")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_LPS_UNSPEC": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "adipose_tissue",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("LUSC", 1.0), ("CESC", 0.82), ("HNSC", 0.78))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("LUSC_TPM", 0.92), ("CESC_TPM", 0.9)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 180.0 for gene in markers}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    exact = next(
+        row for row in result["evidence"] if row["cancer_type"] == "SARC_LPS_UNSPEC"
+    )
+    assert exact["can_select_report_label"] is False
+    assert exact["local_reference_signature_anchored"] is False
+
+
+def test_smooth_muscle_reference_cannot_escape_coherent_epithelial_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    sarc_markers = ("ACTA2", "MYH11", "TAGLN", "DES", "CNN1")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_LMS": {
+                "markers": sarc_markers,
+                "ref_medians": {gene: 100.0 for gene in sarc_markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "smooth_muscle",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _analysis(("BLCA", 1.0), ("LUSC", 0.92), ("PAAD", 0.85))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("BLCA_TPM", 0.92), ("LUSC_TPM", 0.88)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 180.0 for gene in sarc_markers},
+                "UPK1A": 350.0,
+                "UPK1B": 250.0,
+                "UPK2": 500.0,
+                "GATA3": 120.0,
+                "FOXA1": 50.0,
+                "EPCAM": 140.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BLCA"
+    exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LMS")
+    assert exact["can_select_report_label"] is False
+    assert exact["local_reference_signature_anchored"] is False
+
+
+def test_nerve_sheath_reference_cannot_escape_epithelial_basal_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    mpnst_markers = ("MIA", "S100B", "SOX10", "PLP1", "PMP22")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_MPNST": {
+                "markers": mpnst_markers,
+                "ref_medians": {gene: 100.0 for gene in mpnst_markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "nerve_sheath",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "observed_bulk_reference",
+            }
+        },
+    )
+    analysis = _analysis(("BRCA", 1.0), ("LUAD", 0.90), ("LUSC", 0.85))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("SARC_TPM", 0.93), ("BRCA_TPM", 0.92)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 180.0 for gene in mpnst_markers},
+                "KRT14": 220.0,
+                "KRT17": 700.0,
+                "KRT5": 65.0,
+                "EPCAM": 480.0,
+                "KRT8": 620.0,
+                "KRT18": 230.0,
+                "SMARCB1": 140.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_MPNST")
+    assert exact["can_select_report_label"] is False
+    assert exact["local_reference_signature_anchored"] is False
+
+
+def test_nerve_sheath_reference_cannot_escape_coherent_cns_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    mpnst_markers = ("MIA", "S100B", "SOX10", "PLP1", "PMP22")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_MPNST": {
+                "markers": mpnst_markers,
+                "ref_medians": {gene: 100.0 for gene in mpnst_markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "nerve_sheath",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "observed_bulk_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 180.0 for gene in mpnst_markers},
+                "GFAP": 500.0,
+                "OLIG2": 120.0,
+                "SOX2": 80.0,
+                "EGFR": 60.0,
+            }
+        ),
+        _analysis(("GBM", 1.0), ("LGG", 0.93), ("SKCM", 0.75)),
+    )
+
+    assert result["selected"]["cancer_type"] == "GBM"
+    exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_MPNST")
+    assert exact["can_select_report_label"] is False
+    assert any("nerve_sheath exact-reference refinement" in r for r in exact["blocking_reasons"])
+
+
+def test_cross_lineage_local_reference_uses_active_context_for_marker_gate(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("IFI30", "XBP1", "TOMM6", "CALML3")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "NEC_LUNG_LARGECELL": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("PCPG", "LUSC"),
+                "family": "neuroendocrine",
+                "primary_tissue": "lung",
+                "source_cohort": "DRMETRICS_ALCALA_2019_LNEN",
+                "reference_kind": "observed_bulk_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 80.0 for gene in markers}),
+        _analysis(("LUSC", 1.0), ("CESC", 0.92), ("HNSC", 0.9)),
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    nec = next(
+        row
+        for row in result["evidence"]
+        if row["cancer_type"] == "NEC_LUNG_LARGECELL"
+    )
+    assert nec["can_select_report_label"] is False
+    assert nec["local_reference_cross_lineage_marker_conflict"] is True
+    assert any(
+        "while the compatible RNA context is LUSC" in reason
+        for reason in nec["blocking_reasons"]
+    )
+
+
+def test_lineage_panel_does_not_override_broad_coarse_consensus(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.lineage_panels as lineage_panels
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    fake_panel = lineage_panels.LineagePanel(
+        name="ESCA_SQUAMOUS",
+        parent_cohort="ESCA",
+        high_markers=("TP63",),
+        obligate=("TP63",),
+    )
+    fake_panel_evidence = SimpleNamespace(panel_name="ESCA_SQUAMOUS", score=0.9)
+
+    monkeypatch.setattr(evidence, "_local_expression_reference_panels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(lineage_panels, "LINEAGE_PANELS", (fake_panel,))
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (fake_panel_evidence,),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "summarize_evidence",
+        lambda _evidence: {
+            "top_panel": "ESCA_SQUAMOUS",
+            "top_score": 0.9,
+            "margin_over_second": 0.9,
+            "top_rationale": "ESCA_SQUAMOUS: strong squamous marker signal",
+        },
+    )
+
+    analysis = _analysis(("CESC", 1.0), ("ESCA", 0.93), ("HNSC", 0.84))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("CESC_TPM", 0.91), ("ESCA_TPM", 0.88)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"TP63": 250.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "CESC"
+    esca = next(row for row in result["evidence"] if row["cancer_type"] == "ESCA")
+    assert esca["can_select_report_label"] is False
+    assert any(
+        "broad RNA ranking and coarse reference matching both support CESC" in reason
+        for reason in esca["blocking_reasons"]
+    )
+    assert result["lineage_panel_evidence"]["promotion"] == {
+        "promoted": False,
+        "code": "ESCA",
+        "blockers": esca["blocking_reasons"],
+    }
+
+
+def test_mutation_defined_expression_reference_does_not_set_report_label(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "LUAD_KRAS": {
+                "markers": ("MAGEA3", "MAGEA6", "CSAG3"),
+                "ref_medians": {"MAGEA3": 50.0, "MAGEA6": 60.0, "CSAG3": 20.0},
+                "context_codes": ("LUAD",),
+                "family": "carcinoma-lung",
+                "primary_tissue": "lung",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_LUAD_MUT",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TCGA/mut",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"MAGEA3": 40.0, "MAGEA6": 45.0, "CSAG3": 30.0}),
+        _analysis(("LUAD", 1.0), ("HNSC", 0.4)),
+    )
+
+    assert result["selected"]["cancer_type"] == "LUAD"
+    subtype = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD_KRAS")
+    assert subtype["can_select_report_label"] is False
+    assert any(
+        "molecular-status expression reference requires direct molecular evidence"
+        in reason
+        for reason in subtype["blocking_reasons"]
+    )
+
+
+def test_eln_expression_reference_promotes_parent_not_status_child(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("MPO", "ELANE", "FLT3", "KIT", "CD34")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "LAML_ELNadv": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("LAML",),
+                "parent_code": "LAML",
+                "family": "heme-myeloid",
+                "primary_tissue": "bone_marrow",
+                "source_cohort": "BEATAML_OHSU_2022",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "BEATAML",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 90.0 for gene in markers}),
+        _analysis(("LAML", 1.0), ("DLBC", 0.4)),
+    )
+
+    assert result["selected"]["cancer_type"] == "LAML"
+    assert result["selected"]["local_reference_status_child_code"] == "LAML_ELNadv"
+    subtype = next(row for row in result["evidence"] if row["cancer_type"] == "LAML_ELNadv")
+    assert subtype["can_select_report_label"] is False
+    assert any(
+        "molecular-status expression reference requires direct molecular evidence"
+        in reason
+        for reason in subtype["blocking_reasons"]
+    )
+
+
+def test_molecular_status_parent_provenance_follows_selected_child_priority(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    favored_markers = ("MPO", "ELANE", "FLT3", "KIT", "CD34")
+    adverse_markers = ("DEFA3", "LTF", "MMP8", "CEACAM8")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "LAML_ELNfav": {
+                "markers": favored_markers,
+                "ref_medians": {gene: 100.0 for gene in favored_markers},
+                "context_codes": ("LAML",),
+                "parent_code": "LAML",
+                "family": "heme-myeloid",
+                "primary_tissue": "bone_marrow",
+                "source_cohort": "BEATAML_OHSU_2022",
+                "reference_kind": "observed_bulk_reference",
+            },
+            "LAML_ELNadv": {
+                "markers": adverse_markers,
+                "ref_medians": {gene: 100.0 for gene in adverse_markers},
+                "context_codes": ("LAML",),
+                "parent_code": "LAML",
+                "family": "heme-myeloid",
+                "primary_tissue": "bone_marrow",
+                "source_cohort": "BEATAML_OHSU_2022",
+                "reference_kind": "deconvolved_tumor_reference",
+            },
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 90.0 for gene in favored_markers[:-1]},
+                favored_markers[-1]: 0.0,
+                **{gene: 90.0 for gene in adverse_markers[:-1]},
+                adverse_markers[-1]: 0.0,
+            }
+        ),
+        _analysis(("LAML", 1.0), ("DLBC", 0.4)),
+    )
+
+    assert result["selected"]["cancer_type"] == "LAML"
+    assert result["selected"]["local_reference_status_child_code"] == "LAML_ELNadv"
+    assert result["selected"]["local_reference_kind"] == "deconvolved_tumor_reference"
+
+
+def test_direct_cml_reference_beats_aml_status_child_parent(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    cml_markers = ("AZU1", "ELANE", "MPO", "S100A12", "CTSG")
+    eln_markers = ("DEFA3", "LTF", "MMP8", "CEACAM8", "BPI")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "CML": {
+                "markers": cml_markers,
+                "ref_medians": {gene: 100.0 for gene in cml_markers},
+                "context_codes": ("LAML", "DLBC", "THYM"),
+                "family": "heme-myeloid",
+                "primary_tissue": "peripheral_blood",
+                "source_cohort": "GSE100026_DING_2017",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "BCR-ABL1",
+            },
+            "LAML_ELNadv": {
+                "markers": eln_markers,
+                "ref_medians": {gene: 100.0 for gene in eln_markers},
+                "context_codes": ("LAML",),
+                "parent_code": "LAML",
+                "family": "heme-myeloid",
+                "primary_tissue": "bone_marrow",
+                "source_cohort": "BEATAML_OHSU_2022",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "BEATAML",
+            },
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 90.0 for gene in cml_markers + eln_markers}),
+        _analysis(("LAML", 1.0), ("DLBC", 0.8), ("THYM", 0.5)),
+    )
+
+    assert result["selected"]["cancer_type"] == "CML"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    assert result["selected"]["local_reference_requires_fusion_confirmation"] is True
+    assert "fusion-defined" in result["selected"]["caveat"]
+    laml = next(row for row in result["evidence"] if row["cancer_type"] == "LAML")
+    assert laml["can_select_report_label"] is True
+    assert laml["local_reference_status_child_code"] == "LAML_ELNadv"
+
+
+def test_molecular_status_expression_reference_promotes_parent_label(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ERBB2", "GRB7", "KRT8", "EPCAM")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "BRCA_HER2": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("BRCA",),
+                "parent_code": "BRCA",
+                "family": "carcinoma-breast",
+                "primary_tissue": "breast",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_BRCA_PAM50",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TCGA/PAM50",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                **{gene: 90.0 for gene in markers},
+                "GATA3": 40.0,
+                "FOXA1": 35.0,
+                "TFF1": 25.0,
+            }
+        ),
+        _analysis(("KIRC", 1.0), ("BRCA", 0.97), ("LUAD", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    assert result["selected"]["local_reference_status_child_code"] == "BRCA_HER2"
+    subtype = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA_HER2")
+    assert subtype["can_select_report_label"] is False
+    assert any("molecular-status expression reference" in reason for reason in subtype["blocking_reasons"])
+
+
+def test_molecular_status_parent_promotion_requires_parent_marker_coherence(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    status_markers = ("MAGEA3", "MAGEA6", "CSAG3")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "LUAD_STK11": {
+                "markers": status_markers,
+                "ref_medians": {gene: 100.0 for gene in status_markers},
+                "context_codes": ("LUAD",),
+                "parent_code": "LUAD",
+                "family": "carcinoma-lung",
+                "primary_tissue": "lung",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_LUAD_MUT",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TCGA/mut",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MAGEA3": 90.0,
+                "MAGEA6": 95.0,
+                "CSAG3": 85.0,
+                "SFTPB": 450.0,
+                "SCGB1A1": 4.5,
+            }
+        ),
+        _analysis(("BRCA", 1.0), ("LUAD", 0.97)),
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    parent = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
+    assert parent["can_select_report_label"] is False
+    assert any("marker program is partial" in reason for reason in parent["blocking_reasons"])
+
+
+def test_msi_status_reference_does_not_cross_broad_coarse_consensus(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("MLH1", "MSH2", "MSH6", "PMS2", "EPCAM")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "COAD_MSI": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("COAD",),
+                "parent_code": "COAD",
+                "family": "carcinoma-gi",
+                "primary_tissue": "colon",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_COADREAD_MSI",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "TCGA/MSI",
+            }
+        },
+    )
+    analysis = _analysis(("BRCA", 1.0), ("COAD", 0.94), ("LUAD", 0.7))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("BRCA_TPM", 0.9), ("LUAD_TPM", 0.85)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 90.0 for gene in markers}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    subtype = next(row for row in result["evidence"] if row["cancer_type"] == "COAD_MSI")
+    parent = next(row for row in result["evidence"] if row["cancer_type"] == "COAD")
+    assert subtype["can_select_report_label"] is False
+    assert parent["can_select_report_label"] is False
+    assert any("secondary near-match" in reason for reason in parent["blocking_reasons"])
+
+
+def test_salivary_exact_reference_combines_with_marker_axis(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 25.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 25.0,
+                "NFIB": 30.0,
+                "KRT7": 100.0,
+                "SOX10": 25.0,
+                "KIT": 30.0,
+            }
+        ),
+        _analysis(("LUAD", 1.0), ("HNSC", 0.9), ("BRCA", 0.6)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "ADCC"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    assert result["selected"]["expression_reference_cancer_type"] == "ADCC"
+    assert set(result["selected"]["evidence_sources"]) == {
+        "local_expression_reference",
+        "rare_marker",
+    }
+    assert result["selected"]["local_reference_source_cohort"] == "GSE294016_BARTL_2025_SGC"
+
+
+def test_adcc_marker_axis_requires_complete_support_without_strong_local_reference():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 30.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "KIT"],
+        "missing_support_genes": ["SOX10"],
+        "support_gene_count": 2,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+        "support_pass": True,
+    }
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("BRCA", 1.0), ("HNSC", 0.86), ("LUAD", 0.82)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["can_select_report_label"] is False
+    assert any("complete MYB-axis" in reason for reason in adcc["blocking_reasons"])
+
+
+def test_low_myb_adcc_exact_reference_can_override_brca_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 18.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 18.0,
+                "NFIB": 30.0,
+                "KRT7": 100.0,
+                "SOX10": 25.0,
+                "KIT": 30.0,
+            }
+        ),
+        _analysis(("BRCA", 1.0), ("HNSC", 0.85)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "ADCC"
+    assert result["selected"]["local_reference_high_confidence"] is True
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["can_select_report_label"] is True
+    assert not any(
+        "ADCC MYB promoter signal" in reason for reason in adcc["blocking_reasons"]
+    )
+    assert "high-confidence exact expression-reference support" in (
+        result["selected"].get("caveat") or ""
+    )
+
+
+def test_adcc_exact_reference_yields_to_native_brca_consensus_without_strong_driver_axis(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 28.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+    analysis = _analysis(("BRCA", 1.0), ("ESCA", 0.90), ("HNSC", 0.85))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[("BRCA_TPM", 0.88), ("PRAD_TPM", 0.87)],
+        top_normal_tissues=[("breast_nTPM", 0.86), ("salivary gland_nTPM", 0.10)],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 28.0,
+                "NFIB": 142.0,
+                "KRT7": 1174.0,
+                "SOX10": 233.0,
+                "KIT": 209.0,
+            }
+        ),
+        analysis,
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["local_reference_high_confidence"] is True
+    assert adcc["fusion_defined_context_conflict"] is True
+    assert adcc["can_select_report_label"] is False
+    assert any(
+        "native BRCA broad/coarse expression consensus" in reason
+        and "MYB 28.0 TPM < 75.0 TPM" in reason
+        for reason in adcc["blocking_reasons"]
+    )
+
+
+def test_strong_myb_adcc_exact_reference_can_refine_native_brca_consensus(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    analysis = _analysis(("BRCA", 1.0), ("ESCA", 0.90), ("HNSC", 0.85))
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[("BRCA_TPM", 0.88), ("PRAD_TPM", 0.87)],
+        top_normal_tissues=[("breast_nTPM", 0.86), ("salivary gland_nTPM", 0.10)],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 123.0,
+                "NFIB": 99.0,
+                "KRT7": 500.0,
+                "SOX10": 300.0,
+                "KIT": 90.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "ADCC"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["local_reference_high_confidence"] is True
+    assert adcc["fusion_defined_context_conflict"] is False
+    assert adcc["can_select_report_label"] is True
+
+
+def test_low_myb_adcc_exact_reference_yields_to_basal_brca_program(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 19.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 19.0,
+                "NFIB": 68.0,
+                "KRT7": 100.0,
+                "SOX10": 30.0,
+                "KIT": 55.0,
+                "KRT14": 52.0,
+                "KRT5": 1600.0,
+                "FOXC1": 46.0,
+                "MIA": 94.0,
+                "MUCL1": 0.0,
+                "ESR1": 4.0,
+                "PGR": 0.0,
+                "UPK1B": 0.0,
+                "TP63": 10.0,
+                "SOX2": 0.0,
+            }
+        ),
+        _analysis(("CESC", 1.0), ("ESCA", 0.94), ("BRCA", 0.90), ("HNSC", 0.85)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] != "ADCC"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["local_reference_high_confidence"] is True
+    assert adcc["adcc_low_myb_basal_breast_conflict"] is True
+    assert adcc["can_select_report_label"] is False
+    assert any("BRCA_BASAL" in reason for reason in adcc["blocking_reasons"])
+
+
+def test_high_myb_adcc_exact_reference_yields_to_luminal_brca_program(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": ("MYB", "NFIB", "KRT7", "SOX10", "KIT"),
+                "ref_medians": {
+                    "MYB": 30.0,
+                    "NFIB": 40.0,
+                    "KRT7": 80.0,
+                    "SOX10": 20.0,
+                    "KIT": 25.0,
+                },
+                "context_codes": ("HNSC", "LUAD", "BRCA"),
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 69.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 69.0,
+                "NFIB": 14.0,
+                "KRT7": 279.0,
+                "SOX10": 7.0,
+                "KIT": 9.0,
+                "ESR1": 89.0,
+                "PGR": 76.0,
+                "FOXA1": 172.0,
+                "GATA3": 319.0,
+                "SCGB2A2": 228.0,
+                "MUCL1": 32.0,
+                "KRT14": 87.0,
+                "KRT5": 85.0,
+            }
+        ),
+        _analysis(("BRCA", 1.0), ("LUAD", 0.88), ("BLCA", 0.88), ("HNSC", 0.82)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["local_reference_high_confidence"] is True
+    assert adcc["adcc_breast_program_conflict"] is True
+    assert adcc["can_select_report_label"] is False
+    assert any("BRCA_LUMINAL" in reason for reason in adcc["blocking_reasons"])
+
+
+def test_low_myb_adcc_surrogate_without_strong_local_reference_stays_blocked(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(evidence, "_local_expression_reference_panels", lambda: {})
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 18.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "MYB": 18.0,
+                "KRT7": 100.0,
+                "SOX10": 25.0,
+                "KIT": 30.0,
+            }
+        ),
+        _analysis(("BRCA", 1.0), ("HNSC", 0.85)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["can_select_report_label"] is False
+    assert any("ADCC MYB promoter signal" in reason for reason in adcc["blocking_reasons"])
+
+
 def test_local_expression_reference_requires_top_compatible_context(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
@@ -506,7 +2719,7 @@ def test_real_rare_rna_rules_promote_with_configured_partial_support():
 
     cases = [
         ("ACINIC", "HNSC", {"NR4A3": 18.0, "SOX10": 3.0}),
-        ("ADCC", "HNSC", {"MYB": 18.0, "KIT": 3.0}),
+        ("ADCC", "HNSC", {"MYB": 18.0, "KIT": 3.0, "SOX10": 3.0}),
         ("MTC", "THCA", {"CALCA": 18.0, "CHGA": 3.0}),
     ]
 
@@ -522,8 +2735,176 @@ def test_real_rare_rna_rules_promote_with_configured_partial_support():
         # was detected and the partial-support contract is exposed (one support
         # gene required, the rest reported as missing).
         assert result is not None
-        assert result["min_support_genes"] == 1
+        assert result["min_support_genes"] >= 1
         assert result["missing_support_genes"]
+
+
+def test_complete_context_gated_rare_marker_axis_beats_neighboring_exact_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    mbl_markers = (
+        "ZIC1",
+        "GPM6A",
+        "STMN2",
+        "INSM1",
+        "GFAP",
+        "NCAM1",
+        "OTX2",
+        "ATOH1",
+        "SOX2",
+        "MYC",
+        "MYCN",
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "MBL_SHH": {
+                "markers": mbl_markers,
+                "ref_medians": {gene: 100.0 for gene in mbl_markers},
+                "context_codes": ("PCPG",),
+                "parent_code": "MBL",
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
+                "reference_kind": "observed_bulk_reference",
+            }
+        },
+    )
+    original_marker_coherence = evidence._marker_coherence
+
+    def fake_marker_coherence(code, sample):
+        if code == "MBL_SHH":
+            return {
+                "status": "consistent",
+                "detected": 5,
+                "total": 5,
+                "required_for_consistent": 3,
+                "detected_fraction": 1.0,
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", fake_marker_coherence)
+    finding = {
+        "cancer_type": "MTC",
+        "rule_id": "mtc_calca",
+        "surrogate": "CALCA",
+        "surrogate_tpm": 1500.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["CHGA", "SYP", "RET"],
+        "missing_support_genes": [],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    sample = {gene: 120.0 for gene in mbl_markers}
+    sample.update({"CALCA": 1500.0, "CHGA": 200.0, "SYP": 180.0, "RET": 120.0})
+    result = select_report_scope_from_evidence(
+        _expression_frame(sample),
+        _analysis(("PCPG", 1.0), ("NET_PANCREAS", 0.5), ("SCLC", 0.5)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "MTC"
+    assert result["selected"]["selected_by"] == "rare_marker"
+    mbl = next(row for row in result["evidence"] if row["cancer_type"] == "MBL_SHH")
+    assert mbl["can_select_report_label"] is True
+
+
+def test_mtc_marker_axis_needs_specific_anchor_in_neural_crest_context():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    finding = {
+        "cancer_type": "MTC",
+        "rule_id": "mtc_calca",
+        "surrogate": "CALCA",
+        "surrogate_tpm": 600.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["CHGA", "SYP", "RET"],
+        "missing_support_genes": [],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+    sample = {
+        "CALCA": 600.0,
+        "CHGA": 200.0,
+        "SYP": 150.0,
+        "RET": 12.0,
+        "CEACAM5": 0.0,
+        "CALCR": 0.0,
+        "PHOX2B": 100.0,
+        "TH": 400.0,
+        "B4GALNT1": 30.0,
+        "ALK": 10.0,
+        "MYCN": 8.0,
+        "DBH": 200.0,
+        "CHGB": 500.0,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(sample),
+        _analysis(("PCPG", 1.0), ("SCLC", 0.5)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "PCPG"
+    mtc = next(row for row in result["evidence"] if row["cancer_type"] == "MTC")
+    assert mtc["label_decision"]["status"] == "blocked"
+    assert any(
+        "not specific enough to override a PCPG/neural-crest expression context"
+        in reason
+        for reason in mtc["blocking_reasons"]
+    )
+    assert mtc["mtc_neural_crest_context_conflict"] is True
+
+
+def test_subgroup_reference_requires_established_parent_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    subgroup_markers = ("ZIC1", "GPM6A", "STMN2", "INSM1", "GFAP", "NCAM1")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "MBL_SHH": {
+                "markers": subgroup_markers,
+                "ref_medians": {gene: 100.0 for gene in subgroup_markers},
+                "context_codes": ("MBL",),
+                "parent_code": "MBL",
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
+                "reference_kind": "observed_bulk_reference",
+            }
+        },
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 120.0 for gene in subgroup_markers}),
+        _analysis(("GBM", 1.0), ("LGG", 0.93), ("SKCM", 0.75)),
+    )
+
+    assert result["selected"]["cancer_type"] == "GBM"
+    subgroup = next(row for row in result["evidence"] if row["cancer_type"] == "MBL_SHH")
+    assert subgroup["can_select_report_label"] is False
+    assert any("requires established MBL parent-context support" in r for r in subgroup["blocking_reasons"])
+
+
+def test_adcc_marker_prompt_requires_combined_co_marker_support():
+    from trufflepig.rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
+
+    hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(
+        _expression_frame({"MYB": 45.0, "KRT7": 12.0}),
+        _analysis(("HNSC", 1.0)),
+    )
+
+    assert all(row["cancer_type"] != "ADCC" for row in hypotheses)
 
 
 def test_direct_rare_rna_scope_requires_top_context_match():
@@ -758,3 +3139,303 @@ def test_subtype_deconvolved_expression_without_subtype_column(monkeypatch):
         cte._local_expression_reference_panels()
     finally:
         cte._local_expression_reference_panels.cache_clear()
+
+
+def _contrast_rows(*, contrast="GBC_vs_PAAD"):
+    return (
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "GBC",
+            "symbol": "CLDN4",
+            "direction": "high",
+            "tier": "primary",
+            "separability": "poor",
+            "source": "GSE139682",
+            "support_type": "gallbladder_expression_candidate",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "GBC",
+            "symbol": "KRT7",
+            "direction": "high",
+            "tier": "supporting",
+            "separability": "poor",
+            "source": "GSE139682",
+            "support_type": "gallbladder_expression_candidate",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "GBC",
+            "symbol": "KRT19",
+            "direction": "high",
+            "tier": "supporting",
+            "separability": "poor",
+            "source": "GSE139682",
+            "support_type": "gallbladder_expression_candidate",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "GBC",
+            "symbol": "ERBB2",
+            "direction": "high",
+            "tier": "supporting",
+            "separability": "poor",
+            "source": "GSE139682",
+            "support_type": "gallbladder_expression_candidate",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "PAAD",
+            "symbol": "GATA6",
+            "direction": "high",
+            "tier": "primary",
+            "separability": "poor",
+            "source": "PMID:26343385",
+            "support_type": "contrast_marker_literature",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "PAAD",
+            "symbol": "PDX1",
+            "direction": "high",
+            "tier": "primary",
+            "separability": "poor",
+            "source": "PMID:26343385",
+            "support_type": "contrast_marker_literature",
+        },
+        {
+            "contrast": contrast,
+            "type_a": "GBC",
+            "type_b": "PAAD",
+            "favors": "PAAD",
+            "symbol": "MSLN",
+            "direction": "high",
+            "tier": "supporting",
+            "separability": "poor",
+            "source": "PMID:26343385",
+            "support_type": "contrast_marker_literature",
+        },
+    )
+
+
+def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", _contrast_rows)
+    analysis = _analysis(("PAAD", 1.0))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CLDN4": 90.0,
+                "KRT7": 120.0,
+                "KRT19": 80.0,
+                "ERBB2": 35.0,
+                "GATA6": 0.2,
+                "PDX1": 0.1,
+                "MSLN": 0.2,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "GBC"
+    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["contrast_discriminator_context_code"] == "PAAD"
+    assert result["selected"]["metrics"]["contrast_discriminator_support"] > 0.8
+
+
+def test_contrast_discriminator_blocks_marker_incoherent_override(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", _contrast_rows)
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CLDN4": 90.0,
+                "KRT7": 120.0,
+                "KRT19": 80.0,
+                "ERBB2": 0.5,
+                "GATA6": 0.2,
+                "PDX1": 0.1,
+                "MSLN": 0.2,
+            }
+        ),
+        _analysis(("PAAD", 1.0)),
+    )
+
+    assert result["selected"]["cancer_type"] == "PAAD"
+    gbc = next(row for row in result["evidence"] if row["cancer_type"] == "GBC")
+    assert gbc["label_decision"]["status"] == "blocked"
+    assert any("marker program is partial" in reason for reason in gbc["blocking_reasons"])
+
+
+def test_contrast_discriminator_requires_primary_context_for_cross_code_promotion(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", _contrast_rows)
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[
+            ("PRAD_TPM", 0.76),
+            ("PAAD_TPM", 0.76),
+            ("PCPG_TPM", 0.75),
+        ],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CLDN4": 90.0,
+                "KRT7": 120.0,
+                "KRT19": 80.0,
+                "ERBB2": 35.0,
+                "CEACAM5": 8.0,
+                "GATA6": 0.2,
+                "PDX1": 0.1,
+                "MSLN": 0.2,
+            }
+        ),
+        {
+            "cancer_type": "PCPG",
+            "fit_quality": {"label": "focused"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "PCPG", "support_fraction_of_top": 1.0},
+                {"code": "NET_PANCREAS", "support_fraction_of_top": 0.5},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "PCPG"
+    gbc = next(row for row in result["evidence"] if row["cancer_type"] == "GBC")
+    assert gbc["label_decision"]["status"] == "blocked"
+    assert gbc["contrast_discriminator_context_code"] == "PAAD"
+    assert gbc["contrast_discriminator_context_is_primary"] is False
+    assert any(
+        "does not resolve the active top RNA context" in r
+        for r in gbc["blocking_reasons"]
+    )
+
+
+def test_same_top_contrast_does_not_outrank_exact_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "HEPB": {
+                "markers": ("DLK1", "GPC3", "KRT8", "KRT18"),
+                "ref_medians": {
+                    "DLK1": 100.0,
+                    "GPC3": 100.0,
+                    "KRT8": 100.0,
+                    "KRT18": 100.0,
+                },
+                "context_codes": ("LUAD",),
+                "parent_code": "",
+                "family": "embryonal",
+                "primary_tissue": "liver",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_HEPB",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "TREEHOUSE",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        lambda: (
+            {
+                "contrast": "LUAD_vs_LUSC",
+                "type_a": "LUAD",
+                "type_b": "LUSC",
+                "favors": "LUAD",
+                "symbol": "SFTPC",
+                "direction": "high",
+                "tier": "primary",
+                "separability": "strong",
+                "source": "PMID:22960745",
+                "support_type": "contrast_marker_literature",
+            },
+            {
+                "contrast": "LUAD_vs_LUSC",
+                "type_a": "LUAD",
+                "type_b": "LUSC",
+                "favors": "LUAD",
+                "symbol": "NAPSA",
+                "direction": "high",
+                "tier": "primary",
+                "separability": "strong",
+                "source": "PMID:22960745",
+                "support_type": "contrast_marker_literature",
+            },
+            {
+                "contrast": "LUAD_vs_LUSC",
+                "type_a": "LUAD",
+                "type_b": "LUSC",
+                "favors": "LUSC",
+                "symbol": "TP63",
+                "direction": "high",
+                "tier": "primary",
+                "separability": "strong",
+                "source": "PMID:22960745",
+                "support_type": "contrast_marker_literature",
+            },
+            {
+                "contrast": "LUAD_vs_LUSC",
+                "type_a": "LUAD",
+                "type_b": "LUSC",
+                "favors": "LUSC",
+                "symbol": "KRT5",
+                "direction": "high",
+                "tier": "primary",
+                "separability": "strong",
+                "source": "PMID:22960745",
+                "support_type": "contrast_marker_literature",
+            },
+        ),
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "SFTPC": 500.0,
+                "NAPSA": 100.0,
+                "TP63": 0.1,
+                "KRT5": 0.1,
+                "DLK1": 20.0,
+                "GPC3": 20.0,
+                "KRT8": 20.0,
+                "KRT18": 20.0,
+            }
+        ),
+        _analysis(("LUAD", 1.0), ("LUSC", 0.8)),
+    )
+
+    assert result["selected"]["cancer_type"] == "HEPB"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
+    assert "contrast_discriminator" in luad["evidence_sources"]
+    assert luad["selected_by"] == "primary_expression_match"

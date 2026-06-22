@@ -10,6 +10,15 @@ from __future__ import annotations
 
 from typing import Any
 
+_RNA_ONLY_HYPOTHESIS_CONTEXTS: dict[str, set[str]] = {
+    "nutm_brd_nutm1_myc_cta": {"NUTM", "HNSC", "LUSC", "ESCA", "CESC", "THYM"},
+    "ewsr1_fli1_ewing_program": {"SARC"},
+    "ss18_ssx_tle1_program": {"SARC"},
+    "pax_foxo1_arms_program": {"SARC"},
+    "pax3_non_foxo_program": {"SARC"},
+    "aspscr1_tfe3_asps_program": {"SARC"},
+}
+
 
 def fusion_expression_effect_rules_df():
     """Return curated fusion -> expression-consequence rules."""
@@ -47,6 +56,55 @@ def _safe_bool(value: object, default: bool = False) -> bool:
     if not text or text == "nan":
         return bool(default)
     return text in {"1", "true", "yes", "y"}
+
+
+def _candidate_context_codes(
+    *,
+    cancer_code: str | None = None,
+    candidate_trace: list[dict[str, Any]] | None = None,
+) -> set[str]:
+    codes: set[str] = set()
+    if cancer_code:
+        codes.add(str(cancer_code).strip().upper())
+    for row in candidate_trace or []:
+        if not hasattr(row, "get"):
+            continue
+        support = _safe_float(
+            row.get("support_fraction_of_top"),
+            1.0 if not codes else 0.0,
+        )
+        if codes and support < 0.85:
+            continue
+        code = str(row.get("code") or "").strip().upper()
+        if code:
+            codes.add(code)
+    return codes
+
+
+def _context_code_matches_allowed(code: str, allowed: set[str]) -> bool:
+    if code in allowed:
+        return True
+    if "SARC" in allowed and code.startswith("SARC"):
+        return True
+    return False
+
+
+def _rna_only_hypothesis_context_allowed(
+    rule_id: str,
+    *,
+    cancer_code: str | None = None,
+    candidate_trace: list[dict[str, Any]] | None = None,
+) -> bool:
+    allowed = _RNA_ONLY_HYPOTHESIS_CONTEXTS.get(rule_id)
+    if not allowed:
+        return True
+    context_codes = _candidate_context_codes(
+        cancer_code=cancer_code,
+        candidate_trace=candidate_trace,
+    )
+    if not context_codes:
+        return False
+    return any(_context_code_matches_allowed(code, allowed) for code in context_codes)
 
 
 def _record_value(record, key: str, default=None):
@@ -261,6 +319,8 @@ def infer_fusion_expression_hypotheses(
     sample_tpm_by_symbol: dict[str, Any] | None,
     *,
     tumor_tpm_by_symbol: dict[str, Any] | None = None,
+    cancer_code: str | None = None,
+    candidate_trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return RNA-only fusion-effect hypotheses that should prompt testing."""
     if not sample_tpm_by_symbol:
@@ -269,6 +329,13 @@ def infer_fusion_expression_hypotheses(
     hypotheses: list[dict[str, Any]] = []
     for _, rule in rules.iterrows():
         if not _safe_bool(rule.get("allow_expression_hypothesis"), default=False):
+            continue
+        rule_id = str(rule.get("rule_id") or "").strip()
+        if not _rna_only_hypothesis_context_allowed(
+            rule_id,
+            cancer_code=cancer_code,
+            candidate_trace=candidate_trace,
+        ):
             continue
         expression = _evaluate_rule_expression(
             rule,
@@ -279,7 +346,7 @@ def infer_fusion_expression_hypotheses(
             continue
         hypotheses.append(
             {
-                "rule_id": str(rule.get("rule_id") or "").strip(),
+                "rule_id": rule_id,
                 "label": str(rule.get("label") or "").strip(),
                 "expected_pair": f"{rule.get('gene_a')}--{rule.get('gene_b')}",
                 "confidence": str(rule.get("confidence") or "moderate").strip(),

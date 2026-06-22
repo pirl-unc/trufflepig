@@ -285,6 +285,59 @@ BROAD_TISSUE_COUNT = 15
 BROADLY_ENRICHED_MAX_RATIO = 3.0
 BREADTH_BASELINE_TOP_N = 10
 
+_REFERENCE_BY_SYMBOL_CACHE = {}
+_HEALTHY_REFERENCE_METRICS_CACHE = {}
+
+
+def _row_mean_top_n(df, n):
+    """Return each row's mean of its top ``n`` non-NaN values."""
+    if df.empty or n <= 0 or df.shape[1] == 0:
+        return {idx: 0.0 for idx in df.index}
+    values = df.to_numpy(dtype=float, copy=True)
+    top_n = min(int(n), values.shape[1])
+    valid = ~np.isnan(values)
+    filled = np.where(valid, values, -np.inf)
+    top_values = np.partition(filled, values.shape[1] - top_n, axis=1)[:, -top_n:]
+    top_values = np.where(np.isneginf(top_values), np.nan, top_values)
+    top_valid = ~np.isnan(top_values)
+    sums = np.where(top_valid, top_values, 0.0).sum(axis=1)
+    counts = top_valid.sum(axis=1)
+    means = np.divide(sums, counts, out=np.zeros_like(sums), where=counts > 0)
+    return dict(zip(df.index, means))
+
+
+def _cached_reference_by_symbol(ref_full):
+    """Return the Symbol-indexed pan-cancer reference derived from ``ref_full``."""
+    key = id(ref_full)
+    entry = _REFERENCE_BY_SYMBOL_CACHE.get(key)
+    if entry is not None and entry[0] is ref_full:
+        return entry[1]
+    ref_dedup = ref_full.drop_duplicates(subset="Symbol").set_index("Symbol")
+    _REFERENCE_BY_SYMBOL_CACHE[key] = (ref_full, ref_dedup)
+    return ref_dedup
+
+
+def _cached_healthy_reference_metrics(ref_dedup, ntpm_nonrepro, top_n):
+    """Cache healthy-reference breadth vectors that are invariant per sample."""
+    cols = tuple(ntpm_nonrepro)
+    if not cols:
+        return {}, {}, {}
+    key = (id(ref_dedup), cols, int(top_n))
+    entry = _HEALTHY_REFERENCE_METRICS_CACHE.get(key)
+    if entry is not None and entry[0] is ref_dedup:
+        return entry[1]
+
+    all_healthy = ref_dedup.loc[:, list(cols)].astype(float)
+    max_healthy = all_healthy.max(axis=1).to_dict()
+    n_tissues_expressed = (
+        all_healthy >= HK_TISSUE_NTPM_THRESHOLD
+    ).sum(axis=1).to_dict()
+    mean_top_healthy = _row_mean_top_n(all_healthy, top_n)
+    metrics = (max_healthy, n_tissues_expressed, mean_top_healthy)
+    _HEALTHY_REFERENCE_METRICS_CACHE[key] = (ref_dedup, metrics)
+    return metrics
+
+
 # AMPLIFICATION_MIN_FOLD (5.0):
 #   When the sample's observed TPM exceeds ``max_healthy_tpm`` by this
 #   multiple, treat the observation as an amplification / over-
@@ -669,7 +722,7 @@ def estimate_tumor_expression_ranges(
     sample_hk_median = float(np.median(sample_hk_vals)) if sample_hk_vals else 1.0
 
     # --- Reference data ---
-    ref_dedup = ref_full.drop_duplicates(subset="Symbol").set_index("Symbol")
+    ref_dedup = _cached_reference_by_symbol(ref_full)
     ntpm_cols = [c for c in ref_full.columns if c.endswith("_nTPM")]
     cohort_cols = [c for c in ref_full.columns if c.endswith("_TPM")]
     ntpm_nonrepro = [
@@ -718,30 +771,15 @@ def estimate_tumor_expression_ranges(
     # universally-expressed housekeeping-like and surface genes. These
     # two metrics drive a breadth floor on non-tumor attribution and a
     # new ``broadly_expressed`` reliability flag.
-    if ntpm_nonrepro:
-        _all_healthy = ref_dedup[ntpm_nonrepro].astype(float)
-        _max_healthy = _all_healthy.max(axis=1)
-        max_healthy_tpm_by_symbol = _max_healthy.to_dict()
-        # Count healthy tissues with nTPM >= HK_TISSUE_NTPM_THRESHOLD.
-        # Threshold matches the detection bar elsewhere in pirlygenes:
-        # 5 nTPM is "detectable expression" per HPA conventions.
-        _n_tissues_expressed = (_all_healthy >= HK_TISSUE_NTPM_THRESHOLD).sum(axis=1)
-        n_healthy_tissues_by_symbol = _n_tissues_expressed.to_dict()
-        # Mean of the top-N healthy tissues per gene — used as a "breadth
-        # baseline" for the non-tumor floor below. Genes expressed in
-        # only one tissue have a small mean (dominated by zeros); genes
-        # expressed ubiquitously have a large mean.
-        _mean_top_healthy = _all_healthy.apply(
-            lambda row: float(row.nlargest(BREADTH_BASELINE_TOP_N).mean())
-            if row.notna().any()
-            else 0.0,
-            axis=1,
-        )
-        mean_top_healthy_tpm_by_symbol = _mean_top_healthy.to_dict()
-    else:
-        max_healthy_tpm_by_symbol = {}
-        n_healthy_tissues_by_symbol = {}
-        mean_top_healthy_tpm_by_symbol = {}
+    (
+        max_healthy_tpm_by_symbol,
+        n_healthy_tissues_by_symbol,
+        mean_top_healthy_tpm_by_symbol,
+    ) = _cached_healthy_reference_metrics(
+        ref_dedup,
+        ntpm_nonrepro,
+        BREADTH_BASELINE_TOP_N,
+    )
 
     # --- Full-coverage TPM-space TME background (fixes issue #45) --------
     #

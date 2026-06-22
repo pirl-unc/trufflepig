@@ -1064,7 +1064,7 @@ def test_generate_target_report_canonicalizes_curated_antigen_symbols(
     }
 
     prefix = str(tmp_path / "sarc")
-    cli_mod._generate_target_report(ranges_df, analysis, prefix, "SARC", purity)
+    _write_target_report(ranges_df, analysis, prefix, "SARC", purity)
 
     text = (tmp_path / "sarc-targets.md").read_text()
     assert "| **MAGEA4** |" in text

@@ -18,6 +18,8 @@ from trufflepig.reporting import (
     therapy_path_context,
     therapy_path_rank,
     therapy_path_tier,
+    therapy_rna_context_conflict,
+    therapy_row_rna_context_inactive,
 )
 
 
@@ -238,6 +240,66 @@ def test_treatment_path_context_dedupes_curated_note_prefix():
     context = therapy_path_context(row)
     assert context == "clinical-trial follow-up; not default standard"
     assert "clinical-trial follow-up; clinical-trial follow-up" not in context
+
+
+def test_her2_rows_are_deprioritized_when_sample_rna_context_is_her2_down():
+    row = {
+        "cancer_code": "BRCA",
+        "symbol": "ERBB2",
+        "agent": "trastuzumab deruxtecan",
+        "agent_class": "HER2 ADC",
+        "phase": "approved",
+        "indication": "HER2-positive or HER2-low metastatic breast cancer",
+        "rationale": "HER2-directed therapy",
+    }
+    analysis = {"therapy_response_scores": {"HER2_signaling": {"state": "down"}}}
+
+    assert therapy_row_rna_context_inactive(row, analysis=analysis) is True
+    assert "HER2 axis is suppressed" in therapy_rna_context_conflict(
+        row,
+        analysis=analysis,
+    )
+
+
+def test_her2_rows_remain_prioritizable_when_orthogonal_eligibility_is_supplied():
+    row = {
+        "cancer_code": "BRCA",
+        "symbol": "ERBB2",
+        "agent": "trastuzumab",
+        "agent_class": "HER2 antibody",
+        "phase": "approved",
+        "indication": "HER2 amplification-positive metastatic breast cancer",
+        "rationale": "HER2 amplification",
+    }
+    analysis = {
+        "therapy_response_scores": {"HER2_signaling": {"state": "down"}},
+        "alteration_records": [
+            {
+                "gene": "ERBB2",
+                "alteration": "ERBB2 amplification",
+                "alteration_type": "amplification",
+            }
+        ],
+    }
+
+    assert therapy_row_rna_context_inactive(row, analysis=analysis) is False
+    assert therapy_rna_context_conflict(row, analysis=analysis) == ""
+
+
+def test_her2_rows_remain_prioritizable_when_sample_rna_context_is_her2_up():
+    row = {
+        "cancer_code": "BRCA",
+        "symbol": "ERBB2",
+        "agent": "trastuzumab",
+        "agent_class": "HER2 antibody",
+        "phase": "approved",
+        "indication": "HER2-positive metastatic breast cancer",
+        "rationale": "HER2-directed therapy",
+    }
+    analysis = {"therapy_response_scores": {"HER2_signaling": {"state": "up"}}}
+
+    assert therapy_row_rna_context_inactive(row, analysis=analysis) is False
+    assert therapy_rna_context_conflict(row, analysis=analysis) == ""
 
 
 def test_hla_restricted_therapy_rows_use_supplied_hla_gate():

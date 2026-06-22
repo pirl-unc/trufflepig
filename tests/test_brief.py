@@ -7,6 +7,7 @@ from trufflepig.brief import (
     build_brief,
     build_summary,
     _format_therapy_bullet,
+    _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
 )
@@ -53,6 +54,13 @@ def test_subtype_line_suppressed_when_panel_proposes_unadopted_label():
     # Panel proposed a different label that wasn't adopted as the report scope.
     analysis = _lineage_panel_evidence("CHOL", promoted=True, code="CHOL")
     assert _lineage_panel_subtype_reasoning_line(analysis, "PRAD") is None
+
+
+def test_lineage_panel_evidence_marks_promoted_unadopted_label_as_competing():
+    analysis = _lineage_panel_evidence("BRCA_BASAL", promoted=True, code="BRCA")
+    line = _lineage_panel_evidence_line(analysis, "ADCC") or ""
+    assert "competing BRCA lineage signal" in line
+    assert "did not override the ADCC call" in line
 
 
 def _make_analysis(
@@ -1006,6 +1014,21 @@ def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
     )
     assert "RNA-context conflict: ER axis is suppressed/ER-low" in actionable
     assert "ER-low biology or current/prior endocrine therapy signal" in actionable
+
+
+def test_disease_state_ifn_split_preserves_sentence_punctuation():
+    from trufflepig.brief import _disease_state_summary_lines
+
+    lines = _disease_state_summary_lines(
+        "**ER-axis suppressed / ER-low pattern** (ESR1 low; classic ER targets "
+        "collapsed). This can reflect ER-negative/basal-like biology or "
+        "endocrine resistance/exposure depending on clinical context. "
+        "**Active IFN response** — MHC-I / ISG surface fold-changes carry "
+        "IFN-driven inflation."
+    )
+
+    assert lines[0].endswith("context.")
+    assert lines[1].startswith("**Immune/IFN state:** Active IFN response")
 
 
 def test_brief_explains_bulk_present_targets_that_fail_source_gate():

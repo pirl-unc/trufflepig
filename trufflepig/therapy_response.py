@@ -468,20 +468,17 @@ def infer_mapk_activity_sources(
     ]
 
 
-def _cohort_median_for_symbol(symbol, cancer_code, ref_flat):
-    """Return the TCGA cohort median TPM for a symbol in a cancer
-    type, or None if the cohort column is missing or the symbol is
-    absent from the reference universe."""
+def _cohort_medians_for_cancer(cancer_code, ref_flat) -> dict[str, float]:
     col = f"{cancer_code}_TPM"
     if col not in ref_flat.columns:
-        return None
-    sub = ref_flat[ref_flat["Symbol"] == symbol]
-    if sub.empty:
-        return None
-    val = float(sub.iloc[0][col])
-    if val != val:  # NaN check without numpy
-        return None
-    return val
+        return {}
+    medians: dict[str, float] = {}
+    for row in ref_flat[["Symbol", col]].itertuples(index=False, name=None):
+        symbol, value = row
+        if value != value:  # NaN check without numpy
+            continue
+        medians[str(symbol)] = float(value)
+    return medians
 
 
 def score_therapy_signatures(
@@ -516,6 +513,7 @@ def score_therapy_signatures(
     ref_flat = pan_cancer_expression(technical_rna_normalize=True).drop_duplicates(
         subset="Symbol"
     )
+    cohort_medians = _cohort_medians_for_cancer(cancer_type, ref_flat)
 
     out = {}
     for cls, directions in applicable.items():
@@ -529,7 +527,7 @@ def score_therapy_signatures(
             for g in genes:
                 sym = g["symbol"]
                 sample_tpm = sample_tpm_by_symbol.get(sym)
-                cohort_med = _cohort_median_for_symbol(sym, cancer_type, ref_flat)
+                cohort_med = cohort_medians.get(sym)
                 if sample_tpm is None or cohort_med is None:
                     continue
                 # Cohort-referenced fold change. Pseudocount of 0.5 TPM

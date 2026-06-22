@@ -152,8 +152,27 @@ def _deconvolved_range():
 # Whole-profile centroid correlation.
 # --------------------------------------------------------------------------- #
 def _rankdata(arr):
-    """Average-rank transform (Spearman = Pearson on ranks). numpy/pandas only."""
-    return pd.Series(arr).rank(method="average").to_numpy()
+    """Average-rank transform with pandas-compatible tie/NaN behavior."""
+    values = np.asarray(arr, dtype=float)
+    ranks = np.full(values.shape, np.nan, dtype=float)
+    ok = ~np.isnan(values)
+    valid = values[ok]
+    if valid.size == 0:
+        return ranks
+
+    order = np.argsort(valid, kind="mergesort")
+    sorted_values = valid[order]
+    group_start = np.r_[True, sorted_values[1:] != sorted_values[:-1]]
+    starts = np.flatnonzero(group_start)
+    counts = np.diff(np.r_[starts, valid.size])
+    # Ranks are 1-based. For a tie group with zero-based start ``s`` and
+    # length ``n``, the average rank is mean(s + 1, ..., s + n).
+    group_ranks = starts + (counts + 1) / 2.0
+    sorted_ranks = np.repeat(group_ranks, counts)
+    valid_ranks = np.empty(valid.size, dtype=float)
+    valid_ranks[order] = sorted_ranks
+    ranks[ok] = valid_ranks
+    return ranks
 
 
 # --------------------------------------------------------------------------- #

@@ -1701,6 +1701,69 @@ def therapy_state_caution(target_row, *, analysis=None, disease_state=None) -> s
     return ""
 
 
+def _therapy_rna_context_inactive_rule(target_row, *, analysis=None) -> dict | None:
+    """Return the exposure rule that makes a therapy row out-of-context.
+
+    ``therapy_state_caution`` is deliberately broad: it flags possible prior or
+    current therapy exposure. This helper is narrower. It only fires when the
+    sample's own RNA state argues against using a pathway-dependent row as a
+    priority recommendation, and it backs off when supplied molecular evidence
+    directly supports the row's eligibility.
+    """
+    if not isinstance(analysis, dict) or not hasattr(target_row, "get"):
+        return None
+    if supplied_alteration_supports_target_row(target_row, analysis):
+        return None
+    for rule in _THERAPY_EXPOSURE_RULES:
+        axis = str(rule.get("axis") or "")
+        if axis not in {"ER_signaling", "HER2_signaling"}:
+            continue
+        if _therapy_axis_state(analysis, axis) != str(rule.get("state") or "").lower():
+            continue
+        if _therapy_row_matches_exposure_rule(target_row, rule):
+            return rule
+    return None
+
+
+def therapy_rna_context_conflict(target_row, *, analysis=None, disease_state=None) -> str:
+    """Reader-facing reason when RNA context argues against a therapy row.
+
+    This is stronger than the medication-reconciliation caution: the row can
+    remain visible in full context tables, but should be deprioritized unless
+    clinical HER2/ER status or a compatible supplied alteration confirms
+    eligibility.
+    """
+    rule = _therapy_rna_context_inactive_rule(target_row, analysis=analysis)
+    if rule is None:
+        return ""
+    axis = str(rule.get("axis") or "")
+    if axis == "ER_signaling":
+        return (
+            "RNA-context conflict: ER axis is suppressed/ER-low; verify "
+            "ER-positive disease and indication-specific eligibility before acting"
+        )
+    if axis == "HER2_signaling":
+        return (
+            "RNA-context conflict: HER2 axis is suppressed by RNA context; verify "
+            "HER2-positive/HER2-low protein or amplification status and "
+            "indication-specific eligibility before acting"
+        )
+    return ""
+
+
+def therapy_row_rna_context_inactive(
+    target_row, *, analysis=None, disease_state=None
+) -> bool:
+    """Whether a therapy row should be deprioritized by sample RNA context."""
+    return bool(
+        therapy_rna_context_conflict(
+            target_row,
+            analysis=analysis,
+            disease_state=disease_state,
+        )
+    )
+
+
 def hla_restrictions_for_target_row(target_row) -> list[str]:
     """Return class-I HLA restrictions encoded in a therapy row."""
     if not hasattr(target_row, "get"):
@@ -1803,6 +1866,46 @@ def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:
     return int(_therapy_path_info(target_row)["rank"])
 
 
+def interval_material_target_candidate(
+    row,
+    target_row=None,
+    *,
+    min_high_tumor_tpm=10.0,
+    min_support_fraction=0.25,
+    min_observed_tpm=10.0,
+) -> bool:
+    """Whether uncertainty still leaves a mature target row clinically reviewable.
+
+    This is not a clean tumor-source call. It keeps mature, disease-scoped
+    therapy rows visible in concise reports when the median attribution is
+    background-heavy, but the modeled interval still includes material
+    tumor-source signal. That is the right reading for broadly epithelial
+    targets such as TROP2 in basal breast cancer: RNA specificity is limited,
+    yet the clinical row should not disappear when the biology and indication
+    otherwise fit.
+    """
+    if target_row is None or expression_independent_indication(target_row):
+        return False
+    if not _clean_text(target_row.get("agent") if hasattr(target_row, "get") else ""):
+        return False
+    if _phase_text(target_row) not in {"approved", "phase_3", "phase_2"}:
+        return False
+    if therapy_path_rank(target_row) > 3:
+        return False
+    if _truthy(row.get("source_marker_non_tumor_prior")):
+        return False
+    if _truthy(row.get("matched_normal_over_predicted")):
+        return False
+    source = tumor_attribution_context(row)
+    if source["observed_tpm"] < float(min_observed_tpm):
+        return False
+    if source["attr_tumor_tpm_high"] < float(min_high_tumor_tpm):
+        return False
+    if source["attr_tumor_fraction_high"] < 0.30:
+        return False
+    return source["attr_support_fraction"] >= float(min_support_fraction)
+
+
 def target_interpretation_summary(
     target_row,
     expression_row,
@@ -1840,6 +1943,15 @@ def target_interpretation_summary(
     )
     if path_context:
         parts.append(path_context)
+    conflict = (
+        therapy_rna_context_conflict(
+            target_row, analysis=analysis, disease_state=disease_state
+        )
+        if target_row is not None
+        else ""
+    )
+    if conflict:
+        parts.append(conflict)
     caution = (
         therapy_state_caution(
             target_row, analysis=analysis, disease_state=disease_state

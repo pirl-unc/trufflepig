@@ -144,6 +144,8 @@ from .reporting import (
     target_observation_state,
     therapy_path_context,
     therapy_path_rank,
+    therapy_rna_context_conflict,
+    therapy_row_rna_context_inactive,
     therapy_state_caution,
     tumor_band_cell,
     target_interpretation_summary,
@@ -1064,6 +1066,8 @@ def _store_alteration_effect_reasoning(
             else infer_fusion_expression_hypotheses(
                 sample_tpm_by_symbol,
                 tumor_tpm_by_symbol=tumor_tpm_by_symbol,
+                cancer_code=cancer_code or analysis.get("cancer_type"),
+                candidate_trace=analysis.get("candidate_trace") or [],
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -2263,6 +2267,7 @@ def _analyze_body(run: AnalyzeRun):
             else None
         ),
     }
+    analysis["healthy_vs_tumor"] = healthy_vs_tumor
     fusion_findings = []
     fusion_scope_inference = None
     analysis["fusion_inputs_supplied"] = bool(fusion_paths)
@@ -2754,7 +2759,7 @@ def _analyze_body(run: AnalyzeRun):
         decomp_results,
         reference_code=reference_cancer_code,
         report_code=cancer_code,
-        enabled=bool(cancer_type or report_scope_cancer_type),
+        enabled=True,
         analysis=analysis,
     )
     call_summary = _summarize_sample_call(
@@ -4520,6 +4525,37 @@ def _selected_report_scope_label(analysis):
     return ""
 
 
+def _selected_report_scope_basis_label(analysis):
+    evidence = analysis.get("cancer_type_evidence") or {}
+    selected = evidence.get("selected") if isinstance(evidence, dict) else {}
+    selected_by = ""
+    if isinstance(selected, dict):
+        selected_by = str(selected.get("selected_by") or "").strip()
+    if not selected_by and analysis.get("fusion_report_scope_inference"):
+        selected_by = "direct_fusion"
+    if not selected_by and analysis.get("rare_report_scope_inference"):
+        selected_by = "rare_marker"
+    if not selected_by and analysis.get("cancer_type_source") == "user-specified":
+        return "the supplied cancer label"
+    return {
+        "direct_fusion": "direct fusion evidence",
+        "rare_marker": "rare RNA-marker and expression-context evidence",
+        "local_expression_reference": "exact local expression-reference evidence",
+        "fine_reference": "fine-grained expression-reference evidence",
+        "lineage_panel": "lineage-panel evidence",
+        "tumor_label_refinement": "tumor-label refinement evidence",
+        "primary_expression_match": "the leading RNA expression-reference match",
+    }.get(selected_by, "integrated classifier evidence")
+
+
+def _selected_report_scope_caveat(analysis):
+    evidence = analysis.get("cancer_type_evidence") or {}
+    selected = evidence.get("selected") if isinstance(evidence, dict) else {}
+    if not isinstance(selected, dict):
+        return ""
+    return str(selected.get("caveat") or "").strip()
+
+
 def _candidate_label_options(analysis):
     candidate_trace = analysis.get("candidate_trace", [])
     fit_quality = analysis.get("fit_quality", {})
@@ -4874,7 +4910,11 @@ def _prioritize_report_compatible_decomposition(
     uncertainty signal, but it should not silently become the background model
     for target subtraction when a reference-compatible fit exists.
     """
-    if not enabled or not decomp_results:
+    if not decomp_results:
+        return decomp_results
+    reference_code = str(reference_code or "").strip()
+    report_code = str(report_code or "").strip()
+    if not enabled and not (reference_code or report_code):
         return decomp_results
     first = decomp_results[0]
     if _decomposition_matches_report_reference(
@@ -4897,8 +4937,6 @@ def _prioritize_report_compatible_decomposition(
         return decomp_results
     selected = max(compatible, key=lambda row: float(getattr(row, "score", 0.0) or 0.0))
     selected_code = str(getattr(selected, "cancer_type", "") or "").strip()
-    reference_code = str(reference_code or "").strip()
-    report_code = str(report_code or "").strip()
     if selected_code == reference_code and selected_code != report_code:
         warning = (
             "Selected fallback-reference decomposition for target/background "
@@ -5663,6 +5701,36 @@ def _tumor_type_sanity_markdown(analysis, *, max_rows: int = 6) -> str:
         f"markers are at least {high_floor:g} TPM; {len(low_present)}/{len(low_rows)} "
         f"expected low markers are above {low_ceiling:g} TPM. Status: {status_label}."
     )
+    selected_scope = (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+    selected_by = str(selected_scope.get("selected_by") or "").strip()
+    if (
+        selected_by == "coarse_composition_reference"
+        and str(sanity.get("status") or "") in {"weak", "partial"}
+    ):
+        rho = selected_scope.get("coarse_reference_rho")
+        hits = selected_scope.get("coarse_reference_type_specific_hit_count")
+        evidence_bits = []
+        if isinstance(rho, (int, float)):
+            evidence_bits.append(f"top cancer-reference rho {float(rho):.2f}")
+        if isinstance(hits, int) and hits > 0:
+            evidence_bits.append(f"{hits} type-specific tumor-up hits")
+        if selected_scope.get("coarse_reference_tissue_tiebreak_applied"):
+            tissue = str(selected_scope.get("coarse_reference_primary_tissue") or "").strip()
+            tissue_score = selected_scope.get("coarse_reference_primary_tissue_score")
+            if tissue and isinstance(tissue_score, (int, float)):
+                tissue_label = tissue.replace("_", " ")
+                evidence_bits.append(
+                    f"{tissue_label} normal-tissue tie-break rho {float(tissue_score):.2f}"
+                )
+        evidence_clause = "; ".join(evidence_bits)
+        if evidence_clause:
+            evidence_clause = f" ({evidence_clause})"
+        lines.append(
+            "- **Interpretation**: this curated marker panel is a sanity check, "
+            "not the selecting evidence. The report label came from independent "
+            f"composition/reference evidence{evidence_clause}, so low conventional "
+            "lineage markers should be read as subtype/differentiation caveat."
+        )
 
     if high_rows:
         lines.append("")
@@ -5946,11 +6014,12 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         coarse_label = _cancer_label(coarse)
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         if distinct_reference_used and coarse == reference_cancer_code:
+            basis_label = _selected_report_scope_basis_label(analysis)
             bullets.append(
                 f"- **Coarse prior**: tissue composition screen is `{hvt.cancer_hint}` and its top "
                 f"cancer-reference match, {coarse_label}, agrees with the broad "
                 f"reference context; {_cancer_label(cancer_code)} remains the "
-                "report label from supplied or registry-level evidence."
+                f"report label from {basis_label}."
             )
         elif coarse == cancer_code:
             bullets.append(
@@ -6955,6 +7024,9 @@ def _generate_text_reports(
             lines.append(
                 f"- **Report label**: {_cancer_label(call_summary['label_options'][0])}"
             )
+            scope_caveat = _selected_report_scope_caveat(analysis)
+            if scope_caveat:
+                lines.append(f"- **Report-label caveat**: {scope_caveat}")
         else:
             lines.append(
                 "- **Possible report labels**: "
@@ -7767,6 +7839,13 @@ def _build_target_report(
                 )
                 if path_context:
                     parts.append(path_context)
+                conflict = therapy_rna_context_conflict(
+                    target_row,
+                    analysis=analysis,
+                    disease_state=disease_state,
+                )
+                if conflict:
+                    parts.append(conflict)
                 state_caution = therapy_state_caution(
                     target_row,
                     analysis=analysis,
@@ -7809,6 +7888,13 @@ def _build_target_report(
             )
             if path_context:
                 parts.append(path_context)
+            conflict = therapy_rna_context_conflict(
+                target_row,
+                analysis=analysis,
+                disease_state=disease_state,
+            )
+            if conflict:
+                parts.append(conflict)
             state_caution = therapy_state_caution(
                 target_row,
                 analysis=analysis,
@@ -8154,6 +8240,14 @@ def _build_target_report(
                     "preclinical": 4,
                 }
                 targets_sorted = targets_df.assign(
+                    _inactive_key=[
+                        1 if therapy_row_rna_context_inactive(
+                            trow,
+                            analysis=analysis,
+                            disease_state=disease_state,
+                        ) else 0
+                        for _, trow in targets_df.iterrows()
+                    ],
                     _path_key=[
                         therapy_path_rank(
                             trow,
@@ -8165,7 +8259,9 @@ def _build_target_report(
                     _phase_key=targets_df["phase"].map(
                         lambda p: phase_order.get(str(p), 99)
                     ),
-                ).sort_values(["_path_key", "_phase_key", "symbol", "agent"])
+                ).sort_values(
+                    ["_inactive_key", "_path_key", "_phase_key", "symbol", "agent"]
+                )
 
                 def _cell(value):
                     if value is None:

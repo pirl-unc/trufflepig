@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from trufflepig.cancer_type_centroid import (
+    _rankdata,
     centroid_correlations,
     coarse_lineage_scores,
     range_plausibility,
@@ -56,6 +57,16 @@ def _dec_cohort_as_sample(code):
     dec = tcga_deconvolved_expression(technical_rna_normalize=True)
     sub = dec[dec["cancer_code"].astype(str) == code]
     return dict(zip(sub["symbol"].astype(str), sub["tumor_tpm_median"].astype(float)))
+
+
+def test_rankdata_matches_average_rank_with_ties_and_nans():
+    out = _rankdata(np.array([3.0, np.nan, 1.0, 3.0, 2.0]))
+
+    assert out[0] == pytest.approx(3.5)
+    assert np.isnan(out[1])
+    assert out[2] == pytest.approx(1.0)
+    assert out[3] == pytest.approx(3.5)
+    assert out[4] == pytest.approx(2.0)
 
 
 @pytest.mark.parametrize("code", ["COAD", "PRAD", "BLCA", "BRCA", "BRCA_Basal"])

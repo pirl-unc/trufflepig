@@ -520,6 +520,24 @@ def test_fusion_expression_effects_use_tumor_tpm_when_available():
     assert myc["tumor_tpm"] == 60.0
 
 
+def test_rna_only_fusion_hypotheses_require_compatible_context():
+    from trufflepig.fusion_effects import infer_fusion_expression_hypotheses
+
+    sample = {"TFE3": 4.0, "ANGPTL2": 30.0, "VEGFA": 25.0}
+
+    acc_findings = infer_fusion_expression_hypotheses(sample, cancer_code="ACC")
+    assert all(
+        row["rule_id"] != "aspscr1_tfe3_asps_program" for row in acc_findings
+    )
+
+    sarc_findings = infer_fusion_expression_hypotheses(sample, cancer_code="SARC")
+    asps = next(
+        row for row in sarc_findings if row["rule_id"] == "aspscr1_tfe3_asps_program"
+    )
+    assert asps["status"] == "active"
+    assert {"ANGPTL2", "VEGFA"}.issubset(set(asps["observed_genes"]))
+
+
 def test_mutation_expression_effects_are_hypotheses_not_calls():
     from trufflepig.alteration_effects import infer_mutation_expression_hypotheses
 

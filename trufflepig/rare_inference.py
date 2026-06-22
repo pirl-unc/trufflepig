@@ -42,7 +42,67 @@ def _safe_bool(value: object, default: bool = False) -> bool:
     return text in {"1", "true", "yes", "y"}
 
 
-def _evaluate_rna_rule(rule, sample_tpm: dict[str, float], top_codes: list[str]):
+def _candidate_trace_supports(analysis) -> list[tuple[str, float]]:
+    trace = []
+    for idx, row in enumerate((analysis or {}).get("candidate_trace") or []):
+        if not hasattr(row, "get"):
+            continue
+        code = str(row.get("code") or "").strip()
+        if not code:
+            continue
+        support = _safe_float(
+            row.get("support_fraction_of_top"),
+            1.0 if idx == 0 else 0.0,
+        )
+        trace.append((code, support))
+    return trace
+
+
+def _rule_context_is_active(
+    rule,
+    *,
+    candidate_supports: list[tuple[str, float]],
+    context_codes: set[str],
+    context_top_k: int,
+) -> tuple[bool, list[str], float, str]:
+    context_slice = [code for code, _ in candidate_supports[:context_top_k] if code]
+    if not context_codes:
+        return True, context_slice, 1.0, "ungated"
+    if not candidate_supports:
+        return False, context_slice, 0.0, "missing_candidate_trace"
+
+    top_code = candidate_supports[0][0]
+    if top_code in context_codes:
+        return True, context_slice, 1.0, "top_context"
+
+    best_support = max(
+        (
+            support
+            for code, support in candidate_supports[:context_top_k]
+            if code in context_codes
+        ),
+        default=0.0,
+    )
+    promotes = _safe_bool(rule.get("promote_report_scope"), default=True)
+    # Promoting rare surrogates such as ADCC/MYB and NUTM1 may need a related
+    # parent cohort to be essentially tied rather than top-1. Non-promoting
+    # literature signatures are report annotations only, so they must stay
+    # inside the active top context and should not leak from loose top-5 overlap.
+    min_context_support = _safe_float(
+        rule.get("min_context_support_fraction"),
+        0.85 if promotes else 1.01,
+    )
+    if promotes and best_support >= min_context_support:
+        return True, context_slice, best_support, "near_top_context"
+    return False, context_slice, best_support, "context_not_active"
+
+
+def _evaluate_rna_rule(
+    rule,
+    sample_tpm: dict[str, float],
+    *,
+    candidate_supports: list[tuple[str, float]],
+):
     primary_gene = str(rule.get("primary_gene") or "").strip()
     if not primary_gene:
         return None
@@ -53,10 +113,16 @@ def _evaluate_rna_rule(rule, sample_tpm: dict[str, float], top_codes: list[str])
 
     context_codes = set(_split_semicolon(rule.get("context_codes")))
     context_top_k = _safe_int(rule.get("context_top_k"), 5)
-    context_slice = set(top_codes[:context_top_k])
-    context_match = not context_codes or bool(context_codes & context_slice)
+    context_match, context_slice, context_support, context_reason = (
+        _rule_context_is_active(
+            rule,
+            candidate_supports=candidate_supports,
+            context_codes=context_codes,
+            context_top_k=context_top_k,
+        )
+    )
     excluded_context_codes = set(_split_semicolon(rule.get("excluded_context_codes")))
-    excluded_context_match = bool(excluded_context_codes & context_slice)
+    excluded_context_match = bool(excluded_context_codes & set(context_slice))
     if not context_match or excluded_context_match:
         return None
 
@@ -70,7 +136,12 @@ def _evaluate_rna_rule(rule, sample_tpm: dict[str, float], top_codes: list[str])
         else:
             missing_support.append(gene)
     min_support = _safe_int(rule.get("min_support_genes"), 0)
+    code = str(rule.get("cancer_code") or "").strip().upper()
+    if code == "ADCC":
+        min_support = max(min_support, min(2, len(required_support)))
     support_pass = len(support_genes) >= min_support
+    if not support_pass:
+        return None
 
     absent_max = _safe_float(rule.get("absent_max_tpm"), 0.0)
     absent_confirmed = []
@@ -101,7 +172,9 @@ def _evaluate_rna_rule(rule, sample_tpm: dict[str, float], top_codes: list[str])
         "absent_genes_unconfirmed": absent_unconfirmed,
         "exclusion_genes_observed": exclusion_observed,
         "context_codes": sorted(context_codes),
-        "context_slice": [code for code in top_codes[:context_top_k] if code],
+        "context_slice": context_slice,
+        "context_support_fraction_of_top": context_support,
+        "context_match_reason": context_reason,
     }
 
 
@@ -128,6 +201,8 @@ class RareCancerRnaInference:
     min_support_genes: int = 0
     required_support_gene_count: int = 0
     promote_report_scope: bool = True
+    context_support_fraction_of_top: float = 0.0
+    context_match_reason: str = ""
 
     def public_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +221,11 @@ class RareCancerRnaInference:
             "required_support_gene_count": int(self.required_support_gene_count),
             "exclusion_genes_observed": list(self.exclusion_genes_observed),
             "absent_genes_confirmed": list(self.absent_genes_confirmed),
+            "context_support_fraction_of_top": round(
+                float(self.context_support_fraction_of_top),
+                4,
+            ),
+            "context_match_reason": self.context_match_reason,
             "basis": self.basis,
             "confirmatory_tests": self.confirmatory_tests,
             "caveat": self.caveat,
@@ -397,16 +477,16 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
     top_reference = (
         str(candidate_trace[0].get("code") or "").strip() if candidate_trace else ""
     )
-    top_codes = [
-        str(row.get("code") or "").strip()
-        for row in candidate_trace
-        if str(row.get("code") or "").strip()
-    ]
+    candidate_supports = _candidate_trace_supports(analysis)
 
     rules = rare_cancer_rna_surrogate_rules_df().fillna("")
     findings: list[dict[str, Any]] = []
     for _, rule in rules.iterrows():
-        evidence = _evaluate_rna_rule(rule, sample_tpm, top_codes)
+        evidence = _evaluate_rna_rule(
+            rule,
+            sample_tpm,
+            candidate_supports=candidate_supports,
+        )
         if evidence is None:
             continue
         findings.append(
@@ -429,14 +509,21 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
                 support_pass=bool(evidence["support_pass"]),
                 min_support_genes=int(evidence["min_support_genes"]),
                 required_support_gene_count=int(evidence["required_support_gene_count"]),
+                context_support_fraction_of_top=float(
+                    evidence.get("context_support_fraction_of_top") or 0.0
+                ),
+                context_match_reason=str(evidence.get("context_match_reason") or ""),
                 promote_report_scope=False,
             ).public_dict()
         )
+    confidence_rank = {"high": 2, "moderate": 1, "low": 0}
     findings.sort(
         key=lambda row: (
             len(row.get("support_genes") or []),
+            confidence_rank.get(str(row.get("confidence") or "").lower(), 0),
             float(row.get("surrogate_tpm") or 0.0)
             / max(float(row.get("threshold_tpm") or 1.0), 1e-9),
+            -len(row.get("missing_support_genes") or []),
         ),
         reverse=True,
     )
