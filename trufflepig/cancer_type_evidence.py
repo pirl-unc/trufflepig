@@ -338,6 +338,9 @@ class CancerTypeEvidence:
             "can_select_report_label": bool(self.can_select_report_label),
             "blocking_reasons": list(self.blocking_reasons),
             "metrics": metrics,
+            "lineage_path": _lineage_path_for_code(self.cancer_type),
+            "orthogonal_axes": _orthogonal_axes_for_hypothesis(self),
+            "evidence_channels": _hypothesis_evidence_channels(self),
             "basis": self.basis,
             "confirmatory_tests": self.confirmatory_tests,
             "caveat": self.caveat,
@@ -487,6 +490,39 @@ _RARE_RNA_POLICIES = {
 _DEFAULT_RARE_RNA_POLICY = RareRnaPolicy()
 
 
+@dataclass(frozen=True)
+class CancerTypeEvidenceChannel:
+    """One interpretable signal feeding the staged cancer-type decision."""
+
+    channel: str
+    stage: str
+    role: str
+    code: str = ""
+    context_code: str = ""
+    support: float = 0.0
+    status: str = "informative"
+    selects_report_label: bool = False
+    details: Mapping[str, Any] = field(default_factory=dict)
+
+    def public_dict(self) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "channel": self.channel,
+            "stage": self.stage,
+            "role": self.role,
+            "status": self.status,
+            "selects_report_label": bool(self.selects_report_label),
+        }
+        if self.code:
+            row["code"] = self.code
+        if self.context_code:
+            row["context_code"] = self.context_code
+        if self.support > 0:
+            row["support"] = round(float(self.support), 4)
+        if self.details:
+            row["details"] = dict(self.details)
+        return row
+
+
 def _clean(value: Any) -> str:
     if value is None:
         return ""
@@ -554,6 +590,226 @@ def _selection_method_label(selected_by: str) -> str:
         "rare_marker": "rna_marker_with_expression_context",
         "direct_fusion": "direct_fusion",
     }.get(selected_by, selected_by)
+
+
+def _registry_family_for_code(code: str) -> str:
+    row = _registry_by_code().get(_clean(code), {})
+    family = _clean(row.get("family")).lower()
+    if family:
+        return family
+    return _broad_lineage_for_code(code).lower()
+
+
+def _decision_stage_for_selector(selected_by: str) -> str:
+    if selected_by in {
+        "direct_fusion",
+        "fine_reference",
+        "local_expression_reference",
+        "lineage_panel",
+        "rare_marker",
+        "contrast_discriminator",
+    }:
+        return "exact_subtype"
+    if selected_by in {
+        "coarse_composition_reference",
+        "primary_expression_match",
+        "tumor_label_refinement",
+    }:
+        return "coarse_type"
+    return "unselected"
+
+
+def _decision_stage_for_hypothesis(
+    hypothesis: CancerTypeEvidence | None,
+) -> str:
+    if hypothesis is None:
+        return "unselected"
+    if hypothesis.details.get("local_reference_status_child_code"):
+        return "coarse_type"
+    return _decision_stage_for_selector(hypothesis.selected_by)
+
+
+def _channel_status(
+    hypothesis: CancerTypeEvidence,
+    *,
+    selector: str = "",
+    default: str = "informative",
+) -> str:
+    if (
+        selector
+        and hypothesis.can_select_report_label
+        and hypothesis.selected_by == selector
+    ):
+        return "selected_report_label"
+    if hypothesis.label_status == "blocked":
+        return "blocked"
+    return default
+
+
+def _channel_selects(
+    hypothesis: CancerTypeEvidence,
+    selector: str,
+) -> bool:
+    return bool(
+        selector
+        and hypothesis.can_select_report_label
+        and hypothesis.selected_by == selector
+    )
+
+
+def _hypothesis_evidence_channels(
+    hypothesis: CancerTypeEvidence,
+) -> list[dict[str, Any]]:
+    channels: list[CancerTypeEvidenceChannel] = []
+
+    def add(
+        *,
+        channel: str,
+        stage: str,
+        role: str,
+        support: float,
+        selector: str = "",
+        code: str = "",
+        context_code: str = "",
+        status: str = "",
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        if support <= 0 and not code and not context_code:
+            return
+        channels.append(
+            CancerTypeEvidenceChannel(
+                channel=channel,
+                stage=stage,
+                role=role,
+                code=code or hypothesis.cancer_type,
+                context_code=context_code,
+                support=support,
+                status=status
+                or _channel_status(hypothesis, selector=selector),
+                selects_report_label=_channel_selects(hypothesis, selector),
+                details=details or {},
+            )
+        )
+
+    add(
+        channel="bulk_rna",
+        stage="coarse_type",
+        role="primary_expression_candidate"
+        if hypothesis.broad_rna_rank == 1
+        else "expression_candidate",
+        support=hypothesis.broad_rna_support,
+        selector="primary_expression_match",
+        status="primary_context" if hypothesis.broad_rna_rank == 1 else "",
+        details={"rank": hypothesis.broad_rna_rank}
+        if hypothesis.broad_rna_rank is not None
+        else None,
+    )
+    add(
+        channel="bulk_rna",
+        stage="coarse_type",
+        role="related_expression_context",
+        support=hypothesis.related_context_support,
+        code=hypothesis.cancer_type,
+        context_code=hypothesis.related_context_code,
+        status="context_only",
+    )
+    add(
+        channel="composition_reference",
+        stage="coarse_type",
+        role="independent_tissue_composition",
+        support=hypothesis.coarse_composition_support,
+        selector="coarse_composition_reference",
+        details={
+            "rho": hypothesis.details.get("coarse_reference_rho"),
+            "margin": hypothesis.details.get("coarse_reference_margin"),
+            "type_specific_hits": hypothesis.details.get(
+                "coarse_reference_type_specific_hit_count"
+            ),
+        },
+    )
+    local_kind = str(hypothesis.details.get("local_reference_kind") or "")
+    exact_channel = (
+        "deconvolved_tumor_reference"
+        if local_kind == "deconvolved_tumor_reference"
+        else "exact_expression_reference"
+    )
+    orthogonal_axes = _orthogonal_axes_for_hypothesis(hypothesis)
+    exact_stage = "orthogonal_state" if orthogonal_axes else "exact_subtype"
+    exact_role = (
+        "orthogonal_status_reference"
+        if orthogonal_axes
+        else (
+            "tumor_program_reference"
+            if exact_channel == "deconvolved_tumor_reference"
+            else "exact_reference_match"
+        )
+    )
+    add(
+        channel=exact_channel,
+        stage=exact_stage,
+        role=exact_role,
+        support=hypothesis.fine_reference_support,
+        selector=hypothesis.selected_by
+        if hypothesis.selected_by in {"fine_reference", "local_expression_reference"}
+        else "",
+        context_code=hypothesis.reference_cancer_type,
+        details={
+            "reference_kind": local_kind,
+            "expression_source": hypothesis.details.get(
+                "local_reference_expression_source"
+            ),
+            "source_cohort": hypothesis.details.get("local_reference_source_cohort"),
+            "orthogonal_axes": orthogonal_axes,
+        },
+    )
+    add(
+        channel="marker_program",
+        stage="family",
+        role="family_marker_coherence",
+        support=hypothesis.family_marker_support,
+        selector="tumor_label_refinement",
+        details={
+            "family": hypothesis.details.get("tumor_label_family")
+            or _registry_family_for_code(hypothesis.cancer_type),
+        },
+    )
+    add(
+        channel="purity_attribution",
+        stage="coarse_type",
+        role="background_aware_tumor_label",
+        support=hypothesis.background_label_support,
+        selector="tumor_label_refinement",
+        context_code=hypothesis.details.get("competing_background_code") or "",
+        details={
+            "background_family": hypothesis.details.get("competing_background_family"),
+        },
+    )
+    add(
+        channel="rare_fusion_anchor",
+        stage="exact_subtype",
+        role="rna_marker_anchor",
+        support=hypothesis.rna_marker_support,
+        selector="rare_marker",
+        context_code=hypothesis.related_context_code,
+    )
+    add(
+        channel="rare_fusion_anchor",
+        stage="exact_subtype",
+        role="direct_fusion_anchor",
+        support=hypothesis.direct_fusion_support,
+        selector="direct_fusion",
+    )
+    add(
+        channel="contrast_discriminator",
+        stage="exact_subtype",
+        role="local_marker_discriminator",
+        support=hypothesis.contrast_discriminator_support,
+        selector="contrast_discriminator",
+        context_code=hypothesis.details.get("contrast_discriminator_context_code") or "",
+        details=hypothesis.details.get("contrast_discriminator_active_ambiguity")
+        or {},
+    )
+    return [channel.public_dict() for channel in channels]
 
 
 def _candidate_rows(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1124,6 +1380,51 @@ def _contrast_context_code(
     return (code, float(support)) if support > 0 else ("", 0.0)
 
 
+def _contrast_active_ambiguity(
+    *,
+    contrast: str,
+    type_a: str,
+    type_b: str,
+    winner_code: str,
+    context_code: str,
+    top_code: str,
+    primary_contexts: tuple[str, ...],
+    broad_uncertain: bool,
+    context_marker_incoherent: bool,
+    strong_signal: bool,
+) -> dict[str, Any]:
+    """Describe whether a contrast is local enough to select a label."""
+    top_participates = top_code in {type_a, type_b}
+    context_is_top = context_code == top_code
+    same_top = winner_code == top_code
+    same_context = winner_code == context_code
+    return {
+        "contrast": contrast,
+        "participants": [type_a, type_b],
+        "winner": winner_code,
+        "top_code": top_code,
+        "context_code": context_code,
+        "top_participates": bool(top_participates),
+        "context_is_top": bool(context_is_top),
+        "context_is_primary": bool(context_code in primary_contexts),
+        "same_top": bool(same_top),
+        "same_context": bool(same_context),
+        "broad_uncertain": bool(broad_uncertain),
+        "context_marker_incoherent": bool(context_marker_incoherent),
+        "strong_signal": bool(strong_signal),
+        "active_for_report_label": bool(
+            top_participates
+            and context_is_top
+            and not same_top
+            and (
+                same_context
+                or broad_uncertain
+                or context_marker_incoherent
+            )
+        ),
+    }
+
+
 def _add_contrast_discriminator_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
@@ -1217,6 +1518,18 @@ def _add_contrast_discriminator_features(
         context_marker_incoherent = bool(
             context_marker_coherence
             and not _marker_coherence_selection_grade(context_marker_coherence)
+        )
+        active_ambiguity = _contrast_active_ambiguity(
+            contrast=contrast,
+            type_a=type_a,
+            type_b=type_b,
+            winner_code=winner_code,
+            context_code=context_code,
+            top_code=top_code,
+            primary_contexts=primary_contexts,
+            broad_uncertain=broad_uncertain,
+            context_marker_incoherent=context_marker_incoherent,
+            strong_signal=strong_signal,
         )
         blockers: list[str] = []
         # If the contrast agrees with the current top broad RNA label, it is
@@ -1320,6 +1633,7 @@ def _add_contrast_discriminator_features(
                 "contrast_discriminator_margin": round(float(margin), 4),
                 "contrast_discriminator_strong_signal": bool(strong_signal),
                 "contrast_discriminator_broad_fit_label": fit_label,
+                "contrast_discriminator_active_ambiguity": active_ambiguity,
                 "contrast_discriminator_sources": winner_signal.get("sources") or [],
                 "contrast_discriminator_support_types": (
                     winner_signal.get("support_types") or []
@@ -1842,6 +2156,319 @@ def _is_molecular_status_expression_source(value: object) -> bool:
         "apl",
     }
     return bool((tokens & status_terms) or any(token.startswith("eln") for token in tokens))
+
+
+def _registry_row_for_code(code: str) -> dict[str, Any]:
+    return dict(_registry_by_code().get(_clean(code), {}))
+
+
+def _registry_parent_chain(code: str) -> tuple[str, ...]:
+    registry = _registry_by_code()
+    current = _clean(code)
+    seen: set[str] = set()
+    out: list[str] = []
+    while current and current not in seen:
+        seen.add(current)
+        parent = _clean(registry.get(current, {}).get("parent_code"))
+        if not parent:
+            break
+        out.append(parent)
+        current = parent
+    return tuple(out)
+
+
+def _code_suffix_for_parent(code: str, parent_code: str = "") -> str:
+    code_text = _clean(code)
+    parent_text = _clean(parent_code)
+    if parent_text and code_text.startswith(parent_text + "_"):
+        return code_text[len(parent_text) + 1 :]
+    if "_" in code_text:
+        return code_text.rsplit("_", 1)[-1]
+    return ""
+
+
+def _humanize_status_token(token: str) -> str:
+    token = _clean(token)
+    if not token:
+        return ""
+    acronyms = {
+        "MSI": "MSI-H / dMMR",
+        "MSS": "MSS / MMR-proficient",
+        "POLE": "POLE-ultramutated",
+        "CNH": "copy-number-high / p53-abnormal",
+        "CNL": "copy-number-low / NSMP",
+        "HPVpos": "HPV-positive",
+        "HPVneg": "HPV-negative",
+        "HER2": "HER2-enriched",
+        "LumA": "luminal A",
+        "LumB": "luminal B",
+        "MYCNamp": "MYCN-amplified",
+        "MYCNnonamp": "MYCN-non-amplified",
+        "ELNfav": "ELN favorable",
+        "ELNint": "ELN intermediate",
+        "ELNadv": "ELN adverse",
+    }
+    if token in acronyms:
+        return acronyms[token]
+    return token.replace("_", " ").replace("-", " ").strip()
+
+
+def _orthogonal_axes_for_code(
+    code: str,
+    *,
+    support: float = 0.0,
+    status: str = "informative",
+    evidence_source: str = "registry",
+    selects_report_label: bool = False,
+) -> list[dict[str, Any]]:
+    """Return molecular/status axes encoded by a registry child code.
+
+    Registry parent/ancestor links describe the diagnosis lineage. Some children
+    instead encode an orthogonal state (MSI/MSS, POLE, HPV, PAM50, mutation,
+    fusion, cytogenetic/risk group). Those states should annotate the lineage
+    call rather than force every cancer to model its own bespoke subtype tree.
+    """
+    code_text = _clean(code)
+    row = _registry_row_for_code(code_text)
+    if not code_text or not row:
+        return []
+
+    parent_code = _clean(row.get("parent_code"))
+    suffix = _code_suffix_for_parent(code_text, parent_code)
+    suffix_upper = suffix.upper()
+    expression_source = _clean(row.get("expression_source"))
+    source_cohort = _clean(row.get("source_cohort"))
+    name = _clean(row.get("name"))
+    notes = _clean(row.get("notes"))
+    viral_agent = _clean(row.get("viral_agent"))
+    viral_etiology = _clean(row.get("viral_etiology")).lower()
+    fusion_driver = _clean(row.get("fusion_driver"))
+    fusion_driven = _clean(row.get("fusion_driven")).lower()
+    text = " ".join(
+        part.lower()
+        for part in (
+            code_text,
+            suffix,
+            expression_source,
+            source_cohort,
+            name,
+            notes,
+            viral_agent,
+            fusion_driver,
+        )
+        if part
+    )
+
+    axes: list[dict[str, Any]] = []
+
+    def add_axis(
+        axis: str,
+        state: str,
+        *,
+        system: str = "",
+        state_code: str = "",
+        confidence: str = "registry",
+    ) -> None:
+        state_text = _clean(state) or _humanize_status_token(suffix)
+        if not axis or not state_text:
+            return
+        key = (axis, state_text)
+        if any((row["axis"], row["state"]) == key for row in axes):
+            return
+        axis_row: dict[str, Any] = {
+            "axis": axis,
+            "state": state_text,
+            "code": code_text,
+            "base_code": parent_code or code_text,
+            "parent_code": parent_code,
+            "ancestors": list(_registry_parent_chain(code_text)),
+            "evidence_source": evidence_source,
+            "status": status,
+            "selects_report_label": bool(selects_report_label),
+            "confidence": confidence,
+        }
+        if state_code:
+            axis_row["state_code"] = state_code
+        if system:
+            axis_row["system"] = system
+        if support > 0:
+            axis_row["support"] = round(float(support), 4)
+        axes.append(axis_row)
+
+    if suffix_upper in {"MSI", "MSS"} or "msi" in text or "mmr" in text:
+        state = (
+            "MSS / MMR-proficient"
+            if suffix_upper == "MSS"
+            or "microsatellite-stable" in text
+            or "mmr-proficient" in text
+            else "MSI-H / dMMR"
+        )
+        add_axis("mismatch_repair", state, system="MSI/MMR", state_code=suffix_upper)
+    if suffix_upper == "POLE" or "pole" in text:
+        add_axis("polymerase_epsilon", "POLE-ultramutated", system="TCGA molecular class")
+    if suffix_upper in {"CNH", "CNL"} or "copy-number" in text:
+        add_axis(
+            "copy_number_p53",
+            _humanize_status_token(suffix) or "copy-number state",
+            system="TCGA molecular class",
+            state_code=suffix_upper,
+        )
+    if suffix_upper.startswith("HPV") or viral_agent.upper() == "HPV":
+        state = (
+            "HPV-negative"
+            if suffix_upper.endswith("NEG") or "hpv-negative" in text
+            else "HPV-positive"
+        )
+        add_axis("viral_status", state, system="viral etiology", state_code=suffix)
+    elif viral_agent and viral_etiology in {"defining", "subtype"}:
+        add_axis("viral_status", viral_agent, system="viral etiology")
+    if (
+        "pam50" in expression_source.lower()
+        or code_text.startswith("BRCA_")
+        and suffix in {"Basal", "HER2", "LumA", "LumB", "Normal"}
+    ):
+        add_axis(
+            "expression_subtype",
+            _humanize_status_token(suffix),
+            system="PAM50",
+            state_code=suffix,
+        )
+    if "/mut" in expression_source.lower() or "mutation" in expression_source.lower():
+        add_axis(
+            "driver_mutation",
+            _humanize_status_token(suffix),
+            system=expression_source or "mutation-defined cohort",
+            state_code=suffix,
+        )
+    if suffix_upper.startswith("ELN") or suffix_upper == "APL":
+        add_axis(
+            "hematologic_risk_status",
+            _humanize_status_token(suffix),
+            system="hematologic molecular/risk group",
+            state_code=suffix,
+        )
+    if "MYCN" in suffix_upper:
+        add_axis(
+            "amplification_status",
+            _humanize_status_token(suffix),
+            system="copy-number/amplification",
+            state_code=suffix,
+        )
+    if suffix_upper in {"ASCL1", "NEUROD1", "POU2F3", "YAP1"}:
+        add_axis(
+            "transcriptional_state",
+            suffix,
+            system="transcription-factor dominance",
+            state_code=suffix,
+        )
+    if fusion_driver and parent_code and fusion_driven == "subtype":
+        add_axis("fusion_driver", fusion_driver, system="fusion")
+
+    if not axes and parent_code and _is_molecular_status_expression_source(
+        expression_source or source_cohort or code_text
+    ):
+        add_axis(
+            "molecular_status",
+            _humanize_status_token(suffix),
+            system=expression_source or source_cohort or "registry status child",
+            state_code=suffix,
+            confidence="inferred_from_registry_source",
+        )
+
+    return axes
+
+
+def _lineage_path_for_code(code: str) -> list[dict[str, Any]]:
+    code_text = _clean(code)
+    row = _registry_row_for_code(code_text)
+    if not code_text or not row:
+        return []
+    axes = _orthogonal_axes_for_code(code_text)
+    base_code = (
+        _clean(row.get("parent_code"))
+        if axes and _clean(row.get("parent_code"))
+        else code_text
+    )
+    base_row = _registry_row_for_code(base_code) or row
+    ancestors = list(_registry_parent_chain(base_code))
+    path: list[dict[str, Any]] = []
+    family = _clean(base_row.get("family") or row.get("family"))
+    if family:
+        path.append({"stage": "family", "family": family})
+    for idx, ancestor in enumerate(reversed(ancestors)):
+        path.append(
+            {
+                "stage": "coarse_type" if idx == 0 else "intermediate_type",
+                "code": ancestor,
+            }
+        )
+    if base_code:
+        stage = "exact_subtype" if ancestors else "coarse_type"
+        if not path or path[-1].get("code") != base_code:
+            path.append({"stage": stage, "code": base_code})
+    return path
+
+
+def _orthogonal_axes_for_hypothesis(
+    hypothesis: CancerTypeEvidence | None,
+) -> list[dict[str, Any]]:
+    if hypothesis is None:
+        return []
+    axes = _orthogonal_axes_for_code(
+        hypothesis.cancer_type,
+        support=max(
+            hypothesis.fine_reference_support,
+            hypothesis.rna_marker_support,
+            hypothesis.direct_fusion_support,
+        ),
+        status=(
+            "selected_report_label"
+            if hypothesis.can_select_report_label
+            else hypothesis.label_status or "informative"
+        ),
+        evidence_source=hypothesis.selected_by or "registry",
+        selects_report_label=hypothesis.can_select_report_label,
+    )
+    observed_fusion = _clean(hypothesis.details.get("fusion"))
+    if hypothesis.direct_fusion_support > 0 and observed_fusion:
+        axes.append(
+            {
+                "axis": "fusion_driver",
+                "state": observed_fusion,
+                "code": hypothesis.cancer_type,
+                "base_code": hypothesis.cancer_type,
+                "parent_code": "",
+                "ancestors": list(_registry_parent_chain(hypothesis.cancer_type)),
+                "evidence_source": "direct_fusion",
+                "status": "selected_report_label"
+                if hypothesis.can_select_report_label
+                else "informative",
+                "selects_report_label": bool(hypothesis.can_select_report_label),
+                "confidence": "observed_fusion",
+                "support": round(float(hypothesis.direct_fusion_support), 4),
+                "system": "fusion",
+            }
+        )
+    child_code = _clean(hypothesis.details.get("local_reference_status_child_code"))
+    if child_code and child_code != hypothesis.cancer_type:
+        axes.extend(
+            _orthogonal_axes_for_code(
+                child_code,
+                support=hypothesis.fine_reference_support,
+                status="supports_parent_label",
+                evidence_source="local_expression_reference",
+                selects_report_label=False,
+            )
+        )
+    unique: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for axis in axes:
+        key = (
+            str(axis.get("axis") or ""),
+            str(axis.get("state") or ""),
+            str(axis.get("code") or ""),
+        )
+        unique[key] = axis
+    return list(unique.values())
 
 
 def _hypothesis(
@@ -4114,6 +4741,133 @@ def _public_evidence_sort_key(evidence: CancerTypeEvidence):
     )
 
 
+def _post_label_context_channels(analysis: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Channels that are important context but must not select the diagnosis here."""
+    channels: list[CancerTypeEvidenceChannel] = []
+    decomp = analysis.get("decomposition_results") or []
+    if decomp:
+        best = decomp[0]
+        channels.append(
+            CancerTypeEvidenceChannel(
+                channel="deconvolution",
+                stage="coarse_type",
+                role="post_label_mixture_context",
+                code=str(getattr(best, "cancer_type", "") or ""),
+                context_code=str(getattr(best, "template", "") or ""),
+                support=_safe_float(getattr(best, "score", 0.0)),
+                status="not_used_for_report_label",
+                details={
+                    "purity": round(_safe_float(getattr(best, "purity", 0.0)), 4),
+                },
+            )
+        )
+    else:
+        channels.append(
+            CancerTypeEvidenceChannel(
+                channel="deconvolution",
+                stage="coarse_type",
+                role="post_label_mixture_context",
+                status="not_available_pre_label_selection",
+            )
+        )
+    channels.append(
+        CancerTypeEvidenceChannel(
+            channel="therapy_context",
+            stage="exact_subtype",
+            role="downstream_compatibility_check",
+            status="downstream_consumer_not_selector",
+        )
+    )
+    return [channel.public_dict() for channel in channels]
+
+
+def _build_staged_evidence_graph(
+    rows: list[CancerTypeEvidence],
+    selected: CancerTypeEvidence | None,
+    analysis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the serializable lineage graph plus orthogonal subtype axes."""
+    selected_code = selected.cancer_type if selected is not None else _top_code(analysis)
+    selected_by = selected.selected_by if selected is not None else ""
+    selected_stage = _decision_stage_for_hypothesis(selected)
+    selected_family = _registry_family_for_code(selected_code)
+    reference_code = (
+        selected.reference_cancer_type
+        if selected is not None and selected.reference_cancer_type
+        else selected_code
+    )
+    lineage_path = _lineage_path_for_code(selected_code)
+    selected_axes = _orthogonal_axes_for_hypothesis(selected)
+    expression_reference = (
+        selected.expression_reference_cancer_type
+        if selected is not None and selected.expression_reference_cancer_type
+        else reference_code
+    )
+    exact_selected = bool(selected is not None and selected_stage == "exact_subtype")
+
+    channels: list[dict[str, Any]] = []
+    for row in sorted(rows, key=_public_evidence_sort_key):
+        for channel in _hypothesis_evidence_channels(row):
+            channel = dict(channel)
+            channel["candidate_code"] = row.cancer_type
+            channels.append(channel)
+    channels.extend(_post_label_context_channels(analysis))
+
+    return {
+        "schema_version": 1,
+        "selection_order": ["family", "coarse_type", "exact_subtype"],
+        "orthogonal_axis_order": [
+            "mismatch_repair",
+            "polymerase_epsilon",
+            "copy_number_p53",
+            "viral_status",
+            "expression_subtype",
+            "driver_mutation",
+            "fusion_driver",
+        ],
+        "selected": {
+            "code": selected_code,
+            "family": selected_family,
+            "coarse_type": reference_code,
+            "expression_reference_cancer_type": expression_reference,
+            "selected_by": selected_by,
+            "stage": selected_stage,
+            "lineage_path": lineage_path,
+            "orthogonal_axes": selected_axes,
+        }
+        if selected_code
+        else None,
+        "stages": [
+            {
+                "stage": "family",
+                "status": "inferred" if selected_family else "not_resolved",
+                "family": selected_family,
+                "code": selected_code,
+                "basis": "registry_family_or_broad_lineage",
+            },
+            {
+                "stage": "coarse_type",
+                "status": "selected" if reference_code else "not_resolved",
+                "code": reference_code,
+                "basis": _selection_method_label(selected_by)
+                if selected_by
+                else "primary_expression_context",
+            },
+            {
+                "stage": "exact_subtype",
+                "status": "selected" if exact_selected else "not_resolved",
+                "code": selected_code if exact_selected else "",
+                "basis": _selection_method_label(selected_by)
+                if exact_selected
+                else "",
+            },
+        ],
+        "lineage_path": lineage_path,
+        "orthogonal_axes": selected_axes,
+        "channels": channels,
+    }
+
+
 def select_report_scope_from_evidence(
     df_expr,
     analysis: Mapping[str, Any],
@@ -4219,6 +4973,11 @@ def select_report_scope_from_evidence(
             row.public_dict()
             for row in sorted(rows, key=_public_evidence_sort_key)
         ],
+        "staged_evidence_graph": _build_staged_evidence_graph(
+            rows,
+            selected,
+            analysis,
+        ),
         "primary_expression_context": {
             "cancer_type": primary_context,
             "support": round(float(primary_context_support), 4),

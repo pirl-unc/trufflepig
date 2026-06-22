@@ -67,6 +67,56 @@ def test_nutm_rna_surrogate_promotes_in_squamous_context():
     assert result["selected"]["evidence_sources"] == ["rare_marker"]
     assert result["selected"]["can_select_report_label"] is True
     assert result["selected"]["metrics"]["rna_marker_support"] == 1.0
+    graph = result["staged_evidence_graph"]
+    assert graph["selection_order"] == ["family", "coarse_type", "exact_subtype"]
+    assert graph["selected"]["code"] == "NUTM"
+    assert graph["selected"]["stage"] == "exact_subtype"
+    assert graph["stages"][2]["status"] == "selected"
+    rare_channels = [
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "NUTM"
+        and row["channel"] == "rare_fusion_anchor"
+        and row["role"] == "rna_marker_anchor"
+    ]
+    assert rare_channels
+    assert rare_channels[0]["selects_report_label"] is True
+    assert rare_channels[0]["stage"] == "exact_subtype"
+    deconv = next(row for row in graph["channels"] if row["channel"] == "deconvolution")
+    assert deconv["status"] == "not_available_pre_label_selection"
+    therapy = next(row for row in graph["channels"] if row["channel"] == "therapy_context")
+    assert therapy["status"] == "downstream_consumer_not_selector"
+
+
+def test_registry_molecular_children_are_orthogonal_axes():
+    from trufflepig.cancer_type_evidence import (
+        _lineage_path_for_code,
+        _orthogonal_axes_for_code,
+    )
+
+    coad_axes = _orthogonal_axes_for_code("COAD_MSI")
+    read_axes = _orthogonal_axes_for_code("READ_MSI")
+    ucec_msi_axes = _orthogonal_axes_for_code("UCEC_MSI")
+    ucec_pole_axes = _orthogonal_axes_for_code("UCEC_POLE")
+
+    assert coad_axes[0]["axis"] == "mismatch_repair"
+    assert coad_axes[0]["state"] == "MSI-H / dMMR"
+    assert coad_axes[0]["base_code"] == "COAD"
+    assert coad_axes[0]["ancestors"] == ["COAD", "CRC"]
+    assert read_axes[0]["axis"] == "mismatch_repair"
+    assert read_axes[0]["base_code"] == "READ"
+    assert ucec_msi_axes[0]["axis"] == "mismatch_repair"
+    assert ucec_msi_axes[0]["base_code"] == "UCEC"
+    assert ucec_pole_axes[0]["axis"] == "polymerase_epsilon"
+
+    assert [row.get("code") or row.get("family") for row in _lineage_path_for_code("COAD_MSI")] == [
+        "carcinoma-gi",
+        "CRC",
+        "COAD",
+    ]
+    assert [row.get("code") or row.get("family") for row in _lineage_path_for_code("UCEC_MSI")] == [
+        "carcinoma-gu",
+        "UCEC",
+    ]
 
 
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
@@ -2014,6 +2064,14 @@ def test_molecular_status_expression_reference_promotes_parent_label(monkeypatch
     assert result["selected"]["cancer_type"] == "BRCA"
     assert result["selected"]["selected_by"] == "local_expression_reference"
     assert result["selected"]["local_reference_status_child_code"] == "BRCA_HER2"
+    graph = result["staged_evidence_graph"]
+    assert graph["selected"]["code"] == "BRCA"
+    assert graph["selected"]["stage"] == "coarse_type"
+    assert graph["stages"][2]["status"] == "not_resolved"
+    assert graph["orthogonal_axes"][0]["axis"] == "expression_subtype"
+    assert graph["orthogonal_axes"][0]["state"] == "HER2-enriched"
+    assert graph["orthogonal_axes"][0]["base_code"] == "BRCA"
+    assert graph["orthogonal_axes"][0]["status"] == "supports_parent_label"
     subtype = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA_HER2")
     assert subtype["can_select_report_label"] is False
     assert any("molecular-status expression reference" in reason for reason in subtype["blocking_reasons"])
@@ -3257,6 +3315,16 @@ def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(mo
     assert result["selected"]["selected_by"] == "contrast_discriminator"
     assert result["selected"]["contrast_discriminator_context_code"] == "PAAD"
     assert result["selected"]["metrics"]["contrast_discriminator_support"] > 0.8
+    graph = result["staged_evidence_graph"]
+    contrast_channel = next(
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "GBC"
+        and row["channel"] == "contrast_discriminator"
+    )
+    assert contrast_channel["selects_report_label"] is True
+    assert contrast_channel["details"]["active_for_report_label"] is True
+    assert contrast_channel["details"]["top_participates"] is True
+    assert contrast_channel["details"]["context_is_top"] is True
 
 
 def test_contrast_discriminator_blocks_marker_incoherent_override(monkeypatch):
@@ -3331,10 +3399,23 @@ def test_contrast_discriminator_requires_primary_context_for_cross_code_promotio
     assert gbc["label_decision"]["status"] == "blocked"
     assert gbc["contrast_discriminator_context_code"] == "PAAD"
     assert gbc["contrast_discriminator_context_is_primary"] is False
+    assert (
+        gbc["contrast_discriminator_active_ambiguity"]["active_for_report_label"]
+        is False
+    )
     assert any(
         "does not resolve the active top RNA context" in r
         for r in gbc["blocking_reasons"]
     )
+    graph = result["staged_evidence_graph"]
+    contrast_channel = next(
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "GBC"
+        and row["channel"] == "contrast_discriminator"
+    )
+    assert contrast_channel["selects_report_label"] is False
+    assert contrast_channel["status"] == "blocked"
+    assert contrast_channel["details"]["top_participates"] is False
 
 
 def test_same_top_contrast_does_not_outrank_exact_reference(monkeypatch):
