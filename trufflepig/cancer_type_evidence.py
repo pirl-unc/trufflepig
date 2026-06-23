@@ -166,6 +166,8 @@ _COARSE_REFERENCE_MIN_MARGIN = 0.03
 _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS = 2
 _COARSE_REFERENCE_TISSUE_TIE_WINDOW = 0.02
 _COARSE_REFERENCE_MIN_TISSUE_TIE_SCORE = 0.75
+_COARSE_REFERENCE_TISSUE_TIE_MIN_DELTA = 0.03
+_COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT = 0.75
 _CONTRAST_DISCRIMINATOR_MIN_CONTEXT_SUPPORT = 0.60
 _CONTRAST_DISCRIMINATOR_MIN_SCORE = 0.65
 _CONTRAST_DISCRIMINATOR_MIN_MARGIN = 0.25
@@ -601,6 +603,8 @@ def _registry_family_for_code(code: str) -> str:
 
 
 def _decision_stage_for_selector(selected_by: str) -> str:
+    # Selector stages are part of the staged_evidence_graph output contract.
+    # Add new selectors here when they first call consider_for_report_label.
     if selected_by in {
         "direct_fusion",
         "fine_reference",
@@ -885,6 +889,11 @@ def _primary_tissue_for_code(code: str) -> str:
     return str(CANCER_TO_TISSUE.get(_clean(code)) or "").strip()
 
 
+def _primary_tissue_key_for_code(code: str) -> str:
+    tissue = _primary_tissue_for_code(code)
+    return _clean(tissue).lower().replace(" ", "_")
+
+
 def _resolved_coarse_reference(analysis: Mapping[str, Any]) -> dict[str, Any]:
     pairs = _coarse_reference_pairs(analysis)
     if not pairs:
@@ -917,7 +926,8 @@ def _resolved_coarse_reference(analysis: Mapping[str, Any]) -> dict[str, Any]:
         if (
             best[0] != top_code
             and best_tissue_score >= _COARSE_REFERENCE_MIN_TISSUE_TIE_SCORE
-            and best_tissue_score > selected_tissue_score
+            and best_tissue_score
+            >= selected_tissue_score + _COARSE_REFERENCE_TISSUE_TIE_MIN_DELTA
         ):
             selected_code, selected_rho = best
             selected_tissue = best_tissue
@@ -938,6 +948,23 @@ def _resolved_coarse_reference(analysis: Mapping[str, Any]) -> dict[str, Any]:
         "tissue_tiebreak_applied": bool(tissue_tiebreak_applied),
         "close_codes": [code for code, _rho in close],
     }
+
+
+def _same_tissue_close_coarse_codes(resolved: Mapping[str, Any]) -> list[str]:
+    selected_code = _clean(resolved.get("code"))
+    selected_tissue = _primary_tissue_key_for_code(selected_code)
+    if not selected_code or not selected_tissue:
+        return []
+    out: list[str] = []
+    for code in resolved.get("close_codes") or []:
+        code = _clean(code)
+        if (
+            code
+            and code != selected_code
+            and _primary_tissue_key_for_code(code) == selected_tissue
+        ):
+            out.append(code)
+    return out
 
 
 def _marker_coherence(
@@ -1183,9 +1210,24 @@ def _strong_conflicting_coarse_reference(
     type_specific_count = (
         len(type_specific_hits) if type_specific_cohort == top_code else 0
     )
+    primary_tissue_score = _safe_float(resolved.get("primary_tissue_score"))
+    same_tissue_close_codes = _same_tissue_close_coarse_codes(resolved)
+    tissue_only_same_tissue_ambiguity = bool(
+        margin < _COARSE_REFERENCE_MIN_MARGIN
+        and type_specific_count < _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        and primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
+        and same_tissue_close_codes
+    )
+    if (
+        tissue_only_same_tissue_ambiguity
+        and _primary_tissue_key_for_code(code)
+        == _primary_tissue_key_for_code(top_code)
+    ):
+        return {}
     if (
         margin < _COARSE_REFERENCE_MIN_MARGIN
         and type_specific_count < _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        and primary_tissue_score < _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
         and not bool(resolved.get("tissue_tiebreak_applied"))
     ):
         return {}
@@ -1197,7 +1239,8 @@ def _strong_conflicting_coarse_reference(
         "type_specific_hit_count": type_specific_count,
         "fit_label": fit_label,
         "primary_tissue": resolved.get("primary_tissue") or "",
-        "primary_tissue_score": round(_safe_float(resolved.get("primary_tissue_score")), 4),
+        "primary_tissue_score": round(primary_tissue_score, 4),
+        "same_tissue_close_codes": list(same_tissue_close_codes),
         "tissue_tiebreak_applied": bool(resolved.get("tissue_tiebreak_applied")),
     }
 
@@ -2332,8 +2375,10 @@ def _orthogonal_axes_for_code(
         add_axis("viral_status", viral_agent, system="viral etiology")
     if (
         "pam50" in expression_source.lower()
-        or code_text.startswith("BRCA_")
-        and suffix in {"Basal", "HER2", "LumA", "LumB", "Normal"}
+        or (
+            code_text.startswith("BRCA_")
+            and suffix in {"Basal", "HER2", "LumA", "LumB", "Normal"}
+        )
     ):
         add_axis(
             "expression_subtype",
@@ -3089,6 +3134,14 @@ def _add_coarse_composition_reference_features(
     type_specific_count = (
         len(type_specific_hits) if type_specific_cohort == top_code else 0
     )
+    primary_tissue_score = _safe_float(resolved.get("primary_tissue_score"))
+    same_tissue_close_codes = _same_tissue_close_coarse_codes(resolved)
+    tissue_only_same_tissue_ambiguity = bool(
+        margin < _COARSE_REFERENCE_MIN_MARGIN
+        and type_specific_count < _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        and primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
+        and same_tissue_close_codes
+    )
 
     fit_quality = analysis.get("fit_quality") or {}
     fit_label = ""
@@ -3114,6 +3167,7 @@ def _add_coarse_composition_reference_features(
     has_specificity = (
         margin >= _COARSE_REFERENCE_MIN_MARGIN
         or type_specific_count >= _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        or primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
         or bool(resolved.get("tissue_tiebreak_applied"))
     )
 
@@ -3128,9 +3182,19 @@ def _add_coarse_composition_reference_features(
             "top cancer-reference composition lacks separation or type-specific "
             "tumor-up evidence"
         )
+    if tissue_only_same_tissue_ambiguity:
+        blockers.append(
+            "primary-tissue composition supports "
+            f"{resolved.get('primary_tissue') or 'the selected tissue'}, but "
+            f"does not distinguish {top_code} from same-tissue close cohort(s) "
+            f"{', '.join(same_tissue_close_codes)}; exact report-label "
+            "selection requires cancer-reference separation, type-specific "
+            "tumor-up evidence, or an exact-reference selector"
+        )
     if (
         broad_top_is_close_coarse_match
         and margin < _COARSE_REFERENCE_MIN_MARGIN
+        and primary_tissue_score < _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
         and not bool(resolved.get("tissue_tiebreak_applied"))
     ):
         blockers.append(
@@ -3186,9 +3250,10 @@ def _add_coarse_composition_reference_features(
             "coarse_reference_close_codes": close_codes,
             "coarse_reference_primary_tissue": resolved.get("primary_tissue") or "",
             "coarse_reference_primary_tissue_score": round(
-                _safe_float(resolved.get("primary_tissue_score")),
+                primary_tissue_score,
                 4,
             ),
+            "coarse_reference_same_tissue_close_codes": same_tissue_close_codes,
             "coarse_reference_tissue_tiebreak_applied": bool(
                 resolved.get("tissue_tiebreak_applied")
             ),
@@ -4330,6 +4395,22 @@ def _add_lineage_panel_features(
             "broad RNA ranking and coarse reference matching both support "
             f"{consensus_context}; lineage panel {top_panel} is noted as a "
             "program signal, not a cross-site report-label override"
+        )
+        can_promote = False
+    conflicting_coarse = (
+        _strong_conflicting_coarse_reference(analysis, code)
+        if can_promote and not same_code
+        else {}
+    )
+    if conflicting_coarse:
+        blockers.append(
+            "lineage panel program conflicts with independent composition "
+            f"reference {conflicting_coarse['code']} (rho "
+            f"{conflicting_coarse['rho']:.2f}; primary tissue "
+            f"{conflicting_coarse.get('primary_tissue') or 'unknown'} "
+            f"rho {conflicting_coarse.get('primary_tissue_score', 0.0):.2f}); "
+            "recorded as a program signal rather than a cross-site report-label "
+            "override"
         )
         can_promote = False
     marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)

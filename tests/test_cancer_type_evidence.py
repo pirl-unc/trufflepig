@@ -429,6 +429,90 @@ def test_composition_reference_tie_with_broad_winner_stays_contextual():
     assert any("tied with the first-pass RNA winner" in r for r in ucec["blocking_reasons"])
 
 
+def test_composition_reference_can_use_primary_normal_tissue_support():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("lung_nTPM", 0.87),
+            ("urinary_bladder_nTPM", 0.86),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("BLCA_TPM", 0.90),
+            ("BRCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"SFTPB": 450.0, "SCGB1A1": 4.5, "KRT5": 120.0}),
+        {
+            "cancer_type": "BRCA",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "BRCA", "support_fraction_of_top": 1.0},
+                {"code": "LUSC", "support_fraction_of_top": 0.99},
+                {"code": "BLCA", "support_fraction_of_top": 0.98},
+                {"code": "LUAD", "support_fraction_of_top": 0.94},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "LUAD"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    assert result["selected"]["coarse_reference_type_specific_hit_count"] == 0
+    assert result["selected"]["coarse_reference_primary_tissue"] == "lung"
+    assert result["selected"]["coarse_reference_primary_tissue_score"] == 0.87
+
+
+def test_composition_reference_preserves_raw_top_when_tissue_scores_are_tied():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("urinary_bladder_nTPM", 0.872),
+            ("lung_nTPM", 0.869),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("LUSC_TPM", 0.90),
+            ("BLCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"SFTPB": 450.0, "SCGB1A1": 4.5, "KRT5": 120.0}),
+        {
+            "cancer_type": "BRCA",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "LUSC", "support_fraction_of_top": 1.0},
+                {"code": "BRCA", "support_fraction_of_top": 0.99},
+                {"code": "BLCA", "support_fraction_of_top": 0.98},
+                {"code": "LUAD", "support_fraction_of_top": 0.97},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
+    assert luad["coarse_reference_raw_top_code"] == "LUAD"
+    assert luad["coarse_reference_tissue_tiebreak_applied"] is False
+    assert luad["can_select_report_label"] is False
+    assert luad["coarse_reference_same_tissue_close_codes"] == ["LUSC"]
+    assert any("does not distinguish LUAD from same-tissue" in r for r in luad["blocking_reasons"])
+
+
 def test_luad_marker_sanity_requires_program_breadth_not_two_singletons():
     from trufflepig.tumor_type_ontology import tumor_type_sanity_check
 
@@ -1889,6 +1973,75 @@ def test_lineage_panel_does_not_override_broad_coarse_consensus(monkeypatch):
         "code": "ESCA",
         "blockers": esca["blocking_reasons"],
     }
+
+
+def test_lineage_panel_does_not_override_strong_conflicting_composition(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.lineage_panels as lineage_panels
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    fake_panel = lineage_panels.LineagePanel(
+        name="BRCA_BASAL",
+        parent_cohort="BRCA",
+        high_markers=("KRT14", "KRT5", "FOXC1"),
+        obligate=("KRT14",),
+    )
+    fake_panel_evidence = SimpleNamespace(panel_name="BRCA_BASAL", score=0.9)
+
+    monkeypatch.setattr(evidence, "_local_expression_reference_panels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(lineage_panels, "LINEAGE_PANELS", (fake_panel,))
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (fake_panel_evidence,),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "summarize_evidence",
+        lambda _evidence: {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.9,
+            "margin_over_second": 0.9,
+            "top_rationale": "BRCA_BASAL: strong basal epithelial program",
+        },
+    )
+
+    analysis = _analysis(
+        ("LUSC", 1.0),
+        ("CESC", 0.99),
+        ("BRCA", 0.98),
+        ("LUAD", 0.94),
+    )
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("lung_nTPM", 0.87),
+            ("urinary_bladder_nTPM", 0.86),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("LUSC_TPM", 0.90),
+            ("BRCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"KRT14": 120.0, "KRT5": 80.0, "FOXC1": 30.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    brca = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA")
+    assert brca["can_select_report_label"] is False
+    assert any(
+        "lineage panel program conflicts with independent composition reference LUAD"
+        in reason
+        for reason in brca["blocking_reasons"]
+    )
 
 
 def test_mutation_defined_expression_reference_does_not_set_report_label(monkeypatch):
