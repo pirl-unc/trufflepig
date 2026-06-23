@@ -81,12 +81,13 @@ def test_normalize_to_reference_space_conforms_v4_to_fixed_fraction():
         {
             "Ensembl_Gene_ID": [
                 "ENSG00000210082",  # MT-RNR2 (mt-DNA, technical)
+                "ENSG00000089157",  # RPLP0 (ribosomal-protein compartment)
                 "ENSG00000119888",  # EPCAM
                 "ENSG00000108821",  # COL1A1
                 "ENSG00000075624",  # ACTB
             ],
-            "Symbol": ["MT-RNR2", "EPCAM", "COL1A1", "ACTB"],
-            "TPM": [150000.0, 50000.0, 200000.0, 500000.0],
+            "Symbol": ["MT-RNR2", "RPLP0", "EPCAM", "COL1A1", "ACTB"],
+            "TPM": [150000.0, 100000.0, 50000.0, 200000.0, 500000.0],
         }
     )
     label, idc = resolve_gene_columns(df)
