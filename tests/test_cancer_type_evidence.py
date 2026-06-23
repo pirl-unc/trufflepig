@@ -67,6 +67,96 @@ def test_nutm_rna_surrogate_promotes_in_squamous_context():
     assert result["selected"]["evidence_sources"] == ["rare_marker"]
     assert result["selected"]["can_select_report_label"] is True
     assert result["selected"]["metrics"]["rna_marker_support"] == 1.0
+    graph = result["staged_evidence_graph"]
+    assert graph["selection_order"] == ["family", "coarse_type", "exact_subtype"]
+    assert graph["selected"]["code"] == "NUTM"
+    assert graph["selected"]["stage"] == "exact_subtype"
+    assert graph["stages"][2]["status"] == "selected"
+    rare_channels = [
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "NUTM"
+        and row["channel"] == "rare_fusion_anchor"
+        and row["role"] == "rna_marker_anchor"
+    ]
+    assert rare_channels
+    assert rare_channels[0]["selects_report_label"] is True
+    assert rare_channels[0]["stage"] == "exact_subtype"
+    deconv = next(row for row in graph["channels"] if row["channel"] == "deconvolution")
+    assert deconv["status"] == "not_available_pre_label_selection"
+    therapy = next(row for row in graph["channels"] if row["channel"] == "therapy_context")
+    assert therapy["status"] == "downstream_consumer_not_selector"
+
+
+def test_registry_molecular_children_are_orthogonal_axes():
+    from trufflepig.cancer_type_evidence import (
+        _lineage_path_for_code,
+        _orthogonal_axes_for_code,
+    )
+
+    coad_axes = _orthogonal_axes_for_code("COAD_MSI")
+    read_axes = _orthogonal_axes_for_code("READ_MSI")
+    ucec_msi_axes = _orthogonal_axes_for_code("UCEC_MSI")
+    ucec_pole_axes = _orthogonal_axes_for_code("UCEC_POLE")
+
+    assert coad_axes[0]["axis"] == "mismatch_repair"
+    assert coad_axes[0]["state"] == "MSI-H / dMMR"
+    assert coad_axes[0]["base_code"] == "COAD"
+    assert coad_axes[0]["ancestors"] == ["COAD", "CRC"]
+    assert read_axes[0]["axis"] == "mismatch_repair"
+    assert read_axes[0]["base_code"] == "READ"
+    assert ucec_msi_axes[0]["axis"] == "mismatch_repair"
+    assert ucec_msi_axes[0]["base_code"] == "UCEC"
+    assert ucec_pole_axes[0]["axis"] == "polymerase_epsilon"
+
+    assert [row.get("code") or row.get("family") for row in _lineage_path_for_code("COAD_MSI")] == [
+        "carcinoma-gi",
+        "CRC",
+        "COAD",
+    ]
+    assert [row.get("code") or row.get("family") for row in _lineage_path_for_code("UCEC_MSI")] == [
+        "carcinoma-gu",
+        "UCEC",
+    ]
+
+
+def test_registry_status_mentions_do_not_create_orthogonal_axes():
+    from trufflepig.cancer_type_evidence import (
+        _lineage_path_for_code,
+        _orthogonal_axes_for_code,
+    )
+
+    for code in ("CRC", "COAD", "READ", "STAD", "MM"):
+        assert _orthogonal_axes_for_code(code) == []
+
+    assert [
+        row.get("code") or row.get("family") for row in _lineage_path_for_code("COAD")
+    ] == [
+        "carcinoma-gi",
+        "CRC",
+        "COAD",
+    ]
+
+
+def test_broad_only_channels_require_positive_signal():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("COAD", 1.0), ("READ", 0.8)),
+    )
+
+    selected_channels = result["selected"]["evidence_channels"]
+    assert [
+        (row["channel"], row["role"]) for row in selected_channels
+    ] == [("bulk_rna", "primary_expression_candidate")]
+
+    graph_channels = [
+        row for row in result["staged_evidence_graph"]["channels"]
+        if row.get("candidate_code") == "COAD"
+    ]
+    assert [
+        (row["channel"], row["role"]) for row in graph_channels
+    ] == [("bulk_rna", "primary_expression_candidate")]
 
 
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
@@ -337,6 +427,90 @@ def test_composition_reference_tie_with_broad_winner_stays_contextual():
     ucec = next(row for row in result["evidence"] if row["cancer_type"] == "UCEC")
     assert ucec["can_select_report_label"] is False
     assert any("tied with the first-pass RNA winner" in r for r in ucec["blocking_reasons"])
+
+
+def test_composition_reference_can_use_primary_normal_tissue_support():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("lung_nTPM", 0.87),
+            ("urinary_bladder_nTPM", 0.86),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("BLCA_TPM", 0.90),
+            ("BRCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"SFTPB": 450.0, "SCGB1A1": 4.5, "KRT5": 120.0}),
+        {
+            "cancer_type": "BRCA",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "BRCA", "support_fraction_of_top": 1.0},
+                {"code": "LUSC", "support_fraction_of_top": 0.99},
+                {"code": "BLCA", "support_fraction_of_top": 0.98},
+                {"code": "LUAD", "support_fraction_of_top": 0.94},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "LUAD"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    assert result["selected"]["coarse_reference_type_specific_hit_count"] == 0
+    assert result["selected"]["coarse_reference_primary_tissue"] == "lung"
+    assert result["selected"]["coarse_reference_primary_tissue_score"] == 0.87
+
+
+def test_composition_reference_preserves_raw_top_when_tissue_scores_are_tied():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("urinary_bladder_nTPM", 0.872),
+            ("lung_nTPM", 0.869),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("LUSC_TPM", 0.90),
+            ("BLCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"SFTPB": 450.0, "SCGB1A1": 4.5, "KRT5": 120.0}),
+        {
+            "cancer_type": "BRCA",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "LUSC", "support_fraction_of_top": 1.0},
+                {"code": "BRCA", "support_fraction_of_top": 0.99},
+                {"code": "BLCA", "support_fraction_of_top": 0.98},
+                {"code": "LUAD", "support_fraction_of_top": 0.97},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
+    assert luad["coarse_reference_raw_top_code"] == "LUAD"
+    assert luad["coarse_reference_tissue_tiebreak_applied"] is False
+    assert luad["can_select_report_label"] is False
+    assert luad["coarse_reference_same_tissue_close_codes"] == ["LUSC"]
+    assert any("does not distinguish LUAD from same-tissue" in r for r in luad["blocking_reasons"])
 
 
 def test_luad_marker_sanity_requires_program_breadth_not_two_singletons():
@@ -1801,6 +1975,75 @@ def test_lineage_panel_does_not_override_broad_coarse_consensus(monkeypatch):
     }
 
 
+def test_lineage_panel_does_not_override_strong_conflicting_composition(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.lineage_panels as lineage_panels
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    fake_panel = lineage_panels.LineagePanel(
+        name="BRCA_BASAL",
+        parent_cohort="BRCA",
+        high_markers=("KRT14", "KRT5", "FOXC1"),
+        obligate=("KRT14",),
+    )
+    fake_panel_evidence = SimpleNamespace(panel_name="BRCA_BASAL", score=0.9)
+
+    monkeypatch.setattr(evidence, "_local_expression_reference_panels", lambda *args, **kwargs: {})
+    monkeypatch.setattr(lineage_panels, "LINEAGE_PANELS", (fake_panel,))
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (fake_panel_evidence,),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "summarize_evidence",
+        lambda _evidence: {
+            "top_panel": "BRCA_BASAL",
+            "top_score": 0.9,
+            "margin_over_second": 0.9,
+            "top_rationale": "BRCA_BASAL: strong basal epithelial program",
+        },
+    )
+
+    analysis = _analysis(
+        ("LUSC", 1.0),
+        ("CESC", 0.99),
+        ("BRCA", 0.98),
+        ("LUAD", 0.94),
+    )
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("lung_nTPM", 0.87),
+            ("urinary_bladder_nTPM", 0.86),
+            ("esophagus_nTPM", 0.84),
+        ],
+        top_tcga_cohorts=[
+            ("LUAD_TPM", 0.91),
+            ("LUSC_TPM", 0.90),
+            ("BRCA_TPM", 0.89),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"KRT14": 120.0, "KRT5": 80.0, "FOXC1": 30.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "LUSC"
+    brca = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA")
+    assert brca["can_select_report_label"] is False
+    assert any(
+        "lineage panel program conflicts with independent composition reference LUAD"
+        in reason
+        for reason in brca["blocking_reasons"]
+    )
+
+
 def test_mutation_defined_expression_reference_does_not_set_report_label(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
@@ -2014,6 +2257,14 @@ def test_molecular_status_expression_reference_promotes_parent_label(monkeypatch
     assert result["selected"]["cancer_type"] == "BRCA"
     assert result["selected"]["selected_by"] == "local_expression_reference"
     assert result["selected"]["local_reference_status_child_code"] == "BRCA_HER2"
+    graph = result["staged_evidence_graph"]
+    assert graph["selected"]["code"] == "BRCA"
+    assert graph["selected"]["stage"] == "coarse_type"
+    assert graph["stages"][2]["status"] == "not_resolved"
+    assert graph["orthogonal_axes"][0]["axis"] == "expression_subtype"
+    assert graph["orthogonal_axes"][0]["state"] == "HER2-enriched"
+    assert graph["orthogonal_axes"][0]["base_code"] == "BRCA"
+    assert graph["orthogonal_axes"][0]["status"] == "supports_parent_label"
     subtype = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA_HER2")
     assert subtype["can_select_report_label"] is False
     assert any("molecular-status expression reference" in reason for reason in subtype["blocking_reasons"])
@@ -3257,6 +3508,16 @@ def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(mo
     assert result["selected"]["selected_by"] == "contrast_discriminator"
     assert result["selected"]["contrast_discriminator_context_code"] == "PAAD"
     assert result["selected"]["metrics"]["contrast_discriminator_support"] > 0.8
+    graph = result["staged_evidence_graph"]
+    contrast_channel = next(
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "GBC"
+        and row["channel"] == "contrast_discriminator"
+    )
+    assert contrast_channel["selects_report_label"] is True
+    assert contrast_channel["details"]["active_for_report_label"] is True
+    assert contrast_channel["details"]["top_participates"] is True
+    assert contrast_channel["details"]["context_is_top"] is True
 
 
 def test_contrast_discriminator_blocks_marker_incoherent_override(monkeypatch):
@@ -3331,10 +3592,23 @@ def test_contrast_discriminator_requires_primary_context_for_cross_code_promotio
     assert gbc["label_decision"]["status"] == "blocked"
     assert gbc["contrast_discriminator_context_code"] == "PAAD"
     assert gbc["contrast_discriminator_context_is_primary"] is False
+    assert (
+        gbc["contrast_discriminator_active_ambiguity"]["active_for_report_label"]
+        is False
+    )
     assert any(
         "does not resolve the active top RNA context" in r
         for r in gbc["blocking_reasons"]
     )
+    graph = result["staged_evidence_graph"]
+    contrast_channel = next(
+        row for row in graph["channels"]
+        if row.get("candidate_code") == "GBC"
+        and row["channel"] == "contrast_discriminator"
+    )
+    assert contrast_channel["selects_report_label"] is False
+    assert contrast_channel["status"] == "blocked"
+    assert contrast_channel["details"]["top_participates"] is False
 
 
 def test_same_top_contrast_does_not_outrank_exact_reference(monkeypatch):

@@ -9,6 +9,24 @@ but this project does not version-tag releases yet — entries are grouped
 under the merging PR title and the date the breaking change landed on
 `main`.
 
+## Unreleased — staged cancer-type evidence graph
+
+### New surface
+
+- `cancer_type_evidence` now includes a `staged_evidence_graph` with a
+  registry-derived lineage path plus a family -> coarse_type -> exact_subtype
+  selection order. Molecular/status labels such as MSI/MSS, POLE, HPV, PAM50,
+  mutation-defined cohorts, cytogenetic/risk groups, and observed fusion drivers
+  are exposed as orthogonal axes rather than forced into the lineage tree.
+- Evidence rows now expose separate channels for bulk RNA, composition
+  reference, exact/deconvolved expression references, marker programs,
+  rare/fusion anchors, purity/background attribution, deconvolution context,
+  and therapy-context compatibility.
+- Contrast-discriminator evidence now records an explicit
+  `contrast_discriminator_active_ambiguity` block so reports and audits can
+  distinguish local top-code ambiguity resolution from coarse/secondary-context
+  marker evidence that should be recorded but not select the report label.
+
 ## Unreleased — hierarchical compartment→leaf cancer-type call (PR #86)
 
 ### Behavior change
