@@ -4754,7 +4754,7 @@ def _add_rare_marker_features(
     )
     if complete_context_gated_marker_axis:
         priority_class = 3
-        priority_strength = max(marker_context_support, marker_support)
+        priority_strength = max(marker_context_support, priority_strength)
     if fusion_defined_code and has_local_exact_support:
         priority_class = max(priority_class, 2)
         priority_strength = max(
@@ -4762,6 +4762,24 @@ def _add_rare_marker_features(
             0.5 * marker_context_support + 0.5 * hypothesis.fine_reference_support,
             priority_strength,
         )
+    if (
+        fusion_defined_code
+        and rule_promotes
+        and not has_direct_fusion
+        and bool(strong_rna_surrogate.get("strong"))
+    ):
+        priority_class = max(priority_class, 3)
+        # NUTM1 is highly discriminative for NUT carcinoma in compatible RNA
+        # context. Other fusion-defined RNA surrogates such as MYB remain
+        # combined marker/context evidence because the primary marker is less
+        # specific as a single-gene anchor.
+        anchor_strength = marker_support if code == "NUTM" else marker_context_support
+        priority_strength = max(
+            anchor_strength,
+            marker_context_support,
+            priority_strength,
+        )
+        hypothesis.details["fusion_defined_rna_anchor"] = dict(strong_rna_surrogate)
 
     hypothesis.consider_for_report_label(
         selected_by="rare_marker",

@@ -513,7 +513,10 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
                     evidence.get("context_support_fraction_of_top") or 0.0
                 ),
                 context_match_reason=str(evidence.get("context_match_reason") or ""),
-                promote_report_scope=False,
+                promote_report_scope=_safe_bool(
+                    rule.get("promote_report_scope"),
+                    default=True,
+                ),
             ).public_dict()
         )
     confidence_rank = {"high": 2, "moderate": 1, "low": 0}
