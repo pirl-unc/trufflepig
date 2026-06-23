@@ -242,6 +242,92 @@ def test_generated_nutm_anchor_beats_adcc_local_reference(monkeypatch):
     assert "local_expression_reference" in adcc["evidence_sources"]
 
 
+def test_strong_myb_adcc_surrogate_is_not_single_gene_anchor():
+    import trufflepig.cancer_type_evidence as evidence
+
+    hypotheses = {}
+    evidence._add_rare_marker_features(
+        hypotheses,
+        {
+            "cancer_type": "ADCC",
+            "rule_id": "adcc_myb",
+            "surrogate": "MYB",
+            "surrogate_tpm": 90.0,
+            "threshold_tpm": 10.0,
+            "support_genes": [],
+            "missing_support_genes": [],
+            "support_pass": True,
+            "support_gene_count": 0,
+            "min_support_genes": 0,
+            "required_support_gene_count": 0,
+        },
+        _analysis(("HNSC", 1.0), ("LUAD", 0.8)),
+        {"MYB": 90.0},
+    )
+
+    adcc = hypotheses["ADCC"]
+    assert adcc.can_select_report_label is True
+    assert adcc.selection_priority[0] == 1
+    assert "fusion_defined_rna_anchor" not in adcc.details
+
+
+def test_complete_context_gated_marker_axis_keeps_context_weighted_strength():
+    import trufflepig.cancer_type_evidence as evidence
+
+    hypotheses = {}
+    analysis = _analysis(("LUSC", 1.0), ("THCA", 0.95), ("HNSC", 0.9))
+    sample = {
+        "NUTM1": 10.0,
+        "CALCA": 600.0,
+        "CHGA": 200.0,
+        "SYP": 180.0,
+        "RET": 120.0,
+    }
+    evidence._add_rare_marker_features(
+        hypotheses,
+        {
+            "cancer_type": "MTC",
+            "rule_id": "mtc_calca",
+            "surrogate": "CALCA",
+            "surrogate_tpm": 600.0,
+            "threshold_tpm": 10.0,
+            "support_genes": ["CHGA", "SYP", "RET"],
+            "missing_support_genes": [],
+            "support_pass": True,
+            "support_gene_count": 3,
+            "min_support_genes": 1,
+            "required_support_gene_count": 3,
+        },
+        analysis,
+        sample,
+    )
+    evidence._add_rare_marker_features(
+        hypotheses,
+        {
+            "cancer_type": "NUTM",
+            "rule_id": "nutm_nutm1",
+            "surrogate": "NUTM1",
+            "surrogate_tpm": 10.0,
+            "threshold_tpm": 100.0 / 9.0,
+            "support_genes": [],
+            "missing_support_genes": [],
+            "support_pass": True,
+            "support_gene_count": 0,
+            "min_support_genes": 0,
+            "required_support_gene_count": 0,
+        },
+        analysis,
+        sample,
+    )
+
+    mtc = hypotheses["MTC"]
+    nutm = hypotheses["NUTM"]
+    assert mtc.selection_priority[0] == 3
+    assert abs(mtc.selection_priority[1] - 0.8275) < 1e-9
+    assert nutm.selection_priority[0] == 3
+    assert nutm.selection_priority[1] > mtc.selection_priority[1]
+
+
 def test_nutm_rna_surrogate_blocks_from_mesenchymal_top_context():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

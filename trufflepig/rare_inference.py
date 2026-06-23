@@ -461,10 +461,11 @@ def infer_rare_cancer_report_scope_from_rna(df_expr, analysis):
 
 
 def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict[str, Any]]:
-    """Return non-promoting rare-cancer RNA marker hypotheses.
+    """Return data-backed rare-cancer RNA marker hypotheses.
 
-    These markers are useful testing prompts but are not specific enough to
-    replace the RNA classifier/report scope by themselves.
+    Promoting rules are candidate report-scope hypotheses for the unified
+    cancer-type evidence selector. Non-promoting literature/signature rules are
+    emitted as diagnostic prompts and annotations only.
     """
     try:
         from .common import build_sample_tpm_by_symbol
