@@ -73,7 +73,11 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
     of centered per-arm log2-ratios vs the (diploid) reference; higher = more aneuploid.
     Pass a tumor-only residual to score the *tumor* compartment specifically.
     """
-    arms = gene_arm_map()
+    try:
+        arms = gene_arm_map()
+    except Exception:  # noqa: BLE001 — needs pyensembl + an installed GRCh37 genome; optional
+        return {"score": float("nan"), "n_arms": 0, "arm_profile": {},
+                "top_gained": [], "top_lost": [], "note": "gene-arm map unavailable (pyensembl/genome)"}
     sample = pd.Series(dict(sample_tpm_by_symbol), dtype=float)
     ref = (pd.Series(dict(reference_tpm_by_symbol), dtype=float)
            if reference_tpm_by_symbol is not None else _diploid_reference())

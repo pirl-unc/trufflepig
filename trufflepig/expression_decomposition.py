@@ -191,7 +191,8 @@ def _safe(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
 
-def _score(sample: pd.Series, gene_symbols, space: str = "percentile") -> float:
+def signature_score(sample: pd.Series, gene_symbols, space: str = "percentile") -> float:
+    """Enrichment of a gene set in a sample, in ``percentile`` (default) or ``ssgsea`` space."""
     present = [g for g in gene_symbols if g in sample.index]
     if not present:
         return float("nan")
@@ -220,7 +221,7 @@ def _collinearity(templates, genes) -> float:
 
 def _heme_immune(sample, signatures, space, type_code):
     """Determine the malignant immune sub-lineage and the healthy ones to subtract."""
-    scores = {sl: _score(sample, signatures[sl], space) for sl in _SUBLINEAGES}
+    scores = {sl: signature_score(sample, signatures[sl], space) for sl in _SUBLINEAGES}
     if type_code and type_code in HEME_MALIGNANT:
         malignant, source = HEME_MALIGNANT[type_code], "type-map"
     else:
@@ -249,7 +250,8 @@ def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
     return keys, info
 
 
-def _decompose_mode(mode, sample, templates, signatures, space, type_code, met_sites):
+def decompose_mode(mode, sample, templates, signatures, space, type_code, met_sites):
+    """Run one lineage mode's NNLS background subtraction → (metrics, residual, info)."""
     from scipy.optimize import nnls
 
     keys, info = _subtract_keys(mode, sample, signatures, space, type_code, met_sites)
@@ -263,17 +265,29 @@ def _decompose_mode(mode, sample, templates, signatures, space, type_code, met_s
     total = float(sample.sum()) or 1.0
     metrics = {"purity": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
-               "tumor_lineage_in_residual": round(_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
+               "tumor_lineage_in_residual": round(signature_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3)}
     return metrics, residual, info
 
 
-def _characterize(residual, signatures, space, mode, heme_info):
-    """Tumor sub-population characteristics on the (purity-corrected) residual."""
-    from .aneuploidy_axis import aneuploidy_score
+def characterize_residual(residual, *, mode: str = "solid", space: str = "percentile",
+                          signatures=None, heme_info=None) -> dict:
+    """Tumor sub-population characteristics for a residual (``{symbol: TPM}`` or Series).
 
-    prolif = _score(residual, signatures["proliferation"], space)
-    aneu = aneuploidy_score(residual.to_dict())
+    Proliferation (cell-cycle) + aneuploidy (chromosome-arm coherence) + heme sub-lineage.
+    Aneuploidy needs :mod:`trufflepig.aneuploidy_axis` (pyensembl); if it is unavailable it
+    degrades gracefully (``aneuploidy_score=None``) rather than raising.
+    """
+    if signatures is None:
+        _, signatures = _refs()
+    if not isinstance(residual, pd.Series):
+        residual = _safe(pd.Series(dict(residual), dtype=float))
+    prolif = signature_score(residual, signatures["proliferation"], space)
+    try:
+        from .aneuploidy_axis import aneuploidy_score
+        aneu = aneuploidy_score(residual.to_dict())
+    except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) optional; degrade gracefully
+        aneu = {"score": float("nan"), "top_gained": [], "top_lost": []}
     proliferative = bool(not np.isnan(prolif) and prolif >= _PROLIFERATIVE_PCTL)
     aneuploid = bool(not np.isnan(aneu["score"]) and aneu["score"] >= _ANEUPLOIDY_STRONG)
     support = ([s for s, ok in (("proliferation", proliferative), ("aneuploidy", aneuploid)) if ok] or ["weak"])
@@ -322,7 +336,7 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
                                                    else ["solid", "mesenchymal", "heme", "embryonal"])
     out, residuals, heme_infos = {}, {}, {}
     for m in modes:
-        metrics, residual, info = _decompose_mode(m, sample, templates, signatures, space, type_code, met_sites)
+        metrics, residual, info = decompose_mode(m, sample, templates, signatures, space, type_code, met_sites)
         out[m], residuals[m], heme_infos[m] = metrics, residual, info
 
     if mode is not None:
@@ -338,7 +352,8 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
         return {"selected_mode": None, "routing": routing, "confidence": "no decomposition produced"}
 
     sel = out[selected]
-    characteristics = _characterize(residuals[selected], signatures, space, selected, heme_infos.get(selected))
+    characteristics = characterize_residual(residuals[selected], mode=selected, space=space,
+                                            signatures=signatures, heme_info=heme_infos.get(selected))
     note = next((v for k, v in _MOL_SUBTYPE_NOTE.items() if str(cancer or "").upper().endswith(k)), None)
     purity = {"decomposition_purity": sel.get("purity"),
               "subtracted_fractions": sel.get("subtracted", {}),
