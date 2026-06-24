@@ -60,10 +60,66 @@ measured on the purity-corrected **residual** — the decomposition is what make
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, TypedDict
 
 import numpy as np
 import pandas as pd
+
+
+# ── output contract (documents the result shape; structural, not enforced at runtime) ──
+class ModeMetrics(TypedDict, total=False):
+    residual_fraction: float | None          # residual mass fraction under this mode
+    subtracted: dict[str, float]             # background → subtracted fraction
+    tumor_lineage_in_residual: float | None  # mode tumor-signature score on the residual (routing tiebreak)
+    template_collinearity: float             # identifiability: max |cosine| of subtracted templates
+    note: str
+
+
+class Corroborators(TypedDict):
+    aneuploidy_amplitude_bulk: float | None  # purity-scaled (∝ purity), noise-floor-subtracted; bulk
+    restricted_marker_burden: dict           # germline/CTA burden → purity floor
+
+
+class PurityBlock(TypedDict):
+    residual_fraction: float | None          # primary (lineage-routed; not yet absolute purity)
+    subtracted_fractions: dict[str, float]
+    corroborators: Corroborators
+    consistency_flags: list[str]
+    note: str
+
+
+class TumorCharacteristics(TypedDict, total=False):
+    proliferation_percentile: float | None
+    proliferative: bool
+    aneuploidy_score: float | None           # RESIDUAL aneuploidy (characterization, not purity)
+    aneuploid: bool
+    aneuploidy_arms_gained: list[str]
+    aneuploidy_arms_lost: list[str]
+    malignancy_support: str                  # "proliferation+aneuploidy" / … / "weak"
+    tumor_lineage_signature: str
+    tumor_lineage_signature_score: float | None
+    heme_sublineage: dict
+
+
+class LineageInfo(TypedDict):
+    compartment: str | None
+    mode: str
+    type_code: str | None
+    routing: str
+    confidence: str
+
+
+class DecompositionResult(TypedDict, total=False):
+    selected_mode: str | None
+    lineage: LineageInfo
+    routing: str
+    confidence: str
+    classifier: dict | None
+    space: str
+    subtype_note: str | None
+    purity: PurityBlock
+    tumor_characteristics: TumorCharacteristics
+    modes: dict[str, ModeMetrics]
 
 # --- malignancy / lineage signatures (symbol space) ---
 PROLIFERATION = ("MKI67","CCNB1","CCNB2","CDK1","TOP2A","BUB1","AURKA","AURKB","PLK1","CENPA",
@@ -105,11 +161,16 @@ HEME_MALIGNANT = {
     "MM": "plasma", "CTCL": "t_cell",
     "LAML": "myeloid", "CML": "myeloid", "MDS": "myeloid", "MPN": "myeloid",
 }
-MODE_SUBTRACT = {"solid": ("immune", "stromal"),
-                 "mesenchymal": ("immune", "epithelial"),
-                 "heme": ("epithelial", "stromal"),       # + healthy immune sub-lineages, added per-sample
-                 "embryonal": ("immune",)}
-MODE_TUMOR_SIG = {"solid": "epithelial", "mesenchymal": "stromal", "heme": "immune", "embryonal": "proliferation"}
+# Each decomposition MODE: the non-tumor backgrounds it subtracts (NNLS templates), and the
+# signature its residual is validated against by default (a finer compartment signature overrides
+# it — see _COMPARTMENTS). `heme` additionally subtracts the *healthy* immune sub-lineages,
+# determined per sample, keeping the malignant one as tumor.
+_MODES = {
+    "solid":       {"subtract": ("immune", "stromal"),     "tumor_sig": "epithelial"},
+    "mesenchymal": {"subtract": ("immune", "epithelial"),  "tumor_sig": "stromal"},
+    "heme":        {"subtract": ("epithelial", "stromal"), "tumor_sig": "immune"},
+    "embryonal":   {"subtract": ("immune",),               "tumor_sig": "proliferation"},
+}
 _MET_PRIMARY_LINEAGE = {"liver": {"LIHC", "HEPB", "CHOL"}, "lung": {"LUAD", "LUSC", "SCLC", "MESO"},
                         "brain": {"GBM", "LGG"}, "marrow": set()}  # marrow guarded by heme mode
 _MOL_SUBTYPE_NOTE = {"MSI": "MSI/dMMR — high immune infiltrate is real biology, not contamination.",
@@ -126,8 +187,19 @@ NEUROENDOCRINE = ("CHGA", "CHGB", "SYP", "INSM1", "NCAM1", "ASCL1")
 EMBRYONAL = ("LIN28A", "LIN28B", "SALL4", "SOX2", "POU5F1", "DPPA4", "MYCN", "UTF1")
 CNS_GLIAL = ("GFAP", "OLIG1", "OLIG2", "SOX2", "MBP", "S100B")
 GERM = ("DDX4", "SALL4", "POU5F1", "NANOG", "KIT", "DPPA4")
-COMPARTMENT_SIG = {"Epithelial": "epithelial", "Melanoma": "melanoma", "Neuroendocrine": "neuroendocrine",
-                   "Embryonal": "embryonal", "CNS": "cns", "Germ cell": "germ", "Heme": "immune", "Sarcoma": "stromal"}
+# Each fine lineage COMPARTMENT (as returned by compartment_call / cancer_lineage_group): the
+# decomposition mode it routes to, and the positive marker signature its tumor residual is
+# confirmed against. This is the single source for compartment → (mode, signature).
+_COMPARTMENTS = {
+    "Epithelial":     {"mode": "solid",       "tumor_sig": "epithelial"},
+    "Melanoma":       {"mode": "solid",       "tumor_sig": "melanoma"},
+    "Neuroendocrine": {"mode": "solid",       "tumor_sig": "neuroendocrine"},
+    "CNS":            {"mode": "solid",       "tumor_sig": "cns"},
+    "Germ cell":      {"mode": "solid",       "tumor_sig": "germ"},
+    "Embryonal":      {"mode": "embryonal",   "tumor_sig": "embryonal"},
+    "Heme":           {"mode": "heme",        "tumor_sig": "immune"},
+    "Sarcoma":        {"mode": "mesenchymal", "tumor_sig": "stromal"},
+}
 _FAMILY_COMPARTMENT = {"solid": "Epithelial", "epithelial": "Epithelial", "carcinoma": "Epithelial",
                        "melanoma": "Melanoma", "cns": "CNS", "neuroendocrine": "Neuroendocrine", "germ cell": "Germ cell",
                        "mesenchymal": "Sarcoma", "sarcoma": "Sarcoma", "heme": "Heme", "hematologic": "Heme",
@@ -167,6 +239,9 @@ def _refs():
 
 
 def _group_to_mode(group: str) -> str:
+    """Compartment label → decomposition mode: exact via _COMPARTMENTS, fuzzy fallback for variants."""
+    if group in _COMPARTMENTS:
+        return _COMPARTMENTS[group]["mode"]
     g = (group or "").lower()
     if any(k in g for k in ("heme", "hema", "lymph", "myel", "leuk")):
         return "heme"
@@ -266,7 +341,7 @@ def _heme_immune(sample, signatures, space, type_code):
 
 def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
     info = {}
-    keys = list(MODE_SUBTRACT[mode])
+    keys = list(_MODES[mode]["subtract"])
     if mode == "heme":
         info, healthy = _heme_immune(sample, signatures, space, type_code)
         keys += healthy                                   # keep the malignant sub-lineage as tumor
@@ -298,13 +373,13 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     total = float(sample.sum()) or 1.0
     metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
-               "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
+               "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[_MODES[mode]["tumor_sig"]], space), 2),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3)}
     return metrics, residual, info
 
 
 def characterize_residual(residual, *, mode: str = "solid", space: str = "percentile",
-                          signatures=None, heme_info=None) -> dict:
+                          signatures=None, heme_info=None) -> TumorCharacteristics:
     """Tumor sub-population characteristics for a residual (``{symbol: TPM}`` or Series).
 
     Proliferation (cell-cycle) + aneuploidy (chromosome-arm coherence) + heme sub-lineage.
@@ -388,7 +463,7 @@ _NO_ANEUPLOIDY_FLOOR = 0.02   # below this bulk amplitude is indistinguishable f
 _OVER_SUBTRACTION_RF = 0.10   # residual_fraction this low with restricted markers present ⇒ likely over-subtracted
 
 
-def _build_purity_block(sel, sample, signatures, proliferative) -> dict:
+def _build_purity_block(sel, sample, signatures, proliferative) -> PurityBlock:
     """Purity block: ``residual_fraction`` primary + gated purity-aware corroborators + consistency flags."""
     rf = sel.get("residual_fraction")
     bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled corroborator (BULK, not residual)
@@ -405,7 +480,7 @@ def _build_purity_block(sel, sample, signatures, proliferative) -> dict:
 
 def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None, *,
                          space: str = "percentile", route_via_classifier: bool = True,
-                         run_all: bool = False, met_sites: Sequence[str] | None = None) -> dict:
+                         run_all: bool = False, met_sites: Sequence[str] | None = None) -> DecompositionResult:
     """Lineage-routed decomposition + tumor characterization for one sample.
 
     ``met_sites`` is **off by default**; pass e.g. ``["liver"]`` only when met evidence
@@ -466,7 +541,7 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
     # compartment-aware tumor-identity confirmation on the residual: prefer the fine compartment's
     # markers (melanoma/NE/embryonal/CNS/germ) and fall back to the selected mode's signature
     # (every mode has one, so sig_key always resolves to a real, present signature).
-    sig_key = COMPARTMENT_SIG.get(compartment) or MODE_TUMOR_SIG[selected]
+    sig_key = (_COMPARTMENTS.get(compartment) or {}).get("tumor_sig") or _MODES[selected]["tumor_sig"]
     sig_genes = signatures.get(sig_key)
     characteristics["tumor_lineage_signature"] = sig_key
     characteristics["tumor_lineage_signature_score"] = (
