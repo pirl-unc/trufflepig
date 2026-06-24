@@ -76,7 +76,7 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
     try:
         arms = gene_arm_map()
     except Exception:  # noqa: BLE001 — needs pyensembl + an installed GRCh37 genome; optional
-        return {"score": float("nan"), "n_arms": 0, "arm_profile": {},
+        return {"score": None, "n_arms": 0, "arm_profile": {},
                 "top_gained": [], "top_lost": [], "note": "gene-arm map unavailable (pyensembl/genome)"}
     sample = pd.Series(dict(sample_tpm_by_symbol), dtype=float)
     ref = (pd.Series(dict(reference_tpm_by_symbol), dtype=float)
@@ -84,13 +84,13 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
 
     genes = [g for g in sample.index if g in arms and g in ref.index]
     if not genes:
-        return {"score": float("nan"), "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
+        return {"score": None, "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
     logratio = np.log2((sample.loc[genes] + 1.0) / (ref.loc[genes] + 1.0))
     by_arm = pd.DataFrame({"arm": [arms[g] for g in genes], "lr": logratio.values})
     counts = by_arm.groupby("arm")["lr"].size()
     arm_med = by_arm.groupby("arm")["lr"].median()[counts >= min_genes_per_arm]
     if arm_med.empty:
-        return {"score": float("nan"), "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
+        return {"score": None, "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
     centered = arm_med - arm_med.median()                      # remove global tumor/normal shift
     score = float(1.4826 * (centered - centered.median()).abs().median())  # MAD
     ordered = centered.sort_values()

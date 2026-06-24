@@ -280,13 +280,13 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     keys, info = _subtract_keys(mode, sample, signatures, space, type_code, met_sites)
     fit = sorted(set().union(*[signatures.get(k, frozenset()) for k in keys]) & set(sample.index))
     if not fit:
-        return {"purity": float("nan"), "note": "no fit genes"}, sample, info
+        return {"residual_fraction": None, "note": "no fit genes"}, sample, info
     a = np.column_stack([templates[k].reindex(fit).fillna(0.0).values for k in keys])
     f, _ = nnls(a, sample.reindex(fit).fillna(0.0).values)
     recon = sum(f[i] * templates[keys[i]] for i in range(len(keys)))
     residual = (sample - recon.reindex(sample.index).fillna(0.0)).clip(lower=0)
     total = float(sample.sum()) or 1.0
-    metrics = {"purity": round(float(residual.sum() / total), 3),
+    metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
                "tumor_lineage_in_residual": round(signature_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3)}
@@ -310,13 +310,14 @@ def characterize_residual(residual, *, mode: str = "solid", space: str = "percen
         from .aneuploidy_axis import aneuploidy_score
         aneu = aneuploidy_score(residual.to_dict())
     except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) optional; degrade gracefully
-        aneu = {"score": float("nan"), "top_gained": [], "top_lost": []}
+        aneu = {"score": None, "top_gained": [], "top_lost": []}
+    aneu_score = aneu["score"]                                  # None when aneuploidy unavailable (valid JSON null)
     proliferative = bool(not np.isnan(prolif) and prolif >= _PROLIFERATIVE_PCTL)
-    aneuploid = bool(not np.isnan(aneu["score"]) and aneu["score"] >= _ANEUPLOIDY_STRONG)
+    aneuploid = bool(aneu_score is not None and not np.isnan(aneu_score) and aneu_score >= _ANEUPLOIDY_STRONG)
     support = ([s for s, ok in (("proliferation", proliferative), ("aneuploidy", aneuploid)) if ok] or ["weak"])
     char = {"proliferation_percentile": round(prolif, 1) if not np.isnan(prolif) else None,
             "proliferative": proliferative,
-            "aneuploidy_score": aneu["score"], "aneuploid": aneuploid,
+            "aneuploidy_score": aneu_score, "aneuploid": aneuploid,
             "aneuploidy_arms_gained": aneu["top_gained"], "aneuploidy_arms_lost": aneu["top_lost"],
             "malignancy_support": "+".join(support)}
     if mode == "heme" and heme_info:
@@ -349,7 +350,9 @@ def bulk_aneuploidy_amplitude(sample) -> float | None:
         s = aneuploidy_score(sample.to_dict()).get("score")
     except Exception:  # noqa: BLE001
         return None
-    return None if (s is None or np.isnan(s)) else round(max(0.0, s - _ANEUPLOIDY_NOISE_FLOOR), 4)
+    if s is None or (isinstance(s, float) and np.isnan(s)):
+        return None
+    return round(max(0.0, s - _ANEUPLOIDY_NOISE_FLOOR), 4)
 
 
 def restricted_marker_burden(sample, signatures=None) -> dict:
@@ -427,23 +430,25 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
         round(signature_score(residual, signatures.get(sig_key, frozenset()), space), 1) if sig_key else None)
 
     note = next((v for k, v in _MOL_SUBTYPE_NOTE.items() if str(cancer or "").upper().endswith(k)), None)
-    dp = sel.get("purity")
-    bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled structural corroborator (bulk)
+    rf = sel.get("residual_fraction")                        # raw residual mass fraction (lineage-routed)
+    bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled structural corroborator (BULK, not residual)
     restricted = restricted_marker_burden(sample, signatures)
     flags = []
     if bulk_aneu is not None and bulk_aneu < 0.02 and not characteristics["proliferative"]:
         flags.append("no aneuploidy & not proliferative — near-diploid indolent OR low-purity (ambiguous)")
-    if restricted["n_expressed"] >= 1 and dp is not None and dp < 0.10:
-        flags.append("restricted/CTA markers expressed but decomposition purity ~0 — possible over-subtraction")
+    if restricted["n_expressed"] >= 1 and rf is not None and rf < 0.10:
+        flags.append("restricted/CTA markers expressed but residual_fraction ~0 — possible over-subtraction")
     purity = {
-        "primary": dp, "decomposition_purity": dp, "subtracted_fractions": sel.get("subtracted", {}),
+        "residual_fraction": rf, "subtracted_fractions": sel.get("subtracted", {}),
         "corroborators": {"aneuploidy_amplitude_bulk": bulk_aneu, "restricted_marker_burden": restricted},
         "consistency_flags": flags,
-        "note": "primary = lineage-routed decomposition_purity, computed under the SELECTED mode — never an "
-                "epithelial estimate applied to another lineage. Corroborators are purity-aware but gated: bulk "
-                "aneuploidy amplitude is purity-scaled (∝ purity, noise-floor-subtracted; noisier, used as a check / "
-                "where deconvolution is ambiguous — not equal-weight); restricted-gene burden sets a purity floor. "
-                "Proliferation & aneuploidy CHARACTERIZATION are on the purity-corrected residual.",
+        "note": "residual_fraction = lineage-routed residual MASS FRACTION (computed under the SELECTED mode — never an "
+                "epithelial estimate applied to another lineage). It is MONOTONE with purity but NOT yet calibrated to "
+                "absolute purity (≈0.6 at a pure medoid); calibration to an absolute purity/interval is a follow-up. "
+                "Corroborators are purity-aware but gated: BULK aneuploidy amplitude is purity-scaled (∝ purity, "
+                "noise-floor-subtracted; noisier, a check / for where deconvolution is ambiguous — not equal-weight); "
+                "restricted-gene burden sets a purity floor. Proliferation & RESIDUAL aneuploidy are tumor "
+                "CHARACTERIZATION on the purity-corrected residual — distinct from the bulk-aneuploidy purity signal.",
     }
     lineage = {"compartment": compartment, "mode": selected, "type_code": type_code,
                "routing": routing, "confidence": confidence}
