@@ -149,6 +149,30 @@ def test_output_is_valid_json_no_nan():
     json.dumps(r["tumor_characteristics"], allow_nan=False)
 
 
+def test_sparse_panel_input_no_nan_and_none_scores():
+    # P2: background fit genes present but NO tumor-signature genes — scores must be None (valid
+    # JSON null), never NaN, and a missing score must not win the routing max().
+    sparse = {f"FIB{i}": 50.0 for i in range(40)}
+    sparse.update({"COL1A1": 900.0, "PTPRC": 800.0, "CD3D": 700.0})    # stromal + immune only
+    r = decompose_expression(sparse, cancer="SARC")
+    json.dumps(r, allow_nan=False)                                     # raises on any NaN
+    assert r["tumor_characteristics"]["tumor_lineage_signature_score"] is None
+    for m in r["modes"].values():
+        v = m.get("tumor_lineage_in_residual")
+        assert v is None or not (isinstance(v, float) and np.isnan(v))
+
+
+def test_ambiguous_routing_uses_selected_mode_compartment(monkeypatch):
+    # P2: when compartment_call is unconfident and the runner-up mode wins, lineage.compartment
+    # must match the SELECTED mode — not the losing top compartment.
+    monkeypatch.setattr("trufflepig.cancer_type_centroid.compartment_call",
+                        lambda _: {"compartment": "Epithelial", "runner_up": "Heme",
+                                   "confident": False, "margin": 0.001})
+    r = decompose_expression(_sample("DLBC"))                          # no hint → ambiguous solid vs heme
+    expected = {"heme": "Heme", "solid": "Epithelial"}[r["selected_mode"]]
+    assert r["lineage"]["compartment"] == expected
+
+
 # ── wiring into estimate_tumor_purity ───────────────────────────────────
 
 def _df(type_code):

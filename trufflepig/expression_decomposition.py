@@ -214,6 +214,16 @@ def _safe(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
 
+def _round_or_none(v, n):
+    """Round a score for output; NaN/None → None (valid JSON null, never NaN)."""
+    return round(v, n) if (v is not None and not (isinstance(v, float) and np.isnan(v))) else None
+
+
+def _rank_score(v):
+    """Ranking key for residual-lineage scores: missing/NaN sorts last (never wins a max())."""
+    return v if (v is not None and not (isinstance(v, float) and np.isnan(v))) else float("-inf")
+
+
 def signature_score(sample: pd.Series, gene_symbols, space: str = "percentile") -> float:
     """Enrichment of a gene set in a sample, in ``percentile`` (default) or ``ssgsea`` space."""
     present = [g for g in gene_symbols if g in sample.index]
@@ -248,10 +258,10 @@ def _heme_immune(sample, signatures, space, type_code):
     if type_code and type_code in HEME_MALIGNANT:
         malignant, source = HEME_MALIGNANT[type_code], "type-map"
     else:
-        malignant = max(scores, key=lambda s: (scores[s] if not np.isnan(scores[s]) else -1)); source = "dominant-marker"
+        malignant = max(scores, key=lambda s: _rank_score(scores[s])); source = "dominant-marker"
     healthy = [sl for sl in _SUBLINEAGES if sl != malignant]
     return {"malignant_sublineage": malignant, "source": source,
-            "sublineage_scores": {k: round(v, 1) for k, v in scores.items()}}, healthy
+            "sublineage_scores": {k: _round_or_none(v, 1) for k, v in scores.items()}}, healthy
 
 
 def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
@@ -288,7 +298,7 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     total = float(sample.sum()) or 1.0
     metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
-               "tumor_lineage_in_residual": round(signature_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
+               "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[MODE_TUMOR_SIG[mode]], space), 2),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3)}
     return metrics, residual, info
 
@@ -382,6 +392,7 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
     mode, routing, type_code = resolve_mode(cancer)
     classifier = None
     candidates = None
+    candidate_compartment = {}                                # mode -> compartment for the ambiguous candidates
     if mode is None and route_via_classifier:
         try:
             from .cancer_type_centroid import compartment_call
@@ -396,6 +407,9 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
             else:
                 run = _group_to_mode(call.get("runner_up", "")) if call.get("runner_up") else None
                 candidates = list(dict.fromkeys([m for m in (top, run) if m]))
+                candidate_compartment = {top: call.get("compartment")}
+                if run:
+                    candidate_compartment.setdefault(run, call.get("runner_up"))
         except Exception as exc:  # noqa: BLE001
             classifier = {"error": str(exc)[:160]}
 
@@ -409,25 +423,29 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
     if mode is not None:
         selected, confidence = mode, "routed: " + routing
     elif candidates:
-        selected = max(candidates, key=lambda m: out[m].get("tumor_lineage_in_residual", float("-inf")))
+        selected = max(candidates, key=lambda m: _rank_score(out[m].get("tumor_lineage_in_residual")))
         confidence = (f"ambiguous compartment ({classifier['compartment']} vs {classifier['runner_up']}, "
                       f"margin {classifier['margin']}) → {selected} by residual lineage signal — verify")
     elif out:
-        selected = max(out, key=lambda m: out[m].get("tumor_lineage_in_residual", float("-inf")))
+        selected = max(out, key=lambda m: _rank_score(out[m].get("tumor_lineage_in_residual")))
         confidence = "low (data-only fallback; no hint and classifier unavailable)"
     else:
         return {"selected_mode": None, "routing": routing, "confidence": "no decomposition produced"}
 
     sel = out[selected]
     residual = residuals[selected]
-    compartment = _compartment_for(type_code, str(cancer or ""), classifier)
+    # compartment of the SELECTED mode (when ambiguous routing picked the runner-up, use ITS compartment)
+    compartment = candidate_compartment.get(selected) or _compartment_for(type_code, str(cancer or ""), classifier)
     characteristics = characterize_residual(residual, mode=selected, space=space,
                                             signatures=signatures, heme_info=heme_infos.get(selected))
-    # compartment-aware tumor-identity confirmation on the residual (melanoma/NE/embryonal/CNS markers, not the generic mode sig)
-    sig_key = COMPARTMENT_SIG.get(compartment) or MODE_TUMOR_SIG.get(selected)
+    # compartment-aware tumor-identity confirmation on the residual: prefer the fine compartment's
+    # markers (melanoma/NE/embryonal/CNS/germ) and fall back to the selected mode's signature
+    # (every mode has one, so sig_key always resolves to a real, present signature).
+    sig_key = COMPARTMENT_SIG.get(compartment) or MODE_TUMOR_SIG[selected]
+    sig_genes = signatures.get(sig_key)
     characteristics["tumor_lineage_signature"] = sig_key
     characteristics["tumor_lineage_signature_score"] = (
-        round(signature_score(residual, signatures.get(sig_key, frozenset()), space), 1) if sig_key else None)
+        _round_or_none(signature_score(residual, sig_genes, space), 1) if sig_genes else None)
 
     note = next((v for k, v in _MOL_SUBTYPE_NOTE.items() if str(cancer or "").upper().endswith(k)), None)
     rf = sel.get("residual_fraction")                        # raw residual mass fraction (lineage-routed)
