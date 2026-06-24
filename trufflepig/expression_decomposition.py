@@ -30,9 +30,9 @@ WHAT THE PIPELINE DOES             SUMMARY
                                      ``embryonal``   subtract immune only (tumor is polyphenotypic)
 
 **Background subtraction**         NNLS over the mode's templates → tumor-specific residual +
-                                   per-population fractions → ``decomposition_purity`` = residual
-                                   mass fraction (the lineage-aware purity that fixes ESTIMATE's
-                                   heme/sarcoma blind spots).
+                                   per-population fractions → ``residual_fraction`` = residual mass
+                                   fraction (lineage-aware; fixes ESTIMATE's heme/sarcoma blind
+                                   spots — monotone with purity, not yet calibrated to absolute).
 
 **Signals on the residual**        proliferation (cell-cycle), aneuploidy
                                    (:mod:`trufflepig.aneuploidy_axis`, with the gained/lost arms),
@@ -47,15 +47,15 @@ WHAT THE PIPELINE DOES             SUMMARY
                                    identifiability gate (template collinearity).
 =================================  ==============================================================
 
-**Interaction with purity estimation.** Three purity views triangulate:
-  * ``decomposition_purity`` (residual fraction) — lineage-aware; works where ESTIMATE breaks.
-  * the bulk ESTIMATE/lineage purity (``tumor_purity.estimate_tumor_purity``) — cross-check;
-    large disagreement flags a heme/mesenchymal sample ESTIMATE mis-handles.
-  * **aneuploidy amplitude is itself purity-scaled** — an arm gain in a 50%-pure sample shows a
-    half-strength shift, so the aneuploidy signal is an orthogonal, CNA-based purity corroborator
-    (strong aneuploidy ⇒ real tumor content; aneuploid-but-low-purity ⇒ possible over-subtraction).
-  Crucially, proliferation and aneuploidy are measured on the **residual** (purity-corrected),
-  not the bulk — the decomposition is what makes the tumor-intrinsic values readable.
+**Interaction with purity estimation.** ``residual_fraction`` is the lineage-aware primary
+purity signal (works where ESTIMATE breaks on heme/sarcoma). It is *corroborated*, not naively
+fused, by two orthogonal signals (equal-weight fusion was rejected — it was empirically worse):
+  * **bulk aneuploidy amplitude** ∝ purity (an arm gain in a 50%-pure sample is half-strength) —
+    a lineage-agnostic, CNA-based corroborator. Measured on the BULK (not the residual).
+  * **restricted/CTA-gene burden** — off in normal soma, so its bulk expression sets a purity floor.
+Distinct from the above, proliferation and *residual* aneuploidy are tumor CHARACTERIZATION,
+measured on the purity-corrected **residual** — the decomposition is what makes them readable.
+(Wiring + the absolute-purity calibration live in ``tumor_purity.estimate_tumor_purity``; see #96.)
 """
 from __future__ import annotations
 
@@ -189,13 +189,8 @@ def resolve_mode(cancer):
         return None, "no hint", None
     text = str(cancer).strip()
     fam = text.lower()
-    families = {"solid": "solid", "epithelial": "solid", "carcinoma": "solid", "melanoma": "solid",
-                "cns": "solid", "neuroendocrine": "solid", "germ cell": "solid",
-                "mesenchymal": "mesenchymal", "sarcoma": "mesenchymal",
-                "heme": "heme", "hematologic": "heme", "lymphoid": "heme", "myeloid": "heme",
-                "leukemia": "heme", "lymphoma": "heme", "embryonal": "embryonal", "rhabdoid": "embryonal"}
-    if fam in families:
-        return families[fam], f"family={text}", None
+    if fam in _FAMILY_COMPARTMENT:                            # family keyword → mode via its compartment (single source)
+        return _group_to_mode(_FAMILY_COMPARTMENT[fam]), f"family={text}", None
     try:
         from pirlygenes.gene_sets_cancer import cancer_lineage_group
     except Exception:
@@ -212,6 +207,11 @@ def resolve_mode(cancer):
 
 def _safe(series: pd.Series) -> pd.Series:
     return series.replace([np.inf, -np.inf], 0.0).fillna(0.0)
+
+
+def _as_series(sample) -> pd.Series:
+    """Coerce a ``{symbol: value}`` mapping (or Series) to a finite float Series."""
+    return sample if isinstance(sample, pd.Series) else _safe(pd.Series(dict(sample), dtype=float))
 
 
 def _round_or_none(v, n):
@@ -313,8 +313,7 @@ def characterize_residual(residual, *, mode: str = "solid", space: str = "percen
     """
     if signatures is None:
         _, signatures = _refs()
-    if not isinstance(residual, pd.Series):
-        residual = _safe(pd.Series(dict(residual), dtype=float))
+    residual = _as_series(residual)
     prolif = signature_score(residual, signatures["proliferation"], space)
     try:
         from .aneuploidy_axis import aneuploidy_score
@@ -353,8 +352,7 @@ def _compartment_for(type_code, fam, classifier):
 
 def bulk_aneuploidy_amplitude(sample) -> float | None:
     """Noise-floor-subtracted bulk aneuploidy amplitude — a purity-scaled (∝ purity) signal."""
-    if not isinstance(sample, pd.Series):
-        sample = _safe(pd.Series(dict(sample), dtype=float))
+    sample = _as_series(sample)
     try:
         from .aneuploidy_axis import aneuploidy_score
         s = aneuploidy_score(sample.to_dict()).get("score")
@@ -369,13 +367,40 @@ def restricted_marker_burden(sample, signatures=None) -> dict:
     """Burden of germline/CTA-restricted genes (off in normal soma) — a purity floor + lineage flag."""
     if signatures is None:
         _, signatures = _refs()
-    if not isinstance(sample, pd.Series):
-        sample = _safe(pd.Series(dict(sample), dtype=float))
+    sample = _as_series(sample)
     g = [x for x in signatures.get("restricted", ()) if x in sample.index]
     if not g:
         return {"n_expressed": 0, "max_percentile": None}
     pct = sample.rank(pct=True).loc[g] * 100
     return {"n_expressed": int((pct > 95).sum()), "max_percentile": round(float(pct.max()), 1)}
+
+
+_PURITY_NOTE = (
+    "residual_fraction = lineage-routed residual MASS FRACTION (computed under the SELECTED mode — "
+    "never an epithelial estimate applied to another lineage). It is MONOTONE with purity but NOT yet "
+    "calibrated to absolute purity (≈0.6 at a pure medoid); calibration is a follow-up. Corroborators "
+    "are purity-aware but gated: BULK aneuploidy amplitude is purity-scaled (noise-floor-subtracted; "
+    "noisier — a check / for where deconvolution is ambiguous, not equal-weight); restricted-gene "
+    "burden sets a purity floor. Proliferation & RESIDUAL aneuploidy are tumor CHARACTERIZATION on the "
+    "purity-corrected residual — distinct from the bulk-aneuploidy purity signal."
+)
+_NO_ANEUPLOIDY_FLOOR = 0.02   # below this bulk amplitude is indistinguishable from diploid noise
+_OVER_SUBTRACTION_RF = 0.10   # residual_fraction this low with restricted markers present ⇒ likely over-subtracted
+
+
+def _build_purity_block(sel, sample, signatures, proliferative) -> dict:
+    """Purity block: ``residual_fraction`` primary + gated purity-aware corroborators + consistency flags."""
+    rf = sel.get("residual_fraction")
+    bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled corroborator (BULK, not residual)
+    restricted = restricted_marker_burden(sample, signatures)
+    flags = []
+    if bulk_aneu is not None and bulk_aneu < _NO_ANEUPLOIDY_FLOOR and not proliferative:
+        flags.append("no aneuploidy & not proliferative — near-diploid indolent OR low-purity (ambiguous)")
+    if restricted["n_expressed"] >= 1 and rf is not None and rf < _OVER_SUBTRACTION_RF:
+        flags.append("restricted/CTA markers expressed but residual_fraction ~0 — possible over-subtraction")
+    return {"residual_fraction": rf, "subtracted_fractions": sel.get("subtracted", {}),
+            "corroborators": {"aneuploidy_amplitude_bulk": bulk_aneu, "restricted_marker_burden": restricted},
+            "consistency_flags": flags, "note": _PURITY_NOTE}
 
 
 def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None, *,
@@ -387,7 +412,7 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
     exists. Met organs matching the primary's own lineage are skipped (no self-subtraction).
     """
     templates, signatures = _refs()
-    sample = _safe(pd.Series(dict(sample_tpm_by_symbol), dtype=float))
+    sample = _as_series(sample_tpm_by_symbol)
 
     mode, routing, type_code = resolve_mode(cancer)
     classifier = None
@@ -448,26 +473,7 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
         _round_or_none(signature_score(residual, sig_genes, space), 1) if sig_genes else None)
 
     note = next((v for k, v in _MOL_SUBTYPE_NOTE.items() if str(cancer or "").upper().endswith(k)), None)
-    rf = sel.get("residual_fraction")                        # raw residual mass fraction (lineage-routed)
-    bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled structural corroborator (BULK, not residual)
-    restricted = restricted_marker_burden(sample, signatures)
-    flags = []
-    if bulk_aneu is not None and bulk_aneu < 0.02 and not characteristics["proliferative"]:
-        flags.append("no aneuploidy & not proliferative — near-diploid indolent OR low-purity (ambiguous)")
-    if restricted["n_expressed"] >= 1 and rf is not None and rf < 0.10:
-        flags.append("restricted/CTA markers expressed but residual_fraction ~0 — possible over-subtraction")
-    purity = {
-        "residual_fraction": rf, "subtracted_fractions": sel.get("subtracted", {}),
-        "corroborators": {"aneuploidy_amplitude_bulk": bulk_aneu, "restricted_marker_burden": restricted},
-        "consistency_flags": flags,
-        "note": "residual_fraction = lineage-routed residual MASS FRACTION (computed under the SELECTED mode — never an "
-                "epithelial estimate applied to another lineage). It is MONOTONE with purity but NOT yet calibrated to "
-                "absolute purity (≈0.6 at a pure medoid); calibration to an absolute purity/interval is a follow-up. "
-                "Corroborators are purity-aware but gated: BULK aneuploidy amplitude is purity-scaled (∝ purity, "
-                "noise-floor-subtracted; noisier, a check / for where deconvolution is ambiguous — not equal-weight); "
-                "restricted-gene burden sets a purity floor. Proliferation & RESIDUAL aneuploidy are tumor "
-                "CHARACTERIZATION on the purity-corrected residual — distinct from the bulk-aneuploidy purity signal.",
-    }
+    purity = _build_purity_block(sel, sample, signatures, characteristics["proliferative"])
     lineage = {"compartment": compartment, "mode": selected, "type_code": type_code,
                "routing": routing, "confidence": confidence}
     return {"selected_mode": selected, "lineage": lineage, "routing": routing, "confidence": confidence,
