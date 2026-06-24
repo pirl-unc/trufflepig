@@ -1585,15 +1585,20 @@ def _decomposition_purity_component(sample_tpm, cancer_code):
     """
     try:
         from .expression_decomposition import decompose_expression
+        from .purity_calibration import aneuploidy_purity
         r = decompose_expression(dict(sample_tpm), cancer=cancer_code)
         c = r["purity"]["corroborators"]
         return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
                 "residual_fraction": r["purity"]["residual_fraction"],
                 "bulk_aneuploidy_amplitude": c["aneuploidy_amplitude_bulk"],
+                # #96: bulk amplitude calibrated to an absolute purity via the per-type A_ref reference
+                # (None when the type is near-diploid / uncalibratable — aneuploidy carries no purity signal).
+                "aneuploidy_purity": aneuploidy_purity(dict(sample_tpm), cancer_code),
                 "restricted_marker_burden": c["restricted_marker_burden"],
-                "note": "lineage-routed residual mass fraction (monotone with purity, NOT calibrated to "
-                        "absolute purity yet); bulk aneuploidy is a purity-scaled corroborator. Not fused "
-                        "into overall_estimate pending per-cancer-type A_ref calibration."}
+                "note": "lineage-routed residual mass fraction (monotone with purity, NOT yet calibrated to "
+                        "absolute). aneuploidy_purity is the bulk amplitude calibrated to absolute purity "
+                        "(#96, per-type A_ref prior). Neither is fused into overall_estimate yet — pending "
+                        "validation against TCGA ABSOLUTE."}
     except Exception as exc:  # noqa: BLE001
         return {"error": str(exc)[:160]}
 

@@ -195,3 +195,14 @@ def test_estimate_tumor_purity_gates_estimate_for_heme_and_reports_decomposition
         dc = comp["decomposition"]
         assert dc["mode"] == mode
         assert 0.0 < dc["residual_fraction"] <= 1.0
+        assert "aneuploidy_purity" in dc                                  # #96 calibrated signal present
+
+
+def test_aneuploidy_purity_calibration():
+    from trufflepig.purity_calibration import aneuploidy_reference, aneuploidy_purity
+    aref = aneuploidy_reference("COAD")
+    assert aref is not None and aref > 0                                  # aneuploid type → positive A_ref
+    assert aneuploidy_reference("NOT_A_TYPE") is None                     # uncalibratable → None
+    p = aneuploidy_purity(_sample("COAD"), "COAD")
+    assert p is None or (0.0 <= p <= 1.0)                                 # calibrated purity in [0,1]
+    assert aneuploidy_purity(_sample("COAD"), "NOT_A_TYPE") is None       # no reference → None (no signal)
