@@ -147,3 +147,27 @@ def test_output_is_valid_json_no_nan():
     r = decompose_expression(_sample("DLBC"), cancer="DLBC")
     json.dumps(r["purity"], allow_nan=False)                                      # raises if any NaN
     json.dumps(r["tumor_characteristics"], allow_nan=False)
+
+
+# ── wiring into estimate_tumor_purity ───────────────────────────────────
+
+def _df(type_code):
+    from pirlygenes.expression.accessors import representative_cohort_samples
+    d = representative_cohort_samples(type_code).drop_duplicates("Ensembl_Gene_ID")
+    cols = [c for c in d.columns if c not in ("Ensembl_Gene_ID", "Symbol")]
+    return pd.DataFrame({"ensembl_gene_id": d["Ensembl_Gene_ID"].values,
+                         "gene_symbol": d["Symbol"].values, "TPM": d[cols].mean(axis=1).values})
+
+
+def test_estimate_tumor_purity_gates_estimate_for_heme_and_reports_decomposition():
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    solid = estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]
+    heme = estimate_tumor_purity(_df("DLBC"), cancer_type="DLBC")["components"]
+    # ESTIMATE gated off where the tumor lineage IS a background (heme/sarcoma), kept for epithelial.
+    assert solid["lineage_compartment"] == "Epithelial" and solid["estimate_gated_for_lineage"] is False
+    assert heme["lineage_compartment"] == "Heme" and heme["estimate_gated_for_lineage"] is True
+    # lineage-routed decomposition reported as a component (not fused into overall yet).
+    for comp, mode in ((solid, "solid"), (heme, "heme")):
+        dc = comp["decomposition"]
+        assert dc["mode"] == mode
+        assert 0.0 < dc["residual_fraction"] <= 1.0

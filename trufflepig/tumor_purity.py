@@ -1564,6 +1564,40 @@ def _resolve_purity_reference(cancer_code, ref_by_sym):
 # -------------------- main estimation --------------------
 
 
+_ESTIMATE_INVALID_COMPARTMENTS = {"Heme", "Sarcoma"}  # tumor lineage IS a background → ESTIMATE mis-specified (#92/#95)
+
+
+def _purity_lineage_compartment(cancer_code):
+    """Fine lineage compartment for a cancer code (Epithelial/Heme/Sarcoma/…), or None."""
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        return cancer_lineage_group(cancer_code)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _decomposition_purity_component(sample_tpm, cancer_code):
+    """Lineage-routed decomposition residual_fraction + aneuploidy corroborator (fallback-safe).
+
+    Reported as a component; NOT fused into ``overall_estimate`` — ``residual_fraction`` is monotone
+    with purity but not yet calibrated to absolute purity (per-cancer-type A_ref calibration is a
+    follow-up). The bulk aneuploidy amplitude is a purity-scaled, lineage-agnostic corroborator.
+    """
+    try:
+        from .expression_decomposition import decompose_expression
+        r = decompose_expression(dict(sample_tpm), cancer=cancer_code)
+        c = r["purity"]["corroborators"]
+        return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
+                "residual_fraction": r["purity"]["residual_fraction"],
+                "bulk_aneuploidy_amplitude": c["aneuploidy_amplitude_bulk"],
+                "restricted_marker_burden": c["restricted_marker_burden"],
+                "note": "lineage-routed residual mass fraction (monotone with purity, NOT calibrated to "
+                        "absolute purity yet); bulk aneuploidy is a purity-scaled corroborator. Not fused "
+                        "into overall_estimate pending per-cancer-type A_ref calibration."}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)[:160]}
+
+
 def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     """Estimate tumor purity from expression data.
 
@@ -1595,6 +1629,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
         cancer_score = None
 
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
+    lineage_compartment = _purity_lineage_compartment(cancer_code)
 
     # Reference expression by symbol (normalized cohort TPM)
     ref = pan_cancer_expression(technical_rna_normalize=True)
@@ -1755,7 +1790,8 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
         sig_lower=sig_lower,
         sig_upper=sig_upper,
         estimate_purity=estimate_purity
-        if _use_estimate_component(reference_expression_source, stromal_genes)
+        if (_use_estimate_component(reference_expression_source, stromal_genes)
+            and lineage_compartment not in _ESTIMATE_INVALID_COMPARTMENTS)
         else None,
         lineage_purity=lineage_purity,
         lineage_lower=lineage_lower,
@@ -1780,6 +1816,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     else:
         integration_source = None
 
+    decomposition_component = _decomposition_purity_component(sample_tpm, cancer_code)
     return {
         "cancer_type": cancer_code,
         "reference_cancer_type": reference_cancer_code,
@@ -1832,6 +1869,11 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
                 "n_genes": len(immune_genes),
             },
             "estimate_purity": estimate_purity,
+            "estimate_gated_for_lineage": lineage_compartment in _ESTIMATE_INVALID_COMPARTMENTS,
+            "lineage_compartment": lineage_compartment,
+            # Lineage-routed decomposition signal (reported, not fused into overall_estimate
+            # pending per-cancer-type A_ref calibration). See expression_decomposition + #95.
+            "decomposition": decomposition_component,
             "integration": {
                 "source": integration_source,
                 "signature_deprioritized": signature_deprioritized,
