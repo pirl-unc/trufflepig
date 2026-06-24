@@ -117,6 +117,22 @@ _MOL_SUBTYPE_NOTE = {"MSI": "MSI/dMMR — high immune infiltrate is real biology
                      "HPVPOS": "HPV-positive — typically immune-infiltrated."}
 _ANEUPLOIDY_STRONG = 0.20
 _PROLIFERATIVE_PCTL = 60.0
+_ANEUPLOIDY_NOISE_FLOOR = 0.10  # bulk-aneuploidy MAD floor; subtract before reading purity off it
+
+# Curated positive tumor-lineage signatures — compartment-aware residual validation, so a
+# melanoma/NE/embryonal tumor is confirmed against ITS markers, not the generic mode signature.
+MELANOMA = ("MLANA", "PMEL", "TYR", "MITF", "DCT", "TYRP1", "SOX10")
+NEUROENDOCRINE = ("CHGA", "CHGB", "SYP", "INSM1", "NCAM1", "ASCL1")
+EMBRYONAL = ("LIN28A", "LIN28B", "SALL4", "SOX2", "POU5F1", "DPPA4", "MYCN", "UTF1")
+CNS_GLIAL = ("GFAP", "OLIG1", "OLIG2", "SOX2", "MBP", "S100B")
+GERM = ("DDX4", "SALL4", "POU5F1", "NANOG", "KIT", "DPPA4")
+COMPARTMENT_SIG = {"Epithelial": "epithelial", "Melanoma": "melanoma", "Neuroendocrine": "neuroendocrine",
+                   "Embryonal": "embryonal", "CNS": "cns", "Germ cell": "germ", "Heme": "immune", "Sarcoma": "stromal"}
+_FAMILY_COMPARTMENT = {"solid": "Epithelial", "epithelial": "Epithelial", "carcinoma": "Epithelial",
+                       "melanoma": "Melanoma", "cns": "CNS", "neuroendocrine": "Neuroendocrine", "germ cell": "Germ cell",
+                       "mesenchymal": "Sarcoma", "sarcoma": "Sarcoma", "heme": "Heme", "hematologic": "Heme",
+                       "lymphoid": "Heme", "myeloid": "Heme", "leukemia": "Heme", "lymphoma": "Heme",
+                       "embryonal": "Embryonal", "rhabdoid": "Embryonal"}
 
 
 @lru_cache(maxsize=1)
@@ -140,6 +156,13 @@ def _refs():
         signatures[k] = frozenset(m)
     for k, m in _MET_SITE_MARKERS.items():
         signatures[k] = frozenset(m)
+    for k, m in {"melanoma": MELANOMA, "neuroendocrine": NEUROENDOCRINE, "embryonal": EMBRYONAL,
+                 "cns": CNS_GLIAL, "germ": GERM}.items():
+        signatures[k] = frozenset(m)
+    # germline/CTA-restricted genes: ~off in all somatic normal cells -> bulk expression ∝ purity.
+    germline = ("Early spermatids", "Late spermatids", "Spermatocytes", "Spermatogonia", "Oocytes")
+    somatic = [c for c in hpa.columns if c not in germline and c != "Ensembl_Gene_ID"]
+    signatures["restricted"] = frozenset(hpa.index[hpa[somatic].max(axis=1) < 5.0])
     return templates, signatures
 
 
@@ -301,6 +324,47 @@ def characterize_residual(residual, *, mode: str = "solid", space: str = "percen
     return char
 
 
+def _compartment_for(type_code, fam, classifier):
+    """Fine lineage compartment (Epithelial/Melanoma/Heme/Embryonal/…) for tumor-signature choice."""
+    if classifier and classifier.get("compartment"):
+        return classifier["compartment"]
+    if type_code:
+        try:
+            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+            for cand in _candidates(type_code):
+                g = cancer_lineage_group(cand)
+                if g:
+                    return g
+        except Exception:  # noqa: BLE001
+            pass
+    return _FAMILY_COMPARTMENT.get((fam or "").lower())
+
+
+def bulk_aneuploidy_amplitude(sample) -> float | None:
+    """Noise-floor-subtracted bulk aneuploidy amplitude — a purity-scaled (∝ purity) signal."""
+    if not isinstance(sample, pd.Series):
+        sample = _safe(pd.Series(dict(sample), dtype=float))
+    try:
+        from .aneuploidy_axis import aneuploidy_score
+        s = aneuploidy_score(sample.to_dict()).get("score")
+    except Exception:  # noqa: BLE001
+        return None
+    return None if (s is None or np.isnan(s)) else round(max(0.0, s - _ANEUPLOIDY_NOISE_FLOOR), 4)
+
+
+def restricted_marker_burden(sample, signatures=None) -> dict:
+    """Burden of germline/CTA-restricted genes (off in normal soma) — a purity floor + lineage flag."""
+    if signatures is None:
+        _, signatures = _refs()
+    if not isinstance(sample, pd.Series):
+        sample = _safe(pd.Series(dict(sample), dtype=float))
+    g = [x for x in signatures.get("restricted", ()) if x in sample.index]
+    if not g:
+        return {"n_expressed": 0, "max_percentile": None}
+    pct = sample.rank(pct=True).loc[g] * 100
+    return {"n_expressed": int((pct > 95).sum()), "max_percentile": round(float(pct.max()), 1)}
+
+
 def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None, *,
                          space: str = "percentile", route_via_classifier: bool = True,
                          run_all: bool = False, met_sites: Sequence[str] | None = None) -> dict:
@@ -352,15 +416,37 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
         return {"selected_mode": None, "routing": routing, "confidence": "no decomposition produced"}
 
     sel = out[selected]
-    characteristics = characterize_residual(residuals[selected], mode=selected, space=space,
+    residual = residuals[selected]
+    compartment = _compartment_for(type_code, str(cancer or ""), classifier)
+    characteristics = characterize_residual(residual, mode=selected, space=space,
                                             signatures=signatures, heme_info=heme_infos.get(selected))
+    # compartment-aware tumor-identity confirmation on the residual (melanoma/NE/embryonal/CNS markers, not the generic mode sig)
+    sig_key = COMPARTMENT_SIG.get(compartment) or MODE_TUMOR_SIG.get(selected)
+    characteristics["tumor_lineage_signature"] = sig_key
+    characteristics["tumor_lineage_signature_score"] = (
+        round(signature_score(residual, signatures.get(sig_key, frozenset()), space), 1) if sig_key else None)
+
     note = next((v for k, v in _MOL_SUBTYPE_NOTE.items() if str(cancer or "").upper().endswith(k)), None)
-    purity = {"decomposition_purity": sel.get("purity"),
-              "subtracted_fractions": sel.get("subtracted", {}),
-              "aneuploidy_corroborates_purity": bool(characteristics["aneuploid"]),
-              "note": "decomposition_purity is lineage-aware (fixes ESTIMATE on heme/mesench); "
-                      "aneuploidy amplitude is purity-scaled (an orthogonal CNA-based corroborator); "
-                      "proliferation & aneuploidy are measured on the purity-corrected residual."}
-    return {"selected_mode": selected, "routing": routing, "confidence": confidence, "classifier": classifier,
-            "space": space, "subtype_note": note, "purity": purity,
+    dp = sel.get("purity")
+    bulk_aneu = bulk_aneuploidy_amplitude(sample)            # purity-scaled structural corroborator (bulk)
+    restricted = restricted_marker_burden(sample, signatures)
+    flags = []
+    if bulk_aneu is not None and bulk_aneu < 0.02 and not characteristics["proliferative"]:
+        flags.append("no aneuploidy & not proliferative — near-diploid indolent OR low-purity (ambiguous)")
+    if restricted["n_expressed"] >= 1 and dp is not None and dp < 0.10:
+        flags.append("restricted/CTA markers expressed but decomposition purity ~0 — possible over-subtraction")
+    purity = {
+        "primary": dp, "decomposition_purity": dp, "subtracted_fractions": sel.get("subtracted", {}),
+        "corroborators": {"aneuploidy_amplitude_bulk": bulk_aneu, "restricted_marker_burden": restricted},
+        "consistency_flags": flags,
+        "note": "primary = lineage-routed decomposition_purity, computed under the SELECTED mode — never an "
+                "epithelial estimate applied to another lineage. Corroborators are purity-aware but gated: bulk "
+                "aneuploidy amplitude is purity-scaled (∝ purity, noise-floor-subtracted; noisier, used as a check / "
+                "where deconvolution is ambiguous — not equal-weight); restricted-gene burden sets a purity floor. "
+                "Proliferation & aneuploidy CHARACTERIZATION are on the purity-corrected residual.",
+    }
+    lineage = {"compartment": compartment, "mode": selected, "type_code": type_code,
+               "routing": routing, "confidence": confidence}
+    return {"selected_mode": selected, "lineage": lineage, "routing": routing, "confidence": confidence,
+            "classifier": classifier, "space": space, "subtype_note": note, "purity": purity,
             "tumor_characteristics": characteristics, "modes": out}
