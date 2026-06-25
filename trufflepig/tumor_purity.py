@@ -1656,6 +1656,37 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
         return {"error": "decomposition component failed (see logs)"}
 
 
+def _reference_free_purity(sample_tpm, cancer_code, lineage_compartment, expr_compartment,
+                           estimate_invalid_lineage):
+    """Purity result for a type with NO pan-cancer reference (heme/rare/pediatric).
+
+    Signature / lineage / ESTIMATE purity all need a per-type reference; without one we return the
+    lineage DECOMPOSITION — which uses HPA cell templates, not a per-type reference — as the purity
+    signal: ``residual_fraction`` (monotone with purity, NOT absolute) + heme sub-lineage + aneuploidy.
+    The cancer type is explicit here (this path is reference_optional), so the code is trusted (no
+    lineage override). Shaped like the normal result, with reference-dependent fields set to None.
+    """
+    dc = _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
+                                         allow_lineage_override=False)
+    overall = dc.get("residual_fraction") if isinstance(dc, dict) else None
+    return {
+        "cancer_type": cancer_code, "reference_cancer_type": None, "cancer_type_score": None,
+        "overall_estimate": overall, "overall_lower": None, "overall_upper": None,
+        "purity_consistency": [],
+        "components": {
+            "decomposition": dc,
+            "lineage_compartment": lineage_compartment,
+            "expression_lineage_compartment": expr_compartment,
+            "estimate_gated_for_lineage": estimate_invalid_lineage,
+            "integration": {"source": "decomposition"},
+        },
+        "reference_expression_source": "none (reference-free; lineage decomposition only)",
+        "note": "No pan-cancer reference for this cancer type — purity is the lineage-decomposition "
+                "residual fraction (heme/rare-safe; monotone with purity, NOT calibrated to absolute). "
+                "Signature / lineage / ESTIMATE purity need a per-type reference and are unavailable.",
+    }
+
+
 def _purity_reconciliation(overall, decomposition, estimate_value):
     """Guardrail: flag when the lineage-routed decomposition + ESTIMATE strongly disagree with
     ``overall_estimate``.
@@ -1677,7 +1708,8 @@ def _purity_reconciliation(overall, decomposition, estimate_value):
     return flags
 
 
-def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decomposition=True):
+def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decomposition=True,
+                          reference_optional=False):
     """Estimate tumor purity from expression data.
 
     Parameters
@@ -1720,7 +1752,16 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     # Reference expression by symbol (normalized cohort TPM)
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    reference_context = _resolve_purity_reference(cancer_code, ref_by_sym)
+    try:
+        reference_context = _resolve_purity_reference(cancer_code, ref_by_sym)
+    except ValueError:
+        # Heme/rare/pediatric types have no pan-cancer reference; the signature/lineage/ESTIMATE
+        # purity all need one. With reference_optional, fall back to the lineage DECOMPOSITION (which
+        # uses HPA cell templates, not a per-type reference) so these types still get a purity signal.
+        if not reference_optional:
+            raise
+        return _reference_free_purity(sample_tpm, cancer_code, lineage_compartment,
+                                      expr_compartment, estimate_invalid_lineage)
     reference_cancer_code = reference_context["reference_cancer_code"]
     ref_expr = reference_context["ref_expr"]
     reference_expression_source = reference_context["reference_expression_source"]

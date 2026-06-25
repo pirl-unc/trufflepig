@@ -298,6 +298,19 @@ def test_purity_reconciliation_guardrail():
     assert _purity_reconciliation(0.6, {"residual_fraction": 0.6}, 0.6) == []   # agreement → no flag
 
 
+def test_reference_free_purity_for_heme_rare_types():
+    # heme/rare types lack a pan-cancer reference; with reference_optional=True they still get a
+    # lineage-decomposition purity (the default raises, preserving the candidate-ranking skip).
+    import pytest
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    r = estimate_tumor_purity(_df("CLL"), cancer_type="CLL", reference_optional=True)
+    assert r["overall_estimate"] is not None and 0.0 < r["overall_estimate"] <= 1.0
+    assert r["components"]["decomposition"]["mode"] == "heme"
+    assert r["components"]["integration"]["source"] == "decomposition"
+    with pytest.raises(ValueError):
+        estimate_tumor_purity(_df("CLL"), cancer_type="CLL")        # no reference, not optional → raises
+
+
 def test_include_decomposition_flag_opts_out():
     from trufflepig.tumor_purity import estimate_tumor_purity
     on = estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["decomposition"]
