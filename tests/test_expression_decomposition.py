@@ -270,15 +270,20 @@ def test_estimate_gated_by_expression_lineage_when_code_is_wrong():
     assert comp["estimate_gated_for_lineage"] is True            # gated despite the epithelial code
 
 
-def test_decomposition_routes_by_expression_lineage_on_conflict():
-    # #1: a sarcoma forced with an epithelial code → the decomposition routes by the EXPRESSION
-    # lineage (not the wrong code), flags the conflict, and withholds the cross-lineage aneuploidy A_ref.
-    from trufflepig.tumor_purity import estimate_tumor_purity
-    dc = estimate_tumor_purity(_df("SARC"), cancer_type="BRCA")["components"]["decomposition"]
-    assert dc["lineage_conflict"] is True
-    assert dc["code_lineage"] == "Epithelial" and dc["expression_lineage"] == "Sarcoma"
-    assert dc["mode"] == "mesenchymal"               # routed by expression, not the BRCA code
-    assert dc["aneuploidy_purity"] is None           # withheld on conflict (per-type A_ref is cross-lineage)
+def test_decomposition_lineage_override_only_for_auto_codes():
+    # A sarcoma carrying a wrong epithelial code:
+    #  - AUTO-detected code (allow_lineage_override=True) → expression+lineage_fit override to
+    #    mesenchymal, conflict flagged, cross-lineage aneuploidy A_ref withheld.
+    #  - EXPLICIT caller hint (allow_lineage_override=False) → trust the hint, NO override (so a correct
+    #    explicit type — e.g. hepatoblastoma's hepatic expression — is never flipped).
+    from trufflepig.tumor_purity import _decomposition_purity_component
+    sym = _sample("SARC")
+    auto = _decomposition_purity_component(sym, "BRCA", allow_lineage_override=True)
+    assert auto["lineage_conflict"] is True and auto["mode"] == "mesenchymal"
+    assert auto["code_lineage"] == "Epithelial" and auto["expression_lineage"] == "Sarcoma"
+    assert auto["aneuploidy_purity"] is None         # withheld on conflict (per-type A_ref is cross-lineage)
+    explicit = _decomposition_purity_component(sym, "BRCA", allow_lineage_override=False)
+    assert explicit["mode"] == "solid" and explicit["lineage_conflict"] is False   # trusts the explicit code
 
 
 def test_purity_reconciliation_guardrail():

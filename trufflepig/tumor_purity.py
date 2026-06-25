@@ -1591,7 +1591,7 @@ def _expression_lineage_compartment(sample_tpm):
         return None
 
 
-def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=None):
+def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=None, allow_lineage_override=True):
     """Lineage-routed decomposition residual_fraction + aneuploidy corroborator (fallback-safe).
 
     Reported as a component; NOT fused into ``overall_estimate`` — ``residual_fraction`` is monotone
@@ -1599,9 +1599,12 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
     follow-up). The bulk aneuploidy amplitude is a purity-scaled, lineage-agnostic corroborator.
 
     When the cancer-code lineage and the EXPRESSION lineage (``expr_compartment``, from
-    compartment_call) disagree at the mode level — the code is often wrong at the fine level (a
-    sarcoma miscalled BRCA) — the decomposition is routed by the expression lineage, the conflict is
-    flagged, and ``aneuploidy_purity`` is withheld (its per-type A_ref would be for the wrong lineage).
+    compartment_call) disagree at the mode level, the routing is resolved by ``lineage_fit`` — BUT
+    only if ``allow_lineage_override`` (i.e. the cancer code was AUTO-detected and may be wrong, like a
+    sarcoma miscalled BRCA). For an EXPLICIT caller-provided cancer type we trust it and never let
+    expression override it (overriding a correct hint is how a hepatoblastoma's hepatic expression
+    would wrongly flip embryonal→solid). The disagreement is still reported via ``code_lineage`` /
+    ``expression_lineage``; ``aneuploidy_purity`` is withheld whenever the resolved lineage ≠ code.
     """
     try:
         from .expression_decomposition import decompose_expression, _group_to_mode
@@ -1615,9 +1618,9 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
         code_comp = _purity_lineage_compartment(cancer_code)
         code_mode = _group_to_mode(code_comp) if code_comp else None
         expr_mode = _group_to_mode(expr_compartment) if expr_compartment else None
-        if code_mode and expr_mode and code_mode != expr_mode:
-            # Code and expression disagree on lineage — and EITHER can be wrong (a sarcoma miscalled
-            # BRCA: code wrong; a DLBC compartment_call'd Epithelial: expression wrong). Resolve by
+        if allow_lineage_override and code_mode and expr_mode and code_mode != expr_mode:
+            # Auto-detected code vs expression disagree, and EITHER can be wrong (sarcoma miscalled
+            # BRCA: code wrong; DLBC compartment_call'd Epithelial: expression wrong). Resolve by
             # lineage_fit, the mode-comparable goodness-of-fit: run both routings, keep the better fit.
             r_code = decompose_expression(tpm, cancer=cancer_code)
             r_expr = decompose_expression(tpm, cancer=expr_mode)
@@ -1625,7 +1628,7 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
             fit_expr = (r_expr["modes"].get(expr_mode) or {}).get("lineage_fit", float("-inf"))
             r = r_code if fit_code >= fit_expr else r_expr
         else:
-            r = decompose_expression(tpm, cancer=cancer_code)
+            r = decompose_expression(tpm, cancer=cancer_code)  # explicit hint (or agreement) → trust the code
         c = r["purity"]["corroborators"]
         bulk_amp = c["aneuploidy_amplitude_bulk"]
         # conflict = the resolved lineage differs from the cancer code (its per-type A_ref is then
@@ -1901,7 +1904,8 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     # The decomposition component runs a full lineage-routed decomposition (+ first-call reference
     # load); callers in hot loops can opt out via include_decomposition=False to protect latency.
     decomposition_component = (
-        _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment)
+        _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
+                                        allow_lineage_override=(cancer_type is None))
         if include_decomposition else None)
     # Reconciliation guardrail: flag when the decomposition + ESTIMATE strongly disagree with overall.
     purity_consistency = _purity_reconciliation(overall, decomposition_component, estimate_purity)
@@ -4264,7 +4268,8 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         # per candidate); compute it once for the winning type so the report still includes it.
         if isinstance(purity, dict) and (purity.get("components") or {}).get("decomposition") is None:
             comps = dict(purity.get("components") or {})
-            dc = _decomposition_purity_component(sample_tpm, cancer_code)
+            dc = _decomposition_purity_component(sample_tpm, cancer_code,
+                                                 allow_lineage_override=(cancer_type is None))
             comps["decomposition"] = dc
             # ranking computed purity_consistency without the decomposition; recompute now it's present
             purity = {**purity, "components": comps,
