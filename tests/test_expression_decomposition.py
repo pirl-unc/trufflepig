@@ -43,6 +43,22 @@ def test_resolve_mode_routes_family_type_group_subtype(hint, mode):
     assert resolve_mode(hint)[0] == mode
 
 
+def test_config_self_consistency():
+    # The mode/compartment/template/signature tables must stay mutually consistent (catches drift
+    # when biology config is edited) — the "declarative table + validation" Codex asked for.
+    from trufflepig.expression_decomposition import _MODES, _COMPARTMENTS, _SUBLINEAGES, _refs
+    templates, signatures = _refs()
+    for comp, c in _COMPARTMENTS.items():
+        assert c["mode"] in _MODES, f"{comp} routes to unknown mode {c['mode']}"
+        assert c["tumor_sig"] in signatures, f"{comp} tumor_sig {c['tumor_sig']} not a signature"
+    for mode, m in _MODES.items():
+        assert m["tumor_sig"] in signatures, f"{mode} tumor_sig {m['tumor_sig']} not a signature"
+        for k in m["subtract"]:
+            assert k in templates, f"{mode} subtracts {k} but no template exists"
+    for sl in _SUBLINEAGES:                              # heme keeps the malignant sub-lineage, subtracts the rest
+        assert sl in templates and sl in signatures, f"sub-lineage {sl} missing template/signature"
+
+
 def test_group_to_mode():
     assert _group_to_mode("Heme") == "heme"
     assert _group_to_mode("Sarcoma") == "mesenchymal"
