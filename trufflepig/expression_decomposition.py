@@ -72,6 +72,9 @@ class ModeMetrics(TypedDict, total=False):
     subtracted: dict[str, float]             # background → subtracted fraction
     tumor_lineage_in_residual: float | None  # mode tumor-signature score on the residual (routing tiebreak)
     template_collinearity: float             # identifiability: max |cosine| of subtracted templates
+    met_sites_subtracted: list[str]          # met organs whose normal template was subtracted
+    met_sites_skipped_as_primary: list[str]  # met organs skipped (would self-subtract the primary)
+    met_sites_unknown: list[str]             # requested met organs with no template (typo/unsupported)
     note: str
 
 
@@ -258,6 +261,16 @@ def _candidates(code: str):
         yield "_".join(parts[:k])
 
 
+def _code_candidates(type_code):
+    """Yield a type_code and its parent codes, upper-cased — e.g. ``'LAML_APL'`` → ``'LAML_APL','LAML'``.
+
+    Lets subtype hints (``LAML_APL``, ``LUAD_EGFR``) match the parent-keyed registries
+    (:data:`HEME_MALIGNANT`, :data:`_MET_PRIMARY_LINEAGE`) instead of silently falling through.
+    """
+    if type_code:
+        yield from _candidates(str(type_code).upper())
+
+
 def resolve_mode(cancer):
     """Resolve a ``cancer`` hint to ``(mode_or_None, routing, type_code_or_None)``."""
     if not cancer:
@@ -334,8 +347,10 @@ def _collinearity(templates, genes) -> float:
 def _heme_immune(sample, signatures, space, type_code):
     """Determine the malignant immune sub-lineage and the healthy ones to subtract."""
     scores = {sl: signature_score(sample, signatures[sl], space) for sl in _SUBLINEAGES}
-    if type_code and type_code in HEME_MALIGNANT:
-        malignant, source = HEME_MALIGNANT[type_code], "type-map"
+    # subtype hints (LAML_APL) must resolve to the parent's malignant sub-lineage before marker fallback
+    type_mapped = next((HEME_MALIGNANT[c] for c in _code_candidates(type_code) if c in HEME_MALIGNANT), None)
+    if type_mapped is not None:
+        malignant, source = type_mapped, "type-map"
     elif any(v is not None for v in scores.values()):
         malignant = max(scores, key=lambda s: _rank_score(scores[s])); source = "dominant-marker"
     else:                                                   # no sub-lineage markers present → can't tell
@@ -357,7 +372,8 @@ def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
         if site not in _CT:
             unknown_mets.append(site)                     # not a known met organ (typo / unsupported) — surfaced, not silent
             continue
-        if type_code and type_code in _MET_PRIMARY_LINEAGE.get(site, set()):
+        primary = _MET_PRIMARY_LINEAGE.get(site, set())  # match subtype hints too (LUAD_EGFR → LUAD)
+        if any(c in primary for c in _code_candidates(type_code)):
             skipped_mets.append(site)                     # don't subtract a primary's own organ
             continue
         keys.append(site); applied_mets.append(site)
@@ -372,9 +388,12 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     from scipy.optimize import nnls
 
     keys, info = _subtract_keys(mode, sample, signatures, space, type_code, met_sites)
+    # surface the met-site bookkeeping in the output (which organs were subtracted / skipped-as-primary
+    # / unknown) — it lives in `info` but the heme part of `info` is consumed separately downstream.
+    met = {k: info[k] for k in ("met_sites_subtracted", "met_sites_skipped_as_primary", "met_sites_unknown") if k in info}
     fit = sorted(set().union(*[signatures.get(k, frozenset()) for k in keys]) & set(sample.index))
     if not fit:
-        return {"residual_fraction": None, "note": "no fit genes"}, sample, info
+        return {"residual_fraction": None, "note": "no fit genes", **met}, sample, info
     a = np.column_stack([templates[k].reindex(fit).fillna(0.0).values for k in keys])
     f, _ = nnls(a, sample.reindex(fit).fillna(0.0).values)
     recon = sum(f[i] * templates[keys[i]] for i in range(len(keys)))
@@ -383,7 +402,7 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
                "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[_MODES[mode]["tumor_sig"]], space), 2),
-               "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3)}
+               "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3), **met}
     return metrics, residual, info
 
 

@@ -275,3 +275,52 @@ def test_unknown_met_organ_is_surfaced_not_silent():
                                 ["liver", "bone"])
     assert "bone" in info["met_sites_unknown"]               # unsupported organ surfaced, not dropped
     assert "liver" in info["met_sites_subtracted"]           # COAD is not a liver primary → subtracted
+
+
+def test_heme_subtype_resolves_to_parent_malignant_sublineage():
+    # LAML_APL subtype must map to LAML's myeloid sub-lineage (parent walk), NOT fall to marker
+    # dominance and risk subtracting the myeloid (tumor) compartment as healthy background.
+    from trufflepig.expression_decomposition import _heme_immune, _refs
+    _, signatures = _refs()
+    info, healthy = _heme_immune(pd.Series({"GENE": 1.0}), signatures, "percentile", type_code="LAML_APL")
+    assert info["malignant_sublineage"] == "myeloid" and info["source"] == "type-map"
+    assert "myeloid" not in healthy                          # the tumor sub-lineage is kept, not subtracted
+
+
+def test_met_primary_subtype_skips_self_organ():
+    # LUAD_EGFR primary must not self-subtract the lung template (parent LUAD ∈ lung primaries).
+    from trufflepig.expression_decomposition import _subtract_keys, _refs
+    _, signatures = _refs()
+    keys, info = _subtract_keys("solid", pd.Series({"EPCAM": 1.0}), signatures, "percentile", "LUAD_EGFR",
+                                ["lung"])
+    assert "lung" in info["met_sites_skipped_as_primary"]
+    assert "lung" not in keys
+
+
+def test_met_bookkeeping_surfaced_in_decompose_output():
+    # the met info must be visible in the decompose_expression result, not just internal to _subtract_keys
+    r = decompose_expression(_sample("LUAD"), cancer="LUAD_EGFR", met_sites=["lung", "bogus"])
+    m = r["modes"]["solid"]
+    assert m["met_sites_skipped_as_primary"] == ["lung"]      # LUAD_EGFR subtype → lung self-subtract guard
+    assert m["met_sites_unknown"] == ["bogus"]
+
+
+def test_signature_score_ssgsea_space():
+    s = pd.Series({f"BG{i}": 1.0 for i in range(100)} | {"A": 900.0, "B": 800.0, "C": 700.0})
+    sc = signature_score(s, ["A", "B", "C"], space="ssgsea")
+    assert sc is not None and isinstance(sc, float)
+    assert signature_score(s, ["NOPE"], space="ssgsea") is None   # not computable → None in every space
+
+
+def test_aneuploidy_purity_declines_with_dilution():
+    # Recovery: mixing a tumor toward the diploid baseline (simulated contamination) lowers bulk
+    # aneuploidy → lower calibrated purity. Pins direction, not just shape.
+    from trufflepig.purity_calibration import aneuploidy_purity
+    from trufflepig.aneuploidy_axis import _diploid_reference
+    base = _sample("COAD")
+    ref = _diploid_reference()
+    diluted = {k: 0.4 * v + 0.6 * float(ref.get(k, 0.0)) for k, v in base.items()}
+    p_pure = aneuploidy_purity(base, "COAD", median_purity=0.6)
+    p_dil = aneuploidy_purity(diluted, "COAD", median_purity=0.6)
+    assert p_pure is not None and p_dil is not None
+    assert p_dil < p_pure

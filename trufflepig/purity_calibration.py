@@ -20,9 +20,12 @@ on-the-fly prototype of that table.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 _MIN_MEDIAN_PURITY = 0.1   # floor the extrapolation denominator so a tiny median can't blow up A_ref
 
@@ -47,7 +50,8 @@ def _type_reference_sample(cancer_type):
         clean = clean_tpm(d.set_index("Ensembl_Gene_ID")[cols].astype(float), gene_table=gt.set_index(d.index))
         clean.index = d["Symbol"].values
         return clean.groupby(level=0).sum().mean(axis=1).to_dict()
-    except Exception:  # noqa: BLE001 — reference cohort unavailable
+    except Exception:  # noqa: BLE001 — reference cohort / clean_tpm unavailable for this type
+        logger.debug("aneuploidy reference unavailable for %s", cancer_type, exc_info=True)
         return None
 
 
