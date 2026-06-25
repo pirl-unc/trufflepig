@@ -19,16 +19,13 @@ from trufflepig.expression_decomposition import (
 
 @lru_cache(maxsize=None)
 def _sample(type_code):
-    """{symbol: clean-TPM} mean profile for a representative cohort."""
+    """{symbol: TPM} mean profile for a representative cohort (raw; no oncoref). Covers rare types
+    (ATRT/RT/…) absent from the pan-cancer table — routing/lineage tests are rank-based so raw is fine."""
     from pirlygenes.expression.accessors import representative_cohort_samples
-    from oncoref.normalization import clean_tpm
 
-    d = representative_cohort_samples(type_code).drop_duplicates("Ensembl_Gene_ID")
-    cols = [c for c in d.columns if c not in ("Ensembl_Gene_ID", "Symbol")]
-    gt = pd.DataFrame({"Ensembl_Gene_ID": d["Ensembl_Gene_ID"].values, "Symbol": d["Symbol"].values})
-    clean = clean_tpm(d.set_index("Ensembl_Gene_ID")[cols].astype(float), gene_table=gt.set_index(d.index))
-    clean.index = d["Symbol"].values
-    return clean.groupby(level=0).sum().mean(axis=1).to_dict()
+    d = representative_cohort_samples(type_code).drop_duplicates("Symbol").set_index("Symbol")
+    cols = [c for c in d.columns if c.startswith(type_code)]
+    return d[cols].mean(axis=1).to_dict()
 
 
 # ── routing (no heavy data) ─────────────────────────────────────────────
@@ -273,6 +270,28 @@ def test_estimate_gated_by_expression_lineage_when_code_is_wrong():
     assert comp["estimate_gated_for_lineage"] is True            # gated despite the epithelial code
 
 
+def test_decomposition_routes_by_expression_lineage_on_conflict():
+    # #1: a sarcoma forced with an epithelial code → the decomposition routes by the EXPRESSION
+    # lineage (not the wrong code), flags the conflict, and withholds the cross-lineage aneuploidy A_ref.
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    dc = estimate_tumor_purity(_df("SARC"), cancer_type="BRCA")["components"]["decomposition"]
+    assert dc["lineage_conflict"] is True
+    assert dc["code_lineage"] == "Epithelial" and dc["expression_lineage"] == "Sarcoma"
+    assert dc["mode"] == "mesenchymal"               # routed by expression, not the BRCA code
+    assert dc["aneuploidy_purity"] is None           # withheld on conflict (per-type A_ref is cross-lineage)
+
+
+def test_purity_reconciliation_guardrail():
+    # #2: flag when the decomposition + ESTIMATE strongly disagree with overall_estimate (e.g. a cell
+    # line read as ~1% pure); stay silent when they agree.
+    from trufflepig.tumor_purity import _purity_reconciliation
+    under = _purity_reconciliation(0.05, {"residual_fraction": 0.8}, 0.9)
+    assert under and "UNDERESTIMATE" in under[0]
+    over = _purity_reconciliation(0.9, {"residual_fraction": 0.2}, 0.2)
+    assert over and "OVERESTIMATE" in over[0]
+    assert _purity_reconciliation(0.6, {"residual_fraction": 0.6}, 0.6) == []   # agreement → no flag
+
+
 def test_include_decomposition_flag_opts_out():
     from trufflepig.tumor_purity import estimate_tumor_purity
     on = estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["decomposition"]
@@ -351,6 +370,18 @@ def test_met_primary_subtype_skips_self_organ():
                                 ["lung"])
     assert "lung" in info["met_sites_skipped_as_primary"]
     assert "lung" not in keys
+
+
+def test_met_sites_rejects_non_organ_template_keys():
+    # met_sites must accept only true met ORGANS — a non-organ template key like 'immune' must NOT be
+    # treated as a met (it would duplicate the mode's own subtraction key and corrupt the fit).
+    from trufflepig.expression_decomposition import _subtract_keys, _refs
+    _, signatures = _refs()
+    keys, info = _subtract_keys("solid", pd.Series({"EPCAM": 1.0}), signatures, "percentile", "COAD",
+                                ["immune", "liver"])
+    assert "immune" in info["met_sites_unknown"]      # rejected as a non-organ, not subtracted as a met
+    assert "liver" in info["met_sites_subtracted"]
+    assert keys.count("immune") == 1                  # the mode's own immune key, not duplicated
 
 
 def test_met_bookkeeping_surfaced_in_decompose_output():

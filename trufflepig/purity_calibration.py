@@ -38,19 +38,22 @@ _MIN_MEDIAN_PURITY = 0.1   # floor the extrapolation denominator so a tiny media
 
 @lru_cache(maxsize=None)
 def _type_reference_sample(cancer_type):
-    """``{symbol: clean-TPM}`` mean profile for a cancer type's reference cohort, or None."""
-    try:
-        from pirlygenes.expression.accessors import representative_cohort_samples
-        from oncoref.normalization import clean_tpm
-        import pandas as pd
+    """``{symbol: clean-TPM}`` reference profile for a cancer type, or None.
 
-        d = representative_cohort_samples(cancer_type).drop_duplicates("Ensembl_Gene_ID")
-        cols = [c for c in d.columns if c not in ("Ensembl_Gene_ID", "Symbol")]
-        gt = pd.DataFrame({"Ensembl_Gene_ID": d["Ensembl_Gene_ID"].values, "Symbol": d["Symbol"].values})
-        clean = clean_tpm(d.set_index("Ensembl_Gene_ID")[cols].astype(float), gene_table=gt.set_index(d.index))
-        clean.index = d["Symbol"].values
-        return clean.groupby(level=0).sum().mean(axis=1).to_dict()
-    except Exception:  # noqa: BLE001 — reference cohort / clean_tpm unavailable for this type
+    Uses pirlygenes' pan-cancer ``<CODE>_TPM_clean`` reference column — already clean-TPM scale (so it
+    matches the analyzed sample) and a declared dependency, avoiding an undeclared oncoref import.
+    """
+    try:
+        from trufflepig.reference import pan_cancer_expression
+
+        ref = pan_cancer_expression(technical_rna_normalize=True)
+        col = f"{cancer_type}_TPM_clean"
+        if col not in ref.columns:
+            return None
+        s = ref.drop_duplicates("Symbol").set_index("Symbol")[col].astype(float)
+        s = s[s > 0]
+        return s.to_dict() if not s.empty else None
+    except Exception:  # noqa: BLE001 — pan-cancer reference unavailable for this type
         logger.debug("aneuploidy reference unavailable for %s", cancer_type, exc_info=True)
         return None
 

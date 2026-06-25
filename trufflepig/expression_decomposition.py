@@ -402,8 +402,8 @@ def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
         keys += healthy                                   # keep the malignant sub-lineage as tumor
     applied_mets, skipped_mets, unknown_mets = [], [], []
     for site in (met_sites or []):
-        if site not in _CT:
-            unknown_mets.append(site)                     # not a known met organ (typo / unsupported) — surfaced, not silent
+        if site not in _MET_SITE_MARKERS:                # only true met ORGANS — not 'immune'/'stromal'/etc.
+            unknown_mets.append(site)                     # typo / unsupported / non-organ template key — surfaced, not silent
             continue
         primary = _MET_PRIMARY_LINEAGE.get(site, set())  # match subtype hints too (LUAD_EGFR → LUAD)
         if any(c in primary for c in _code_candidates(type_code)):
