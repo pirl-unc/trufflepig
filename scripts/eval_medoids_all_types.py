@@ -55,10 +55,14 @@ def evaluate(types):
             row["fit_argmax"] = max(row["fits"], key=lambda m: (row["fits"][m] if row["fits"][m] is not None else -1e9))
         except Exception as e:  # noqa: BLE001
             row["nh_error"] = str(e)[:50]
-        try:                                                                  # hinted purity (needs a pan-cancer column)
-            pur = estimate_tumor_purity(df, cancer_type=t)
+        try:                                                                  # AUTO-detect end-to-end (non-circular)
+            pur = estimate_tumor_purity(df)                                    # no hint: ranking picks the type
             comp = pur.get("components", {}); dc = comp.get("decomposition") or {}
-            row.update({"decomp_mode": dc.get("mode"), "conflict": dc.get("lineage_conflict"),
+            auto_code = pur.get("cancer_type")
+            auto_grp = cancer_lineage_group(auto_code) if auto_code else None
+            row.update({"auto_code": auto_code,
+                        "auto_lineage": _group_to_mode(auto_grp) if auto_grp else None,
+                        "decomp_mode": dc.get("mode"), "conflict": dc.get("lineage_conflict"),
                         "overall": pur.get("overall_estimate"), "estimate": comp.get("estimate_purity"),
                         "gated": comp.get("estimate_gated_for_lineage"),
                         "residual_fraction": dc.get("residual_fraction"), "aneuploidy_purity": dc.get("aneuploidy_purity"),
@@ -91,22 +95,26 @@ def main():
     print("-" * 110)
 
     nh = [r for r in rows if r.get("clf_mode") and r.get("truth")]              # no-hint scored
-    hint = [r for r in rows if r.get("decomp_mode") and r.get("truth")]         # hinted scored
+    auto = [r for r in rows if r.get("decomp_mode") and r.get("truth")]         # auto-detect end-to-end
+    al = [r for r in rows if r.get("auto_lineage") and r.get("truth")]
     gated_rows = [r for r in rows if "gated" in r and r.get("truth")]
     print(f"\nTypes: {len(rows)} total, {len(load_err)} failed to load, "
-          f"{sum('purity_error' in r for r in rows)} lack a pan-cancer ref (no hinted purity).")
+          f"{sum('purity_error' in r for r in rows)} errored in auto purity.  (ALL metrics below are "
+          f"NON-circular: no cancer-type hint given.)")
     print(f"  NO-HINT lineage == truth ({len(nh)} types): compartment_call "
           f"{sum(r['clf_mode']==r['truth'] for r in nh)}/{len(nh)}   "
           f"lineage_fit-argmax {sum(r['fit_argmax']==r['truth'] for r in nh)}/{len(nh)}")
-    print(f"  HINTED decomp mode==truth ({len(hint)} types): "
-          f"{sum(r['decomp_mode']==r['truth'] for r in hint)}/{len(hint)}  (conflicts resolved by lineage_fit)")
+    print(f"  AUTO cancer-type-call lineage == truth ({len(al)} types): "
+          f"{sum(r['auto_lineage']==r['truth'] for r in al)}/{len(al)}  (rank_cancer_type_candidates)")
+    print(f"  AUTO end-to-end decomp mode == truth ({len(auto)} types): "
+          f"{sum(r['decomp_mode']==r['truth'] for r in auto)}/{len(auto)}  (auto code → decomposition + lineage_fit)")
     hs = [r for r in gated_rows if r["truth"] in ("heme", "mesenchymal")]
     ep = [r for r in gated_rows if r["truth"] == "solid"]
     print(f"  ESTIMATE gated on heme/sarcoma: {sum(bool(r['gated']) for r in hs)}/{len(hs)}   "
           f"wrongly gated on solid: {sum(bool(r['gated']) for r in ep)}/{len(ep)}")
-    print(f"  lineage conflicts (code vs expression): {sum(bool(r.get('conflict')) for r in hint)}/{len(hint)}")
+    print(f"  lineage conflicts (auto code vs expression): {sum(bool(r.get('conflict')) for r in auto)}/{len(auto)}")
     print(f"  reconciliation flags fired: {sum(bool(r.get('consistency')) for r in rows)}/{len(rows)}")
-    print("\nno-hint misses (compartment_call != truth) — hinted decomp shown for contrast:")
+    print("\nno-hint misses (compartment_call != truth) — auto decomp shown for contrast:")
     for r in nh:
         if r["clf_mode"] != r["truth"]:
             fv = " ".join(f"{m[:4]}={(r['fits'][m] if r['fits'][m] is not None else float('nan')):.0f}" for m in MODES)
