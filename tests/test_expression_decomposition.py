@@ -43,6 +43,27 @@ def test_resolve_mode_routes_family_type_group_subtype(hint, mode):
     assert resolve_mode(hint)[0] == mode
 
 
+def test_lineage_fit_score_rewards_surviving_tumor_penalizes_leakage():
+    # synthetic: residual rich in the mode's tumor lineage + poor in its backgrounds → high fit;
+    # residual where the backgrounds leaked through (not subtracted) → low fit.
+    from trufflepig.expression_decomposition import lineage_fit_score, _refs
+    _, signatures = _refs()
+    epi = list(signatures["epithelial"])[:5]
+    imm = list(signatures["immune"])[:5]
+    bg = {f"BG{i}": 10.0 for i in range(60)}
+    good = pd.Series({**bg, **{g: 900.0 for g in epi}, **{g: 1.0 for g in imm}})   # epithelial tumor survived
+    bad = pd.Series({**bg, **{g: 1.0 for g in epi}, **{g: 900.0 for g in imm}})    # immune leaked through
+    assert lineage_fit_score("solid", good, signatures=signatures) > lineage_fit_score("solid", bad, signatures=signatures)
+
+
+def test_lineage_fit_ranks_true_mode_solid_and_heme():
+    # mode-comparable GoF: heme tumor must NOT fit solid (the ESTIMATE failure mode), epithelial must.
+    heme = decompose_expression(_sample("DLBC"), cancer="DLBC", run_all=True)["modes"]
+    assert heme["heme"]["lineage_fit"] > heme["solid"]["lineage_fit"]
+    solid = decompose_expression(_sample("COAD"), cancer="COAD", run_all=True)["modes"]
+    assert solid["solid"]["lineage_fit"] >= max(solid[m]["lineage_fit"] for m in ("heme", "mesenchymal", "embryonal"))
+
+
 def test_config_self_consistency():
     # The mode/compartment/template/signature tables must stay mutually consistent (catches drift
     # when biology config is edited) — the "declarative table + validation" Codex asked for.

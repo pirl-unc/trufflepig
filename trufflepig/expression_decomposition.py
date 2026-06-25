@@ -71,6 +71,7 @@ class ModeMetrics(TypedDict, total=False):
     residual_fraction: float | None          # residual mass fraction under this mode
     subtracted: dict[str, float]             # background → subtracted fraction
     tumor_lineage_in_residual: float | None  # mode tumor-signature score on the residual (routing tiebreak)
+    lineage_fit: float                       # mode-comparable goodness-of-fit (tumor survives − background leakage)
     template_collinearity: float             # identifiability: max |cosine| of subtracted templates
     met_sites_subtracted: list[str]          # met organs whose normal template was subtracted
     met_sites_skipped_as_primary: list[str]  # met organs skipped (would self-subtract the primary)
@@ -333,6 +334,38 @@ def signature_score(sample: pd.Series, gene_symbols, space: str = "percentile") 
     return float(sample.rank(pct=True).loc[present].mean() * 100.0)  # percentile default
 
 
+@lru_cache(maxsize=None)
+def _mode_tumor_lineages(mode):
+    """Tumor-lineage signatures a mode treats as TUMOR (kept, not subtracted) — derived from
+    _COMPARTMENTS (e.g. solid → epithelial/melanoma/neuroendocrine/cns/germ; heme → immune)."""
+    sigs = tuple(sorted({c["tumor_sig"] for c in _COMPARTMENTS.values() if c["mode"] == mode}))
+    return sigs or (_MODES[mode]["tumor_sig"],)
+
+
+_FIT_PROLIF_WEIGHT = 0.3  # small bonus: a real tumor's proliferation survives the right decomposition
+
+
+def lineage_fit_score(mode, residual, *, signatures, space: str = "percentile") -> float:
+    """Mode-comparable goodness-of-fit: how coherently a real tumor of ``mode``'s lineage survives
+    in its residual.
+
+    ``= max(tumor-lineage signal in residual) − max(subtracted-background leakage in residual)``
+    ``  + small proliferation bonus``.
+
+    Every term is a within-sample percentile, so fits ARE comparable across modes — unlike the raw
+    residual fraction. The RIGHT mode keeps its tumor lineage (high) and cleanly removed its
+    backgrounds (low → little leakage); a WRONG mode either subtracted the tumor itself (the tumor
+    signal collapses) or left its backgrounds behind (leakage high). This is the goodness-of-fit a
+    reconstruction-error criterion can't give you — ESTIMATE fails with *low* reconstruction error
+    precisely when it absorbs a collinear tumor into a background.
+    """
+    residual = _as_series(residual)
+    tumor = max((signature_score(residual, signatures.get(s, frozenset()), space) or 0.0) for s in _mode_tumor_lineages(mode))
+    leakage = max((signature_score(residual, signatures.get(s, frozenset()), space) or 0.0) for s in _MODES[mode]["subtract"])
+    prolif = signature_score(residual, signatures.get("proliferation", frozenset()), space) or 0.0
+    return round((tumor - leakage) + _FIT_PROLIF_WEIGHT * (prolif - 50.0), 1)
+
+
 def _collinearity(templates, genes) -> float:
     if len(templates) < 2:
         return 0.0
@@ -402,6 +435,7 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
                "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
                "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[_MODES[mode]["tumor_sig"]], space), 2),
+               "lineage_fit": lineage_fit_score(mode, residual, signatures=signatures, space=space),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3), **met}
     return metrics, residual, info
 
@@ -551,11 +585,11 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
     if mode is not None:
         selected, confidence = mode, "routed: " + routing
     elif candidates:
-        selected = max(candidates, key=lambda m: _rank_score(out[m].get("tumor_lineage_in_residual")))
+        selected = max(candidates, key=lambda m: _rank_score(out[m].get("lineage_fit")))
         confidence = (f"ambiguous compartment ({classifier['compartment']} vs {classifier['runner_up']}, "
-                      f"margin {classifier['margin']}) → {selected} by residual lineage signal — verify")
+                      f"margin {classifier['margin']}) → {selected} by lineage fit — verify")
     elif out:
-        selected = max(out, key=lambda m: _rank_score(out[m].get("tumor_lineage_in_residual")))
+        selected = max(out, key=lambda m: _rank_score(out[m].get("lineage_fit")))
         confidence = "low (data-only fallback; no hint and classifier unavailable)"
     else:
         return {"selected_mode": None, "routing": routing, "confidence": "no decomposition produced"}
