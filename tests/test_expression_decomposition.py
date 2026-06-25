@@ -298,6 +298,22 @@ def test_purity_reconciliation_guardrail():
     assert _purity_reconciliation(0.6, {"residual_fraction": 0.6}, 0.6) == []   # agreement → no flag
 
 
+def test_decomposition_rerouted_to_evidence_call():
+    # The purity decomposition is computed for the pre-evidence ranking winner; once the cancer-type
+    # EVIDENCE layer refines the call to a different lineage, the decomposition is re-routed to match.
+    from trufflepig.main import _reroute_decomposition_to_call
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    df = _df("COAD")
+    analysis = {"purity": estimate_tumor_purity(df, cancer_type="COAD")}      # solid decomposition
+    assert analysis["purity"]["components"]["decomposition"]["mode"] == "solid"
+    _reroute_decomposition_to_call(analysis, df, "DLBC")                      # evidence refines → heme
+    assert analysis["purity"]["components"]["decomposition"]["mode"] == "heme"
+    # same-lineage refinement is a no-op (no needless recompute)
+    a2 = {"purity": estimate_tumor_purity(df, cancer_type="COAD")}
+    _reroute_decomposition_to_call(a2, df, "READ")                           # still epithelial → unchanged
+    assert a2["purity"]["components"]["decomposition"]["mode"] == "solid"
+
+
 def test_reference_free_purity_for_heme_rare_types():
     # heme/rare types lack a pan-cancer reference; with reference_optional=True they still get a
     # lineage-decomposition purity (the default raises, preserving the candidate-ranking skip).
