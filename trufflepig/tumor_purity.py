@@ -1586,24 +1586,32 @@ def _decomposition_purity_component(sample_tpm, cancer_code):
     try:
         from .expression_decomposition import decompose_expression
         from .purity_calibration import aneuploidy_purity
+    except ImportError as exc:                              # optional decomposition stack absent
+        return {"error": f"decomposition unavailable: {exc}"}
+    try:
         r = decompose_expression(dict(sample_tpm), cancer=cancer_code)
         c = r["purity"]["corroborators"]
+        bulk_amp = c["aneuploidy_amplitude_bulk"]
         return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
                 "residual_fraction": r["purity"]["residual_fraction"],
-                "bulk_aneuploidy_amplitude": c["aneuploidy_amplitude_bulk"],
-                # #96: bulk amplitude calibrated to an absolute purity via the per-type A_ref reference
-                # (None when the type is near-diploid / uncalibratable — aneuploidy carries no purity signal).
-                "aneuploidy_purity": aneuploidy_purity(dict(sample_tpm), cancer_code),
+                "bulk_aneuploidy_amplitude": bulk_amp,
+                # #96: bulk amplitude calibrated to absolute purity via the per-type A_ref reference
+                # (None when near-diploid / uncalibratable). median_purity + bulk_amp passed in to keep
+                # purity_calibration decoupled from tumor_purity and avoid recomputing bulk aneuploidy.
+                "aneuploidy_purity": aneuploidy_purity(dict(sample_tpm), cancer_code,
+                                                       median_purity=TCGA_MEDIAN_PURITY.get(cancer_code),
+                                                       bulk_amplitude=bulk_amp),
                 "restricted_marker_burden": c["restricted_marker_burden"],
                 "note": "lineage-routed residual mass fraction (monotone with purity, NOT yet calibrated to "
                         "absolute). aneuploidy_purity is the bulk amplitude calibrated to absolute purity "
                         "(#96, per-type A_ref prior). Neither is fused into overall_estimate yet — pending "
                         "validation against TCGA ABSOLUTE."}
-    except Exception as exc:  # noqa: BLE001
-        return {"error": str(exc)[:160]}
+    except Exception:                                       # don't crash purity on a decomposition bug — but surface it
+        logger.warning("decomposition purity component failed for %s", cancer_code, exc_info=True)
+        return {"error": "decomposition component failed (see logs)"}
 
 
-def estimate_tumor_purity(df_gene_expr, cancer_type=None):
+def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decomposition=True):
     """Estimate tumor purity from expression data.
 
     Parameters
@@ -1821,7 +1829,10 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None):
     else:
         integration_source = None
 
-    decomposition_component = _decomposition_purity_component(sample_tpm, cancer_code)
+    # The decomposition component runs a full lineage-routed decomposition (+ first-call reference
+    # load); callers in hot loops can opt out via include_decomposition=False to protect latency.
+    decomposition_component = (
+        _decomposition_purity_component(sample_tpm, cancer_code) if include_decomposition else None)
     return {
         "cancer_type": cancer_code,
         "reference_cancer_type": reference_cancer_code,

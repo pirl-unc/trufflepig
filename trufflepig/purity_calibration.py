@@ -44,11 +44,13 @@ def _type_reference_sample(cancer_type):
 
 
 @lru_cache(maxsize=None)
-def aneuploidy_reference(cancer_type):
+def aneuploidy_reference(cancer_type, median_purity=None):
     """``A_ref(type)`` — the pure-tumor (purity≈1) bulk aneuploidy amplitude for a cancer type.
 
-    None when the type has no reference cohort or is near-diploid (amplitude below the noise
-    floor), in which case aneuploidy carries no usable purity signal for that type.
+    ``median_purity`` (the reference cohort's typical purity, e.g. TCGA ABSOLUTE median) is passed
+    IN so this module stays decoupled from ``tumor_purity`` — the reference sits at ~median purity,
+    so we divide to extrapolate to purity = 1; ``None`` ⇒ treat the reference as ~pure. Returns
+    None when the type has no reference cohort or is near-diploid (no usable purity signal).
     """
     ref = _type_reference_sample(cancer_type)
     if ref is None:
@@ -58,24 +60,22 @@ def aneuploidy_reference(cancer_type):
     amp = bulk_aneuploidy_amplitude(ref)
     if not amp:                                              # None or ~0 → near-diploid; no signal
         return None
-    from .tumor_purity import TCGA_MEDIAN_PURITY
-
-    median_purity = TCGA_MEDIAN_PURITY.get(cancer_type)      # reference sits at ~median purity
     return round(amp / median_purity, 4) if median_purity else amp
 
 
-def aneuploidy_purity(sample_tpm_by_symbol, cancer_type):
+def aneuploidy_purity(sample_tpm_by_symbol, cancer_type, median_purity=None, bulk_amplitude=None):
     """Calibrated purity from bulk aneuploidy: ``clip(A_obs / A_ref(type), 0, 1)``.
 
+    Pass ``bulk_amplitude`` if already computed (avoids recomputing the sample's bulk aneuploidy).
     Returns None when the type is uncalibratable (no reference / near-diploid) or the sample's
     aneuploidy is unavailable — i.e. when aneuploidy carries no usable purity information.
     """
-    a_ref = aneuploidy_reference(cancer_type)
+    a_ref = aneuploidy_reference(cancer_type, median_purity)
     if not a_ref:
         return None
-    from .expression_decomposition import bulk_aneuploidy_amplitude
-
-    a_obs = bulk_aneuploidy_amplitude(sample_tpm_by_symbol)
-    if a_obs is None:
+    if bulk_amplitude is None:
+        from .expression_decomposition import bulk_aneuploidy_amplitude
+        bulk_amplitude = bulk_aneuploidy_amplitude(sample_tpm_by_symbol)
+    if bulk_amplitude is None:
         return None
-    return round(float(np.clip(a_obs / a_ref, 0.0, 1.0)), 3)
+    return round(float(np.clip(bulk_amplitude / a_ref, 0.0, 1.0)), 3)

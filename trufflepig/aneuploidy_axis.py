@@ -54,13 +54,21 @@ def gene_arm_map() -> dict:
     return out
 
 
+_GERMLINE_CELL_TYPES = ("Early spermatids", "Late spermatids", "Spermatocytes", "Spermatogonia", "Oocytes")
+
+
 @lru_cache(maxsize=1)
 def _diploid_reference() -> pd.Series:
-    """Pan-normal diploid per-gene reference (mean of HPA normal cell types)."""
+    """Pan-normal diploid per-gene reference (mean of HPA *somatic* normal cell types).
+
+    Germline (meiotic/haploid) cell types are excluded so the baseline is genuinely diploid and
+    CTA/germline-restricted genes aren't inflated in the reference (consistent with how the
+    restricted-gene set is defined in expression_decomposition).
+    """
     from pirlygenes.expression.accessors import hpa_cell_type_expression
 
     hpa = hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
-    cell_cols = [c for c in hpa.columns if c not in ("Ensembl_Gene_ID",)]
+    cell_cols = [c for c in hpa.columns if c not in ("Ensembl_Gene_ID",) and c not in _GERMLINE_CELL_TYPES]
     return hpa[cell_cols].mean(axis=1).clip(lower=0)
 
 

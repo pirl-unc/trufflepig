@@ -299,11 +299,15 @@ def _rank_score(v):
     return v if (v is not None and not (isinstance(v, float) and np.isnan(v))) else float("-inf")
 
 
-def signature_score(sample: pd.Series, gene_symbols, space: str = "percentile") -> float:
-    """Enrichment of a gene set in a sample, in ``percentile`` (default) or ``ssgsea`` space."""
+def signature_score(sample: pd.Series, gene_symbols, space: str = "percentile") -> float | None:
+    """Enrichment of a gene set in a sample, in ``percentile`` (default) or ``ssgsea`` space.
+
+    Returns **None** when not computable (no signature gene present in the sample) — an explicit
+    "not available" at the scoring boundary, so callers never have to test for NaN.
+    """
     present = [g for g in gene_symbols if g in sample.index]
     if not present:
-        return float("nan")
+        return None
     if space == "ssgsea":
         x = sample.values
         order = np.argsort(x)[::-1]
@@ -396,10 +400,10 @@ def characterize_residual(residual, *, mode: str = "solid", space: str = "percen
     except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) optional; degrade gracefully
         aneu = {"score": None, "top_gained": [], "top_lost": []}
     aneu_score = aneu["score"]                                  # None when aneuploidy unavailable (valid JSON null)
-    proliferative = bool(not np.isnan(prolif) and prolif >= _PROLIFERATIVE_PCTL)
-    aneuploid = bool(aneu_score is not None and not np.isnan(aneu_score) and aneu_score >= _ANEUPLOIDY_STRONG)
+    proliferative = bool(prolif is not None and prolif >= _PROLIFERATIVE_PCTL)
+    aneuploid = bool(aneu_score is not None and aneu_score >= _ANEUPLOIDY_STRONG)
     support = ([s for s, ok in (("proliferation", proliferative), ("aneuploidy", aneuploid)) if ok] or ["weak"])
-    char = {"proliferation_percentile": round(prolif, 1) if not np.isnan(prolif) else None,
+    char = {"proliferation_percentile": _round_or_none(prolif, 1),
             "proliferative": proliferative,
             "aneuploidy_score": aneu_score, "aneuploid": aneuploid,
             "aneuploidy_arms_gained": aneu["top_gained"], "aneuploidy_arms_lost": aneu["top_lost"],

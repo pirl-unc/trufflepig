@@ -54,7 +54,35 @@ def test_group_to_mode():
 def test_signature_score_high_for_enriched_set():
     s = pd.Series({f"BG{i}": 1.0 for i in range(100)} | {"A": 900.0, "B": 800.0, "C": 700.0})
     assert signature_score(s, ["A", "B", "C"]) > 95
-    assert np.isnan(signature_score(s, ["NOPE"]))
+    assert signature_score(s, ["NOPE"]) is None              # not computable → None (never NaN), at the boundary
+
+
+def test_decompose_mode_nnls_subtracts_only_non_tumor_synthetic(monkeypatch):
+    # Fully synthetic templates/signatures — no real data. `solid` mode subtracts immune+stromal;
+    # the epithelial tumor + proliferation must survive in the residual.
+    import trufflepig.expression_decomposition as ed_mod
+    genes = ["EPI1", "IMM1", "STR1", "PRO1"]
+
+    def tmpl(on):
+        s = pd.Series(0.0, index=genes); s[on] = 1.0
+        return s / s.sum() * 1e6
+
+    templates = {"immune": tmpl("IMM1"), "stromal": tmpl("STR1"), "epithelial": tmpl("EPI1")}
+    signatures = {"immune": frozenset(["IMM1"]), "stromal": frozenset(["STR1"]),
+                  "epithelial": frozenset(["EPI1"]), "proliferation": frozenset(["PRO1"]), "restricted": frozenset()}
+    monkeypatch.setattr(ed_mod, "_refs", lambda: (templates, signatures))
+    sample = pd.Series({"EPI1": 600.0, "IMM1": 200.0, "STR1": 200.0, "PRO1": 60.0})
+    metrics, residual, _ = ed_mod.decompose_mode("solid", sample, templates, signatures, "percentile", None, None)
+    assert metrics["residual_fraction"] > 0.0
+    assert residual["EPI1"] > 0.0 and residual["PRO1"] > 0.0   # tumor + proliferation retained
+    assert residual["IMM1"] < sample["IMM1"] and residual["STR1"] < sample["STR1"]  # backgrounds subtracted
+
+
+def test_result_schema_keys():
+    r = decompose_expression(_sample("COAD"), cancer="COAD")
+    assert set(r) >= {"selected_mode", "lineage", "purity", "tumor_characteristics", "modes"}
+    assert set(r["purity"]) >= {"residual_fraction", "corroborators", "consistency_flags"}
+    assert set(r["lineage"]) >= {"compartment", "mode", "type_code"}
 
 
 def test_restricted_marker_burden_flags_expressed_cta():
