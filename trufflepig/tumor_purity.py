@@ -1580,15 +1580,19 @@ def _purity_lineage_compartment(cancer_code):
 
 
 def _expression_lineage_compartment(sample_tpm):
-    """Expression-derived lineage compartment via ``compartment_call`` — robust when the cancer-type
-    CALL is wrong (e.g. a sarcoma miscalled BRCA). Used to gate ESTIMATE off heme/sarcoma even when
-    the cancer code says otherwise; on real samples the code is wrong at the fine level far more often
-    than the expression lineage is. Returns the compartment label or None."""
+    """Expression-derived lineage via ``compartment_call`` → ``(compartment, confident)``.
+
+    Robust when the cancer-type CALL is wrong (a sarcoma miscalled BRCA). The two consumers want
+    different things, hence the confidence flag: ESTIMATE GATING must act only on a *confident* call
+    (the classifier API says low-margin labels aren't actionable — an unconfident Sarcoma on ATRT
+    must not gate); the decomposition ROUTING may use the raw label because it arbitrates by
+    lineage_fit, not by compartment_call's own confidence. ``(None, False)`` on failure."""
     try:
         from .cancer_type_centroid import compartment_call
-        return compartment_call(dict(sample_tpm)).get("compartment")
+        call = compartment_call(dict(sample_tpm))
+        return call.get("compartment"), bool(call.get("confident"))
     except Exception:  # noqa: BLE001
-        return None
+        return None, False
 
 
 def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=None, allow_lineage_override=True):
@@ -1614,7 +1618,7 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
     try:
         tpm = dict(sample_tpm)                              # materialize once (reused below)
         if expr_compartment is None:
-            expr_compartment = _expression_lineage_compartment(tpm)
+            expr_compartment, _ = _expression_lineage_compartment(tpm)  # raw label; lineage_fit arbitrates
         code_comp = _purity_lineage_compartment(cancer_code)
         code_mode = _group_to_mode(code_comp) if code_comp else None
         expr_mode = _group_to_mode(expr_compartment) if expr_compartment else None
@@ -1705,12 +1709,13 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
 
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
     lineage_compartment = _purity_lineage_compartment(cancer_code)
-    expr_compartment = _expression_lineage_compartment(sample_tpm)
+    expr_compartment, expr_confident = _expression_lineage_compartment(sample_tpm)
     # ESTIMATE is mis-specified where the tumor lineage IS a background (heme/sarcoma). Gate it off if
-    # EITHER the cancer-code lineage OR the EXPRESSION lineage says so — on real samples the code is
-    # wrong at the fine level far more often (a sarcoma miscalled BRCA still expresses as Sarcoma).
+    # EITHER the cancer-code lineage OR a CONFIDENT expression lineage says so — the code is often wrong
+    # at the fine level (a sarcoma miscalled BRCA still expresses as Sarcoma), but a low-margin
+    # expression call (e.g. ATRT read as Sarcoma) is not actionable and must NOT gate.
     estimate_invalid_lineage = (lineage_compartment in _ESTIMATE_INVALID_COMPARTMENTS
-                                or expr_compartment in _ESTIMATE_INVALID_COMPARTMENTS)
+                                or (expr_confident and expr_compartment in _ESTIMATE_INVALID_COMPARTMENTS))
 
     # Reference expression by symbol (normalized cohort TPM)
     ref = pan_cancer_expression(technical_rna_normalize=True)
@@ -1908,7 +1913,8 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
                                         allow_lineage_override=(cancer_type is None))
         if include_decomposition else None)
     # Reconciliation guardrail: flag when the decomposition + ESTIMATE strongly disagree with overall.
-    purity_consistency = _purity_reconciliation(overall, decomposition_component, estimate_purity)
+    # reconcile against the GATED estimate — a gated-out ESTIMATE (heme/sarcoma) must not drive a flag
+    purity_consistency = _purity_reconciliation(overall, decomposition_component, gated_estimate)
     return {
         "cancer_type": cancer_code,
         "reference_cancer_type": reference_cancer_code,
@@ -4271,10 +4277,12 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
             dc = _decomposition_purity_component(sample_tpm, cancer_code,
                                                  allow_lineage_override=(cancer_type is None))
             comps["decomposition"] = dc
-            # ranking computed purity_consistency without the decomposition; recompute now it's present
+            # ranking computed purity_consistency without the decomposition; recompute now it's present.
+            # Use the GATED estimate (None when gated for lineage) so a gated-out ESTIMATE can't flag.
+            gated_est = None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")
             purity = {**purity, "components": comps,
                       "purity_consistency": _purity_reconciliation(
-                          purity.get("overall_estimate"), dc, comps.get("estimate_purity"))}
+                          purity.get("overall_estimate"), dc, gated_est)}
     else:
         purity = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_code)
 

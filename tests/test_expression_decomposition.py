@@ -260,14 +260,15 @@ def test_estimate_tumor_purity_gates_estimate_for_heme_and_reports_decomposition
         assert "aneuploidy_purity" in dc                                  # #96 calibrated signal present
 
 
-def test_estimate_gated_by_expression_lineage_when_code_is_wrong():
-    # On real samples the cancer-type CALL is often wrong at the fine level (a sarcoma miscalled BRCA).
-    # ESTIMATE must still be gated off via the EXPRESSION lineage (compartment_call), not the code.
-    from trufflepig.tumor_purity import estimate_tumor_purity
-    comp = estimate_tumor_purity(_df("SARC"), cancer_type="BRCA")["components"]
-    assert comp["lineage_compartment"] == "Epithelial"           # the (wrong) cancer-code lineage
-    assert comp["expression_lineage_compartment"] == "Sarcoma"   # the right expression lineage
-    assert comp["estimate_gated_for_lineage"] is True            # gated despite the epithelial code
+def test_estimate_gating_requires_confident_expression_lineage(monkeypatch):
+    # ESTIMATE may be gated via the EXPRESSION lineage when the cancer code is wrong (sarcoma miscalled
+    # BRCA) — but ONLY when the expression call is confident. A low-margin call (e.g. ATRT read as
+    # Sarcoma) is not actionable and must NOT gate.
+    import trufflepig.tumor_purity as tp
+    monkeypatch.setattr(tp, "_expression_lineage_compartment", lambda s: ("Sarcoma", True))
+    assert tp.estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["estimate_gated_for_lineage"] is True
+    monkeypatch.setattr(tp, "_expression_lineage_compartment", lambda s: ("Sarcoma", False))
+    assert tp.estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["estimate_gated_for_lineage"] is False
 
 
 def test_decomposition_lineage_override_only_for_auto_codes():
