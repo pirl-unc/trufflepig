@@ -1595,7 +1595,8 @@ def _expression_lineage_compartment(sample_tpm):
         return None, False
 
 
-def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=None, allow_lineage_override=True):
+def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=None, allow_lineage_override=True,
+                                    reference_code=None):
     """Lineage-routed decomposition residual_fraction + aneuploidy corroborator (fallback-safe).
 
     Reported as a component; NOT fused into ``overall_estimate`` — ``residual_fraction`` is monotone
@@ -1638,8 +1639,14 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
         # conflict = the resolved lineage differs from the cancer code (its per-type A_ref is then
         # cross-lineage and untrustworthy → withhold aneuploidy_purity).
         conflict = bool(code_mode and r["selected_mode"] != code_mode)
-        aneu = None if conflict else aneuploidy_purity(
-            tpm, cancer_code, median_purity=TCGA_MEDIAN_PURITY.get(cancer_code, _DEFAULT_MEDIAN_PURITY),
+        # aneuploidy A_ref is per-type; a subtype (LUAD_EGFR / COAD_MSI) has no <code>_TPM_clean column,
+        # so resolve to the first code WITH a pan-cancer reference — the explicit reference_code, else
+        # the subtype, else its broad parent (LUAD / COAD) — matching how the purity reference resolves.
+        from .purity_calibration import _type_reference_sample
+        aneu_ref = next((c for c in (reference_code, cancer_code, _broad_purity_fallback_code(cancer_code))
+                         if c and _type_reference_sample(c) is not None), None)
+        aneu = None if (conflict or not aneu_ref) else aneuploidy_purity(
+            tpm, aneu_ref, median_purity=TCGA_MEDIAN_PURITY.get(aneu_ref, _DEFAULT_MEDIAN_PURITY),
             bulk_amplitude=bulk_amp)
         return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
                 "residual_fraction": r["purity"]["residual_fraction"],
@@ -1951,7 +1958,8 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     # load); callers in hot loops can opt out via include_decomposition=False to protect latency.
     decomposition_component = (
         _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
-                                        allow_lineage_override=(cancer_type is None))
+                                        allow_lineage_override=(cancer_type is None),
+                                        reference_code=reference_cancer_code)
         if include_decomposition else None)
     # Reconciliation guardrail: flag when the decomposition + ESTIMATE strongly disagree with overall.
     # reconcile against the GATED estimate — a gated-out ESTIMATE (heme/sarcoma) must not drive a flag

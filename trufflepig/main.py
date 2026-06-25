@@ -5131,16 +5131,19 @@ def _report_scope_cancer_type(cancer_type):
 
 
 def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
-    """Recompute the purity decomposition for the EVIDENCE-refined cancer call when its lineage
-    differs from the pre-evidence decomposition, so the reported purity lineage matches the final
-    cancer type (e.g. ATRT scored as LGG → solid decomp; evidence calls ATRT → re-route to embryonal).
+    """When the cancer-type EVIDENCE selector refines the call to a DIFFERENT lineage than the
+    pre-evidence ranking winner, recompute the WHOLE purity for the refined call.
 
-    Only recomputes on a lineage change (rare) and is fully fallback-safe — a no-op otherwise.
+    analyze_sample computed purity for the pre-evidence winner, so EVERYTHING lineage-dependent —
+    ``lineage_compartment``, ``estimate_gated_for_lineage``, the gated ``overall_estimate``,
+    integration source, AND the decomposition — reflects the wrong lineage (an ATRT scored as LGG, or
+    a Sarcoma/Heme rescue still using ESTIMATE). Recomputing the full purity for ``refined_code``
+    (explicit → trusted, no expression override) makes the entire purity result consistent with the
+    final lineage. Only fires on a lineage change (rare); fully fallback-safe.
     """
     try:
         purity = analysis.get("purity") or {}
-        comps = purity.get("components") or {}
-        dc = comps.get("decomposition") or {}
+        dc = (purity.get("components") or {}).get("decomposition") or {}
         if not refined_code or not isinstance(dc, dict) or not dc.get("mode"):
             return
         from .expression_decomposition import _group_to_mode
@@ -5148,23 +5151,13 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
 
         refined_mode = _group_to_mode(cancer_lineage_group(refined_code) or "")
         if not refined_mode or refined_mode == dc.get("mode"):
-            return
-        from .tumor_purity import (
-            _decomposition_purity_component,
-            _build_sample_tpm_by_symbol,
-            _purity_reconciliation,
-        )
+            return  # same lineage → pre-evidence purity is already consistent
+        from .tumor_purity import estimate_tumor_purity
 
-        sample_tpm = _build_sample_tpm_by_symbol(df_expr)
-        # the evidence call is authoritative here → trust it (no expression override)
-        new_dc = _decomposition_purity_component(sample_tpm, refined_code, allow_lineage_override=False)
-        comps["decomposition"] = new_dc
-        gated = None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")
-        purity["components"] = comps
-        purity["purity_consistency"] = _purity_reconciliation(purity.get("overall_estimate"), new_dc, gated)
-        analysis["purity"] = purity
+        # full recompute for the refined call → consistent gating / overall / compartment / decomposition
+        analysis["purity"] = estimate_tumor_purity(df_expr, cancer_type=refined_code, reference_optional=True)
     except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
-        _LOGGER.warning("decomposition re-route to evidence call failed", exc_info=True)
+        _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
 
 
 def _apply_cancer_type_evidence(
