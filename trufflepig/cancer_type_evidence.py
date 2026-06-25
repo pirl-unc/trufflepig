@@ -4867,6 +4867,32 @@ def _post_label_context_channels(analysis: Mapping[str, Any]) -> list[dict[str, 
             status="downstream_consumer_not_selector",
         )
     )
+    # Lineage-routed decomposition + purity signals, surfaced alongside the cancer-type evidence so all
+    # axes can be reasoned about together (mode / lineage_fit residual / aneuploidy / ESTIMATE gating /
+    # purity reconciliation). Context only — never selects the report label.
+    purity = analysis.get("purity") or {}
+    comps = purity.get("components") or {}
+    dc = comps.get("decomposition") if isinstance(comps.get("decomposition"), Mapping) else {}
+    if dc and dc.get("mode"):
+        channels.append(
+            CancerTypeEvidenceChannel(
+                channel="lineage_decomposition",
+                stage="family",
+                role="post_label_lineage_purity_context",
+                code=str(dc.get("mode") or ""),
+                context_code=str(comps.get("lineage_compartment") or ""),
+                support=_safe_float(dc.get("residual_fraction") or 0.0),
+                status="not_used_for_report_label",
+                details={
+                    "residual_fraction": dc.get("residual_fraction"),
+                    "aneuploidy_purity": dc.get("aneuploidy_purity"),
+                    "expression_lineage": dc.get("expression_lineage"),
+                    "lineage_conflict": dc.get("lineage_conflict"),
+                    "estimate_gated_for_lineage": comps.get("estimate_gated_for_lineage"),
+                    "purity_consistency": purity.get("purity_consistency") or [],
+                },
+            )
+        )
     return [channel.public_dict() for channel in channels]
 
 

@@ -316,6 +316,21 @@ def test_purity_rerouted_to_evidence_call_recomputes_full_metadata():
     assert a2["purity"]["components"]["decomposition"]["mode"] == "solid"
 
 
+def test_lineage_decomposition_surfaced_in_evidence_graph():
+    # the lineage-decomposition + purity signals are tracked alongside the cancer-type evidence (context
+    # only, never selects the label), so all axes can be reasoned about together.
+    from trufflepig.cancer_type_evidence import _post_label_context_channels
+    analysis = {"purity": {"components": {
+        "decomposition": {"mode": "heme", "residual_fraction": 0.9, "aneuploidy_purity": 0.5,
+                          "expression_lineage": "Heme", "lineage_conflict": False},
+        "lineage_compartment": "Heme", "estimate_gated_for_lineage": True},
+        "purity_consistency": []}}
+    ld = [c for c in _post_label_context_channels(analysis) if c.get("channel") == "lineage_decomposition"]
+    assert ld, "lineage_decomposition channel missing from the evidence graph"
+    assert ld[0]["code"] == "heme" and ld[0]["status"] == "not_used_for_report_label"
+    assert ld[0]["details"]["estimate_gated_for_lineage"] is True
+
+
 def test_reference_free_purity_for_heme_rare_types():
     # heme/rare types lack a pan-cancer reference; with reference_optional=True they still get a
     # lineage-decomposition purity (the default raises, preserving the candidate-ranking skip).
