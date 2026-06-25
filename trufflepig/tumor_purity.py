@@ -121,6 +121,9 @@ TCGA_MEDIAN_PURITY = {
     "UCS": 0.65,
     "UVM": 0.85,
 }
+# Global fallback for types absent from TCGA_MEDIAN_PURITY (mean of the known medians) — used by the
+# aneuploidy-purity calibration so a missing type isn't mistakenly treated as a pure (purity=1) reference.
+_DEFAULT_MEDIAN_PURITY = round(sum(TCGA_MEDIAN_PURITY.values()) / len(TCGA_MEDIAN_PURITY), 3)
 
 _HOST_SITE_BACKGROUND_TISSUES = {
     "bone_marrow",
@@ -1589,7 +1592,8 @@ def _decomposition_purity_component(sample_tpm, cancer_code):
     except ImportError as exc:                              # optional decomposition stack absent
         return {"error": f"decomposition unavailable: {exc}"}
     try:
-        r = decompose_expression(dict(sample_tpm), cancer=cancer_code)
+        tpm = dict(sample_tpm)                              # materialize once (reused below)
+        r = decompose_expression(tpm, cancer=cancer_code)
         c = r["purity"]["corroborators"]
         bulk_amp = c["aneuploidy_amplitude_bulk"]
         return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
@@ -1598,8 +1602,9 @@ def _decomposition_purity_component(sample_tpm, cancer_code):
                 # #96: bulk amplitude calibrated to absolute purity via the per-type A_ref reference
                 # (None when near-diploid / uncalibratable). median_purity + bulk_amp passed in to keep
                 # purity_calibration decoupled from tumor_purity and avoid recomputing bulk aneuploidy.
-                "aneuploidy_purity": aneuploidy_purity(dict(sample_tpm), cancer_code,
-                                                       median_purity=TCGA_MEDIAN_PURITY.get(cancer_code),
+                # Types absent from TCGA_MEDIAN_PURITY fall back to the global mean, not a purity=1 prior.
+                "aneuploidy_purity": aneuploidy_purity(tpm, cancer_code,
+                                                       median_purity=TCGA_MEDIAN_PURITY.get(cancer_code, _DEFAULT_MEDIAN_PURITY),
                                                        bulk_amplitude=bulk_amp),
                 "restricted_marker_burden": c["restricted_marker_burden"],
                 "note": "lineage-routed residual mass fraction (monotone with purity, NOT yet calibrated to "
@@ -2054,7 +2059,9 @@ def plot_tumor_purity(
         )
     )
 
-    if comp.get("estimate_purity") is not None:
+    # ESTIMATE combined was EXCLUDED from overall_estimate for Heme/Sarcoma lineages — don't render it
+    # as a contributing purity bar there (the stromal/immune infiltration bars above stay; they're real).
+    if comp.get("estimate_purity") is not None and not comp.get("estimate_gated_for_lineage"):
         components.append(
             (
                 "ESTIMATE combined\n(1 − infiltration)",
@@ -2296,7 +2303,7 @@ def plot_purity_method_comparison(
             )
         )
 
-    if comp.get("estimate_purity") is not None:
+    if comp.get("estimate_purity") is not None and not comp.get("estimate_gated_for_lineage"):
         rows.append(
             (
                 "ESTIMATE combined (derived)",

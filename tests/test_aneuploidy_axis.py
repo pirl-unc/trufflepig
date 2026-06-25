@@ -26,9 +26,11 @@ def test_diploid_sample_scores_low_aneuploid_sample_scores_higher():
         chrom = arms.get(g, "")[:-1]                               # "7p" -> "7"
         if chrom in factors:
             shifted.loc[g] = shifted.loc[g] * factors[chrom]
-    gained = aneuploidy_score(shifted.to_dict())["score"]
+    out = aneuploidy_score(shifted.to_dict())
+    gained = out["score"]
     assert baseline is not None and gained is not None
     assert gained > baseline + 0.1                                 # broad aneuploidy is detected
+    assert not (set(out["top_gained"]) & set(out["top_lost"]))     # an arm is never both gained and lost
 
 
 def test_returns_none_not_nan_when_empty():

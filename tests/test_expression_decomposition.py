@@ -250,3 +250,28 @@ def test_aneuploidy_purity_calibration():
     p = aneuploidy_purity(_sample("COAD"), "COAD")
     assert p is None or (0.0 <= p <= 1.0)                                 # calibrated purity in [0,1]
     assert aneuploidy_purity(_sample("COAD"), "NOT_A_TYPE") is None       # no reference → None (no signal)
+
+
+def test_aneuploidy_purity_none_when_sample_has_no_aneuploidy():
+    # bulk_amplitude 0.0 (near-diploid sample) → None, not a fake 0.0 ("0% pure") — aneuploidy uninformative.
+    from trufflepig.purity_calibration import aneuploidy_purity
+    assert aneuploidy_purity({}, "COAD", median_purity=0.6, bulk_amplitude=0.0) is None
+
+
+def test_heme_immune_indeterminate_when_no_markers():
+    # No b/t/myeloid/plasma markers present → can't tell which sub-lineage is malignant; subtract NONE
+    # (never guess one and subtract the genuinely-tumor compartment).
+    from trufflepig.expression_decomposition import _heme_immune, _refs
+    _, signatures = _refs()
+    info, healthy = _heme_immune(pd.Series({"SOMEGENE": 100.0}), signatures, "percentile", type_code=None)
+    assert info["malignant_sublineage"] is None and info["source"] == "indeterminate"
+    assert healthy == []
+
+
+def test_unknown_met_organ_is_surfaced_not_silent():
+    from trufflepig.expression_decomposition import _subtract_keys, _refs
+    _, signatures = _refs()
+    keys, info = _subtract_keys("solid", pd.Series({"EPCAM": 100.0}), signatures, "percentile", "COAD",
+                                ["liver", "bone"])
+    assert "bone" in info["met_sites_unknown"]               # unsupported organ surfaced, not dropped
+    assert "liver" in info["met_sites_subtracted"]           # COAD is not a liver primary → subtracted

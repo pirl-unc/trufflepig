@@ -336,9 +336,12 @@ def _heme_immune(sample, signatures, space, type_code):
     scores = {sl: signature_score(sample, signatures[sl], space) for sl in _SUBLINEAGES}
     if type_code and type_code in HEME_MALIGNANT:
         malignant, source = HEME_MALIGNANT[type_code], "type-map"
-    else:
+    elif any(v is not None for v in scores.values()):
         malignant = max(scores, key=lambda s: _rank_score(scores[s])); source = "dominant-marker"
-    healthy = [sl for sl in _SUBLINEAGES if sl != malignant]
+    else:                                                   # no sub-lineage markers present → can't tell
+        malignant, source = None, "indeterminate"
+    # when indeterminate, subtract NO sub-lineage (keep all immune as tumor) rather than guessing one
+    healthy = [sl for sl in _SUBLINEAGES if sl != malignant] if malignant else []
     return {"malignant_sublineage": malignant, "source": source,
             "sublineage_scores": {k: _round_or_none(v, 1) for k, v in scores.items()}}, healthy
 
@@ -349,16 +352,18 @@ def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
     if mode == "heme":
         info, healthy = _heme_immune(sample, signatures, space, type_code)
         keys += healthy                                   # keep the malignant sub-lineage as tumor
-    applied_mets, skipped_mets = [], []
+    applied_mets, skipped_mets, unknown_mets = [], [], []
     for site in (met_sites or []):
         if site not in _CT:
+            unknown_mets.append(site)                     # not a known met organ (typo / unsupported) — surfaced, not silent
             continue
         if type_code and type_code in _MET_PRIMARY_LINEAGE.get(site, set()):
             skipped_mets.append(site)                     # don't subtract a primary's own organ
             continue
         keys.append(site); applied_mets.append(site)
     if met_sites:
-        info = {**info, "met_sites_subtracted": applied_mets, "met_sites_skipped_as_primary": skipped_mets}
+        info = {**info, "met_sites_subtracted": applied_mets, "met_sites_skipped_as_primary": skipped_mets,
+                "met_sites_unknown": unknown_mets}
     return keys, info
 
 

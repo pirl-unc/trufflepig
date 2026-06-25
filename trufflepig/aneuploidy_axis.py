@@ -95,7 +95,7 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
         return {"score": None, "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
     logratio = np.log2((sample.loc[genes] + 1.0) / (ref.loc[genes] + 1.0))
     by_arm = pd.DataFrame({"arm": [arms[g] for g in genes], "lr": logratio.values})
-    counts = by_arm.groupby("arm")["lr"].size()
+    counts = by_arm.groupby("arm")["lr"].count()              # real (non-NaN) values per arm
     arm_med = by_arm.groupby("arm")["lr"].median()[counts >= min_genes_per_arm]
     if arm_med.empty:
         return {"score": None, "n_arms": 0, "arm_profile": {}, "top_gained": [], "top_lost": []}
@@ -106,6 +106,7 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
         "score": round(score, 4),
         "n_arms": int(len(centered)),
         "arm_profile": {a: round(float(v), 3) for a, v in centered.items()},
-        "top_gained": [a for a in ordered.index[::-1][:3]],
-        "top_lost": [a for a in ordered.index[:3]],
+        # sign-based so an arm is never both gained and lost (e.g. when only one arm clears the gate)
+        "top_gained": [a for a in ordered.index[::-1] if centered[a] > 0][:3],   # most-positive arms (gains)
+        "top_lost": [a for a in ordered.index if centered[a] < 0][:3],           # most-negative arms (losses)
     }

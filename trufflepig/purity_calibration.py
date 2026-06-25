@@ -24,6 +24,14 @@ from functools import lru_cache
 
 import numpy as np
 
+_MIN_MEDIAN_PURITY = 0.1   # floor the extrapolation denominator so a tiny median can't blow up A_ref
+
+# NOTE (#96): A_ref here is built from the cohort-MEAN reference profile, whose per-arm dispersion is
+# lower than a single tumor's (sporadic events average out; only recurrent arm events survive). So
+# A_ref can under-estimate the true pure-sample amplitude → aneuploidy_purity can saturate. The
+# proper fix is to regress single-sample amplitude vs per-sample TCGA ABSOLUTE purity (slope = A_ref)
+# and ship that table; this on-the-fly version is the documented prototype.
+
 
 @lru_cache(maxsize=None)
 def _type_reference_sample(cancer_type):
@@ -60,7 +68,9 @@ def aneuploidy_reference(cancer_type, median_purity=None):
     amp = bulk_aneuploidy_amplitude(ref)
     if not amp:                                              # None or ~0 → near-diploid; no signal
         return None
-    return round(amp / median_purity, 4) if median_purity else amp
+    if median_purity is None:                               # no purity prior → treat reference as ~pure
+        return round(amp, 4)
+    return round(amp / max(median_purity, _MIN_MEDIAN_PURITY), 4)  # extrapolate cohort→purity 1 (floored denom)
 
 
 def aneuploidy_purity(sample_tpm_by_symbol, cancer_type, median_purity=None, bulk_amplitude=None):
@@ -76,6 +86,6 @@ def aneuploidy_purity(sample_tpm_by_symbol, cancer_type, median_purity=None, bul
     if bulk_amplitude is None:
         from .expression_decomposition import bulk_aneuploidy_amplitude
         bulk_amplitude = bulk_aneuploidy_amplitude(sample_tpm_by_symbol)
-    if bulk_amplitude is None:
-        return None
+    if not bulk_amplitude:                                   # None OR 0.0 — no detectable aneuploidy in
+        return None                                         # this sample → aneuploidy is uninformative (not "0% pure")
     return round(float(np.clip(bulk_amplitude / a_ref, 0.0, 1.0)), 3)
