@@ -263,6 +263,16 @@ def test_estimate_tumor_purity_gates_estimate_for_heme_and_reports_decomposition
         assert "aneuploidy_purity" in dc                                  # #96 calibrated signal present
 
 
+def test_estimate_gated_by_expression_lineage_when_code_is_wrong():
+    # On real samples the cancer-type CALL is often wrong at the fine level (a sarcoma miscalled BRCA).
+    # ESTIMATE must still be gated off via the EXPRESSION lineage (compartment_call), not the code.
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    comp = estimate_tumor_purity(_df("SARC"), cancer_type="BRCA")["components"]
+    assert comp["lineage_compartment"] == "Epithelial"           # the (wrong) cancer-code lineage
+    assert comp["expression_lineage_compartment"] == "Sarcoma"   # the right expression lineage
+    assert comp["estimate_gated_for_lineage"] is True            # gated despite the epithelial code
+
+
 def test_include_decomposition_flag_opts_out():
     from trufflepig.tumor_purity import estimate_tumor_purity
     on = estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["decomposition"]

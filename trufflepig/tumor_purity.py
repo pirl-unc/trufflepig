@@ -1579,6 +1579,18 @@ def _purity_lineage_compartment(cancer_code):
         return None
 
 
+def _expression_lineage_compartment(sample_tpm):
+    """Expression-derived lineage compartment via ``compartment_call`` — robust when the cancer-type
+    CALL is wrong (e.g. a sarcoma miscalled BRCA). Used to gate ESTIMATE off heme/sarcoma even when
+    the cancer code says otherwise; on real samples the code is wrong at the fine level far more often
+    than the expression lineage is. Returns the compartment label or None."""
+    try:
+        from .cancer_type_centroid import compartment_call
+        return compartment_call(dict(sample_tpm)).get("compartment")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _decomposition_purity_component(sample_tpm, cancer_code):
     """Lineage-routed decomposition residual_fraction + aneuploidy corroborator (fallback-safe).
 
@@ -1648,6 +1660,12 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
 
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
     lineage_compartment = _purity_lineage_compartment(cancer_code)
+    expr_compartment = _expression_lineage_compartment(sample_tpm)
+    # ESTIMATE is mis-specified where the tumor lineage IS a background (heme/sarcoma). Gate it off if
+    # EITHER the cancer-code lineage OR the EXPRESSION lineage says so — on real samples the code is
+    # wrong at the fine level far more often (a sarcoma miscalled BRCA still expresses as Sarcoma).
+    estimate_invalid_lineage = (lineage_compartment in _ESTIMATE_INVALID_COMPARTMENTS
+                                or expr_compartment in _ESTIMATE_INVALID_COMPARTMENTS)
 
     # Reference expression by symbol (normalized cohort TPM)
     ref = pan_cancer_expression(technical_rna_normalize=True)
@@ -1809,7 +1827,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
         sig_upper=sig_upper,
         estimate_purity=estimate_purity
         if (_use_estimate_component(reference_expression_source, stromal_genes)
-            and lineage_compartment not in _ESTIMATE_INVALID_COMPARTMENTS)
+            and not estimate_invalid_lineage)
         else None,
         lineage_purity=lineage_purity,
         lineage_lower=lineage_lower,
@@ -1890,7 +1908,8 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
                 "n_genes": len(immune_genes),
             },
             "estimate_purity": estimate_purity,
-            "estimate_gated_for_lineage": lineage_compartment in _ESTIMATE_INVALID_COMPARTMENTS,
+            "estimate_gated_for_lineage": estimate_invalid_lineage,
+            "expression_lineage_compartment": expr_compartment,
             "lineage_compartment": lineage_compartment,
             # Lineage-routed decomposition signal (reported, not fused into overall_estimate
             # pending per-cancer-type A_ref calibration). See expression_decomposition + #95.
