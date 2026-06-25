@@ -342,6 +342,13 @@ def test_reference_free_purity_for_heme_rare_types():
     assert r["components"]["integration"]["source"] == "decomposition"
     with pytest.raises(ValueError):
         estimate_tumor_purity(_df("CLL"), cancer_type="CLL")        # no reference, not optional → raises
+    # shape-COMPATIBLE with the normal result so report/plot consumers don't crash (Codex P1): they
+    # read components['stromal'/'immune']['enrichment'] + overall_lower/upper directly and do arithmetic.
+    comps = r["components"]
+    assert all(k in comps for k in ("signature", "lineage", "stromal", "immune", "estimate_purity"))
+    assert isinstance(comps["stromal"]["enrichment"], (int, float))
+    assert isinstance(comps["immune"]["enrichment"], (int, float))
+    assert isinstance(r["overall_lower"], (int, float)) and isinstance(r["overall_upper"], (int, float))
 
 
 def test_include_decomposition_flag_opts_out():

@@ -1676,18 +1676,35 @@ def _reference_free_purity(sample_tpm, cancer_code, lineage_compartment, expr_co
     dc = _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
                                          allow_lineage_override=False)
     overall = dc.get("residual_fraction") if isinstance(dc, dict) else None
+    # Shape-COMPATIBLE with the normal purity result so report/plot consumers never crash: report
+    # consumers read components["stromal"/"immune"]["enrichment"] and overall_lower/upper directly
+    # (and do arithmetic on them). The reference-dependent fields are absent for a reference-free type,
+    # so they get safe neutral values — enrichments 0.0, purities None, a degenerate CI (= overall),
+    # empty gene lists — never missing keys or non-numeric values where arithmetic happens.
+    _empty_sig = {"genes": [], "purity": None, "lower": None, "upper": None, "stability": None, "per_gene": []}
+    _empty_lineage = {"genes": [], "purity": None, "lower": None, "upper": None, "stability": None,
+                      "concordance": None, "detection_fraction": None, "support_factor": None,
+                      "per_gene": [], "skipped_detected": [], "winning_subtype": None,
+                      "mixture_subtype_details": None}
     return {
         "cancer_type": cancer_code, "reference_cancer_type": None, "cancer_type_score": None,
-        "overall_estimate": overall, "overall_lower": None, "overall_upper": None,
+        "tissue": None, "tcga_median_purity": None,
+        "reference_expression_source": "none (reference-free; lineage decomposition only)",
+        "overall_estimate": overall,
+        "overall_lower": overall, "overall_upper": overall,   # degenerate CI — plot-safe (numeric, not None)
         "purity_consistency": [],
         "components": {
-            "decomposition": dc,
-            "lineage_compartment": lineage_compartment,
-            "expression_lineage_compartment": expr_compartment,
+            "signature": _empty_sig,
+            "lineage": _empty_lineage,
+            "stromal": {"enrichment": 0.0, "n_genes": 0},     # numeric → report arithmetic is safe
+            "immune": {"enrichment": 0.0, "n_genes": 0},
+            "estimate_purity": None,
             "estimate_gated_for_lineage": estimate_invalid_lineage,
+            "expression_lineage_compartment": expr_compartment,
+            "lineage_compartment": lineage_compartment,
+            "decomposition": dc,
             "integration": {"source": "decomposition"},
         },
-        "reference_expression_source": "none (reference-free; lineage decomposition only)",
         "note": "No pan-cancer reference for this cancer type — purity is the lineage-decomposition "
                 "residual fraction (heme/rare-safe; monotone with purity, NOT calibrated to absolute). "
                 "Signature / lineage / ESTIMATE purity need a per-type reference and are unavailable.",
@@ -4332,6 +4349,10 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
             purity = {**purity, "components": comps,
                       "purity_consistency": _purity_reconciliation(
                           purity.get("overall_estimate"), dc, gated_est)}
+            # Propagate the enriched purity back into the candidate trace too: the CLI passes the trace
+            # to decompose_sample, which may adopt selected_candidate["purity_result"] and overwrite
+            # analysis["purity"] — without this, that restores the stale (decomposition=None) version.
+            selected_candidate["purity_result"] = purity
     else:
         purity = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_code)
 
