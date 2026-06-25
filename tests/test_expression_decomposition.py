@@ -242,6 +242,31 @@ def test_estimate_tumor_purity_gates_estimate_for_heme_and_reports_decomposition
         assert "aneuploidy_purity" in dc                                  # #96 calibrated signal present
 
 
+def test_include_decomposition_flag_opts_out():
+    from trufflepig.tumor_purity import estimate_tumor_purity
+    on = estimate_tumor_purity(_df("COAD"), cancer_type="COAD")["components"]["decomposition"]
+    off = estimate_tumor_purity(_df("COAD"), cancer_type="COAD", include_decomposition=False)["components"]["decomposition"]
+    assert isinstance(on, dict) and on["mode"] == "solid"
+    assert off is None                                                    # ranking loop uses this to skip the cost
+
+
+def test_analyze_sample_computes_decomposition_once_for_winner():
+    # candidate ranking opts out of the decomposition; the winner still gets it (computed once, not N×).
+    import trufflepig.tumor_purity as tp
+    orig, calls = tp._decomposition_purity_component, {"n": 0}
+    def counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+    tp._decomposition_purity_component = counting
+    try:
+        res = tp.analyze_sample(_df("COAD"), cancer_type="COAD")
+    finally:
+        tp._decomposition_purity_component = orig
+    assert calls["n"] == 1                                                # once for the winner, not per candidate
+    dc = (res["purity"].get("components") or {}).get("decomposition")
+    assert isinstance(dc, dict) and dc.get("mode") == "solid"
+
+
 def test_aneuploidy_purity_calibration():
     from trufflepig.purity_calibration import aneuploidy_reference, aneuploidy_purity
     aref = aneuploidy_reference("COAD")

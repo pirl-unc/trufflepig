@@ -3693,7 +3693,9 @@ def rank_cancer_type_candidates(
         # it simply doesn't compete. Re-raise any other ValueError so a genuine bug
         # isn't silently swallowed.
         try:
-            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code)
+            # Rank on scalar/signature/lineage purity only. The lineage decomposition isn't used for
+            # ranking and is expensive per candidate — it's computed once for the winner (analyze_sample).
+            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code, include_decomposition=False)
         except ValueError as exc:
             if "no pan-cancer TPM column" in str(exc) or (
                 "no direct purity marker panel" in str(exc)
@@ -4189,6 +4191,12 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     # 2. Purity
     if selected_candidate is not None:
         purity = selected_candidate["purity_result"]
+        # Candidate ranking ran WITHOUT the lineage decomposition (not used for ranking, expensive
+        # per candidate); compute it once for the winning type so the report still includes it.
+        if isinstance(purity, dict) and (purity.get("components") or {}).get("decomposition") is None:
+            comps = dict(purity.get("components") or {})
+            comps["decomposition"] = _decomposition_purity_component(sample_tpm, cancer_code)
+            purity = {**purity, "components": comps}
     else:
         purity = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_code)
 
