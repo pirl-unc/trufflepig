@@ -28,12 +28,37 @@ from pirlygenes.expression.accessors import (
     representative_cohort_samples,
 )
 from pirlygenes.gene_sets_cancer import cancer_lineage_group, cancer_type_registry
+from trufflepig.cancer_type_evidence import _primary_tissue_key_for_code
 from trufflepig.expression_decomposition import _group_to_mode
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from eval_nohint_validation import full_granularity_call  # noqa: E402
 
 _REGISTRY = {r["code"]: r for r in cancer_type_registry().to_dict("records")}
+_NAME = {code: str(row.get("name") or code) for code, row in _REGISTRY.items()}
+_REG_UPPER = {code.upper(): code for code in _REGISTRY}
+
+
+def name(code):
+    """Full cancer-type name for a code (e.g. ACC → Adrenocortical Carcinoma)."""
+    return _NAME.get(_canon(code), code)
+
+
+def _canon(code):
+    """Resolve a call to its registry code: case-insensitive, and for a molecular subtype not in the
+    registry (e.g. LUAD_KRAS_STK11 from the subtype-signature layer) fall back to the longest
+    registry-code prefix (→ LUAD). Returns the code unchanged if nothing matches."""
+    if not code:
+        return ""
+    upper = str(code).upper()
+    if upper in _REG_UPPER:
+        return _REG_UPPER[upper]
+    parts = upper.split("_")
+    for i in range(len(parts) - 1, 0, -1):
+        candidate = "_".join(parts[:i])
+        if candidate in _REG_UPPER:
+            return _REG_UPPER[candidate]
+    return code
 
 
 def _lineage(code):
@@ -46,23 +71,37 @@ def _parent(code):
     return "" if value in ("", "NAN", "NONE") else value
 
 
-def match_level(call, truth):
-    """exact > subtype (parent↔child) > sibling (shared parent, e.g. COAD/READ both → CRC) >
-    lineage (same lineage mode, different entity — a real mixup) > miss (different lineage).
+def _organ(code):
+    try:
+        return _primary_tissue_key_for_code(code) or ""
+    except (KeyError, ValueError):
+        return ""
 
-    Deliberately NOT using the registry ``family`` (too broad: 'carcinoma-gi' lumps colon with
-    stomach), so COAD→READ scores 'sibling' (compatible) while COAD→STAD scores 'lineage' (mixup)."""
+
+def match_level(call, truth):
+    """exact > subtype (parent↔child) > sibling (shared parent, e.g. COAD/READ → CRC) >
+    lineage (same compartment: solid/mesenchymal/heme/embryonal, different entity, e.g. SKCM→GBM) >
+    organ (SAME primary site but DIFFERENT compartment — a co-located cross-lineage confusion, e.g. a
+    uterine sarcoma vs endometrial carcinoma; the 'less bad' cross-compartment mixup) > miss.
+
+    NOT using the registry ``family`` (too broad: 'carcinoma-gi' lumps colon+stomach), so COAD→READ
+    scores 'sibling' while COAD→STAD scores 'lineage'. Note: generic SARC_* codes have no organ, so a
+    sarcoma↔carcinoma mixup only scores 'organ' when the sarcoma code is site-specific (e.g. UCS)."""
     if not call:
         return "miss"
-    if call == truth:
-        return "exact"
-    if _parent(call) == truth or _parent(truth) == call:
+    cc, ct = _canon(call), _canon(truth)
+    if cc.upper() == ct.upper():                              # same registry entity (case-insensitive)
+        return "exact" if str(call).upper() == str(truth).upper() else "subtype"
+    if _parent(cc) == ct.upper() or _parent(ct) == cc.upper():
         return "subtype"
-    pc, pt = _parent(call), _parent(truth)
+    pc, pt = _parent(cc), _parent(ct)
     if pc and pc == pt:
         return "sibling"
-    if _lineage(call) and _lineage(call) == _lineage(truth):
+    if _lineage(cc) and _lineage(cc) == _lineage(ct):
         return "lineage"
+    oc, ot = _organ(cc), _organ(ct)
+    if oc and oc == ot:
+        return "organ"
     return "miss"
 
 
