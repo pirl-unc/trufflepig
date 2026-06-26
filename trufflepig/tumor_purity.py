@@ -1019,14 +1019,70 @@ def _subtype_lineage_purity_estimates(
     return results, skipped_detected
 
 
+def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
+    """``{subtype: percentile-cosine pick score}`` over the UNION lineage panel — the
+    discriminative basis for choosing among mixture subtypes (#171).
+
+    The default ranker uses ``_summarize_lineage_support`` (a TME-excess-weighted HK cosine),
+    but that subtracts the stromal/TME program — and mesenchymal subtypes (LMS / liposarcoma /
+    synovial …) overlap that program, so the subtraction removes the very markers that
+    distinguish them. Measured on the SARC subtypes (scripts/decomposition_concordance_ab.py +
+    decomposition_production_check.py): the production HK concordance picks the right subtype
+    only 6/15, while a cross-cohort **percentile** cosine of the sample vs each subtype's
+    tumor-only profile, over the union panel, reaches ~14/15. (percentile beats z-score here too
+    — small heavy-tailed marker panels, see normalization_usage Phase 4b.)
+
+    Returns ``{}`` (caller keeps the HK ranking) when the percentile basis can't be built —
+    fewer than two profiled subtypes, or the cohort reference / a tumor profile is missing.
+    """
+    try:
+        from .signal_views import _cohort_reference
+
+        ref = _cohort_reference()
+        lg = _lineage_genes_map()
+        profiles = {s: _subtype_tumor_tpm_lookup(s) for s in paneled_subtypes}
+        profiles = {s: p for s, p in profiles.items() if p}
+        if len(profiles) < 2 or not ref:
+            return {}
+        panel = sorted({g for s in profiles for g in lg.get(s, [])})
+        if not panel:
+            return {}
+
+        def _pctl_vec(vec_by_sym):
+            out = []
+            for g in panel:
+                dist = ref.get(g)
+                v = float(vec_by_sym.get(g, 0.0) or 0.0)
+                out.append(float((dist < v).mean()) if dist is not None and len(dist) else 0.5)
+            return np.asarray(out, dtype=float)
+
+        s_vec = _pctl_vec(sample_tpm)
+        s_norm = float(np.linalg.norm(s_vec))
+        if s_norm <= 0:
+            return {}
+        scores = {}
+        for sub, prof in profiles.items():
+            t_vec = _pctl_vec(prof)
+            t_norm = float(np.linalg.norm(t_vec))
+            scores[sub] = float(s_vec @ t_vec / (s_norm * t_norm)) if t_norm > 0 else 0.0
+        return scores
+    except Exception:  # noqa: BLE001 — pick refinement; fall back to the HK ranking
+        return {}
+
+
 def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
     """Evaluate lineage per subtype for a mixture parent; return max (#171).
 
     For each subtype of ``parent_code`` that has both (a) a curated
     lineage panel in ``lineage-genes.csv`` and (b) tumor-only
     expression medians in ``subtype-deconvolved-expression``, compute
-    the lineage support. Pick the subtype with the best concordance
-    (ties broken by detection_fraction).
+    the lineage support. The subtype is PICKED by the percentile-cosine
+    pick score (:func:`_mixture_subtype_pick_scores`) when ≥2 profiled
+    subtypes are available — it discriminates the mesenchymal subtypes
+    that the HK concordance confuses (SARC pick accuracy 6/15 → ~14/15) —
+    falling back to the HK ``concordance`` otherwise; ties broken by
+    detection_fraction then panel size. The reported ``concordance`` /
+    ``support_factor`` remain HK-based (purity values unchanged).
 
     Returns ``None`` when no subtype qualifies — callers should fall
     back to the parent-level lineage computation.
@@ -1034,6 +1090,16 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
     subtypes = cancer_type_subtypes_of(parent_code)
     if not subtypes:
         return None
+
+    # Percentile-cosine PICK scores (discriminative; see _mixture_subtype_pick_scores). Used
+    # only to RANK the subtypes — the reported concordance / support_factor stay HK-based, so
+    # purity values are untouched and only the surfaced "subtype: X-consistent" label changes.
+    paneled = [
+        s for s in subtypes
+        if _lineage_genes_map().get(s) and _subtype_tumor_tpm_lookup(s)
+    ]
+    pick_scores = _mixture_subtype_pick_scores(paneled, sample_tpm)
+    use_pick = len(pick_scores) >= 2  # need ≥2 profiled subtypes to discriminate
 
     best = None
     per_subtype = []
@@ -1064,14 +1130,20 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
             "concordance": support["concordance"],
             "detection_fraction": support["detection_fraction"],
             "support_factor": support["support_factor"],
+            "pick_score": pick_scores.get(subtype_code),
             "lineage_per_gene": per_gene,
             "skipped": skipped,
         }
         per_subtype.append(record)
-        # Rank: (concordance, detection_fraction, panel-size tiebreak).
-        concordance = record["concordance"] or 0.0
+        # Rank by the percentile pick score when available (it discriminates mesenchymal
+        # subtypes the HK concordance confuses); else fall back to the HK concordance.
+        # detection_fraction + panel size remain the tiebreakers.
         detection = record["detection_fraction"] or 0.0
-        score = (concordance, detection, len(per_gene))
+        rank_primary = (
+            pick_scores.get(subtype_code, 0.0) if use_pick
+            else (record["concordance"] or 0.0)
+        )
+        score = (rank_primary, detection, len(per_gene))
         if best is None or score > best["_score"]:
             best = {**record, "_score": score}
 

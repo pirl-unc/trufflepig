@@ -89,19 +89,22 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
         "rationale": "Same finding as lineage_panels (Phase 4b): already a 5-view consensus incl. percentile; consensus beats any single view; z-score worst. No replacement win.",
     },
     "decomposition_mixture": {
-        "location": "expression_decomposition / tumor_purity._mixture_cohort_lineage_summary (hk_syms)",
-        "current": Basis.HK,
-        "target": Basis.PERCENTILE,  # WEAK signal; revised from ZSCORE; not actioned (Phase 4c)
+        "location": "tumor_purity._mixture_cohort_lineage_summary subtype PICK (_mixture_subtype_pick_scores)",
+        "current": Basis.PERCENTILE,  # ACTIONED (Phase 4c) — the only migration that landed
+        "target": Basis.PERCENTILE,
         "rationale": (
-            "EVALUATED (Phase 4c, scripts/decomposition_concordance_ab.py) — the ONLY consumer where HK "
-            "is the WEAKEST basis. SARC mixture subtype-pick accuracy (the #171 scope: LMS/SYN/LPS_UNSPEC, "
-            "the only mixture parent with >=2 paneled+profiled subtypes) via marker concordance: "
-            "HK 0.733 < log1p 0.867 = z-score 0.867 < percentile 0.933. So the ledger's z-score TARGET is "
-            "wrong — PERCENTILE wins (consistent with Phase 4b: percentile >> z-score for marker panels). "
-            "BUT not actioned: n=15 (3-sample spread), and the harness is a SIMPLIFIED cosine — the "
-            "production _summarize_lineage_support uses a TME-excess-weighted cosine that may already "
-            "close the HK gap. The one place worth a deeper look (faithful concordance + more data) before "
-            "touching the coupled mixture machinery; do NOT migrate on this thin evidence."
+            "MIGRATED (Phase 4c) — the ONE consumer where HK was genuinely worst, and the only change this "
+            "migration landed. The FAITHFUL production check (scripts/decomposition_production_check.py) "
+            "confirmed the HK TME-excess-weighted concordance picks the right SARC subtype only 6/15 "
+            "(0.40) — WORSE than the simplified proxy, because the TME-excess subtraction removes the "
+            "stromal program that mesenchymal subtypes (LMS/SYN/liposarcoma) actually share, with "
+            "SARC_LPS_UNSPEC an attractor. Replaced the subtype RANKING with a percentile-cosine pick over "
+            "the union panel (_mixture_subtype_pick_scores): production pick accuracy 6/15 -> 14/15 (0.93). "
+            "Targeted/low-blast-radius: only the SURFACED '#171 subtype: X-consistent' label changes — the "
+            "reported concordance/support_factor stay HK so purity values are untouched. percentile (not "
+            "z-score; see Phase 4b). Regression test: test_issue_171_mixture_cohort.py parametrized over "
+            "LMS/SYN/LPS_UNSPEC. Caveat: validated on n=15 (all the data that exists — only 3 SARC subtypes "
+            "have panel+profile)."
         ),
     },
     "qc_housekeeping_median": {
