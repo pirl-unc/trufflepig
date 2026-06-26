@@ -319,10 +319,11 @@ def test_normalize_expression_optional_noncoding_gate_keeps_ig_tcr():
         }
     )
 
+    # oncoref's default remove_groups already drops the poly-A-biased lncRNA group
+    # (MALAT1) while keeping protein-coding / IG / TCR — the old remove_noncoding=True behavior.
     out, record = normalize_expression(
         df,
         value_cols=["TPM"],
-        remove_noncoding=True,
     )
 
     assert record["applied"] is True
@@ -350,10 +351,11 @@ def test_normalize_expression_optional_noncoding_gate_keeps_unmatched_joined_bio
     )
     df = expression.merge(partial_annotation, on="Symbol", how="left")
 
+    # oncoref's default remove_groups already drops the poly-A-biased lncRNA group
+    # (MALAT1) while keeping protein-coding / IG / TCR — the old remove_noncoding=True behavior.
     out, record = normalize_expression(
         df,
         value_cols=["TPM"],
-        remove_noncoding=True,
     )
 
     assert record["applied"] is True

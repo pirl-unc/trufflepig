@@ -103,6 +103,9 @@ def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
         }
     )
     out, record = tpm_to_housekeeping_normalized(df)
-    assert record["match_mode"] == "ensembl_id"
-    assert record["panel_present_in_table"] >= 2
+    # The symbols are deliberately wrong, so the two HK-panel genes (ACTB, GAPDH) can
+    # only have been found via their stable Ensembl IDs — oncoref's record reports them
+    # as present (``panel_genes_present``). If matching fell back to symbols, none of the
+    # rows would match (NOT_ACTB/NOT_GAPDH aren't HK genes; MYC isn't in the panel).
+    assert record["panel_genes_present"] >= 2
     assert record["applied"]
