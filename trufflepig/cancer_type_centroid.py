@@ -290,9 +290,9 @@ def _zscore_reference():
 
 
 def zscore_centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
-    """Purity-robust whole-profile match (see ``_ZSCORE_N_GENES``): Pearson correlation of
-    the sample's per-gene z-score profile (standardized vs the reference's cross-cohort
-    mean/std) against each cohort's z-score profile, over the discriminative gene subset.
+    """Purity-robust whole-profile match (see the module-level z-score note): Pearson
+    correlation of the sample's per-gene z-score profile (standardized vs the reference's
+    cross-cohort mean/std) against each cohort's z-score profile, over the informative genes.
 
     Same contract as :func:`centroid_correlations` — ``{cohort_code: score}`` sorted
     descending, may be empty — but on the reference-relative z-score basis that survives
