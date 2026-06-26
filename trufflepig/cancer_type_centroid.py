@@ -47,6 +47,23 @@ _P99_Z = 2.3263478740408408  # norm.ppf(0.99)
 _bulk_cache: dict = {}
 _dec_cache: dict = {}
 _deconv_centroid_cache: dict = {}
+_zscore_cache: dict = {}
+
+# Per-gene z-score (reference-relative) is a PURITY-ROBUST whole-profile basis available via
+# ``zscore_centroid_correlations``. Standardizing each gene by its cross-cohort mean/std makes
+# the sample's *contrast pattern* (which genes are high/low FOR THIS SAMPLE vs the pan-cancer
+# reference) the matched quantity; that pattern survives a *generic* (diffuse) contaminant
+# where a raw-magnitude Spearman correlation collapses. Measured type-argmax accuracy under a
+# pan-cancer-mean contaminant (scripts/centroid_zscore_ab.py):
+#       p (contam):     0.0     0.3     0.5     0.7
+#       Spearman      0.921   0.857   0.816   0.635   (collapses under generic admixture)
+#       z-score(all)  0.906   0.902   0.906   0.898   (robust to generic admixture)
+#
+# It is deliberately NOT wired into ``centroid_correlations`` (see that function's note): on
+# the compartment task it regresses real samples and its margins, and it does NOT help the
+# operative failure mode — a *structured* tissue contaminant matches that tissue's cancer
+# type on every whole-profile basis. Kept as a tested primitive for a future diffuse-dilution
+# or decomposition consumer; do not adopt it for type/compartment scoring without re-measuring.
 
 
 # --------------------------------------------------------------------------- #
@@ -253,6 +270,60 @@ def tumor_only_correlations(tumor_sample_by_symbol, restrict_to=None):
     return pd.Series(out).sort_values(ascending=False)
 
 
+def _zscore_reference():
+    """``(zref [Symbol x COHORT], mu, sd, gene_index)`` — per-gene standardized bulk
+    reference over the informative gene set, cached.
+
+    ``mu``/``sd`` are the per-gene cross-cohort mean/std of the log1p reference; ``zref``
+    is the reference standardized by them; ``gene_index`` is the informative gene set
+    (same floor as the Spearman leg). A sample is scored by standardizing it with the SAME
+    ``mu``/``sd`` and correlating against ``zref`` (see :func:`zscore_centroid_correlations`)."""
+    if "ref" in _zscore_cache:
+        return _zscore_cache["ref"]
+    bulk, informative = _bulk_centroids()
+    mu = bulk.mean(axis=1)
+    sd = bulk.std(axis=1).replace(0, np.nan)
+    zref = bulk.sub(mu, axis=0).div(sd, axis=0)
+    out = (zref, mu, sd, pd.Index(informative))
+    _zscore_cache["ref"] = out
+    return out
+
+
+def zscore_centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
+    """Purity-robust whole-profile match (see ``_ZSCORE_N_GENES``): Pearson correlation of
+    the sample's per-gene z-score profile (standardized vs the reference's cross-cohort
+    mean/std) against each cohort's z-score profile, over the discriminative gene subset.
+
+    Same contract as :func:`centroid_correlations` — ``{cohort_code: score}`` sorted
+    descending, may be empty — but on the reference-relative z-score basis that survives
+    stromal/immune dilution.
+    """
+    zref, mu, sd, genes = _zscore_reference()
+    if not sample_tpm_by_symbol:
+        return pd.Series(dtype=float)
+    sample = pd.Series(sample_tpm_by_symbol, dtype=float)
+    sample = np.log1p(sample[sample.index.notna()].clip(lower=0))
+    shared = genes.intersection(sample.index)
+    if len(shared) < 100:
+        return pd.Series(dtype=float)
+    zs = (sample.loc[shared] - mu.loc[shared]) / sd.loc[shared]
+    zs = zs.replace([np.inf, -np.inf], np.nan).fillna(0.0).to_numpy()
+    a = zs - zs.mean()
+    na = float(np.linalg.norm(a)) or 1.0
+    Z = zref.loc[shared]
+    codes = (
+        list(Z.columns) if restrict_to is None
+        else [c for c in Z.columns if c in set(restrict_to)]
+    )
+    out = {}
+    for code in codes:
+        b = Z[code].to_numpy()
+        b = np.nan_to_num(b, nan=0.0)
+        b = b - b.mean()
+        out[code] = float(a @ b / (na * (float(np.linalg.norm(b)) or 1.0)))
+    return pd.Series(out).sort_values(ascending=False)
+
+
 def centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
     """Spearman correlation of the sample's whole profile against each cohort centroid.
 
@@ -266,6 +337,17 @@ def centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
     Returns
     -------
     pandas.Series  {cohort_code: spearman_rho}, sorted descending (may be empty).
+
+    On the whole-transcriptome Spearman basis, NOT the per-gene z-score basis. A z-score
+    ensemble was evaluated for purity robustness (see ``zscore_centroid_correlations`` and
+    scripts/centroid_zscore_ab.py) and deliberately NOT adopted here: it regresses the
+    clean compartment call (565 real representative samples: 0.943 → 0.931) and its
+    confidence margins (which gate leaf restriction), and it does not fix the dilution
+    failure it was meant to — a *structured* tissue contaminant (e.g. 70% liver) matches
+    that tissue's cancer type (LIHC) on EVERY whole-profile basis, z-score included, so
+    that case needs decomposition/background-subtraction, not a normalization swap. The
+    z-score win is real only for a generic (diffuse) contaminant, which neither this
+    compartment task nor the test suite exercises.
     """
     bulk, informative = _bulk_centroids()
     if not sample_tpm_by_symbol:

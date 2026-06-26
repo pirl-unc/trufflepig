@@ -27,15 +27,28 @@ class Basis(str, Enum):
     HK = "hk"
     ZSCORE = "zscore"
     PERCENTILE = "percentile"
+    SPEARMAN = "spearman"  # whole-profile log-TPM rank correlation (the centroid scorer)
 
 
 # consumer key -> migration record
 NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
     "cancer_type_centroids": {
-        "location": "tumor_purity._cached_reference_matrices(normalize='housekeeping') + centroid scoring",
-        "current": Basis.HK,
-        "target": Basis.ZSCORE,
-        "rationale": "Measured z-score ≫ HK-ratio for type classification; z_matrix already computed alongside.",
+        "location": "cancer_type_centroid.centroid_correlations (compartment_call, leaf restriction, veto)",
+        "current": Basis.SPEARMAN,
+        "target": Basis.SPEARMAN,  # EVALUATED z-score, REJECTED — keep Spearman
+        "rationale": (
+            "MIGRATION EVALUATED AND REJECTED (Phase 3). The premise — that this scorer was HK-based "
+            "at ~0.78 — was wrong: it is whole-profile log-TPM Spearman, already 0.92 type / 0.94 "
+            "compartment on the production 118-medoid reference (beats the HK-0.78 baseline). A z-score "
+            "ensemble REGRESSED the clean compartment call on 565 real representative samples "
+            "(0.943→0.931) and its confidence margins (which gate leaf restriction: 9 wrong-but-confident "
+            "at margin 0.05 vs 0 for Spearman). It also does NOT fix the dilution failure it targeted — a "
+            "structured tissue contaminant (70% liver) matches that tissue's cancer type (LIHC) on EVERY "
+            "whole-profile basis incl. z-score, so that case needs decomposition, not normalization. "
+            "z-score's win is real only for a generic (diffuse) contaminant. Primitive kept as "
+            "cancer_type_centroid.zscore_centroid_correlations; harnesses: scripts/centroid_zscore_ab.py, "
+            "scripts/centroid_compartment_tune.py."
+        ),
     },
     "estimate_purity_surrogate": {
         "location": "tumor_purity._geneset_hk_ratio (stromal/immune/signature)",
