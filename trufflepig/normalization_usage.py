@@ -53,8 +53,18 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
     "estimate_purity_surrogate": {
         "location": "tumor_purity._geneset_hk_ratio (stromal/immune/signature)",
         "current": Basis.HK,
-        "target": Basis.ZSCORE,
-        "rationale": "ESTIMATE-style stroma/immune contrast; z-score of the gene-set vs cohort is the contrast we want.",
+        "target": Basis.HK,  # EVALUATED z-score, no demonstrated win — keep HK enrichment
+        "rationale": (
+            "MIGRATION EVALUATED AND REJECTED (Phase 4a). ESTIMATE estimates purity per-type via "
+            "stromal/immune ENRICHMENT (sample ratio ÷ the type's reference ratio), which already "
+            "removes the type baseline. On synthetic dilution (scripts/estimate_zscore_ab.py), the "
+            "production HK-enrichment is PERFECTLY monotonic in true purity WITHIN a type (mean "
+            "per-type |Spearman| = 1.000 for generic AND structured stromal contaminants), while a "
+            "z-score contrast is slightly WORSE (0.89-0.98). z-score only wins on a pooled cross-type "
+            "metric, which is not how ESTIMATE operates (it is always type-relative). ESTIMATE's real "
+            "weakness is structural — unsound for heme/mesenchymal (already gated out), not a "
+            "normalization-basis problem z-score would fix."
+        ),
     },
     "lineage_panels": {
         "location": "lineage_panels.py / cancer_type_evidence.py (marker / sample_hk_median vs cohort_hk_ratio)",
