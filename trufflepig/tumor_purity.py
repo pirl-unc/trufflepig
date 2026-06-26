@@ -397,6 +397,12 @@ def _cached_reference_matrices(normalize="housekeeping"):
     gene_mean = expr_matrix.mean(axis=1)
     gene_std = expr_matrix.std(axis=1).replace(0, np.nan)
     z_matrix = expr_matrix.sub(gene_mean, axis=0).div(gene_std, axis=0).fillna(0)
+    # All three normalization bases available together (see NORMALIZATION_USAGE for who reads which):
+    #   expr_matrix       — HK-ratio / raw scale (legacy default many consumers still read)
+    #   z_matrix          — per-gene z-score across cancer types (mean/std over cohort cols)
+    #   percentile_matrix — per-gene percentile rank across cancer types (rank-based; robust to
+    #                       outliers/scale where z-score's normality assumption is weak)
+    percentile_matrix = expr_matrix.rank(axis=1, pct=True).fillna(0.0)
 
     entry = {
         "ref_by_sym": ref_by_sym,
@@ -405,6 +411,7 @@ def _cached_reference_matrices(normalize="housekeeping"):
         "gene_mean": gene_mean,
         "gene_std": gene_std,
         "z_matrix": z_matrix,
+        "percentile_matrix": percentile_matrix,
     }
     _REFERENCE_MATRIX_CACHE[normalize] = entry
     return entry
