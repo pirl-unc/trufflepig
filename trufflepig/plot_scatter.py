@@ -27,8 +27,9 @@ from .plot_strip import default_gene_sets
 # Canonical cancer-type name/alias maps and the resolver moved to
 # pirlygenes (data-only). Re-exported here for backwards compatibility
 # with trufflepig modules that imported them from plot_scatter.
+from trufflepig.cancer_ontology import resolve_cancer_type  # noqa: E402
 from pirlygenes.gene_sets_cancer import (
-    CANCER_TYPE_NAMES, resolve_cancer_type, # noqa: E402
+    CANCER_TYPE_NAMES, # noqa: E402
     CANCER_TYPE_ALIASES,
 )
 

@@ -2564,7 +2564,7 @@ def _rare_rules_by_id() -> dict[str, dict[str, Any]]:
 @lru_cache(maxsize=1)
 def _registry_by_code() -> dict[str, dict[str, Any]]:
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
     except ImportError:
         _LOGGER.warning(
             "pirlygenes.gene_sets_cancer.cancer_type_registry is unavailable; "

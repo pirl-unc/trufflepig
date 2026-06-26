@@ -28,9 +28,12 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+from trufflepig.cancer_ontology import (
+    cancer_type_subtypes_of, is_mixture_cohort, resolve_cancer_type,
+)
 from pirlygenes.gene_sets_cancer import (
 
-    cancer_family_panels, cancer_family_panels_df, cancer_type_subtypes_of, housekeeping_gene_ids, is_mixture_cohort, resolve_cancer_type,
+    cancer_family_panels, cancer_family_panels_df, housekeeping_gene_ids,
 
 )
 
@@ -1633,7 +1636,7 @@ _ESTIMATE_INVALID_COMPARTMENTS = {"Heme", "Sarcoma"}  # tumor lineage IS a backg
 def _purity_lineage_compartment(cancer_code):
     """Fine lineage compartment for a cancer code (Epithelial/Heme/Sarcoma/…), or None."""
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
         return cancer_lineage_group(cancer_code)
     except (ImportError, KeyError, ValueError):              # resolver absent or unknown code
         return None
@@ -4179,7 +4182,7 @@ def rank_cancer_type_candidates(
                 range_plausibility,
                 restrict_rows_to_compartment,
             )
-            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+            from trufflepig.cancer_ontology import cancer_lineage_group
 
             cen_corr = centroid_correlations(sample_tpm)  # all cohorts, computed once
             comp = compartment_call(sample_tpm, _corr=cen_corr)

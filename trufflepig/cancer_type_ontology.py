@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import functools
 
-from pirlygenes.gene_sets_cancer import cancer_type_registry
+from trufflepig.cancer_ontology import cancer_type_registry
 
 # --------------------------------------------------------------------------
 # Ontology definition
@@ -142,7 +142,7 @@ def _pirlygenes_broad_lineage(code: str) -> str | None:
     API is unavailable, so the caller falls back to the local family map.
     """
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
 
         group = cancer_lineage_group(code)
     except Exception:  # noqa: BLE001 — caller falls back to the local family map

@@ -319,7 +319,7 @@ def _coarse_from_correlations(corr):
     if corr is None or len(corr) == 0:
         return pd.Series(dtype=float)
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
     except Exception:  # noqa: BLE001
         return pd.Series(dtype=float)
     by_group: dict[str, list[float]] = {}
@@ -415,7 +415,7 @@ def in_compartment(code, compartment):
     if not compartment:
         return True
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
     except Exception:  # noqa: BLE001
         return True
     grp = cancer_lineage_group(str(code))

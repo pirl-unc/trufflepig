@@ -331,9 +331,10 @@ def print_cancer_registry(
     """
     from collections import defaultdict
 
+    from trufflepig.cancer_ontology import cancer_type_registry
     from pirlygenes.gene_sets_cancer import (
 
-        cancer_type_registry, cancer_biomarker_genes, cancer_therapy_targets,
+        cancer_biomarker_genes, cancer_therapy_targets,
 
     )
 
@@ -4693,7 +4694,7 @@ def _primary_tissues_for_analysis(analysis=None, cancer_code=None):
     except Exception:
         pass
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(lookup_code)]
@@ -5022,7 +5023,7 @@ def _analysis_primary_descriptor(analysis=None, cancer_code=None):
     if not lookup_code:
         return "", None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"] == lookup_code]
@@ -5119,7 +5120,7 @@ def _report_scope_cancer_type(cancer_type):
         return aliases[norm]
     code = text.upper()
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         codes_by_upper = {
@@ -5153,7 +5154,7 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
         if not refined_code or not isinstance(dc, dict) or not dc.get("mode"):
             return
         from .expression_decomposition import _group_to_mode
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
 
         refined_mode = _group_to_mode(cancer_lineage_group(refined_code) or "")
         if not refined_mode or refined_mode == dc.get("mode"):
@@ -5187,7 +5188,7 @@ def _veto_local_reference_lineage_flip(
     try:
         from .cancer_type_centroid import compartment_call
         from .expression_decomposition import _group_to_mode
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
         from .tumor_purity import _build_sample_tpm_by_symbol
 
         comp = _group_to_mode(compartment_call(_build_sample_tpm_by_symbol(df_expr)).get("compartment") or "")
@@ -5394,7 +5395,7 @@ def _is_defining_fusion_label(code):
     if not code:
         return False
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(code)]
@@ -5412,7 +5413,7 @@ def _registry_parent_analysis_scope(report_scope):
     if not report_scope:
         return None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
         from .plot import resolve_cancer_type
 
         reg = cancer_type_registry()
@@ -5516,7 +5517,7 @@ def _is_registry_only_label(code):
     if not code:
         return False
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(code)]

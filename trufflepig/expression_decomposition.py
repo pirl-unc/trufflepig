@@ -284,7 +284,7 @@ def resolve_mode(cancer):
     if fam in _FAMILY_COMPARTMENT:                            # family keyword → mode via its compartment (single source)
         return _group_to_mode(_FAMILY_COMPARTMENT[fam]), f"family={text}", None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
     except ImportError:
         return None, f"{text!r}: no resolver", None
     for cand in _candidates(text):
@@ -481,7 +481,7 @@ def _compartment_for(type_code, fam, classifier):
         return classifier["compartment"]
     if type_code:
         try:
-            from pirlygenes.gene_sets_cancer import cancer_lineage_group
+            from trufflepig.cancer_ontology import cancer_lineage_group
         except ImportError:
             cancer_lineage_group = None
         for cand in (_candidates(type_code) if cancer_lineage_group else ()):

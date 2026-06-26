@@ -1,4 +1,4 @@
-from pirlygenes.gene_sets_cancer import cancer_type_registry
+from trufflepig.cancer_ontology import cancer_type_registry
 
 from trufflepig.tumor_type_ontology import (
     tumor_type_ontology,

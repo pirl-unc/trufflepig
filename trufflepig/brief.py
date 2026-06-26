@@ -101,7 +101,7 @@ def _display_subtype_code(code: Optional[str]) -> str:
     if not text:
         return "the alternate subtype"
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"] == text]
@@ -127,7 +127,7 @@ def _registry_row_for_code(code: Optional[str]):
     if not text:
         return None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"] == text]
@@ -1177,7 +1177,7 @@ def _parent_code_for(code):
         return ""
     try:
         import pandas as pd
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         row = reg[reg["code"].astype(str) == str(code)]
