@@ -59,11 +59,14 @@ measured on the purity-corrected **residual** — the decomposition is what make
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Mapping, Sequence, TypedDict
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 # ── output contract (documents the result shape; structural, not enforced at runtime) ──
@@ -282,12 +285,12 @@ def resolve_mode(cancer):
         return _group_to_mode(_FAMILY_COMPARTMENT[fam]), f"family={text}", None
     try:
         from pirlygenes.gene_sets_cancer import cancer_lineage_group
-    except Exception:
+    except ImportError:
         return None, f"{text!r}: no resolver", None
     for cand in _candidates(text):
         try:
             group = cancer_lineage_group(cand)
-        except Exception:
+        except (KeyError, ValueError):                       # unknown candidate code — expected, try the next
             group = None
         if group:
             return _group_to_mode(group), f"{text} → lineage_group={group} (via {cand})", cand
@@ -455,7 +458,8 @@ def characterize_residual(residual, *, mode: str = "solid", space: str = "percen
     try:
         from .aneuploidy_axis import aneuploidy_score
         aneu = aneuploidy_score(residual.to_dict())
-    except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) optional; degrade gracefully
+    except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) is optional; degrade, don't crash
+        logger.debug("aneuploidy_score failed in characterize_residual; degrading to None", exc_info=True)
         aneu = {"score": None, "top_gained": [], "top_lost": []}
     aneu_score = aneu["score"]                                  # None when aneuploidy unavailable (valid JSON null)
     proliferative = bool(prolif is not None and prolif >= _PROLIFERATIVE_PCTL)
@@ -478,12 +482,15 @@ def _compartment_for(type_code, fam, classifier):
     if type_code:
         try:
             from pirlygenes.gene_sets_cancer import cancer_lineage_group
-            for cand in _candidates(type_code):
+        except ImportError:
+            cancer_lineage_group = None
+        for cand in (_candidates(type_code) if cancer_lineage_group else ()):
+            try:
                 g = cancer_lineage_group(cand)
-                if g:
-                    return g
-        except Exception:  # noqa: BLE001
-            pass
+            except (KeyError, ValueError):                   # unknown candidate code — try the next
+                continue
+            if g:
+                return g
     return _FAMILY_COMPARTMENT.get((fam or "").lower())
 
 
@@ -493,7 +500,8 @@ def bulk_aneuploidy_amplitude(sample) -> float | None:
     try:
         from .aneuploidy_axis import aneuploidy_score
         s = aneuploidy_score(sample.to_dict()).get("score")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — aneuploidy axis (pyensembl/genome) is optional
+        logger.debug("bulk aneuploidy amplitude unavailable", exc_info=True)
         return None
     if s is None or (isinstance(s, float) and np.isnan(s)):
         return None
@@ -562,14 +570,18 @@ def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None,
             call = compartment_call(dict(sample_tpm_by_symbol))
             classifier = {"compartment": call.get("compartment"), "confident": bool(call.get("confident")),
                           "margin": round(float(call.get("margin", 0.0)), 4), "runner_up": call.get("runner_up")}
-            top = _group_to_mode(call.get("compartment", ""))
-            if call.get("confident"):
+            compartment = call.get("compartment")
+            # A missing compartment means compartment_call ABSTAINED (e.g. sparse input) — it must NOT
+            # map to solid, or candidates collapse to ['solid'] and the all-mode fallback never runs.
+            top = _group_to_mode(compartment) if compartment else None
+            if compartment and call.get("confident"):
                 mode = top
-                routing = f"compartment_call={call['compartment']} (confident, margin {classifier['margin']}) → {top}"
+                routing = f"compartment_call={compartment} (confident, margin {classifier['margin']}) → {top}"
             else:
-                run = _group_to_mode(call.get("runner_up", "")) if call.get("runner_up") else None
-                candidates = list(dict.fromkeys([m for m in (top, run) if m]))
-                candidate_compartment = {top: call.get("compartment")}
+                run = _group_to_mode(call.get("runner_up")) if call.get("runner_up") else None
+                candidates = list(dict.fromkeys([m for m in (top, run) if m])) or None  # None → all-mode fallback
+                if top:
+                    candidate_compartment[top] = compartment
                 if run:
                     candidate_compartment.setdefault(run, call.get("runner_up"))
         except Exception as exc:  # noqa: BLE001

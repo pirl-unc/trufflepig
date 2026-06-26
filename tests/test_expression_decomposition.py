@@ -224,6 +224,15 @@ def test_sparse_panel_input_no_nan_and_none_scores():
         assert v is None or not (isinstance(v, float) and np.isnan(v))
 
 
+def test_abstaining_compartment_call_reaches_all_mode_fallback(monkeypatch):
+    # P2: an abstaining compartment_call (compartment=None, e.g. sparse input) must NOT be mapped to
+    # solid — routing falls through to the all-mode fallback so heme/sarcoma/embryonal aren't lost.
+    monkeypatch.setattr("trufflepig.cancer_type_centroid.compartment_call",
+                        lambda _: {"compartment": None, "confident": False, "margin": 0.0, "runner_up": None})
+    r = decompose_expression(_sample("DLBC"), cancer=None)
+    assert set(r["modes"]) == {"solid", "mesenchymal", "heme", "embryonal"}
+
+
 def test_ambiguous_routing_uses_selected_mode_compartment(monkeypatch):
     # P2: when compartment_call is unconfident and the runner-up mode wins, lineage.compartment
     # must match the SELECTED mode — not the losing top compartment.

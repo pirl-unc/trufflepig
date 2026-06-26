@@ -5205,6 +5205,14 @@ def _veto_local_reference_lineage_flip(
                            f"classifier ({pre}) and compartment_call ({comp}) — the deconvolved "
                            f"epithelial→sarcoma attractor"),
             }
+            # _apply_cancer_type_evidence already wrote the vetoed selection into the analysis; revert
+            # those analysis-level keys too, or downstream label helpers re-surface the vetoed SARC_* call.
+            analysis["inferred_cancer_type"] = rna_inferred_cancer_type
+            analysis["expression_reference_cancer_type"] = rna_inferred_cancer_type
+            analysis.pop("primary_expression_context", None)
+            cte = analysis.get("cancer_type_evidence")
+            if isinstance(cte, dict):
+                cte["selected"] = None
             return None  # revert to the pre-evidence (bulk) call
     except Exception:  # noqa: BLE001 — refinement guard; never break the analysis
         _LOGGER.warning("local-reference lineage veto failed", exc_info=True)

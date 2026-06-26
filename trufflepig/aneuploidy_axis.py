@@ -21,11 +21,14 @@ proliferation misses.
 """
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Mapping
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Approximate GRCh37/hg19 centromere midpoints (bp); genes below -> p arm, above -> q arm.
 _CENTROMERE = {
@@ -84,6 +87,7 @@ def aneuploidy_score(sample_tpm_by_symbol: Mapping[str, float],
     try:
         arms = gene_arm_map()
     except Exception:  # noqa: BLE001 — needs pyensembl + an installed GRCh37 genome; optional
+        logger.debug("gene_arm_map unavailable (pyensembl/genome); aneuploidy degrades to None", exc_info=True)
         return {"score": None, "n_arms": 0, "arm_profile": {},
                 "top_gained": [], "top_lost": [], "note": "gene-arm map unavailable (pyensembl/genome)"}
     sample = pd.Series(dict(sample_tpm_by_symbol), dtype=float)

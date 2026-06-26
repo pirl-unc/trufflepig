@@ -1575,7 +1575,7 @@ def _purity_lineage_compartment(cancer_code):
     try:
         from pirlygenes.gene_sets_cancer import cancer_lineage_group
         return cancer_lineage_group(cancer_code)
-    except Exception:  # noqa: BLE001
+    except (ImportError, KeyError, ValueError):              # resolver absent or unknown code
         return None
 
 
@@ -1591,7 +1591,8 @@ def _expression_lineage_compartment(sample_tpm):
         from .cancer_type_centroid import compartment_call
         call = compartment_call(dict(sample_tpm))
         return call.get("compartment"), bool(call.get("confident"))
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — classifier guard (varied numeric failure modes); degrade, don't crash
+        logger.debug("compartment_call failed in _expression_lineage_compartment", exc_info=True)
         return None, False
 
 
