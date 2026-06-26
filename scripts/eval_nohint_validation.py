@@ -18,12 +18,15 @@ from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 from trufflepig.load_expression import load_expression_data
 
 D = "/Users/iskander/data"
-# locally generated reports — curated truth lineage (from provenance)
+# ALL locally generated real-sample reports — curated truth lineage (from provenance)
 REPORTS = [
     ("alvin-sarcoma", f"{D}/alvin/RNA/2025-10-31_salmon/quant.gene_tpm.csv", "mesenchymal"),
-    ("hcc1395-breast", f"{D}/hcc1395/rnaseq/kallisto_expression/gene_abundance.tsv", "solid"),
+    ("hcc1395-kallisto", f"{D}/hcc1395/rnaseq/kallisto_expression/gene_abundance.tsv", "solid"),
+    ("hcc1395-stringtie", f"{D}/hcc1395/rnaseq/stringtie_expression/stringtie_gene_expression.tsv", "solid"),
     ("pfo002-colon", f"{D}/pathfinder/pfo002/WashU/mcdb032-BG002179-2022-05-colon/mcdb-workflow_results/gene_abundance.tsv", "solid"),
     ("pfo004-osteosarc", f"{D}/pathfinder/pfo004/analysis/gene-expression.csv", "mesenchymal"),
+    ("pfo004-osteo-salmon", f"{D}/pathfinder/pfo004/analysis/transcripts_quant/quant.gene_tpm.csv", "mesenchymal"),
+    ("pfo017-bladder", f"{D}/pathfinder/pfo017/salmon.merged.gene_tpm.tsv", "solid"),
     ("pfo019-sinonasal", f"{D}/pathfinder/pfo019/BostonGene-BG011335-2024-03-20-nasal/Processed/final_results/final_results/rnaseq/kallisto_expression/gene_abundance.tsv", "solid"),
     ("tempus-nutm1", f"{D}/tempus-unc-nutm1/data_backfill/Data/Group_Level_Molecular/normalized_rna.csv", "solid"),
 ]
@@ -58,11 +61,15 @@ def _lineage(code):
 
 
 def _nohint_call(df):
+    from trufflepig.main import _veto_local_reference_lineage_flip
     a = analyze_sample(df)                                       # no cancer_type → auto
     scope = select_report_scope_from_evidence(df, a)
     sel = scope.get("selected") or {}
-    code = sel.get("cancer_type") or scope.get("top_reference_cancer_type") or a.get("cancer_type")
-    return a.get("cancer_type"), code
+    evid = sel.get("cancer_type") or scope.get("top_reference_cancer_type") or a.get("cancer_type")
+    # apply the deconvolved-local-ref lineage veto, exactly as _analyze_body now does
+    vetoed = _veto_local_reference_lineage_flip(a, df, evid, a.get("cancer_type"), sel)
+    final = vetoed if vetoed is not None else a.get("cancer_type")
+    return a.get("cancer_type"), final
 
 
 def run(name, df, truth, rows):

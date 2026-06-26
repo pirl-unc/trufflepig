@@ -2351,6 +2351,12 @@ def _analyze_body(run: AnalyzeRun):
             rare_scope_inference=rare_scope_inference,
             fine_scope_inference=fine_scope_inference,
         )
+    # Veto a deconvolved local-reference flip that crosses lineage against an agreeing bulk + compartment
+    # call (the epithelial→sarcoma attractor, e.g. colon → SARC_DDLPS). No-op for fusion/marker rescues.
+    report_scope_cancer_type = _veto_local_reference_lineage_flip(
+        analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope)
+    if not report_scope_cancer_type:
+        selected_scope = None  # veto cleared the evidence selection → fall back to the bulk classifier call
     if report_scope_cancer_type:
         selected_reference_cancer_type = (
             (selected_scope or {}).get("reference_cancer_type")
@@ -5158,6 +5164,51 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
         analysis["purity"] = estimate_tumor_purity(df_expr, cancer_type=refined_code, reference_optional=True)
     except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
         _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
+
+
+def _veto_local_reference_lineage_flip(
+    analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope
+):
+    """Veto a LOCAL-EXPRESSION-REFERENCE (deconvolved) flip that crosses lineage against an agreeing
+    bulk classifier + compartment_call.
+
+    The deconvolved local-reference channel mis-rescues epithelial samples to sarcoma (the
+    epithelial→sarcoma attractor — e.g. a colon sample whose correct READ call is flipped to
+    SARC_DDLPS). Targeted, low-regression: only the ``local_expression_reference`` channel is vetoed
+    (a fusion / marker / literature rescue is trusted), and only when the refined lineage disagrees
+    with BOTH the bulk classifier's call AND the compartment_call top — two independent signals
+    agreeing on the lineage outweigh a single deconvolved-reference flip. Returns the (possibly
+    reverted) ``report_scope_cancer_type`` and records the veto on ``analysis``.
+    """
+    if not report_scope_cancer_type or report_scope_cancer_type == rna_inferred_cancer_type:
+        return report_scope_cancer_type
+    if (selected_scope or {}).get("selected_by") != "local_expression_reference":
+        return report_scope_cancer_type
+    try:
+        from .cancer_type_centroid import compartment_call
+        from .expression_decomposition import _group_to_mode
+        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from .tumor_purity import _build_sample_tpm_by_symbol
+
+        comp = _group_to_mode(compartment_call(_build_sample_tpm_by_symbol(df_expr)).get("compartment") or "")
+        refined = _group_to_mode(cancer_lineage_group(report_scope_cancer_type) or "")
+        pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
+               if rna_inferred_cancer_type else None)
+        # Target only the DOCUMENTED attractor — epithelial bulk → SARCOMA deconvolved centroids. A
+        # local-ref flip INTO a non-sarcoma lineage (e.g. HEPB → embryonal) is a legitimate rescue and
+        # must NOT be vetoed; only an into-mesenchymal flip against an agreeing bulk + compartment is.
+        if comp and refined and pre and refined == "mesenchymal" and refined != comp and pre == comp:
+            analysis["cancer_type_evidence_vetoed"] = {
+                "vetoed_call": report_scope_cancer_type,
+                "kept_call": rna_inferred_cancer_type,
+                "reason": (f"local_expression_reference flip to sarcoma conflicts with the bulk "
+                           f"classifier ({pre}) and compartment_call ({comp}) — the deconvolved "
+                           f"epithelial→sarcoma attractor"),
+            }
+            return None  # revert to the pre-evidence (bulk) call
+    except Exception:  # noqa: BLE001 — refinement guard; never break the analysis
+        _LOGGER.warning("local-reference lineage veto failed", exc_info=True)
+    return report_scope_cancer_type
 
 
 def _apply_cancer_type_evidence(
