@@ -36,24 +36,47 @@ _MIN_MEDIAN_PURITY = 0.1   # floor the extrapolation denominator so a tiny media
 # and ship that table; this on-the-fly version is the documented prototype.
 
 
+def _reference_code_candidates(cancer_type):
+    """The cancer code, then its registry parent — so a rare subtype without its own pan-cancer
+    reference column (e.g. ``SARC_DSRCT``) falls back to the parent cohort's column (``SARC``)."""
+    code = str(cancer_type or "").strip().upper()
+    candidates = [code] if code else []
+    try:
+        from trufflepig.analyze.cancer_type_context import registry_parent_code
+
+        parent = (registry_parent_code(code) or "").strip().upper()
+        if parent and parent not in candidates:
+            candidates.append(parent)
+    except (ImportError, KeyError, ValueError):                # no registry / unknown code → no parent
+        pass
+    return candidates
+
+
 @lru_cache(maxsize=None)
 def _type_reference_sample(cancer_type):
     """``{symbol: clean-TPM}`` reference profile for a cancer type, or None.
 
     Uses pirlygenes' pan-cancer ``<CODE>_TPM_clean`` reference column — already clean-TPM scale (so it
-    matches the analyzed sample) and a declared dependency, avoiding an undeclared oncoref import.
+    matches the analyzed sample) and a declared dependency, avoiding an undeclared oncoref import. A
+    rare subtype without its own column falls back to its parent cohort's column (e.g. SARC_DSRCT →
+    SARC), which closes the aneuploidy reference-gap for the sarcoma subtypes (the aneuploid types
+    where this signal matters most). Types with no own *or* parent column (ATRT/HEPB/NUTM/heme) have
+    no pan-cancer reference and stay uncalibratable here — and are typically near-diploid anyway.
     """
     try:
         from trufflepig.reference import pan_cancer_expression
 
-        ref = pan_cancer_expression(technical_rna_normalize=True)
-        col = f"{cancer_type}_TPM_clean"
-        if col not in ref.columns:
-            return None
-        s = ref.drop_duplicates("Symbol").set_index("Symbol")[col].astype(float)
-        s = s[s > 0]
-        return s.to_dict() if not s.empty else None
-    except Exception:  # noqa: BLE001 — pan-cancer reference unavailable for this type
+        indexed = pan_cancer_expression(technical_rna_normalize=True).drop_duplicates("Symbol").set_index("Symbol")
+        for code in _reference_code_candidates(cancer_type):
+            col = f"{code}_TPM_clean"
+            if col not in indexed.columns:
+                continue
+            s = indexed[col].astype(float)
+            s = s[s > 0]
+            if not s.empty:
+                return s.to_dict()
+        return None
+    except (ImportError, KeyError, ValueError):                # pan-cancer reference unavailable
         logger.debug("aneuploidy reference unavailable for %s", cancer_type, exc_info=True)
         return None
 

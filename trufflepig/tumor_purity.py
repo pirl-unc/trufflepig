@@ -328,6 +328,14 @@ TUMOR_PURITY_PARAMETERS = {
         "signature_conflict_ratio": 0.75,
         "signature_stability_min": 0.45,
         "signature_weight_floor": 0.35,
+        # When there is no lineage anchor, a type-specific signature that collapses far below a
+        # clearly-high (type-agnostic) ESTIMATE is unreliable — the cancer-type call is likely wrong
+        # (e.g. a breast cell line miscalled HNSC: signature≈0 because the HNSC genes aren't expressed,
+        # while ESTIMATE≈0.9 from depleted stroma/immune is correct). Deprioritize the signature and
+        # let ESTIMATE drive, instead of the geometric mean dragging overall to ~0.
+        "signature_estimate_conflict_min_estimate": 0.5,   # ESTIMATE must be clearly high
+        "signature_estimate_conflict_max_signature": 0.4,  # signature must be clearly low
+        "signature_estimate_conflict_min_gap": 0.4,        # and the disagreement must be large
     },
     "family_scoring": {
         "presence_scale": 0.15,
@@ -1471,6 +1479,58 @@ def _signature_conflicts_with_lineage(sig_purity, lineage_purity, sig_stability)
     )
 
 
+def _signature_conflicts_with_estimate(sig_purity, estimate_purity):
+    """Return True when a type-specific signature collapses far below a clearly-high ESTIMATE.
+
+    Used only when there is no lineage anchor: a near-zero signature against a high (type-agnostic)
+    ESTIMATE means the cancer-type call is likely wrong (the signature genes aren't this tumor's), so
+    the signature should not anchor purity. See ``purity_combination`` config for the thresholds.
+    """
+    if sig_purity is None or estimate_purity is None:
+        return False
+    params = TUMOR_PURITY_PARAMETERS["purity_combination"]
+    sig, est = float(sig_purity), float(estimate_purity)
+    return (
+        est >= params["signature_estimate_conflict_min_estimate"]
+        and sig < params["signature_estimate_conflict_max_signature"]
+        and (est - sig) >= params["signature_estimate_conflict_min_gap"]
+    )
+
+
+def _override_collapsed_signature_purity(
+    overall, lower, upper, integration_source, *,
+    sig_purity, lineage_purity, estimate_purity, decomposition,
+):
+    """Replace a signature-collapsed ``overall`` with a type-agnostic consensus when the cancer-type
+    call is likely wrong.
+
+    Fires only when ALL hold: the signature drove overall (no lineage anchor; ``integration_source``
+    == "signature"); the signature collapsed far below a clearly-high ESTIMATE
+    (``_signature_conflicts_with_estimate``); AND the decomposition residual_fraction independently
+    corroborates a high purity. Requiring BOTH type-agnostic signals (ESTIMATE + residual) guards
+    against low-coverage, where either alone can be degenerate. ``decomposition`` is None during
+    candidate ranking (include_decomposition=False), so this is a no-op there — ranking keeps using
+    the signature to discriminate types. Returns the (possibly replaced) ``(overall, lower, upper,
+    integration_source)``.
+    """
+    if not isinstance(decomposition, dict) or lineage_purity is not None or integration_source != "signature":
+        return overall, lower, upper, integration_source
+    residual = decomposition.get("residual_fraction")
+    if estimate_purity is None or residual is None:
+        return overall, lower, upper, integration_source
+    params = TUMOR_PURITY_PARAMETERS["purity_combination"]
+    if not _signature_conflicts_with_estimate(sig_purity, estimate_purity):
+        return overall, lower, upper, integration_source
+    if float(residual) < params["signature_estimate_conflict_min_estimate"]:    # residual must corroborate high too
+        return overall, lower, upper, integration_source
+    consensus = float(np.clip(np.sqrt(max(float(estimate_purity), 0.0) * max(float(residual), 0.0)), 0.0, 1.0))
+    if overall is not None and consensus <= overall:                            # only ever raise via this path
+        return overall, lower, upper, integration_source
+    new_lower = consensus if lower is None else min(float(lower), consensus)
+    new_upper = consensus if upper is None else max(float(upper), consensus)
+    return consensus, new_lower, new_upper, "estimate+decomposition"
+
+
 def _registry_parent_code(code):
     try:
         from trufflepig.analyze.cancer_type_context import registry_parent_code
@@ -1979,6 +2039,16 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
                                         allow_lineage_override=(cancer_type is None),
                                         reference_code=reference_cancer_code)
         if include_decomposition else None)
+    # A type-specific signature can collapse when the cancer-type CALL is wrong (e.g. a breast cell
+    # line miscalled HNSC: HNSC genes silent → signature≈0 → overall≈0), even though the sample is
+    # ~pure. Override ONLY in the final (include_decomposition) path — never during candidate ranking,
+    # where a low signature is the legitimate discriminator — and only when TWO independent
+    # type-agnostic signals (ESTIMATE and the decomposition residual) both corroborate a much higher
+    # purity. Requiring both guards against low-coverage, where either alone can be degenerate.
+    overall, overall_lower, overall_upper, integration_source = _override_collapsed_signature_purity(
+        overall, overall_lower, overall_upper, integration_source,
+        sig_purity=sig_purity, lineage_purity=lineage_purity, estimate_purity=gated_estimate,
+        decomposition=decomposition_component)
     # Reconciliation guardrail: flag when the decomposition + ESTIMATE strongly disagree with overall.
     # reconcile against the GATED estimate — a gated-out ESTIMATE (heme/sarcoma) must not drive a flag
     purity_consistency = _purity_reconciliation(overall, decomposition_component, gated_estimate)
