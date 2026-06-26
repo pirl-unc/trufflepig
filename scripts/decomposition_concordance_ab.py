@@ -52,9 +52,11 @@ def main():
                 out[g] = v / hk_med if hk_med else 0.0
             elif basis == "log1p":
                 out[g] = np.log1p(v)
-            elif basis == "percentile":
+            elif basis in ("percentile", "percentile_sq", "percentile_p15", "percentile_cube"):
                 d = ref.get(g)
-                out[g] = float((d < v).mean()) if d is not None and len(d) else 0.5
+                p = float((d < v).mean()) if d is not None and len(d) else 0.5
+                out[g] = {"percentile": p, "percentile_sq": p * p,
+                          "percentile_p15": p ** 1.5, "percentile_cube": p ** 3}[basis]
             elif basis == "zscore":
                 d = ref.get(g)
                 if d is None or len(d) == 0 or d.std() == 0:
@@ -68,7 +70,8 @@ def main():
         return float(a @ b / (na * nb)) if na > 0 and nb > 0 else 0.0
 
     # precompute subtype reference vectors per basis
-    bases = ["hk", "log1p", "percentile", "zscore"]
+    bases = ["hk", "log1p", "percentile", "zscore",
+             "percentile_p15", "percentile_sq", "percentile_cube"]
     ref_vecs = {b: {s: transform(tumor[s], b, hk_med=1.0) for s in subs} for b in bases}
 
     hk_syms = None
