@@ -1,25 +1,22 @@
 """Expression matrix transforms — distinct from QC classification.
 
-The mechanical transforms live in pirlygenes 5.1+ (see
-``pirlygenes.expression.normalize``). This module is a thin
-re-export so existing trufflepig import paths
-(``from trufflepig.expression_normalize import …``) continue to work.
+The mechanical transforms are **canonical in oncoref** (``oncoref.normalization``); pirlygenes'
+``pirlygenes.expression.normalize`` already delegates to it. This module re-exports oncoref's
+transforms so existing trufflepig import paths (``from trufflepig.expression_normalize import …``)
+keep working while sourcing the canonical implementation directly (no pirlygenes hop).
 
 Boundary:
 
-    pirlygenes ─ rescaling primitives + technical-RNA gene-set
-                 definitions + QC classifier (curated reference data
-                 + mechanical operations on it)
-    trufflepig ─ per-sample QC narration, decomposition, sample-level
-                 judgments (analysis layer)
+    oncoref    ─ canonical rescaling primitives + technical-RNA gene-set definitions + QC classifier
+    pirlygenes ─ gene↔biology panels (delegates normalization to oncoref)
+    trufflepig ─ per-sample QC narration, decomposition, sample-level judgments (analysis layer)
 
-If you are writing new code, prefer importing directly from
-``pirlygenes``: the re-exports here exist only for back-compat.
+If you are writing new code, prefer importing directly from ``oncoref.normalization``.
 """
 
 from __future__ import annotations
 
-from pirlygenes.expression.normalize import (
+from oncoref.normalization import (
     fpkm_to_tpm,
     normalize_expression,
     normalize_technical_rna_columns,

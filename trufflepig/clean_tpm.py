@@ -137,10 +137,11 @@ def normalize_to_reference_space(
     mask = technical_rna_mask(df, label_col=label_col, id_col=id_col)
     if not bool(mask.any()):
         return df
-    # Defer the ENTIRE clean-TPM conform to pirlygenes' df-level entry point
-    # (16/9/75 fixed_fraction): df in, cleaned df out, no masks/tables/fractions
-    # built here. Same transform that produced the reference matrices.
-    from pirlygenes.expression.normalize import normalize_expression
+    # Defer the ENTIRE clean-TPM conform to oncoref's canonical df-level entry point
+    # (16/9/75 fixed_fraction): df in, cleaned df out, no masks/tables/fractions built here. Same
+    # transform that produced the reference matrices. censored_fill is passed explicitly because
+    # oncoref's normalize_expression defaults to "zero" (only the wrapper defaulted to fixed_fraction).
+    from oncoref.normalization import normalize_expression
 
     out, _ = normalize_expression(
         df,
