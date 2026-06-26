@@ -4424,12 +4424,28 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
             dc = _decomposition_purity_component(sample_tpm, cancer_code,
                                                  allow_lineage_override=(cancer_type is None))
             comps["decomposition"] = dc
-            # ranking computed purity_consistency without the decomposition; recompute now it's present.
             # Use the GATED estimate (None when gated for lineage) so a gated-out ESTIMATE can't flag.
             gated_est = None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")
+            # Ranking ran _override_collapsed_signature_purity as a no-op (decomposition=None); now the
+            # decomposition residual is available, re-run it so a signature-collapsed headline (wrong
+            # cancer-type call → silent type markers → overall≈0) gets the type-agnostic ESTIMATE+residual
+            # consensus here too — otherwise analyze_sample() keeps the collapsed value that only the
+            # direct estimate_tumor_purity(include_decomposition=True) path would have rescued.
+            sig_comp = comps.get("signature") or {}
+            lin_comp = comps.get("lineage") or {}
+            overall, overall_lower, overall_upper, integ_src = _override_collapsed_signature_purity(
+                purity.get("overall_estimate"), purity.get("overall_lower"), purity.get("overall_upper"),
+                (comps.get("integration") or {}).get("source"),
+                sig_purity=sig_comp.get("purity"), lineage_purity=lin_comp.get("purity"),
+                estimate_purity=gated_est, decomposition=dc)
+            if isinstance(comps.get("integration"), dict):
+                comps["integration"] = {**comps["integration"], "source": integ_src}
+            # ranking computed purity_consistency without the decomposition; recompute now it's present
+            # (reconcile against the possibly-overridden overall, not the stale collapsed one).
             purity = {**purity, "components": comps,
-                      "purity_consistency": _purity_reconciliation(
-                          purity.get("overall_estimate"), dc, gated_est)}
+                      "overall_estimate": overall, "overall_lower": overall_lower,
+                      "overall_upper": overall_upper,
+                      "purity_consistency": _purity_reconciliation(overall, dc, gated_est)}
             # Propagate the enriched purity back into the candidate trace too: the CLI passes the trace
             # to decompose_sample, which may adopt selected_candidate["purity_result"] and overwrite
             # analysis["purity"] — without this, that restores the stale (decomposition=None) version.

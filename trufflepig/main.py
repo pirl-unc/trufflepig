@@ -5191,7 +5191,17 @@ def _veto_local_reference_lineage_flip(
         from trufflepig.cancer_ontology import cancer_lineage_group
         from .tumor_purity import _build_sample_tpm_by_symbol
 
-        comp = _group_to_mode(compartment_call(_build_sample_tpm_by_symbol(df_expr)).get("compartment") or "")
+        # Only treat the compartment as a corroborating signal when it ACTUALLY returned a
+        # confident call: an abstention (compartment=None) or a near-tie (confident=False) is not
+        # an independent signal, and mapping its empty/grazing label through _group_to_mode would
+        # silently default to "solid" — making the veto fire as if two signals agreed when one was
+        # simply absent. Leave comp=None in those cases so the `comp and …` guard below short-circuits.
+        comp_call = compartment_call(_build_sample_tpm_by_symbol(df_expr))
+        comp = (
+            _group_to_mode(comp_call["compartment"])
+            if comp_call.get("compartment") and comp_call.get("confident")
+            else None
+        )
         refined = _group_to_mode(cancer_lineage_group(report_scope_cancer_type) or "")
         pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
                if rna_inferred_cancer_type else None)
