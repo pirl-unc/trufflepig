@@ -69,14 +69,24 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
     "lineage_panels": {
         "location": "lineage_panels.py / cancer_type_evidence.py (marker / sample_hk_median vs cohort_hk_ratio)",
         "current": Basis.HK,
-        "target": Basis.PERCENTILE,
-        "rationale": "Curated marker panels are small + heavy-tailed; percentile rank is robust where z-score normality is weak.",
+        "target": Basis.PERCENTILE,  # ALREADY in the 5-view consensus; no replacement win (Phase 4b)
+        "rationale": (
+            "EVALUATED (Phase 4b, scripts/lineage_view_ab.py). The epithelial/NE lineage gate is ALREADY a "
+            "5-view consensus (signal_views: hk + within_pct + log1p + cohort_pct(percentile) + "
+            "cohort_z, equal-weighted), so the percentile target is already in place. Per-view AUC for "
+            "epithelial/NE detection over 565 reps: the equal-weight CONSENSUS (0.935/0.940) beats every "
+            "single view; percentile (cohort_pct 0.915/0.935) is a STRONG view (≈/> HK 0.897/0.852); "
+            "z-score (cohort_z 0.713/0.812) is the WORST view (small heavy-tailed panels — the percentile-"
+            "over-z instinct confirmed). Dropping HK from the consensus is a wash (+0.003 epi / -0.002 NE). "
+            "No replacement win — keep the multi-view consensus. (Residual pure-HK path: lineage_panels."
+            "score_panel obligate/high-marker gates; percentile≈HK there too, not worth the churn.)"
+        ),
     },
     "epithelial_ne_detection": {
         "location": "lineage_evidence.epithelial_hk_ratio / lineage_marker_recall NE ratios",
         "current": Basis.HK,
-        "target": Basis.PERCENTILE,
-        "rationale": "Same as lineage panels — small marker sets, rank-robust gating.",
+        "target": Basis.PERCENTILE,  # see lineage_panels — already multi-view; no win (Phase 4b)
+        "rationale": "Same finding as lineage_panels (Phase 4b): already a 5-view consensus incl. percentile; consensus beats any single view; z-score worst. No replacement win.",
     },
     "decomposition_mixture": {
         "location": "expression_decomposition / tumor_purity._mixture_cohort_lineage_summary (hk_syms)",
