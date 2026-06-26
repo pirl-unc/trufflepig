@@ -33,13 +33,9 @@ import numpy as np
 def _ribo_free_hk_symbols() -> tuple[str, ...]:
     """Housekeeping symbols EXCLUDING ribosomal-protein genes (RPL*/RPS*).
 
-    The default housekeeping set has 7 ribosomal-protein genes among 30. Those
-    genes are part of pirlygenes' v4 clean-TPM *pinned* ribosomal/technical
-    compartment (fixed 25% of the budget), so a HK median that includes them is
-    coupled to the clean-TPM normalization: it inflates ~2.4× on v4-clean input
-    vs ~1.4× on legacy-clean input. Dropping them makes the marker-gate
-    denominator invariant to the clean-TPM compartment handling, so the
-    HK-ratio thresholds transfer across normalizations.
+    The active source-library HK panel is now HPA-derived and ribosomal-free, but
+    this defensive filter keeps the marker-gate denominator invariant if an older
+    pirlygenes/oncoref package or an overridden panel still contains RPL/RPS genes.
     """
     from .reference import pan_cancer_expression
     from .tumor_purity import housekeeping_gene_ids
