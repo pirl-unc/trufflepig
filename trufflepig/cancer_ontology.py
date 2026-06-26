@@ -77,8 +77,25 @@ def cancer_type_registry():
 
 
 def resolve_cancer_type(*args, **kwargs):
-    """Normalize a free-text / alias cancer label to a registry code (oncoref-canonical)."""
-    return _onc_ont.resolve_cancer_type(*args, **kwargs)
+    """Normalize a free-text / alias cancer label to a registry code (oncoref-canonical).
+
+    Falls back to pirlygenes for codes oncoref cannot resolve but that are still in the
+    merged :func:`cancer_type_registry` — the pirlygenes-only codes (e.g. ASTB; oncoref#221).
+    Without this, an explicit ``analyze_sample(..., cancer_type='ASTB')`` would raise even
+    though ASTB is a supported, registry-listed code. Only a pirlygenes resolution that lands
+    on a merged-registry code is honored; otherwise the original oncoref error is re-raised so
+    genuinely-unknown labels still fail loudly.
+    """
+    try:
+        return _onc_ont.resolve_cancer_type(*args, **kwargs)
+    except (KeyError, ValueError) as onc_err:
+        try:
+            resolved = _pirlygenes().resolve_cancer_type(*args, **kwargs)
+        except (KeyError, ValueError, ImportError, AttributeError):
+            raise onc_err
+        if str(resolved) in set(cancer_type_registry()["code"].astype(str)):
+            return resolved
+        raise onc_err
 
 
 def cancer_type_subtypes_of(parent_code):

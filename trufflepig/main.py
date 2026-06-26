@@ -5141,24 +5141,27 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
     """When the cancer-type EVIDENCE selector refines the call to a DIFFERENT lineage than the
     pre-evidence ranking winner, recompute the WHOLE purity for the refined call.
 
-    analyze_sample computed purity for the pre-evidence winner, so EVERYTHING lineage-dependent —
-    ``lineage_compartment``, ``estimate_gated_for_lineage``, the gated ``overall_estimate``,
-    integration source, AND the decomposition — reflects the wrong lineage (an ATRT scored as LGG, or
-    a Sarcoma/Heme rescue still using ESTIMATE). Recomputing the full purity for ``refined_code``
-    (explicit → trusted, no expression override) makes the entire purity result consistent with the
-    final lineage. Only fires on a lineage change (rare); fully fallback-safe.
+    analyze_sample computed purity for the pre-evidence winner, so EVERYTHING code/lineage-dependent —
+    ``cancer_type``, ``lineage_compartment``, ``estimate_gated_for_lineage``, the gated
+    ``overall_estimate``, integration source, the signature/reference purity, AND the decomposition —
+    reflects the wrong code (an ATRT scored as LGG, or a Sarcoma/Heme rescue still using ESTIMATE).
+    Recomputing the full purity for ``refined_code`` (explicit → trusted, no expression override) makes
+    the entire purity result consistent with the final call. Fires whenever the evidence-refined code
+    differs from the code the purity was computed for; fully fallback-safe.
     """
     try:
         purity = analysis.get("purity") or {}
         dc = (purity.get("components") or {}).get("decomposition") or {}
         if not refined_code or not isinstance(dc, dict) or not dc.get("mode"):
             return
-        from .expression_decomposition import _group_to_mode
-        from trufflepig.cancer_ontology import cancer_lineage_group
-
-        refined_mode = _group_to_mode(cancer_lineage_group(refined_code) or "")
-        if not refined_mode or refined_mode == dc.get("mode"):
-            return  # same lineage → pre-evidence purity is already consistent
+        # Recompute whenever the evidence-refined call differs from the code the purity was
+        # actually computed for (``purity['cancer_type']``). Comparing the decomposition
+        # ``dc['mode']`` instead is unsafe: the decomposition component may have ALREADY
+        # lineage-overridden its mode to the refined lineage, so equal modes can still hide a
+        # stale cancer_type / lineage_compartment / ESTIMATE-gating / signature+reference purity
+        # (the report would say SARC while every other purity field came from the pre-evidence code).
+        if str(refined_code) == str(purity.get("cancer_type") or ""):
+            return  # purity already computed for the final code → consistent
         from .tumor_purity import estimate_tumor_purity
 
         # full recompute for the refined call → consistent gating / overall / compartment / decomposition

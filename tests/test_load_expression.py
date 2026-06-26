@@ -411,6 +411,29 @@ def test_expression_qc_rescue_removes_rrna_like_dominator():
     )
 
 
+def test_expression_qc_rescue_removes_polya_lncrna_by_default():
+    """A MALAT1-dominated sample must have the poly-A-biased lncRNA artifact removed at
+    the DEFAULT (remove_noncoding=False): technical_rna_mask flags MALAT1 (so it trips the
+    rescue), so the removal must match — otherwise the rescue reports high-burden but
+    returns the artifact intact. Regression guard for the remove_groups mapping."""
+    df = pd.DataFrame(
+        {
+            "gene": ["MALAT1", "KLK3", "ACTB"],
+            "TPM": [600_000.0, 150_000.0, 250_000.0],
+        }
+    )
+
+    rescued, record = le.apply_expression_qc_rescue(df, mode="auto")
+
+    assert record["applied"] is True
+    assert rescued.loc[rescued["gene"] == "MALAT1", "TPM"].item() == 0.0
+    assert rescued["TPM"].sum() == pytest.approx(1_000_000.0)
+    # The retained protein-coding genes keep their relative proportions.
+    assert rescued.loc[rescued["gene"] == "KLK3", "TPM"].item() == pytest.approx(
+        150_000.0 / 400_000.0 * 1_000_000.0
+    )
+
+
 def test_expression_qc_rescue_uses_ensembl_id_when_symbol_is_missing():
     df = pd.DataFrame(
         {

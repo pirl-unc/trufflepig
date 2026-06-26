@@ -32,15 +32,11 @@ from trufflepig.expression_qc import (
     summarize_qc_class_shares,
 )
 from trufflepig.expression_normalize import normalize_expression
-from trufflepig.clean_tpm import assert_clean_tpm, technical_rna_mask
-
-# oncoref's ``normalize_expression`` drops a fixed set of technical-RNA "groups" (its
-# ``remove_groups`` parameter) rather than the boolean ``remove_noncoding`` the trufflepig QC
-# rescue historically toggled. rRNA-like + mtDNA + mt-pseudogene artifacts are ALWAYS dropped by
-# the rescue; the poly-A-biased lncRNA group (MALAT1, …) is the part the old flag gated, so
-# ``remove_noncoding`` simply controls whether that one group joins the technical set.
-_QC_RESCUE_TECHNICAL_GROUPS = frozenset({"mt_dna", "mt_like_pseudogene", "rrna_like"})
-_NONCODING_LNCRNA_GROUP = "polyadenylation_bias_lncrna"
+from trufflepig.clean_tpm import (
+    assert_clean_tpm,
+    technical_rna_mask,
+    TECHNICAL_RNA_QC_GROUPS,
+)
 
 # Patterns for fuzzy column guessing (tried in order, first match wins).
 # Each is matched case-insensitively against the full column name.
@@ -470,8 +466,13 @@ def apply_expression_qc_rescue(
         analysis mode; raw TPM remains available through the pre-normalization
         QC record.
     remove_noncoding : bool
-        If True, also removes noncoding-biotype rows when a biotype column is
-        present, while retaining protein-coding, immunoglobulin, and TCR genes.
+        Retained for API compatibility. The rescue now always removes exactly the
+        technical-RNA groups ``technical_rna_mask`` flags — rRNA-like, mtDNA,
+        mt-pseudogene, and the poly-A-biased lncRNA group (MALAT1/NEAT1) — so that
+        what is removed matches what triggers the rescue. oncoref's group-based
+        ``remove_groups`` has no broader noncoding-biotype option, so this flag no
+        longer changes the removed set (protein-coding / immunoglobulin / TCR are
+        always retained because they are not technical-RNA groups).
 
     Returns
     -------
@@ -634,17 +635,18 @@ def apply_expression_qc_rescue(
         norm_label_col = "__trufflepig_qc_label"
         norm_input = df.copy()
         norm_input[norm_label_col] = ""
-    remove_groups = (
-        _QC_RESCUE_TECHNICAL_GROUPS | {_NONCODING_LNCRNA_GROUP}
-        if remove_noncoding
-        else _QC_RESCUE_TECHNICAL_GROUPS
-    )
+    # Remove EXACTLY the technical-RNA groups that ``technical_rna_mask`` flags (the same set
+    # the high-burden / removed_tpm decision above is computed from) — rRNA-like, mtDNA,
+    # mt-pseudogene AND the poly-A-biased lncRNA group (MALAT1/NEAT1). Gating the lncRNA group
+    # on ``remove_noncoding`` would let a MALAT1-dominated sample trip the rescue (mask counts
+    # it) yet return applied=False with the artifact intact. oncoref's ``remove_groups`` has no
+    # broader noncoding-biotype option, so ``remove_noncoding`` no longer changes this set.
     out, normalization_record = normalize_expression(
         norm_input,
         label_col=norm_label_col,
         id_col=id_col,
         value_cols=["TPM"],
-        remove_groups=remove_groups,
+        remove_groups=TECHNICAL_RNA_QC_GROUPS,
     )
     if not normalization_record.get("applied"):
         record["reason"] = normalization_record.get("reason") or record["reason"]
