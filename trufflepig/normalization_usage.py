@@ -91,8 +91,18 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
     "decomposition_mixture": {
         "location": "expression_decomposition / tumor_purity._mixture_cohort_lineage_summary (hk_syms)",
         "current": Basis.HK,
-        "target": Basis.ZSCORE,
-        "rationale": "Subtype concordance is a cross-type contrast; z-score basis aligns with the centroid path.",
+        "target": Basis.PERCENTILE,  # WEAK signal; revised from ZSCORE; not actioned (Phase 4c)
+        "rationale": (
+            "EVALUATED (Phase 4c, scripts/decomposition_concordance_ab.py) — the ONLY consumer where HK "
+            "is the WEAKEST basis. SARC mixture subtype-pick accuracy (the #171 scope: LMS/SYN/LPS_UNSPEC, "
+            "the only mixture parent with >=2 paneled+profiled subtypes) via marker concordance: "
+            "HK 0.733 < log1p 0.867 = z-score 0.867 < percentile 0.933. So the ledger's z-score TARGET is "
+            "wrong — PERCENTILE wins (consistent with Phase 4b: percentile >> z-score for marker panels). "
+            "BUT not actioned: n=15 (3-sample spread), and the harness is a SIMPLIFIED cosine — the "
+            "production _summarize_lineage_support uses a TME-excess-weighted cosine that may already "
+            "close the HK gap. The one place worth a deeper look (faithful concordance + more data) before "
+            "touching the coupled mixture machinery; do NOT migrate on this thin evidence."
+        ),
     },
     "qc_housekeeping_median": {
         "location": "load_expression.py (core-HK median sanity warning)",
