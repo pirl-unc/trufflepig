@@ -84,6 +84,35 @@ def classify_without_hint(df):
     return bulk_classifier_call, final_call, (analysis.get("purity") or {})
 
 
+def full_granularity_call(df):
+    """The FINEST call the system would actually report → ``(bulk_classifier_call, final_call)``.
+
+    Extends ``classify_without_hint`` past the entity level through the two refinement layers the
+    real report applies: the molecular subtype (``candidate_winning_subtype_for_analysis`` — e.g.
+    BRCA → BRCA_LumA, LUAD → LUAD_KRAS_STK11) and then degenerate-subtype resolution (look-alike
+    groups — e.g. ADCC → NUTM). So the call can be coarser than truth (a sibling/parent) or finer
+    (a molecular subtype), reflecting exactly what the system commits to.
+    """
+    from trufflepig.degenerate_subtype import resolve_degenerate_subtype
+    from trufflepig.main import _veto_local_reference_lineage_flip
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+    from trufflepig.tumor_purity import _build_sample_tpm_by_symbol
+
+    analysis = analyze_sample(df)
+    scope = select_report_scope_from_evidence(df, analysis)
+    selected = scope.get("selected") or {}
+    bulk_classifier_call = analysis.get("cancer_type")
+    evidence_call = (selected.get("cancer_type") or scope.get("top_reference_cancer_type")
+                     or bulk_classifier_call)
+    entity = (_veto_local_reference_lineage_flip(analysis, df, evidence_call,
+                                                 bulk_classifier_call, selected)
+              or bulk_classifier_call)
+    analysis["cancer_type"] = entity                                    # subtype lookup matches the final entity
+    base = candidate_winning_subtype_for_analysis(analysis) or entity   # molecular subtype if one was called
+    resolution = resolve_degenerate_subtype(base, tumor_tpm_by_symbol=_build_sample_tpm_by_symbol(df))
+    return bulk_classifier_call, (resolution.get("final_subtype") or base)
+
+
 def result_row(name, truth_lineage, bulk_classifier_call, final_call, purity):
     """Assemble one result row from a classification. Pure dict access — never raises, so it stays
     OUTSIDE the caller's try (only ``classify_without_hint`` is fallible)."""
