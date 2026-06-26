@@ -60,50 +60,107 @@ def _lineage(code):
     return _group_to_mode(grp) if grp else None
 
 
-def _nohint_call(df):
-    from trufflepig.main import _veto_local_reference_lineage_flip
-    a = analyze_sample(df)                                       # no cancer_type → auto
-    scope = select_report_scope_from_evidence(df, a)
-    sel = scope.get("selected") or {}
-    evid = sel.get("cancer_type") or scope.get("top_reference_cancer_type") or a.get("cancer_type")
-    # apply the deconvolved-local-ref lineage veto, exactly as _analyze_body now does
-    vetoed = _veto_local_reference_lineage_flip(a, df, evid, a.get("cancer_type"), sel)
-    final = vetoed if vetoed is not None else a.get("cancer_type")
-    return a.get("cancer_type"), final
+def classify_without_hint(df):
+    """Run the full no-hint cancer-type pipeline → ``(bulk_classifier_call, final_call, purity_result)``.
+
+    Mirrors ``main._analyze_body`` with no cancer-type hint: the bulk classifier (``analyze_sample``)
+    → the cancer-type evidence selector → the deconvolved local-reference lineage veto → the purity
+    reroute (so the returned purity is consistent with the final call).
+    """
+    from trufflepig.main import (
+        _reroute_decomposition_to_call,
+        _veto_local_reference_lineage_flip,
+    )
+    analysis = analyze_sample(df)                                       # no cancer_type → auto-detect
+    scope = select_report_scope_from_evidence(df, analysis)
+    selected = scope.get("selected") or {}
+    bulk_classifier_call = analysis.get("cancer_type")
+    evidence_call = (selected.get("cancer_type") or scope.get("top_reference_cancer_type")
+                     or bulk_classifier_call)
+    final_call = (_veto_local_reference_lineage_flip(analysis, df, evidence_call,
+                                                     bulk_classifier_call, selected)
+                  or bulk_classifier_call)
+    _reroute_decomposition_to_call(analysis, df, final_call)            # purity consistent with the final call
+    return bulk_classifier_call, final_call, (analysis.get("purity") or {})
 
 
-def run(name, df, truth, rows):
+def result_row(name, truth_lineage, bulk_classifier_call, final_call, purity):
+    """Assemble one result row from a classification. Pure dict access — never raises, so it stays
+    OUTSIDE the caller's try (only ``classify_without_hint`` is fallible)."""
+    components = purity.get("components", {})
+    decomposition = components.get("decomposition") or {}
+    return {
+        "sample": name,
+        "truth_lineage": truth_lineage,
+        "bulk_classifier_call": bulk_classifier_call,
+        "final_call": final_call,
+        "final_lineage": _lineage(final_call),
+        "overall_purity_estimate": purity.get("overall_estimate"),
+        "estimate_method_purity": components.get("estimate_purity"),
+        "estimate_gated_for_lineage": components.get("estimate_gated_for_lineage"),
+        "decomposition_residual_fraction": decomposition.get("residual_fraction"),
+        "aneuploidy_purity": decomposition.get("aneuploidy_purity"),
+        "purity_reconciliation_flag": bool(purity.get("purity_consistency")),
+    }
+
+
+# Per-sample failures tolerated while sweeping a heterogeneous corpus (anything else propagates so
+# genuine bugs surface): unreadable / odd-format inputs, and types without a reference column.
+EXPECTED_SAMPLE_ERRORS = (FileNotFoundError, ValueError, KeyError)
+
+_LEGEND = (
+    "Columns — bulk_classifier_call: analyze_sample's ranking winner; final_call: the call after the "
+    "evidence selector + lineage veto; lineage_ok: final lineage == truth lineage; overall_purity: "
+    "headline purity; estimate_method_purity: ESTIMATE stroma/immune purity (None when gated); "
+    "estimate_gated: ESTIMATE disabled for a heme/sarcoma lineage; residual_fraction: decomposition "
+    "tumor fraction; aneuploidy_purity: aneuploidy-calibrated purity; reconciliation: the purity "
+    "consistency flag fired."
+)
+
+
+def _format_value(value, width):
+    return ("%*.2f" % (width, value)) if isinstance(value, (int, float)) else f"{str(value):>{width}s}"
+
+
+def _classify_corpus_item(group, item):
+    """Load + classify one corpus item → a result row (or an error row for an expected failure)."""
+    if group == "LOCAL REPORTS":
+        name, path, truth_lineage = item
+        load = lambda: _load_report(path)
+    else:
+        name, truth_lineage, load = item, _lineage(item), lambda: _medoid_df(item)
     try:
-        analyze_call, evid_call = _nohint_call(df)
-        rows.append({"name": name, "truth": truth, "analyze": analyze_call,
-                     "a_lin": _lineage(analyze_call), "evid": evid_call, "e_lin": _lineage(evid_call)})
-    except Exception as e:  # noqa: BLE001
-        rows.append({"name": name, "truth": truth, "error": str(e)[:60]})
+        result = classify_without_hint(load())                         # the only fallible step
+    except EXPECTED_SAMPLE_ERRORS as exc:
+        return {"sample": name, "truth_lineage": truth_lineage, "error": str(exc)[:70]}
+    return result_row(name, truth_lineage, *result)
 
 
 def main():
+    print(_LEGEND)
     for group, items in (("LOCAL REPORTS", REPORTS), ("MEDOIDS", MEDOIDS)):
-        rows = []
+        rows = [_classify_corpus_item(group, item) for item in items]
         print(f"\n=== {group} (no hint) ===")
-        print(f"{'sample':18s} {'truth':11s} | {'analyze':14s} {'a_lin':11s} | {'evidence':14s} {'e_lin':11s} ok")
-        for it in items:
-            if group == "LOCAL REPORTS":
-                name, path, truth = it
-                try:
-                    run(name, _load_report(path), truth, rows)
-                except Exception as e:  # noqa: BLE001
-                    rows.append({"name": name, "truth": truth, "error": str(e)[:60]})
-            else:
-                run(it, _medoid_df(it), _lineage(it), rows)
-        ok = n = 0
-        for r in rows:
-            if "error" in r:
-                print(f"{r['name']:18s} {str(r['truth']):11s} ERROR: {r['error']}")
+        print(f"{'sample':18s} {'bulk_classifier_call':21s} {'final_call':14s} {'lineage_ok':10s} | "
+              f"{'overall_purity':>14s} {'estimate_method_purity':>22s} {'estimate_gated':>14s} "
+              f"{'residual_fraction':>17s} {'aneuploidy_purity':>17s} {'reconciliation':>14s}")
+        correct = total = 0
+        for row in rows:
+            if "error" in row:
+                print(f"{row['sample']:18s} {str(row['truth_lineage']):21s} ERROR: {row['error']}")
                 continue
-            n += 1; c = r["e_lin"] == r["truth"]; ok += c
-            print(f"{r['name']:18s} {str(r['truth']):11s} | {str(r['analyze'])[:14]:14s} {str(r['a_lin']):11s} | "
-                  f"{str(r['evid'])[:14]:14s} {str(r['e_lin']):11s} {'Y' if c else 'n'}")
-        print(f"  {group} no-hint LINEAGE correct: {ok}/{n}")
+            total += 1
+            lineage_ok = row["final_lineage"] == row["truth_lineage"]
+            correct += lineage_ok
+            print(f"{row['sample']:18s} {str(row['bulk_classifier_call'])[:21]:21s} "
+                  f"{str(row['final_call'])[:14]:14s} {('yes' if lineage_ok else 'NO'):10s} | "
+                  f"{_format_value(row['overall_purity_estimate'], 14)} "
+                  f"{_format_value(row['estimate_method_purity'], 22)} "
+                  f"{str(row['estimate_gated_for_lineage']):>14s} "
+                  f"{_format_value(row['decomposition_residual_fraction'], 17)} "
+                  f"{_format_value(row['aneuploidy_purity'], 17)} "
+                  f"{('fired' if row['purity_reconciliation_flag'] else '-'):>14s}")
+        print(f"  {group} no-hint LINEAGE correct: {correct}/{total}")
     return True
 
 
