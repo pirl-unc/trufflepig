@@ -20,10 +20,19 @@ import pandas as pd
 import pirlygenes as pg
 from oncoref.normalization import clean_tpm
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, FunctionTransformer
 from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import StratifiedKFold
 from sklearn.neighbors import NearestCentroid
+from scipy.stats import rankdata
+
+
+def _within_sample_pct(X):
+    """Per-ROW (per-sample) percentile rank → [0,1]; reference-free, scale-invariant."""
+    return np.vstack([rankdata(row) / row.shape[0] for row in X])
+
+
+WSP = FunctionTransformer(_within_sample_pct)
 
 
 def assemble():
@@ -62,9 +71,10 @@ def main():
 
     configs = {
         "LR raw-log1p":        make_pipeline(LogisticRegression(max_iter=2000, C=1.0)),
-        "LR z-score (C=1)":    make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, C=1.0)),
-        "LR z-score (C=0.1)":  make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, C=0.1)),
+        "LR z-score":          make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000, C=1.0)),
+        "LR within-samp-pct":  make_pipeline(WSP, LogisticRegression(max_iter=2000, C=1.0)),
         "NearestCentroid z":   make_pipeline(StandardScaler(), NearestCentroid(metric="euclidean")),
+        "NearestCentroid wsp": make_pipeline(WSP, NearestCentroid(metric="euclidean")),
     }
     print(f"\n=== 5-fold stratified CV accuracy (266 samples, 54 types, chance {1/len(set(y)):.3f}) ===")
     print(f"{'method':22s} | {'acc':>6s} | {'±sd':>5s}")
