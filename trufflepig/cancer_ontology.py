@@ -137,7 +137,17 @@ def _records_by_code():
 
     records = _onc_ont.cancer_type_records()
     df = records if isinstance(records, pd.DataFrame) else pd.DataFrame(records)
-    return {str(r["code"]): r for r in df.to_dict("records")}
+    by_code = {str(r["code"]): r for r in df.to_dict("records")}
+    # Fallback-only supported codes (e.g. ASTB; oncoref#221) are in the merged cancer_type_registry
+    # but NOT in oncoref's records — add their registry row so cancer_family / registry_parent_code /
+    # normal_tissue_code don't return empty metadata for a code resolve_cancer_type accepts. The
+    # registry carries fewer columns than the oncoref record (e.g. no normal_tissue_code), so those
+    # fields degrade to '' via the helpers' .get() — still strictly better than no record at all.
+    for r in cancer_type_registry().to_dict("records"):
+        code = str(r["code"])
+        if code not in by_code:
+            by_code[code] = r
+    return by_code
 
 
 def registry_parent_code(code):
@@ -166,5 +176,19 @@ def normal_tissue_code(code):
 
 
 def cancer_type_path(code):
-    """Full lineage_group → family → cancer_type path (oncoref) — the graph view of the ontology."""
-    return _onc_ont.cancer_type_path(code)
+    """Full lineage_group → family → cancer_type path (oncoref) — the graph view of the ontology.
+
+    Fallback-only codes (e.g. ASTB) aren't in oncoref's graph, so the direct call raises; degrade
+    to a best-effort path from the merged-registry metadata (lineage group → family → code) rather
+    than crash a caller that legitimately resolved the code."""
+    try:
+        return _onc_ont.cancer_type_path(code)
+    except (KeyError, ValueError):
+        import pandas as pd
+
+        grp = cancer_lineage_group(code) or ""
+        fam = cancer_family(code) or ""
+        rows = [("lineage_group", grp), ("family", fam), ("cancer_type", str(code))]
+        return pd.DataFrame(
+            [{"level": lvl, "code": val} for lvl, val in rows if val]
+        )

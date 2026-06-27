@@ -13,6 +13,7 @@ Pins:
 """
 
 import pandas as pd
+import pytest
 
 from trufflepig.expression_qc import classify_gene_qc
 from trufflepig.expression_normalize import (
@@ -88,24 +89,26 @@ def test_normalize_expression_without_id_col_falls_back_to_symbol():
 
 
 def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
-    # ACTB ENSG00000075624, GAPDH ENSG00000111640, MYC ENSG00000136997
+    """The HK normalizer (pirlygenes back-compat path) must match its housekeeping panel by
+    stable Ensembl ID, not by symbol. Build a sample from real pirlygenes HK panel genes but
+    give them WRONG symbols — if matching fell back to symbols, nothing would match and the
+    non-HK gene wouldn't be normalized by the HK geometric mean."""
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+
+    hk_ids = sorted(housekeeping_gene_ids())[:5]  # deterministic; clears the min-HK-genes guard
+    myc = "ENSG00000136997"
     df = pd.DataFrame(
         {
-            "Ensembl_Gene_ID": [
-                "ENSG00000075624",
-                "ENSG00000111640",
-                "ENSG00000136997",
-            ],
-            # Symbols deliberately wrong; ENSG path should still match
-            # the HK panel by stable ID.
-            "Symbol": ["NOT_ACTB", "NOT_GAPDH", "MYC"],
-            "S_TPM": [100.0, 100.0, 200.0],
+            "Ensembl_Gene_ID": hk_ids + [myc],
+            "Symbol": [f"WRONG_{i}" for i in range(len(hk_ids))] + ["ALSO_WRONG"],
+            "S_TPM": [100.0] * len(hk_ids) + [400.0],
         }
     )
     out, record = tpm_to_housekeeping_normalized(df)
-    # The symbols are deliberately wrong, so the two HK-panel genes (ACTB, GAPDH) can
-    # only have been found via their stable Ensembl IDs — oncoref's record reports them
-    # as present (``panel_genes_present``). If matching fell back to symbols, none of the
-    # rows would match (NOT_ACTB/NOT_GAPDH aren't HK genes; MYC isn't in the panel).
-    assert record["panel_genes_present"] >= 2
-    assert record["applied"]
+    assert record["applied"], record.get("reason")
+    # HK geomean of the five 100-TPM genes is ~100 → the non-HK gene (400) normalizes to ~4×
+    # the HK genes' normalized value. This only happens if the HK genes were found via their
+    # Ensembl IDs despite the wrong symbols (a symbol fallback would match nothing).
+    hk_norm = out.loc[out["Ensembl_Gene_ID"] == hk_ids[0], "S_TPM"].item()
+    myc_norm = out.loc[out["Ensembl_Gene_ID"] == myc, "S_TPM"].item()
+    assert myc_norm / hk_norm == pytest.approx(4.0, rel=1e-2)
