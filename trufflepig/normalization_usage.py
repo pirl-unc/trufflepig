@@ -171,10 +171,15 @@ EXPRESSION_UNITS: dict[Unit, dict[str, object]] = {
     Unit.COHORT_PERCENTILE: {
         "what": "midrank of the sample value among the reference cohorts (cross-type specificity), [0,1]",
         "used_by": [
-            "signature_score (_compute_cancer_type_signature_stats) — the PRIMARY cancer-type signal",
-            "mixture subtype pick (_mixture_subtype_pick_scores, the one migrated consumer); signal_views 'cohort_pct'",
+            "signature_score (_compute_cancer_type_signature_stats) — the PRIMARY cancer-type signal; "
+            "MIGRATED off HK to the COMBINED cohort_pct x within_sample_pct filter (HK-migration #7, "
+            "medoid AUTO lineage 95->99/118). The cohort-pct leg keeps specificity + score spread.",
+            "mixture subtype pick (_mixture_subtype_pick_scores); signal_views 'cohort_pct'",
         ],
-        "migration": "Strong, robust where z-score normality is weak (heavy-tailed panels). The preferred specificity unit.",
+        "migration": (
+            "Strong for specificity, but PURITY-SENSITIVE alone (collapses under dilution). Best paired "
+            "with within_sample_pct (the combined filter that landed #7). The preferred specificity unit."
+        ),
     },
     Unit.COHORT_ZSCORE: {
         "what": "(value - cohort mean)/sd per gene; purity-robust to a GENERIC contaminant only",
