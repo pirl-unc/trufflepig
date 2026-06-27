@@ -3078,6 +3078,22 @@ _SQUAMOUS_PROGRAM_MARKERS = ("TP63", "SOX2")
 _UROTHELIAL_MARKERS = ("UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B")
 _SQUAMOUS_TOP_CODES = {"ESCA", "LUSC", "HNSC", "CESC"}
 
+# Per-gene gate thresholds for the basal/TNBC-vs-squamous discrimination in
+# _detect_tnbc_basal_brca_pattern. ALL in clean-TPM units (the sample-conform scale). These encode
+# genuine absolute-expression facts (a basal keratin truly high; the luminal program truly off), not
+# cross-cohort specificity — so they stay absolute rather than percentile (a top-percentile gene in a
+# globally-low sample could still be ~0 TPM). Named + grouped here so the gate logic below reads as
+# features, and so the units are visible in one place (see normalization_usage for the unit catalog).
+_TNBC_BASAL_KERATIN_HIGH_TPM = 100.0   # a basal keratin (KRT5/6/14) counts as "high" at >= this
+_TNBC_MIN_HIGH_KERATINS = 2            # need >= this many high basal keratins
+_TNBC_LUMINAL_ESR1_ON_TPM = 5.0        # ESR1 "on" → luminal, vetoes the basal call, at >=
+_TNBC_LUMINAL_PGR_ON_TPM = 1.0         # PGR "on" → luminal veto at >=
+_TNBC_FOXC1_MIN_TPM = 10.0             # basal TF FOXC1 must be >= this (rules IN basal)
+_TNBC_BASAL_POSITIVE_ON_TPM = 2.0      # MIA / GABRP basal-positive marker "present" at >=
+_TNBC_SQUAMOUS_TP63_ON_TPM = 30.0      # squamous program "on" → veto when TP63 >= this …
+_TNBC_SQUAMOUS_SOX2_ON_TPM = 5.0       # … AND SOX2 >= this
+_TNBC_UROTHELIAL_SUM_ON_TPM = 10.0     # urothelial (bladder) marker sum "on" → veto at >=
+
 
 def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
     """Detect basal-mammary samples misclassified into the squamous family.
@@ -3157,46 +3173,35 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
     if top_code not in _SQUAMOUS_TOP_CODES:
         return None
 
-    keratin_tpm = {
-        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
-        for sym in _BASAL_MAMMARY_KERATINS
+    def _tpm(sym):
+        return float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
+
+    keratin_tpm = {sym: _tpm(sym) for sym in _BASAL_MAMMARY_KERATINS}
+    luminal_tpm = {sym: _tpm(sym) for sym in _LUMINAL_MAMMARY_MARKERS}
+    positive_tpm = {sym: _tpm(sym) for sym in _BASAL_MAMMARY_POSITIVE}
+    squamous_tpm = {sym: _tpm(sym) for sym in _SQUAMOUS_PROGRAM_MARKERS}
+    foxc1 = _tpm("FOXC1")
+    urothelial_sum = sum(_tpm(sym) for sym in _UROTHELIAL_MARKERS)
+    high_keratins = [s for s, t in keratin_tpm.items() if t >= _TNBC_BASAL_KERATIN_HIGH_TPM]
+
+    # Each threshold comparison surfaced as a NAMED boolean feature (not buried in control flow), so
+    # the gate states are inspectable + reportable. The rescue fires only when ALL gates pass.
+    gates = {
+        "basal_keratins_high": len(high_keratins) >= _TNBC_MIN_HIGH_KERATINS,
+        "esr1_off": luminal_tpm.get("ESR1", 0.0) < _TNBC_LUMINAL_ESR1_ON_TPM,
+        "pgr_off": luminal_tpm.get("PGR", 0.0) < _TNBC_LUMINAL_PGR_ON_TPM,
+        "foxc1_high": foxc1 >= _TNBC_FOXC1_MIN_TPM,
+        "basal_positive_present": (
+            positive_tpm.get("MIA", 0.0) >= _TNBC_BASAL_POSITIVE_ON_TPM
+            or positive_tpm.get("GABRP", 0.0) >= _TNBC_BASAL_POSITIVE_ON_TPM
+        ),
+        "squamous_program_absent": not (
+            squamous_tpm.get("TP63", 0.0) >= _TNBC_SQUAMOUS_TP63_ON_TPM
+            and squamous_tpm.get("SOX2", 0.0) >= _TNBC_SQUAMOUS_SOX2_ON_TPM
+        ),
+        "urothelial_absent": urothelial_sum < _TNBC_UROTHELIAL_SUM_ON_TPM,
     }
-    high_keratins = [sym for sym, tpm in keratin_tpm.items() if tpm >= 100.0]
-    if len(high_keratins) < 2:
-        return None
-
-    luminal_tpm = {
-        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
-        for sym in _LUMINAL_MAMMARY_MARKERS
-    }
-    if luminal_tpm.get("ESR1", 0.0) >= 5.0:
-        return None
-    if luminal_tpm.get("PGR", 0.0) >= 1.0:
-        return None
-
-    foxc1 = float(sample_tpm_by_symbol.get("FOXC1", 0.0) or 0.0)
-    if foxc1 < 10.0:
-        return None
-
-    positive_tpm = {
-        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
-        for sym in _BASAL_MAMMARY_POSITIVE
-    }
-    if positive_tpm.get("MIA", 0.0) < 2.0 and positive_tpm.get("GABRP", 0.0) < 2.0:
-        return None
-
-    squamous_tpm = {
-        sym: float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
-        for sym in _SQUAMOUS_PROGRAM_MARKERS
-    }
-    if squamous_tpm.get("TP63", 0.0) >= 30.0 and squamous_tpm.get("SOX2", 0.0) >= 5.0:
-        return None
-
-    urothelial_sum = sum(
-        float(sample_tpm_by_symbol.get(sym, 0.0) or 0.0)
-        for sym in _UROTHELIAL_MARKERS
-    )
-    if urothelial_sum >= 10.0:
+    if not all(gates.values()):
         return None
 
     return {
@@ -3204,6 +3209,7 @@ def _detect_tnbc_basal_brca_pattern(rows, sample_tpm_by_symbol):
         "recommended_code": "BRCA",
         "recommended_subtype": "BRCA_Basal",
         "competing_top_code": top_code,
+        "gates": gates,
         "high_basal_keratins": high_keratins,
         "keratin_tpm": {sym: round(val, 2) for sym, val in keratin_tpm.items()},
         "luminal_marker_tpm": {sym: round(val, 2) for sym, val in luminal_tpm.items()},

@@ -119,3 +119,105 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
 def usage(consumer: str) -> dict[str, object]:
     """Migration record for a consumer key, or an empty dict if untracked."""
     return NORMALIZATION_USAGE.get(consumer, {})
+
+
+# --------------------------------------------------------------------------- #
+# Expression-UNIT catalog — every basis a sample value is expressed in before it hits a threshold,
+# and where each is used. The point: see the whole spread in one place so a migration to a SMALLER,
+# simpler set of units can be focused. (The NORMALIZATION_USAGE map above tracks the per-consumer
+# migration verdicts; this catalog is the broader unit-by-unit inventory.) Base scale for everything
+# is clean-TPM (clean_tpm.normalize_to_reference_space — every sample is conformed once).
+# --------------------------------------------------------------------------- #
+class Unit(str, Enum):
+    CLEAN_TPM = "clean_tpm"                       # absolute value on the conform scale
+    HK_RATIO = "hk_ratio"                         # value / housekeeping-median (depth-invariant)
+    COHORT_PERCENTILE = "cohort_percentile"       # rank of sample vs reference cohorts, [0,1]
+    COHORT_ZSCORE = "cohort_zscore"               # (value - cohort mean)/sd, per gene
+    WITHIN_SAMPLE_PERCENTILE = "within_sample_pct"  # rank of gene WITHIN the sample, [0,1]
+    LOG1P_TPM = "log1p_tpm"                       # log1p(clean-TPM)
+    SPEARMAN = "spearman"                         # whole-profile rank correlation, [-1,1]
+    LOG2_FOLD = "log2_fold"                       # log2(sample / reference)
+    MAD_LOG2_RATIO = "mad_log2_ratio"             # dispersion of per-arm log2 ratios (aneuploidy)
+
+
+# unit -> {what it means, where it's used (consumer @ rough file:line), migration note}
+EXPRESSION_UNITS: dict[Unit, dict[str, object]] = {
+    Unit.CLEAN_TPM: {
+        "what": "absolute sample value on the 16/9/75 conform scale (~1e6 budget)",
+        "used_by": [
+            "cancer_type_evidence per-gene anchors: RET>=50/CALCR>=5/CEACAM5>=5, IGF2>=100/DLK1>=5/SALL4>=5, "
+            "NUTM1>=10, MYB>=20/75, SMARCB1<=5/40, contrast hi/lo 5/2/1, _LOCAL_REFERENCE_MIN_TPM=5 (:54-196)",
+            "tumor_purity TNBC/squamous gates _TNBC_*_TPM (~:3079); _LINEAGE_COMPETITOR_FLOOR=5 (:596)",
+            "lineage_panels _HIGH_MARKER_MIN_TPM=5 + low-marker caps 1-50",
+            "tumor_evidence CA9>=50, glycolysis baseline 50; healthy_vs_tumor CTA/oncofetal>=3, CTA-sum>=30",
+            "load_expression core-HK-median QC <5; subtype_signature min_subtype_tpm=5",
+        ],
+        "migration": (
+            "SPLIT by intent. KEEP absolute where the number encodes genuine high/low expression "
+            "(RET/IGF2/CA9/SMARCB1, the TNBC luminal-off gates) — percentile would LOSE that (a top-pctl "
+            "gene can be ~0 TPM). For the specificity-PROXY gates (contrast hi/lo, _HIGH_MARKER_MIN_TPM) "
+            "→ HK_RATIO for depth-invariance, or COHORT_PERCENTILE. This is the ~40-anchor fragility set."
+        ),
+    },
+    Unit.HK_RATIO: {
+        "what": "geneset (or gene) / housekeeping-median — cancels per-sample depth, basis-locked",
+        "used_by": [
+            "ESTIMATE surrogate (tumor_purity _geneset_hk_ratio); lineage_panels 0.5x cohort-HK gate",
+            "lineage_marker_recall NE recall (0.30 / 2.0 HK-ratio); family panels; tumor-specific gene selection",
+            "signature detection floor _SIGNATURE_DETECTION_FLOOR_HK=0.1; signal_views 'hk' view",
+        ],
+        "migration": "Validated already-good for ESTIMATE (perfect per-type monotonicity). Keep; depth-invariant.",
+    },
+    Unit.COHORT_PERCENTILE: {
+        "what": "midrank of the sample value among the reference cohorts (cross-type specificity), [0,1]",
+        "used_by": [
+            "signature_score (_compute_cancer_type_signature_stats) — the PRIMARY cancer-type signal",
+            "mixture subtype pick (_mixture_subtype_pick_scores, the one migrated consumer); signal_views 'cohort_pct'",
+        ],
+        "migration": "Strong, robust where z-score normality is weak (heavy-tailed panels). The preferred specificity unit.",
+    },
+    Unit.COHORT_ZSCORE: {
+        "what": "(value - cohort mean)/sd per gene; purity-robust to a GENERIC contaminant only",
+        "used_by": [
+            "tumor-specific gene SELECTION (zscore_min=1.0/0.25/1.5); signal_views 'cohort_z' vote",
+            "z_matrix in _cached_reference_matrices; cancer_type_centroid.zscore_centroid_correlations (built, UNUSED)",
+            "optional expression_classifier co-signal (learned, opt-in)",
+        ],
+        "migration": "WORST basis for small marker panels (Phase 4b). Keep to gene selection / the learned co-signal.",
+    },
+    Unit.WITHIN_SAMPLE_PERCENTILE: {
+        "what": "rank of a gene WITHIN the one sample, [0,1]; reference-free, dominance not specificity",
+        "used_by": [
+            "expression_decomposition proliferation (>=60) + restricted-marker burden (>95); signal_views 'within_pct'",
+        ],
+        "migration": "The reference-free DEFAULT for new/ambiguous thresholds (clean-competitive, 0.861). TME-contaminated; don't use for specificity.",
+    },
+    Unit.LOG1P_TPM: {
+        "what": "log1p(clean-TPM) — compresses dynamic range; the substrate for Spearman + log views",
+        "used_by": ["cancer_type_centroid Spearman input; signal_views 'log1p'; proliferation log2 panels"],
+        "migration": "Transform, not a threshold scale. Leave.",
+    },
+    Unit.SPEARMAN: {
+        "what": "whole-profile rank correlation of sample vs a reference profile, [-1,1]",
+        "used_by": [
+            "centroid_correlations / compartment_call (margins _COMPARTMENT_CONFIDENT_MARGIN=0.025)",
+            "cancer_type_evidence coarse-reference gate (_COARSE_REFERENCE_MIN_RHO=0.75); healthy_vs_tumor HPA match",
+        ],
+        "migration": "Validated best for the compartment call (z-score regressed it, Phase 3). Keep. Margins are reference-calibrated.",
+    },
+    Unit.LOG2_FOLD: {
+        "what": "log2(sample / reference) — fold over pan-cancer or within-cohort",
+        "used_by": ["cancer_type_evidence local-reference (MIN_LOG2_VS_PAN=1.0); subtype_signature panel build"],
+        "migration": "Fold-over-reference; semantically close to COHORT_PERCENTILE for specificity. Candidate to unify.",
+    },
+    Unit.MAD_LOG2_RATIO: {
+        "what": "median-abs-deviation of per-chromosome-arm log2 ratios — genomic instability, not expression level",
+        "used_by": ["aneuploidy_axis; expression_decomposition (_ANEUPLOIDY_STRONG=0.20); purity_calibration"],
+        "migration": "Distinct quantity (instability), not a per-gene expression unit. Leave separate.",
+    },
+}
+
+
+def unit_catalog(unit: "Unit | None" = None):
+    """The whole EXPRESSION_UNITS catalog, or one unit's record."""
+    return EXPRESSION_UNITS if unit is None else EXPRESSION_UNITS.get(unit, {})
