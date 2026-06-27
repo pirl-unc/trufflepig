@@ -78,6 +78,9 @@ def evaluate(signal_name, genes, positive_group):
         keep = [v for v in VIEW_NAMES if v != drop]
         m = np.nanmean(np.vstack([arr[v] for v in keep]), axis=0)
         print(f"  consensus w/o {drop:5s} AUC {_auc(m, labels):.3f}  (views: {keep})")
+    # the combined filter that landed #7: cohort_pct x within_pct
+    combined = np.nan_to_num(arr["cohort_pct"]) * np.nan_to_num(arr["within_pct"])
+    print(f"  {'COMBINED':11s} AUC {_auc(combined, labels):.3f}   (cohort_pct x within_pct — the #7 filter)")
 
 
 def main():
