@@ -273,13 +273,28 @@ def _compute_cancer_type_signature_stats(
     sample_raw_by_symbol, sample_hk_by_symbol = _sample_expression_by_symbol(
         df_gene_expr
     )
-    # HK-normalize both sides so percentile comparison is on the same
-    # scale (sample TPM/hk vs reference cohort TPM/hk). This is consistent
-    # normalization, not mixed — both are divided by their own HK median.
+    # Per-gene score basis: the COMBINED filter cross-cohort-percentile x within-sample-percentile
+    # (two weak filters multiplied). The cohort-percentile leg supplies SPECIFICITY + the score spread
+    # the ranker's margins need; the within-sample-percentile leg supplies purity-ROBUSTNESS (a
+    # within-sample rank of curated markers survives proportional dilution, whereas cross-cohort
+    # percentile is purity-SENSITIVE — dilution shifts where the sample falls in the cohort
+    # distribution). A/B'd on 392 rep samples + dilution (scripts/signature_basis_ab.py) and validated
+    # end-to-end: the medoid AUTO cancer-type lineage rises 95->99/118 vs the HK-percentile basis
+    # (within-sample-pct ALONE regressed -3 because its compressed scores collapse the ranker margins;
+    # the product keeps the spread). Both legs in [0,1] -> product in [0,1].
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
+
+    # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
+    import pandas as _pd
+
+    _within_pct = (
+        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
+        if sample_raw_by_symbol
+        else {}
+    )
 
     stats = []
     if candidate_codes is None:
@@ -297,25 +312,23 @@ def _compute_cancer_type_signature_stats(
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0))
             sample_hk = float(sample_hk_by_symbol.get(gene, 0.0))
             cohort_hk = 0.0
-            percentile = 0.5
+            cohort_pct = 0.5
             if gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
                 cohort_hk = float(ref_by_sym.loc[gene, cohort_col])
-                # Midrank percentile: robust to ties at zero
-                ref_vals = expr_matrix.loc[gene].values
+                ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK)
                 n = len(ref_vals)
                 below = np.sum(ref_vals < sample_hk)
                 equal = np.sum(np.isclose(ref_vals, sample_hk, atol=1e-6))
-                percentile = float((below + 0.5 * equal) / n)
-                # Fix the "zero-floor percentile inflation" pathology: a *specific*
-                # marker is near-zero across non-target cancers, so its cross-cancer
-                # reference is a floor of zeros and ANY nonzero sample value — incl.
-                # quantifier noise — clears it and scores ~1.0, false evidence of
-                # expression. A gene the sample does not detectably express
-                # (sample_hk below the HK-relative detection floor) cannot be
-                # positive evidence: clamp to the neutral 0.5. Genes the sample
-                # genuinely expresses are unaffected.
-                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:
-                    percentile = min(percentile, 0.5)
+                cohort_pct = float((below + 0.5 * equal) / n)
+                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:  # zero-floor inflation guard
+                    cohort_pct = min(cohort_pct, 0.5)
+            # COMBINED filter (two weak filters): cross-cohort percentile (specificity, keeps the
+            # discrimination SPREAD the ranker's margins need) x within-sample percentile (dominance,
+            # purity-robust because a within-sample rank survives proportional dilution). A/B'd in
+            # scripts/signature_basis_ab.py: best clean accuracy AND far more dilution-robust than the
+            # cohort-percentile alone. Both legs in [0,1] → product in [0,1].
+            within_pct = float(_within_pct.get(gene, 0.5))
+            percentile = cohort_pct * within_pct
             percentiles.append(percentile)
             log_diff = abs(np.log2(sample_hk + 1) - np.log2(cohort_hk + 1))
             gene_details.append(
