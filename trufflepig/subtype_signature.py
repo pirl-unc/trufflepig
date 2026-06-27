@@ -190,6 +190,16 @@ def compute_subtype_signature_stats(
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
+    # Same COMBINED filter the broad signature uses (HK-migration #7): cross-cohort percentile x
+    # within-sample percentile — specificity + score spread from the cohort leg, purity-robustness
+    # from the within-sample leg. Within-sample percentile computed once.
+    import pandas as _pd
+
+    within_pct_by_symbol = (
+        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
+        if sample_raw_by_symbol
+        else {}
+    )
 
     results: dict[str, list[dict]] = {}
     for (code, subtype), panel in panels.items():
@@ -208,7 +218,8 @@ def compute_subtype_signature_stats(
                 continue
             below = int(np.sum(ref_vals < sample_hk_val))
             equal = int(np.sum(np.isclose(ref_vals, sample_hk_val, atol=1e-6)))
-            percentile = float((below + 0.5 * equal) / n)
+            cohort_pct = float((below + 0.5 * equal) / n)
+            percentile = cohort_pct * float(within_pct_by_symbol.get(gene, 0.5))
             percentiles.append(percentile)
             details.append(
                 {
