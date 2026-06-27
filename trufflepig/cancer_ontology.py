@@ -77,25 +77,41 @@ def cancer_type_registry():
 
 
 def resolve_cancer_type(*args, **kwargs):
-    """Normalize a free-text / alias cancer label to a registry code (oncoref-canonical).
+    """Normalize a free-text / alias cancer label to a **trufflepig-supported** registry code.
 
-    Falls back to pirlygenes for codes oncoref cannot resolve but that are still in the
-    merged :func:`cancer_type_registry` — the pirlygenes-only codes (e.g. ASTB; oncoref#221).
-    Without this, an explicit ``analyze_sample(..., cancer_type='ASTB')`` would raise even
-    though ASTB is a supported, registry-listed code. Only a pirlygenes resolution that lands
-    on a merged-registry code is honored; otherwise the original oncoref error is re-raised so
-    genuinely-unknown labels still fail loudly.
+    Both the oncoref resolution and the pirlygenes fallback are validated against the merged
+    :func:`cancer_type_registry`, which is trufflepig's supported code set (oncoref ∩ pirlygenes
+    + pirlygenes-only codes like ASTB − oncoref-only aggregates like NET / CRC_MSI that have no
+    markers or reference column here):
+
+    - oncoref resolving to a SUPPORTED code → returned (the common path).
+    - oncoref resolving to a DROPPED aggregate (NET, CRC_MSI) → NOT returned: it would only fail
+      later in purity/reference lookup. Try the pirlygenes mapping; if that also doesn't land on a
+      supported code, raise — so an unsupported code fails loudly at resolve time.
+    - oncoref unable to resolve at all → pirlygenes fallback for the pirlygenes-only codes (ASTB).
+
+    Genuinely-unknown labels still raise (the original oncoref error).
     """
+    supported = set(cancer_type_registry()["code"].astype(str))
+    onc_err: Exception
     try:
-        return _onc_ont.resolve_cancer_type(*args, **kwargs)
-    except (KeyError, ValueError) as onc_err:
-        try:
-            resolved = _pirlygenes().resolve_cancer_type(*args, **kwargs)
-        except (KeyError, ValueError, ImportError, AttributeError):
-            raise onc_err
-        if str(resolved) in set(cancer_type_registry()["code"].astype(str)):
+        resolved = _onc_ont.resolve_cancer_type(*args, **kwargs)
+    except (KeyError, ValueError) as exc:
+        onc_err = exc
+    else:
+        if str(resolved) in supported:
             return resolved
+        onc_err = ValueError(
+            f"{resolved!r} resolved by oncoref but is not a trufflepig-supported code "
+            f"(an oncoref-only aggregate dropped from the merged registry)"
+        )
+    try:
+        pirly_resolved = _pirlygenes().resolve_cancer_type(*args, **kwargs)
+    except (KeyError, ValueError, ImportError, AttributeError):
         raise onc_err
+    if str(pirly_resolved) in supported:
+        return pirly_resolved
+    raise onc_err
 
 
 def cancer_type_subtypes_of(parent_code):

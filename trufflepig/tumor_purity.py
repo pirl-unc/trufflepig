@@ -1876,7 +1876,7 @@ def _purity_reconciliation(overall, decomposition, estimate_value):
 
 
 def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decomposition=True,
-                          reference_optional=False):
+                          reference_optional=False, expr_lineage=None):
     """Estimate tumor purity from expression data.
 
     Parameters
@@ -1908,7 +1908,13 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
 
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
     lineage_compartment = _purity_lineage_compartment(cancer_code)
-    expr_compartment, expr_confident = _expression_lineage_compartment(sample_tpm)
+    # ``expr_lineage`` (compartment, confident) may be precomputed by the caller — the ranker
+    # passes it so the whole-profile compartment_call/centroid pass runs ONCE per rank, not once
+    # per candidate (it is sample-, not cancer_code-, dependent). None → compute it here.
+    expr_compartment, expr_confident = (
+        expr_lineage if expr_lineage is not None
+        else _expression_lineage_compartment(sample_tpm)
+    )
     # ESTIMATE is mis-specified where the tumor lineage IS a background (heme/sarcoma). Gate it off if
     # EITHER the cancer-code lineage OR a CONFIDENT expression lineage says so — the code is often wrong
     # at the fine level (a sarcoma miscalled BRCA still expresses as Sarcoma), but a low-margin
@@ -3893,6 +3899,22 @@ def rank_cancer_type_candidates(
             ):
                 subtype_stats = compute_subtype_signature_stats(df_gene_expr)
     sample_tpm = _build_sample_tpm_by_symbol(df_gene_expr)
+    # Whole-profile centroid pass — computed ONCE here and reused for (a) every candidate's
+    # ESTIMATE-gating expression compartment (via ``expr_lineage``, so estimate_tumor_purity
+    # doesn't recompute compartment_call/centroid_correlations per candidate) and (b) the shared
+    # cross-check pass below. It is sample-dependent, not cancer_code-dependent, so one pass suffices.
+    _ranker_cen_corr = None
+    _ranker_expr_lineage = None
+    if sample_tpm:
+        try:
+            from .cancer_type_centroid import centroid_correlations, compartment_call
+
+            _ranker_cen_corr = centroid_correlations(sample_tpm)
+            _comp = compartment_call(sample_tpm, _corr=_ranker_cen_corr)
+            _ranker_expr_lineage = (_comp.get("compartment"), bool(_comp.get("confident")))
+        except Exception:  # noqa: BLE001 — degrade to per-candidate computation, don't crash ranking
+            _ranker_cen_corr = None
+            _ranker_expr_lineage = None
     # Family panels are scored by Ensembl ID (alias-drift immune); build the
     # versionless-ENSG-keyed sample for that lookup.
     sample_tpm_by_id = _build_sample_tpm_by_gene_id(df_gene_expr)
@@ -3993,7 +4015,8 @@ def rank_cancer_type_candidates(
         try:
             # Rank on scalar/signature/lineage purity only. The lineage decomposition isn't used for
             # ranking and is expensive per candidate — it's computed once for the winner (analyze_sample).
-            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code, include_decomposition=False)
+            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code, include_decomposition=False,
+                                                  expr_lineage=_ranker_expr_lineage)
         except ValueError as exc:
             if "no pan-cancer TPM column" in str(exc) or (
                 "no direct purity marker panel" in str(exc)
@@ -4263,7 +4286,9 @@ def rank_cancer_type_candidates(
             )
             from trufflepig.cancer_ontology import cancer_lineage_group
 
-            cen_corr = centroid_correlations(sample_tpm)  # all cohorts, computed once
+            # Reuse the single ranker-level centroid pass when available (computed above), else
+            # compute it here — all cohorts, once.
+            cen_corr = _ranker_cen_corr if _ranker_cen_corr is not None else centroid_correlations(sample_tpm)
             comp = compartment_call(sample_tpm, _corr=cen_corr)
             cen_coarse = comp["compartment"]
             cen_top_code = cen_corr.index[0] if len(cen_corr) else None
