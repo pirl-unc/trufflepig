@@ -190,6 +190,11 @@ def compute_subtype_signature_stats(
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
+    # Same full ~170-cohort HK reference the broad signature uses (default ON), so broad + subtype
+    # cohort-percentiles are on one comparable footing. Falls back to the 33-cohort expr_matrix.
+    from .plot_embedding import _USE_FULL_COHORT_REFERENCE, _full_cohort_hk_reference
+
+    full_ref = _full_cohort_hk_reference() if _USE_FULL_COHORT_REFERENCE else None
     # Same COMBINED filter the broad signature uses (HK-migration #7): cross-cohort percentile x
     # within-sample percentile — specificity + score spread from the cohort leg, purity-robustness
     # from the within-sample leg. Within-sample percentile computed once.
@@ -208,11 +213,15 @@ def compute_subtype_signature_stats(
         percentiles: list[float] = []
         details: list[dict] = []
         for gene in panel:
-            if gene not in ref_by_sym.index:
-                continue
             sample_hk_val = float(sample_hk_by_symbol.get(gene, 0.0) or 0.0)
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0) or 0.0)
-            ref_vals = expr_matrix.loc[gene].values
+            if full_ref is not None and gene in full_ref.index:
+                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
+                ref_vals = ref_vals[~np.isnan(ref_vals)]
+            elif gene in ref_by_sym.index:
+                ref_vals = expr_matrix.loc[gene].values
+            else:
+                continue
             n = len(ref_vals)
             if n == 0:
                 continue
