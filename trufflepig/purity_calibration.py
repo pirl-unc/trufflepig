@@ -39,12 +39,16 @@ _MIN_MEDIAN_PURITY = 0.1   # floor the extrapolation denominator so a tiny media
 def _reference_code_candidates(cancer_type):
     """The cancer code, then its registry parent — so a rare subtype without its own pan-cancer
     reference column (e.g. ``SARC_DSRCT``) falls back to the parent cohort's column (``SARC``)."""
-    code = str(cancer_type or "").strip().upper()
+    # Preserve the code's ORIGINAL case: registry keys + the *_TPM_clean columns are case-sensitive
+    # and mixed-case for molecular subtypes (BRCA_Basal, HNSC_HPVpos, NBL_MYCNamp, LAML_ELNfav, cSCC).
+    # Uppercasing here turned BRCA_Basal -> BRCA_BASAL, so registry_parent_code returned None and the
+    # parent fallback never fired → those subtypes silently lost aneuploidy-purity calibration.
+    code = str(cancer_type or "").strip()
     candidates = [code] if code else []
     try:
         from trufflepig.analyze.cancer_type_context import registry_parent_code
 
-        parent = (registry_parent_code(code) or "").strip().upper()
+        parent = (registry_parent_code(code) or "").strip()
         if parent and parent not in candidates:
             candidates.append(parent)
     except (ImportError, KeyError, ValueError):                # no registry / unknown code → no parent
