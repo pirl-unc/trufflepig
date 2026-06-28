@@ -252,6 +252,14 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
 # weakly-expressed marker of the true type is NOT clamped).
 _SIGNATURE_DETECTION_FLOOR_HK = 0.1
 
+# Weight of the within-sample-percentile leg in the combined signature filter. cohort-pct (HK) is
+# DOMINANT; within-pct enters as a [1-w, 1] factor. 0.0 = pure cohort-pct (pre-#7); 1.0 = full product
+# (medoid +4 but 565 exact -4 — the product blurred sibling entity calls). 0.5 keeps the score near the
+# cohort-pct scale the thresholds expect → recovers exact while keeping the lineage/miss robustness.
+# (Cohort leg stays HK: switching it to raw clean-TPM regressed the medoid -4 end-to-end despite better
+# isolated argmax — the HK-percentile distribution interacts better with the ranker thresholds.)
+_WITHIN_PCT_WEIGHT = 0.5
+
 
 def _compute_cancer_type_signature_stats(
     df_gene_expr,
@@ -322,13 +330,15 @@ def _compute_cancer_type_signature_stats(
                 cohort_pct = float((below + 0.5 * equal) / n)
                 if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:  # zero-floor inflation guard
                     cohort_pct = min(cohort_pct, 0.5)
-            # COMBINED filter (two weak filters): cross-cohort percentile (specificity, keeps the
-            # discrimination SPREAD the ranker's margins need) x within-sample percentile (dominance,
-            # purity-robust because a within-sample rank survives proportional dilution). A/B'd in
-            # scripts/signature_basis_ab.py: best clean accuracy AND far more dilution-robust than the
-            # cohort-percentile alone. Both legs in [0,1] → product in [0,1].
+            # COMBINED filter (two weak filters): cross-cohort percentile (specificity + the
+            # discrimination SPREAD the ranker margins need) modulated by within-sample percentile
+            # (dominance, purity-robust — a within-sample rank survives proportional dilution).
+            # cohort-pct DOMINANT; within-pct is a [1-w, 1] factor (w=_WITHIN_PCT_WEIGHT) so it never
+            # zeros the cohort discrimination and the score stays near the cohort-pct scale the
+            # thresholds expect. A/B'd in scripts/signature_basis_ab.py; w=0.5 validated (medoid AUTO
+            # lineage 95→99, exact recovered vs the full product). Both legs [0,1] → result [0,1].
             within_pct = float(_within_pct.get(gene, 0.5))
-            percentile = cohort_pct * within_pct
+            percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)
             log_diff = abs(np.log2(sample_hk + 1) - np.log2(cohort_hk + 1))
             gene_details.append(

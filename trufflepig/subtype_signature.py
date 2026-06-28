@@ -219,7 +219,12 @@ def compute_subtype_signature_stats(
             below = int(np.sum(ref_vals < sample_hk_val))
             equal = int(np.sum(np.isclose(ref_vals, sample_hk_val, atol=1e-6)))
             cohort_pct = float((below + 0.5 * equal) / n)
-            percentile = cohort_pct * float(within_pct_by_symbol.get(gene, 0.5))
+            # cohort-pct dominant, within-pct as a [1-w, 1] factor — same weight as the broad
+            # signature so broad + subtype scores stay on one comparable scale.
+            from .plot_embedding import _WITHIN_PCT_WEIGHT as _w
+
+            within_pct = float(within_pct_by_symbol.get(gene, 0.5))
+            percentile = cohort_pct * ((1.0 - _w) + _w * within_pct)
             percentiles.append(percentile)
             details.append(
                 {
