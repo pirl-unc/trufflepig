@@ -257,7 +257,14 @@ _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 import os as _os
 
 _CENTROID_FACTOR_POWER = 4.0
-_USE_CENTROID_IN_SUPPORT = _os.environ.get("TRUFFLEPIG_CENTROID_IN_SUPPORT", "1") != "0"
+# DEFAULT OFF. We implemented + validated this (env=1 to enable): the eval showed Spearman-to-centroid
+# dominates the panel signature on hard cases IN ISOLATION (argmax), but END-TO-END it does NOT help —
+# the existing compartment_call leaf-restriction already captures the centroid's lineage value, so the
+# explicit support factor is ~neutral on the 565 (entity 432->431, exact +9 but lineage -2) AND breaks
+# specific cases the whole-profile genuinely can't separate (it ties COAD/READ at cf=1.0 then the
+# signature tiebreak flips COAD->READ; also SARC self-call + decomposition routing). Kept gated as a
+# documented negative result; the centroid stays in the ranker via the compartment restriction.
+_USE_CENTROID_IN_SUPPORT = _os.environ.get("TRUFFLEPIG_CENTROID_IN_SUPPORT", "0") == "1"
 
 
 def _centroid_support_factor(cen_corr, max_cen, power=_CENTROID_FACTOR_POWER):
