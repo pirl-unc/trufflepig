@@ -262,6 +262,60 @@ _SIGNATURE_DETECTION_FLOOR_HK = 0.1
 _WITHIN_PCT_WEIGHT = 1.0
 
 
+# The signature cohort-percentile leg ranks the sample against the FULL ~170-cohort HK reference (120
+# cancer cohorts from cancer_reference_expression + 50 HPA normals) instead of the 33 TCGA cohort
+# medians. HK-normalization bridges the differing clean-TPM scales of the sources (see
+# _full_cohort_hk_reference). DEFAULT ON — validated on ALL 565 samples (+6 entity 414→420, +12 subtype)
+# AND the 118 medoids (+1 lineage), local reports flat at 7/8. The 33-cohort reference dropped 85 of the
+# 118 types (ATRT/BL/SCLC/heme/molecular subtypes) and quantized the percentile to ~1/33 steps. Set env
+# TRUFFLEPIG_FULL_COHORT_REF=0 to fall back to the 33-cohort reference (A/B reproducibility).
+import os as _os
+
+_USE_FULL_COHORT_REFERENCE = _os.environ.get("TRUFFLEPIG_FULL_COHORT_REF", "1") != "0"
+
+
+def _full_cohort_hk_reference():
+    """~170-col HK-normalized cohort reference (Symbol-indexed): 120 cancer cohorts + 50 HPA normals.
+
+    Each cohort column is HK-normalized by its OWN trufflepig-HK-panel median, which bridges the
+    different absolute clean-TPM scales of cancer_reference_expression (~4310 ACTB), pan_cancer
+    normals, and the conformed sample — so the cross-cohort midrank is computed in one HK-relative
+    space (the same bridge the 33-cohort expr_matrix(HK) uses). Cached on the function object.
+    """
+    cached = getattr(_full_cohort_hk_reference, "_cache", None)
+    if cached is not None:
+        return cached
+    import pandas as _pd
+    from .reference import cancer_reference_expression, pan_cancer_expression
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+
+    hk_ids = {str(x).split(".")[0] for x in housekeeping_gene_ids()}
+
+    def _hk_norm_block(df, value_cols, label):
+        ids = df["Ensembl_Gene_ID"].astype(str).str.split(".").str[0]
+        hk_rows = ids.isin(hk_ids)
+        out = {}
+        for c in value_cols:
+            vals = df[c].astype(float)
+            med = vals[hk_rows & (vals > 0)].median()
+            if med and med > 0:
+                out[label(c)] = (vals / med).to_numpy()
+        return _pd.DataFrame(out, index=df["Symbol"].astype(str))
+
+    cref = cancer_reference_expression(format="wide")
+    cancer_cols = [c for c in cref.columns if str(c).endswith("_TPM_clean")]
+    cancer_hk = _hk_norm_block(cref, cancer_cols, lambda c: c.replace("_TPM_clean", ""))
+
+    pan = pan_cancer_expression()
+    normal_cols = [c for c in pan.columns if str(c).endswith("_nTPM")]
+    normal_hk = _hk_norm_block(pan, normal_cols, lambda c: c)
+
+    full = cancer_hk.join(normal_hk, how="outer")
+    full = full[~full.index.duplicated(keep="first")]
+    _full_cohort_hk_reference._cache = full
+    return full
+
+
 def _compute_cancer_type_signature_stats(
     df_gene_expr,
     n_signature_genes=20,
@@ -294,6 +348,8 @@ def _compute_cancer_type_signature_stats(
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
+    # A/B: rank against the full ~170-cohort HK reference (118 cancer + 50 normal) instead of 33.
+    full_ref = _full_cohort_hk_reference() if _USE_FULL_COHORT_REFERENCE else None
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
@@ -324,7 +380,14 @@ def _compute_cancer_type_signature_stats(
             cohort_pct = 0.5
             if gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
                 cohort_hk = float(ref_by_sym.loc[gene, cohort_col])
-                ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK)
+            if full_ref is not None and gene in full_ref.index:
+                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
+                ref_vals = ref_vals[~np.isnan(ref_vals)]
+            elif gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
+                ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK, 33)
+            else:
+                ref_vals = np.array([])
+            if ref_vals.size:
                 n = len(ref_vals)
                 below = np.sum(ref_vals < sample_hk)
                 equal = np.sum(np.isclose(ref_vals, sample_hk, atol=1e-6))
@@ -336,8 +399,8 @@ def _compute_cancer_type_signature_stats(
             # (dominance, purity-robust — a within-sample rank survives proportional dilution).
             # cohort-pct DOMINANT; within-pct is a [1-w, 1] factor (w=_WITHIN_PCT_WEIGHT) so it never
             # zeros the cohort discrimination and the score stays near the cohort-pct scale the
-            # thresholds expect. A/B'd in scripts/signature_basis_ab.py; w=0.5 validated (medoid AUTO
-            # lineage 95→99, exact recovered vs the full product). Both legs [0,1] → result [0,1].
+            # thresholds expect. w=1.0 (full product) — the 565 all-samples eval beat w=0.5 on every
+            # metric (see _WITHIN_PCT_WEIGHT). Both legs [0,1] → result [0,1].
             within_pct = float(_within_pct.get(gene, 0.5))
             percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)
