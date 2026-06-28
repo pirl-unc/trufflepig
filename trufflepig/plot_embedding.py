@@ -356,12 +356,13 @@ def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
     cols = [c for c in df.columns if str(c).endswith("_TPM_clean")]
     syms = df["Symbol"].astype(str).to_numpy()
     mat = df[cols].astype(float)
-    cross_mean = mat.mean(axis=1).to_numpy()
+    cross_mean = mat.mean(axis=1).to_numpy()  # pandas skips NaN per gene
+    cross_mean = np.nan_to_num(cross_mean, nan=0.0)
     is_excluded = _compile_excluded_gene_matcher()
     panels = {}
     for c in cols:
         code = c.replace("_TPM_clean", "")
-        v = df[c].astype(float).to_numpy()
+        v = np.nan_to_num(df[c].astype(float).to_numpy(), nan=0.0)  # cancer_reference has NaN cells
         log2r = np.log2((v + 1.0) / (cross_mean + 1.0))
         idx = np.where((v >= min_tpm) & (log2r >= min_log2_vs_mean))[0]
         ranked = sorted(
@@ -1165,9 +1166,14 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
         n_signature_genes=n_signature_genes,
     )
     sample_scores = np.zeros(len(labels))
+    _label_pos = {code: i for i, code in enumerate(labels)}
     for stat in sample_stats:
-        j = labels.index(stat["code"])
-        sample_scores[j] = stat["score"]
+        # _compute_cancer_type_signature_stats now scores ~93 codes (part-2 added panels for the
+        # missing base types); this embedding only plots its own `labels` reference set, so ignore
+        # codes outside it instead of labels.index() raising ValueError on e.g. SARC_UPS.
+        j = _label_pos.get(stat["code"])
+        if j is not None:
+            sample_scores[j] = stat["score"]
 
     matrix = np.vstack([ref_scores, sample_scores[None, :]])
     labels.append("SAMPLE")
