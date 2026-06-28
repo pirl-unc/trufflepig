@@ -247,6 +247,36 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
 _SUPPORT_FACTOR_COUNT = 5
 _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 
+# Whole-profile centroid as a support factor. The eval (scripts/classification_strategy_eval.py)
+# showed Spearman-to-centroid dominates the panel signature on HARD cases (lineage 1.00 vs 0.94, hard-
+# exact 0.69 vs 0.54) — it is a strong FAMILY/lineage signal that the signature can't match. The
+# _candidate_support_score docstring already names this as the intended direction (centroid replacing
+# the known-imperfect purity term). We fold it in RELATIVE to the best candidate's correlation (so a
+# whole-profile-mismatched candidate is demoted) and raise it to a power so the small absolute spread
+# of Spearman corrs (~0.7–0.95) becomes a meaningful penalty. Gated by env for A/B (default ON).
+import os as _os
+
+_CENTROID_FACTOR_POWER = 4.0
+_USE_CENTROID_IN_SUPPORT = _os.environ.get("TRUFFLEPIG_CENTROID_IN_SUPPORT", "1") != "0"
+
+
+def _centroid_support_factor(cen_corr, max_cen, power=_CENTROID_FACTOR_POWER):
+    """Centroid correlation as a [0,1] support factor, RELATIVE to the best candidate.
+
+    `(max(0, corr) / max_corr) ** power` — the top-correlated candidate gets 1.0; a candidate whose
+    whole-profile correlation is below the best is penalised, amplified by `power` (Spearman corrs sit
+    in a narrow high band, so a raw ratio barely discriminates). Returns None when unavailable.
+    """
+    if cen_corr is None or max_cen is None or not (float(max_cen) > 0):
+        return None
+    try:
+        rel = max(0.0, float(cen_corr)) / float(max_cen)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(rel):
+        return None
+    return float(np.clip(rel, 0.0, 1.0) ** power)
+
 _CANCER_FAMILY_DISPLAY = {
     "CRC": "CRC",
     "ESCA_SQ": "esophageal squamous",
@@ -3565,6 +3595,7 @@ def _candidate_support_score(
     signature_stability,
     family_factor,
     family_params,
+    centroid_factor=None,
 ):
     """THE single definition of a candidate's cancer-type support score.
 
@@ -3582,7 +3613,7 @@ def _candidate_support_score(
     data-derived centroid + sample decomposition that replace its role, is tracked
     in the cancer-type re-architecture issue and lands in that PR, not here.
     """
-    factors = (
+    factors = [
         float(signature_score or 0.0),
         max(
             float(purity_estimate or 0.0),
@@ -3594,10 +3625,14 @@ def _candidate_support_score(
             family_params["signature_stability_floor"],
         ),
         max(float(family_factor or 0.0), family_params["min_factor"]),
-    )
+    ]
     assert len(factors) == _SUPPORT_FACTOR_COUNT
+    # Optional 6th factor: whole-profile centroid fit (relative to the best candidate). When present
+    # the geomean exponent tracks the actual factor count so scores stay in [0,1] and comparable.
+    if centroid_factor is not None:
+        factors.append(max(float(centroid_factor), family_params["min_factor"]))
     product = float(np.prod(factors))
-    return float(product ** _SUPPORT_GEOMEAN_EXPONENT) if product > 0 else 0.0
+    return float(product ** (1.0 / len(factors))) if product > 0 else 0.0
 
 
 def _candidate_raw_support(row, family_params):
@@ -3630,6 +3665,7 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
         row.get("signature_stability"),
         factor,
         family_params,
+        centroid_factor=row.get("centroid_support_factor"),  # None unless the centroid pass set it
     )
     # support_score IS the geomean now (computed once, in [0, 1]); support_geomean
     # is retained as an alias only so existing readers keep resolving.
@@ -4304,6 +4340,26 @@ def rank_cancer_type_candidates(
                 )
                 row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
                 row["hallmark_fit"] = hallmark_fit(row["code"], sample_tpm)
+
+            # Fold the whole-profile centroid into support_score as a 6th factor (relative to the
+            # best candidate), then re-sort. The eval (scripts/classification_strategy_eval.py) showed
+            # Spearman-to-centroid dominates the panel signature on hard/lineage cases; this demotes
+            # candidates whose whole transcriptome doesn't match, which the ~20-gene signature misses.
+            if _USE_CENTROID_IN_SUPPORT:
+                _cand_corrs = [
+                    r["centroid_correlation"] for r in rows
+                    if np.isfinite(r.get("centroid_correlation", float("nan")))
+                ]
+                _max_cen = max(_cand_corrs, default=0.0)
+                if _max_cen > 0:
+                    for row in rows:
+                        cf = _centroid_support_factor(row.get("centroid_correlation"), _max_cen)
+                        row["centroid_support_factor"] = cf
+                        if cf is not None:
+                            _recompute_candidate_support(row, family_params)
+                    rows.sort(
+                        key=lambda r: (-r["support_score"], -r["signature_score"], r["code"])
+                    )
 
             # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
             # above out-of-compartment ones (stable -> within-tier order preserved).
