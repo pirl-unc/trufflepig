@@ -253,12 +253,13 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
 _SIGNATURE_DETECTION_FLOOR_HK = 0.1
 
 # Weight of the within-sample-percentile leg in the combined signature filter. cohort-pct (HK) is
-# DOMINANT; within-pct enters as a [1-w, 1] factor. 0.0 = pure cohort-pct (pre-#7); 1.0 = full product
-# (medoid +4 but 565 exact -4 — the product blurred sibling entity calls). 0.5 keeps the score near the
-# cohort-pct scale the thresholds expect → recovers exact while keeping the lineage/miss robustness.
-# (Cohort leg stays HK: switching it to raw clean-TPM regressed the medoid -4 end-to-end despite better
-# isolated argmax — the HK-percentile distribution interacts better with the ranker thresholds.)
-_WITHIN_PCT_WEIGHT = 0.5
+# DOMINANT; within-pct enters as a [1-w, 1] factor. 0.0 = pure cohort-pct (pre-#7); 1.0 = full product.
+# Set to 1.0 (full product): the ALL-SAMPLES 565 eval (the authority — medoids mislead) showed w=0.5
+# is strictly WORSE than w=1.0 on every metric incl. exact (242 vs 246 exact, 409 vs 414 entity, 523 vs
+# 526 lineage). The single-medoid "COAD>READ recovered exact" smoke was an artifact; on 565 samples the
+# full product wins. (Cohort leg stays HK: switching to raw clean-TPM regressed -4 — HK bridges the
+# different clean-TPM scales of sample vs reference; it is load-bearing here, not redundant.)
+_WITHIN_PCT_WEIGHT = 1.0
 
 
 def _compute_cancer_type_signature_stats(
