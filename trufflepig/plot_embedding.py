@@ -142,6 +142,8 @@ _CURATED_PAN_REFERENCE_ANCHORS = [
 ]
 
 _signature_panel_cache = {}
+_full_cohort_hk_reference_cache = {}
+_full_cohort_signature_panels_cache = {}
 _embedding_gene_cache = {}
 _tme_gene_cache = {}
 _bottleneck_gene_cache = {}
@@ -236,6 +238,24 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
                 break
         panels[code] = genes[:n_signature_genes]
 
+    # Part 2: add broad panels for the missing BASE cancer types (ATRT/BL/SCLC/heme/...) that have no
+    # deconvolved tumor reference, so the broad signature can SCORE them (not only the
+    # ontology/subtype/centroid layers). MOLECULAR SUBTYPES are deliberately EXCLUDED: a subtype panel
+    # (BRCA_Basal, COAD_MSS, SCLC_ASCL1) competes with its parent for the same sample, which makes the
+    # ranker abstain (parent vs subtype tie); the subtype-signature already refines those on top, and
+    # calling the parent is a correct "subtype"-level match. A code is a subtype iff its prefix
+    # (before the last "_") is itself a cohort. Only when the full-cohort reference is active.
+    if _USE_FULL_COHORT_REFERENCE:
+        extra = _full_cohort_signature_panels(n=n_signature_genes)
+        all_cohorts = set(extra.keys())
+        for code, genes in extra.items():
+            if code in panels:
+                continue
+            if "_" in code and code.rsplit("_", 1)[0] in all_cohorts:
+                continue  # molecular subtype of an existing cohort — call the parent instead
+            if len(genes) >= max(5, n_signature_genes // 2):
+                panels[code] = list(genes)
+
     _signature_panel_cache[cache_key] = {
         code: tuple(genes) for code, genes in panels.items()
     }
@@ -282,9 +302,8 @@ def _full_cohort_hk_reference():
     normals, and the conformed sample — so the cross-cohort midrank is computed in one HK-relative
     space (the same bridge the 33-cohort expr_matrix(HK) uses). Cached on the function object.
     """
-    cached = getattr(_full_cohort_hk_reference, "_cache", None)
-    if cached is not None:
-        return cached
+    if "ref" in _full_cohort_hk_reference_cache:
+        return _full_cohort_hk_reference_cache["ref"]
     import pandas as _pd
     from .reference import cancer_reference_expression, pan_cancer_expression
     from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
@@ -312,8 +331,46 @@ def _full_cohort_hk_reference():
 
     full = cancer_hk.join(normal_hk, how="outer")
     full = full[~full.index.duplicated(keep="first")]
-    _full_cohort_hk_reference._cache = full
+    _full_cohort_hk_reference_cache["ref"] = full
     return full
+
+
+def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
+    """Derive a broad signature panel (top-N cohort-specific genes) for ALL 118 cancer cohorts.
+
+    The legacy `_get_cancer_type_signature_panels` only builds panels for the 33 TCGA cohorts it has
+    deconvolved tumor references for, so the broad signature could never SCORE the other 85 types
+    (ATRT/BL/SCLC/heme/molecular subtypes) — they were callable only via the ontology/subtype/centroid
+    layers. This derives panels for every cohort in `cancer_reference_expression` (120) the same way
+    `subtype_signature.subtype_signature_panels` does: a gene is in cohort C's panel if it is expressed
+    (>= min_tpm) AND elevated vs the cross-cohort mean (log2((C+1)/(mean+1)) >= min_log2_vs_mean),
+    ranked by that log2 ratio. Family/HK/excluded genes dropped. Cached on the function object.
+    """
+    key = (n, min_tpm, min_log2_vs_mean)
+    if key in _full_cohort_signature_panels_cache:
+        return _full_cohort_signature_panels_cache[key]
+    from .reference import cancer_reference_expression
+    from .tumor_purity import _compile_excluded_gene_matcher
+
+    df = cancer_reference_expression(format="wide")
+    cols = [c for c in df.columns if str(c).endswith("_TPM_clean")]
+    syms = df["Symbol"].astype(str).to_numpy()
+    mat = df[cols].astype(float)
+    cross_mean = mat.mean(axis=1).to_numpy()
+    is_excluded = _compile_excluded_gene_matcher()
+    panels = {}
+    for c in cols:
+        code = c.replace("_TPM_clean", "")
+        v = df[c].astype(float).to_numpy()
+        log2r = np.log2((v + 1.0) / (cross_mean + 1.0))
+        idx = np.where((v >= min_tpm) & (log2r >= min_log2_vs_mean))[0]
+        ranked = sorted(
+            ((float(log2r[i]), syms[i]) for i in idx if syms[i] and not is_excluded(syms[i])),
+            reverse=True,
+        )
+        panels[code] = tuple(s for _, s in ranked[:n])
+    _full_cohort_signature_panels_cache[key] = panels
+    return panels
 
 
 def _compute_cancer_type_signature_stats(
