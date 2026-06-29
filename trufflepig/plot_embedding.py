@@ -144,6 +144,14 @@ _CURATED_PAN_REFERENCE_ANCHORS = [
 _signature_panel_cache = {}
 _full_cohort_hk_reference_cache = {}
 _full_cohort_signature_panels_cache = {}
+
+# Part-2: exclude molecular subtypes from the broad signature panels (default). A subtype as a
+# competing candidate CODE leaks into decomposition routing; the subtype-signature refines on top.
+# Set TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES=0 to INCLUDE them (A/B — they help subtype medoids but break
+# the synthetic decomposition tests; see the medoid-regression diagnosis).
+import os as _os_p2
+
+_PART2_EXCLUDE_SUBTYPES = _os_p2.environ.get("TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES", "1") != "0"
 _embedding_gene_cache = {}
 _tme_gene_cache = {}
 _bottleneck_gene_cache = {}
@@ -240,19 +248,32 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
 
     # Part 2: add broad panels for the missing BASE cancer types (ATRT/BL/SCLC/heme/...) that have no
     # deconvolved tumor reference, so the broad signature can SCORE them (not only the
-    # ontology/subtype/centroid layers). MOLECULAR SUBTYPES are deliberately EXCLUDED: a subtype panel
-    # (BRCA_Basal, COAD_MSS, SCLC_ASCL1) competes with its parent for the same sample, which makes the
-    # ranker abstain (parent vs subtype tie); the subtype-signature already refines those on top, and
-    # calling the parent is a correct "subtype"-level match. A code is a subtype iff its prefix
-    # (before the last "_") is itself a cohort. Only when the full-cohort reference is active.
+    # ontology/subtype/centroid layers). MOLECULAR SUBTYPES are deliberately EXCLUDED: a subtype as a
+    # competing candidate CODE (SARC_LMS vs SARC, COAD_MSS vs COAD) ties with / beats its parent and
+    # leaks into decomposition routing (winning_subtype + support_fraction_of_top) — flipping a primary
+    # to a met template or reclassifying a contaminated tumor to a subtype. The subtype-signature
+    # already refines those on top of the broad call. A code is a SUBTYPE iff its registry parent is a
+    # cohort we already score (the 33 TCGA panels) or another cancer_reference cohort — NOT a prefix
+    # check (cancer_reference ships SARC_LMS but no broad "SARC" column, so a prefix check silently
+    # failed and let the subtypes through). Only when the full-cohort reference is active.
     if _USE_FULL_COHORT_REFERENCE:
+        from .analyze.cancer_type_context import registry_parent_code
+
         extra = _full_cohort_signature_panels(n=n_signature_genes)
         all_cohorts = set(extra.keys())
         for code, genes in extra.items():
             if code in panels:
                 continue
-            if "_" in code and code.rsplit("_", 1)[0] in all_cohorts:
-                continue  # molecular subtype of an existing cohort — call the parent instead
+            try:
+                parent = registry_parent_code(code)
+            except Exception:  # noqa: BLE001
+                parent = None
+            if (
+                _PART2_EXCLUDE_SUBTYPES
+                and parent
+                and (parent in panels or parent in all_cohorts)
+            ):
+                continue  # molecular subtype of a scored cohort — call the parent; subtype-sig refines
             if len(genes) >= max(5, n_signature_genes // 2):
                 panels[code] = list(genes)
 

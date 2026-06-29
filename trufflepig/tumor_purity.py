@@ -1707,7 +1707,7 @@ def _resolve_purity_reference(cancer_code, ref_by_sym):
         return {
             "reference_cancer_code": cancer_code,
             "reference_expression_source": "pan_cancer",
-            "reference_purity": TCGA_MEDIAN_PURITY.get(cancer_code, 0.7),
+            "reference_purity": TCGA_MEDIAN_PURITY.get(cancer_code, _DEFAULT_MEDIAN_PURITY),
             "ref_expr": ref_by_sym[cancer_col].to_dict(),
         }
 
@@ -1726,7 +1726,7 @@ def _resolve_purity_reference(cancer_code, ref_by_sym):
         return {
             "reference_cancer_code": parent_code,
             "reference_expression_source": "parent_pan_cancer",
-            "reference_purity": TCGA_MEDIAN_PURITY.get(parent_code, 0.7),
+            "reference_purity": TCGA_MEDIAN_PURITY.get(parent_code, _DEFAULT_MEDIAN_PURITY),
             "ref_expr": ref_by_sym[parent_col].to_dict(),
         }
 
