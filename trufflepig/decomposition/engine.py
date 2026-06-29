@@ -194,6 +194,13 @@ DECOMPOSITION_PARAMETERS = {
         "met_site_dominance_min_extra_fraction": 0.25,
         "met_site_dominance_gain": 12.0,
         "met_site_dominance_cap": 3.0,
+        # The dominance boost may fire ONLY for a leading tumor hypothesis. site_delta =
+        # met-site-score − origin-score is large whenever the origin tissue is ABSENT — which is true
+        # both for a real met AND for a WRONG primary whose origin simply isn't in the sample (an
+        # esophageal-cancer hypothesis on a colon sample: peritoneum present, esophagus absent → big
+        # delta → spurious 3× boost that lets the weak hypothesis beat the correct primary). A met of
+        # cancer-type X must still be a strong X candidate, so gate the boost on support_fraction_of_top.
+        "met_site_dominance_min_support": 0.90,
         # Extra-component factor rewards met templates whose site-specific
         # host cell (e.g. hepatocyte, astrocyte) is actually detected.
         # factor = base + gain × clip(extra_fraction / full_fraction, 0, 1)
@@ -1282,6 +1289,7 @@ def _fit_one_hypothesis(
             site_evidence.get("site_supported", False)
             and site_delta >= scoring["met_site_dominance_min_delta"]
             and extra_sample_fraction >= scoring["met_site_dominance_min_extra_fraction"]
+            and cancer_support >= scoring["met_site_dominance_min_support"]
         ):
             site_boost = float(
                 np.clip(
