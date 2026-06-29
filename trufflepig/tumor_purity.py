@@ -128,6 +128,14 @@ TCGA_MEDIAN_PURITY = {
 # aneuploidy-purity calibration so a missing type isn't mistakenly treated as a pure (purity=1) reference.
 _DEFAULT_MEDIAN_PURITY = round(sum(TCGA_MEDIAN_PURITY.values()) / len(TCGA_MEDIAN_PURITY), 3)
 
+# A niche / pediatric cohort (NBL, ...) can have a strong cross-cohort SIGNATURE but NO purity
+# REFERENCE (no pan-cancer TPM column, no local purity panel). The candidate loop used to DROP such a
+# code outright, silently excluding it from ever being called even when its signature is the single
+# best (NBL scored 0.98 yet never reached the candidate list -> the call defaulted to an adult
+# look-alike). We instead let a CLEARLY-EXPRESSED niche signature compete with a neutral purity; this
+# floor keeps faint family-expansion codes out (the signature still gates the winner).
+_NICHE_CANDIDATE_MIN_SIGNATURE = 0.6
+
 _HOST_SITE_BACKGROUND_TISSUES = {
     "bone_marrow",
     "lymph_node",
@@ -4070,8 +4078,25 @@ def rank_cancer_type_candidates(
             if "no pan-cancer TPM column" in str(exc) or (
                 "no direct purity marker panel" in str(exc)
             ):
-                continue
-            raise
+                # No purity REFERENCE for this code. Drop a faint candidate, but rescue a
+                # clearly-expressed niche signature so it still COMPETES. Route it through the
+                # existing reference-free path (lineage-decomposition residual as the purity signal),
+                # which returns a shape-complete result so the winner finalises correctly. Fixes niche
+                # types (NBL) being excluded from candidacy entirely despite a top signature.
+                if (
+                    float(signature_score_map.get(code, 0.0))
+                    < _NICHE_CANDIDATE_MIN_SIGNATURE
+                ):
+                    continue
+                purity_result = estimate_tumor_purity(
+                    df_gene_expr,
+                    cancer_type=code,
+                    include_decomposition=False,
+                    expr_lineage=_ranker_expr_lineage,
+                    reference_optional=True,
+                )
+            else:
+                raise
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
         broad_signature_score = float(signature_score_map.get(code, 0.0))
         signature_score = broad_signature_score
@@ -4277,7 +4302,7 @@ def rank_cancer_type_candidates(
     # guards this wiring.
     compartment_restricted = False
     if sample_tpm:
-        from .cancer_type_ontology import broad_lineage
+        from .cancer_type_ontology import lineage_compatibility
         from .lineage_evidence import lineage_exclusion_evidence
         from .lineage_marker_recall import marker_hk_median
 
@@ -4286,7 +4311,14 @@ def rank_cancer_type_candidates(
         )
         if _lineage_ev.factors:
             for r in rows:
-                _factor = _lineage_ev.factors.get(broad_lineage(r["code"]), 1.0)
+                # Polyphenotypic tumors (NBL=embryonal+neuroendocrine, DSRCT=mesenchymal+
+                # epithelial, ...) take the LEAST-demoting factor over their compatible
+                # lineages, so the gate can't veto a biphasic entity on its secondary
+                # program. Unilineage codes are unaffected (single-member set).
+                _factor = max(
+                    _lineage_ev.factors.get(lin, 1.0)
+                    for lin in lineage_compatibility(r["code"])
+                )
                 if _factor != 1.0:
                     r["support_score"] = float(r.get("support_score") or 0.0) * _factor ** _SUPPORT_GEOMEAN_EXPONENT
                     r["support_geomean"] = r["support_score"]

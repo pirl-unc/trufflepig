@@ -194,6 +194,56 @@ def ontology_path(code: str) -> list[str]:
     return ["root", broad, code]
 
 
+# Polyphenotypic / biphasic tumors co-express TWO lineage programs, so a single
+# ``broad_lineage`` label makes the lineage-exclusion and compartment gates VETO the
+# correct call whenever the whole-profile / marker evidence reads the *secondary*
+# program. The canonical failure: neuroblastoma's neural-crest catecholamine
+# (neuroendocrine) program demotes its "embryonal" label, handing the call to SCLC;
+# likewise DSRCT/epithelioid-sarcoma's keratin program demotes "mesenchymal" -> UCS/CESC,
+# and hepatoblastoma's hepatic program floats LIHC above it. Each entry lists the
+# SECONDARY broad lineage(s) the entity co-expresses (primary stays ``broad_lineage``).
+#
+# Deliberately SURGICAL: only textbook-multiphenotypic *specific* entities appear. Broad
+# SARC and the common carcinoma/sarcoma subtypes stay single-lineage, so the gates still
+# demote genuine saturation mis-calls (a stroma-contaminated tumor mis-read as SARC, a
+# squamous-contaminated tumor mis-read as HNSC). A secondary lineage only ever *prevents
+# demotion* — the panel signature still decides the winner among undemoted candidates, so
+# protecting a type it doesn't match costs nothing.
+_SECONDARY_LINEAGES: dict[str, tuple[str, ...]] = {
+    # Blastomas — embryonal tumors differentiating toward an organ lineage
+    "NBL": ("neuroendocrine", "neural"),   # neural-crest sympathoadrenal, catecholamine+
+    "HEPB": ("epithelial",),               # hepatic differentiation, AFP+
+    "WT": ("epithelial",),                 # nephroblastoma: blastema + epithelial tubules
+    "RBL": ("neural",),                    # retinoblastoma
+    "PBL": ("mesenchymal",),               # pleuropulmonary blastoma
+    # Biphasic mesenchymal -> epithelial. NOTE the directional asymmetry: a SECONDARY
+    # lineage makes a candidate in-compartment for that lineage too, so a *common* type
+    # given a secondary program intrudes on the secondary compartment and beats its true
+    # residents (e.g. epithelial UCS/MESO marked "mesenchymal" out-competes real sarcomas
+    # on a Sarcoma sample — a measured regression). Only RARE, signature-distinct entities
+    # whose own panel gates them belong here; common carcinosarcoma/mesothelioma do not.
+    "SARC_DSRCT": ("epithelial", "neural"),  # EWSR1-WT1 polyphenotypic epithelial/myogenic/neural
+    "SARC_EPITH": ("epithelial",),         # epithelioid sarcoma (keratin+, SMARCB1-loss)
+    "SARC_SS": ("epithelial",),            # synovial sarcoma (biphasic)
+}
+
+
+def lineage_compatibility(code: str, _registry=None) -> frozenset[str]:
+    """Broad lineages a cohort code is COMPATIBLE with (primary + any secondary programs).
+
+    For a unilineage tumor this is just ``{broad_lineage(code)}``. For the textbook
+    biphasic / blastomatous entities in :data:`_SECONDARY_LINEAGES` it also includes the
+    co-expressed program(s), so a lineage gate that reads the secondary program does not
+    veto the correct call. Subtype codes (``NBL_MYCNamp``) inherit their parent's
+    secondary set via the ``CODE_SUFFIX`` -> ``CODE`` fallback.
+    """
+    primary = broad_lineage(code, _registry=_registry)
+    extra = _SECONDARY_LINEAGES.get(code)
+    if extra is None and "_" in code:
+        extra = _SECONDARY_LINEAGES.get(code.rsplit("_", 1)[0])
+    return frozenset((primary, *(extra or ())))
+
+
 # Registry lookup (family by code), loaded lazily on first use so importing this
 # module stays cheap.
 @functools.lru_cache(maxsize=1)
