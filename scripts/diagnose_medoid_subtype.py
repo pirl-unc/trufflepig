@@ -1,10 +1,7 @@
 #!/usr/bin/env python
-"""Per-medoid top call + lineage, to diff subtype-exclude vs subtype-include and find what flipped.
-
-Run twice: TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES=1 (default) and =0; diff the two outputs. For each medoid
-type it prints: truth_lineage, top_call, call_lineage, ok, and the top-3 (code, signature_score).
+"""Per-medoid top call + lineage. For each medoid type prints: truth_lineage, top_call, call_lineage,
+ok, and the top-3 (code, support_score) — a quick read on what the ranker calls each cohort's medoid.
 """
-import os
 import sys
 import warnings
 
@@ -34,8 +31,6 @@ def lin(code):
 
 
 def main():
-    excl = os.environ.get("TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES", "1")
-    print(f"# EXCLUDE_SUBTYPES={excl}")
     for t in sorted(available_representative_cohorts()):
         try:
             r = rank_cancer_type_candidates(medoid_df(t), top_k=3)

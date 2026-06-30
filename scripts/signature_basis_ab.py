@@ -85,10 +85,16 @@ def main():
                     ps.append(pct_among(hk_ref.loc[g].to_numpy(), sv / hk_med) * float(wp.get(g, 0.5)))
                 elif basis == "combined_raw":
                     ps.append(pct_among(raw_ref.loc[g].to_numpy(), sv) * float(wp.get(g, 0.5)))
+                elif basis.startswith("beta"):
+                    # cohort_hk * ((1-b) + b*within_pct): cohort-pct dominant, within-pct a lighter
+                    # robustness factor in [1-b, 1] that never zeros the cohort discrimination.
+                    b = float(basis.split("_")[1]) / 100.0
+                    cp = pct_among(hk_ref.loc[g].to_numpy(), sv / hk_med)
+                    ps.append(cp * ((1.0 - b) + b * float(wp.get(g, 0.5))))
             out[t] = float(np.mean(ps)) if ps else 0.0
         return max(out, key=out.get)
 
-    bases = ["cohort_hk", "cohort_raw", "within_pct", "combined", "combined_raw"]
+    bases = ["cohort_hk", "combined", "beta_25", "beta_50", "beta_75"]
     print(f"{len(samples)} samples / {len(types)} panel types", file=sys.stderr)
     # pan-cancer-mean background for the dilution stress
     bg = raw_ref.mean(axis=1)

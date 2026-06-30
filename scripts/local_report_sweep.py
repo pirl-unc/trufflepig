@@ -36,16 +36,17 @@ def main():
         odir = OUT / name
         print(f"\n{'='*90}\n##### {name}   (truth lineage: {truth})\n{'='*90}")
         r = subprocess.run(
-            ["python", "-m", "trufflepig.cli", "analyze", path, "--output-dir", str(odir),
+            ["python", "-m", "trufflepig.cli", "run", "--sample", path, "--workspace", str(odir),
              "--no-figures", "--force"],
             capture_output=True, text=True, timeout=900,
         )
         if r.returncode != 0:
             print(f"  ANALYZE FAILED (rc={r.returncode}):\n  {r.stderr[-600:]}")
             continue
-        mds = sorted(odir.glob("*analysis.md")) + sorted(odir.glob("*summary.md"))
+        # `run` writes reports under <workspace>/analyze/. Prefer the summary (headline call).
+        mds = sorted(odir.rglob("*summary.md")) + sorted(odir.rglob("*analysis.md"))
         if not mds:
-            mds = sorted(odir.glob("*.md"))
+            mds = sorted(odir.rglob("*.md"))
         md = mds[0] if mds else None
         if md is None:
             print("  (no markdown produced)")

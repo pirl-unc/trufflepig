@@ -14,6 +14,8 @@ Match levels per sample:
 Run:  python3 scripts/eval_per_sample_confusion.py
 """
 import collections
+import argparse
+import multiprocessing as mp
 import os
 import sys
 import warnings
@@ -137,14 +139,55 @@ def call_each_sample(type_code):
         yield col, final_call
 
 
-def main():
+def _eval_one_cohort(truth):
+    """Worker: all (sample, final_call) for one cohort. Top-level + picklable for the pool."""
+    try:
+        return truth, list(call_each_sample(truth))
+    except Exception as exc:  # noqa: BLE001 — a cohort that fails to load shouldn't kill the run
+        return truth, [("<cohort-error>", f"ERROR:{str(exc)[:40]}")]
+
+
+def _default_workers():
+    """min(cpu-2, free_RAM/1.8GB) — each worker re-imports trufflepig + the reference matrices
+    (~1.5-1.8 GB RSS), so cap by memory like ``test.sh`` to avoid OOM on a fat machine."""
+    cpu = os.cpu_count() or 4
+    cap = max(1, cpu - 2)
+    try:  # macOS: free + inactive pages from vm_stat
+        import re
+        import subprocess
+        out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5).stdout
+        page = int(re.search(r"page size of (\d+)", out).group(1))
+        free = sum(int(re.search(rf"Pages {k}:\s+(\d+)", out).group(1)) for k in ("free", "inactive"))
+        gb = free * page / 1e9
+        cap = min(cap, max(1, int(gb // 1.8)))
+    except Exception:  # noqa: BLE001 — fall back to the cpu-based cap
+        pass
+    return cap
+
+
+def main(workers=None):
     types = sorted(available_representative_cohorts())
+    if workers is None:
+        workers = _default_workers()
     results = []  # (truth_type, sample, final_call, match_level)
-    for i, truth in enumerate(types, 1):
-        calls = list(call_each_sample(truth))
+    print(f"# {len(types)} cohorts, {workers} worker(s)", flush=True)
+    if workers <= 1:
+        stream = ((t, list(call_each_sample(t))) for t in types)
+        pool = None
+    else:
+        # 'spawn' (macOS default) gives each worker a clean interpreter that re-imports the
+        # reference matrices once; 'fork' would copy the parent's half-built caches.
+        pool = mp.get_context("spawn").Pool(workers)
+        stream = pool.imap_unordered(_eval_one_cohort, types)
+    done = 0
+    for truth, calls in stream:
+        done += 1
         for sample, final_call in calls:
             results.append((truth, sample, final_call, match_level(final_call, truth)))
-        print(f"  [{i}/{len(types)}] {truth:16s} -> {[c for _, c in calls]}", flush=True)
+        print(f"  [{done}/{len(types)}] {truth:16s} -> {[c for _, c in calls]}", flush=True)
+    if pool is not None:
+        pool.close()
+        pool.join()
 
     levels = collections.Counter(r[3] for r in results)
     n = len(results)
@@ -182,4 +225,8 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(0 if main() is not None else 1)
+    _ap = argparse.ArgumentParser(description="Per-sample cancer-type confusion over all cohorts.")
+    _ap.add_argument("--workers", type=int, default=None,
+                     help="parallel worker processes (default: memory-aware cap; 1 = serial)")
+    _args = _ap.parse_args()
+    sys.exit(0 if main(workers=_args.workers) is not None else 1)

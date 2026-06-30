@@ -67,6 +67,12 @@ def main():
         # stromal+immune enrichment over HK (higher => more TME => lower purity)
         return _geneset_hk_ratio(tme_genes, hk_syms, col_vals)
 
+    def raw_contrast(col_vals):
+        # stromal+immune sum on CLEAN-TPM (no HK division). clean-TPM already removes depth, so
+        # the enrichment-vs-reference should track purity without the HK normalization — the test of
+        # whether HK is REDUNDANT for ESTIMATE (the last open HK case).
+        return float(sum(col_vals.get(g, 0.0) for g in tme_genes))
+
     def sp(a, b):
         ra = pd.Series(a).rank().to_numpy(); rb = pd.Series(b).rank().to_numpy()
         return float(np.corrcoef(ra, rb)[0, 1])
@@ -74,31 +80,28 @@ def main():
     def run(contaminant_name, bg_vals):
         # pooled across types, using HK ENRICHMENT (the production method: ratio ÷ the type's own
         # f=0 reference) so type baseline is removed for BOTH methods — the fair comparison.
-        rows = []   # (true_purity, hk_enrichment, z_contrast)
-        per_type_hk, per_type_z = [], []
+        per_type_hk, per_type_z, per_type_raw = [], [], []
         for t in tcols:
             tumor = ref[t].astype(float)
-            hk0 = None
-            tp_t, hk_t, z_t = [], [], []
+            hk0 = rw0 = None
+            tp_t, hk_t, z_t, raw_t = [], [], [], []
             for f in FRACS:
                 mix = (tumor * (1 - f) + pd.Series(bg_vals).reindex(tumor.index).fillna(0.0) * f)
                 mix = mix / mix.sum() * 1e6
                 cv = mix.to_dict()
-                raw_hk = hk_contrast(cv)
+                rh = hk_contrast(cv); rr = raw_contrast(cv)
                 if hk0 is None:
-                    hk0 = raw_hk or 1.0
-                enr = raw_hk / hk0 if hk0 else 0.0
-                rows.append((1 - f, enr, zscore_contrast(cv)))
-                tp_t.append(1 - f); hk_t.append(enr); z_t.append(zscore_contrast(cv))
+                    hk0 = rh or 1.0; rw0 = rr or 1.0
+                tp_t.append(1 - f)
+                hk_t.append(rh / hk0 if hk0 else 0.0)
+                raw_t.append(rr / rw0 if rw0 else 0.0)
+                z_t.append(zscore_contrast(cv))
             per_type_hk.append(abs(sp(hk_t, tp_t)))
             per_type_z.append(abs(sp(z_t, tp_t)))
-        arr = np.array(rows)
-        tp, hk, z = arr[:, 0], arr[:, 1], arr[:, 2]
-        print(f"  [{contaminant_name}]")
-        print(f"      pooled |Spearman(contrast, purity)|:   HK-enrichment {abs(sp(hk, tp)):.3f}   "
-              f"z-score {abs(sp(z, tp)):.3f}   (n={len(rows)})")
-        print(f"      mean per-type |Spearman|:              HK-enrichment {np.mean(per_type_hk):.3f}   "
-              f"z-score {np.mean(per_type_z):.3f}")
+            per_type_raw.append(abs(sp(raw_t, tp_t)))
+        print(f"  [{contaminant_name}]  mean per-type |Spearman(contrast, purity)|:")
+        print(f"      HK-enrichment {np.mean(per_type_hk):.3f}   raw-cleanTPM-enrichment "
+              f"{np.mean(per_type_raw):.3f}   z-score {np.mean(per_type_z):.3f}")
 
     print(f"types={len(tcols)} fracs={FRACS} tme_genes={len(tme_genes)}", file=sys.stderr)
     print("\n=== ESTIMATE contrast vs true purity (higher |corr| = better purity signal) ===")
