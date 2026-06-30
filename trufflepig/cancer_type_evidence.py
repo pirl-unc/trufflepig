@@ -35,6 +35,11 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "primary_expression_match": 1,
 }
 
+# Selectors the whole-profile-expression centroid veto must NOT override: a definitive molecular
+# call (a detected fusion) outranks expression, which can be contaminated / low-purity. See
+# ``_apply_centroid_fine_subtype_veto``.
+_CENTROID_VETO_EXEMPT_SELECTORS: frozenset[str] = frozenset({"direct_fusion"})
+
 # Thresholds for the lineage_panel selector — gates when a
 # trufflepig.lineage_panels panel result is strong enough to
 # propose a cancer type. See issue #42 + lineage_panels.py for
@@ -4814,7 +4819,7 @@ def _public_evidence_sort_key(evidence: CancerTypeEvidence):
 
     The negation pattern lets the caller use plain ``sorted(...)``
     (ascending) so the alphabetical-tie field stays in natural
-    ascending order. Mirrors ``_selectable_sort_key`` in
+    ascending order. Mirrors ``_pick_selected`` in
     ``select_report_scope_from_evidence`` — both must agree so the
     "selected" hypothesis matches the top of the evidence list on
     ties.
@@ -4983,6 +4988,94 @@ def _build_staged_evidence_graph(
     }
 
 
+def _apply_centroid_fine_subtype_veto(
+    hypotheses: dict[str, "CancerTypeEvidence"],
+    cen,
+) -> None:
+    """Strip report-label selectability from a fine subtype the whole-profile centroid rejects (#98).
+
+    The curated marker / local-expression-reference path can nominate a fine subtype the
+    whole-transcriptome centroid clearly contradicts — the canonical case is an MDM2/CDK4
+    amplicon scoring ``SARC_DDLPS`` (a degenerate "junk-drawer" reference) on a sample whose
+    whole profile is unmistakably ``SARC_OS`` (osteosarcoma). The centroid is the robust,
+    purity-/contaminant-resistant signal here, so when it prefers a SIBLING of a candidate's
+    broad family by a clear margin (``resolve_fine_subtype``), we drop that candidate's
+    selectability and record the reason. The report then falls back to the centroid-anchored
+    ``winning_subtype`` (which the ranker already resolved the same way) or the broad context,
+    instead of committing to the centroid-contradicted subtype. ``cen`` is the precomputed
+    :func:`centroid_correlations` Series. Only a fine subtype with its OWN reference medoid is
+    judged (so the centroid can actually see it); fail-open on any error.
+
+    AUTHORITY: the centroid is whole-profile EXPRESSION, so it may only override OTHER
+    expression-derived selectors — never a definitive molecular call. A ``direct_fusion``
+    hypothesis (the actual detected driver, e.g. EWSR1-FLI1 -> SARC_EWS) is diagnostic and
+    outranks expression (which can be contaminated / low-purity), so it is exempt.
+    """
+    if cen is None or len(cen) == 0:
+        return
+    try:
+        from trufflepig.cancer_ontology import registry_parent_code
+
+        from .cancer_type_centroid import resolve_fine_subtype
+    except Exception:  # noqa: BLE001 — never let the veto crash report scoping
+        return
+    cen_index = set(cen.index)
+    for code, hyp in hypotheses.items():
+        if not hyp.can_select_report_label or code not in cen_index:
+            continue
+        if hyp.selected_by in _CENTROID_VETO_EXEMPT_SELECTORS:
+            continue  # definitive molecular evidence — expression must not override it
+        parent = registry_parent_code(code)
+        if not parent:  # broad type, not a fine subtype — nothing to re-resolve
+            continue
+        preferred = resolve_fine_subtype(parent, cen, current_subtype=code)
+        if preferred and preferred != code:
+            hyp.can_select_report_label = False
+            hyp.label_status = "blocked"
+            hyp.blocking_reasons = tuple(hyp.blocking_reasons) + (
+                f"whole-profile centroid prefers {preferred} over {code}",
+            )
+
+
+def _centroid_and_compartment_for_veto(sample_tpm_by_symbol: Mapping[str, float]):
+    """``(centroid_correlations Series, compartment_call dict)`` for the veto, or ``(None, None)``.
+
+    One whole-profile centroid pass, shared by the fine-subtype veto and its lineage-flip
+    guard. Fail-open (returns ``(None, None)``) so the veto simply does not run on any error.
+    """
+    if not sample_tpm_by_symbol:
+        return None, None
+    try:
+        from .cancer_type_centroid import centroid_correlations, compartment_call
+
+        cen = centroid_correlations(sample_tpm_by_symbol)
+        comp = compartment_call(sample_tpm_by_symbol, _corr=cen)
+        return cen, comp
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def _veto_lineage_flip_allowed(pre, post, comp) -> bool:
+    """May the centroid veto move the report scope from ``pre`` to ``post``?
+
+    Always yes within a broad lineage (a same-lineage fine refinement). Across lineages,
+    yes only when ``post``'s broad lineage is the one the whole-profile compartment call
+    points at — so the centroid that demoted ``pre`` is also the authority for the new
+    lineage. Fail-open to allowed on any lookup error (the centroid already chose ``post``).
+    """
+    try:
+        from .cancer_type_ontology import _BROAD_TO_COMPARTMENT, broad_lineage
+
+        pre_lin = broad_lineage(pre.cancer_type)
+        post_lin = broad_lineage(post.cancer_type)
+        if pre_lin == post_lin:
+            return True
+        compartment = (comp or {}).get("compartment")
+        return bool(compartment) and _BROAD_TO_COMPARTMENT.get(post_lin) == compartment
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def select_report_scope_from_evidence(
     df_expr,
     analysis: Mapping[str, Any],
@@ -5059,22 +5152,58 @@ def select_report_scope_from_evidence(
             sample_tpm_by_symbol,
         )
 
-    rows = list(hypotheses.values())
-    selectable = [row for row in rows if row.can_select_report_label]
-    selected = None
-    if selectable:
-        # Tie-break: highest selection_priority first (class_rank, then
-        # strength, then tiebreak slot), then *ascending* cancer_type
-        # alphabetical for determinism. The previous form
-        # ``sort((priority, cancer_type), reverse=True)`` flipped both
-        # fields, producing Z-before-A on ties (e.g. UCS over THCA at
-        # equal priority) — surprising and undocumented.
-        def _selectable_sort_key(row):
-            cls, strength, tb = row.selection_priority
-            return (-cls, -strength, -tb, row.cancer_type)
+    def _pick_selected(hyps):
+        # Tie-break: highest selection_priority first (class_rank, then strength, then
+        # tiebreak slot), then *ascending* cancer_type alphabetical for determinism. The
+        # previous form ``sort((priority, cancer_type), reverse=True)`` flipped both
+        # fields, producing Z-before-A on ties (e.g. UCS over THCA at equal priority).
+        sel = [row for row in hyps.values() if row.can_select_report_label]
+        if not sel:
+            return None
+        sel.sort(key=lambda row: (-row.selection_priority[0], -row.selection_priority[1],
+                                  -row.selection_priority[2], row.cancer_type))
+        return sel[0]
 
-        selectable.sort(key=_selectable_sort_key)
-        selected = selectable[0]
+    # Whole-profile centroid veto (#98): a curated marker / local-reference hypothesis must
+    # not commit the report to a fine subtype the whole transcriptome contradicts (SARC_OS
+    # mislabelled SARC_DDLPS via its MDM2/CDK4 amplicon). Applied before selection so a
+    # vetoed subtype drops out of the candidate set and the report falls back to the
+    # centroid-anchored fine label.
+    #
+    # The veto may CHANGE the report's broad lineage, but only TOWARD the whole-profile
+    # compartment call. A demotion that exposes a different-lineage look-alike is allowed
+    # iff that look-alike's lineage is the one the centroid's compartment aggregation points
+    # at — the same whole-profile signal, now adjudicating the cross-lineage case (e.g. a
+    # colon carcinoma mislabelled SARC_DDLPS whose compartment is Epithelial flips to STAD).
+    # Otherwise it is reverted: on a lineage-ambiguous sample (a low-quality sarcoma whose
+    # weak centroid grazes the embryonal cohorts) demoting SARC_DDLPS would expose MBL while
+    # the compartment still reads Sarcoma — strictly worse than the in-lineage baseline.
+    _cen, _comp = _centroid_and_compartment_for_veto(sample_tpm_by_symbol)
+    _pre_veto = _pick_selected(hypotheses)
+    # Snapshot EVERY field the veto mutates, so a disallowed cross-lineage revert restores the
+    # hypothesis exactly — otherwise it is emitted with can_select_report_label=True but a stale
+    # label_status='blocked' and a leftover centroid-veto blocking reason.
+    _veto_snapshot = {
+        c: (h.can_select_report_label, h.label_status, h.blocking_reasons)
+        for c, h in hypotheses.items()
+    }
+    _apply_centroid_fine_subtype_veto(hypotheses, _cen)
+    _post_veto = _pick_selected(hypotheses)
+    if (
+        _pre_veto is not None
+        and _post_veto is not None
+        and _pre_veto is not _post_veto
+        and not _veto_lineage_flip_allowed(_pre_veto, _post_veto, _comp)
+    ):
+        for c, h in hypotheses.items():  # disallowed cross-lineage flip — fully restore pre-veto state
+            (
+                h.can_select_report_label,
+                h.label_status,
+                h.blocking_reasons,
+            ) = _veto_snapshot[c]
+
+    rows = list(hypotheses.values())
+    selected = _pick_selected(hypotheses)
 
     primary_context = _top_code(analysis)
     primary_context_support = _candidate_support_by_code(analysis).get(

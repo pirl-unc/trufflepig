@@ -255,42 +255,12 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
 _SUPPORT_FACTOR_COUNT = 5
 _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 
-# Whole-profile centroid as a support factor. The eval (scripts/classification_strategy_eval.py)
-# showed Spearman-to-centroid dominates the panel signature on HARD cases (lineage 1.00 vs 0.94, hard-
-# exact 0.69 vs 0.54) — it is a strong FAMILY/lineage signal that the signature can't match. The
-# _candidate_support_score docstring already names this as the intended direction (centroid replacing
-# the known-imperfect purity term). We fold it in RELATIVE to the best candidate's correlation (so a
-# whole-profile-mismatched candidate is demoted) and raise it to a power so the small absolute spread
-# of Spearman corrs (~0.7–0.95) becomes a meaningful penalty. Gated by env for A/B (default ON).
-import os as _os
-
-_CENTROID_FACTOR_POWER = 4.0
-# DEFAULT OFF. We implemented + validated this (env=1 to enable): the eval showed Spearman-to-centroid
-# dominates the panel signature on hard cases IN ISOLATION (argmax), but END-TO-END it does NOT help —
-# the existing compartment_call leaf-restriction already captures the centroid's lineage value, so the
-# explicit support factor is ~neutral on the 565 (entity 432->431, exact +9 but lineage -2) AND breaks
-# specific cases the whole-profile genuinely can't separate (it ties COAD/READ at cf=1.0 then the
-# signature tiebreak flips COAD->READ; also SARC self-call + decomposition routing). Kept gated as a
-# documented negative result; the centroid stays in the ranker via the compartment restriction.
-_USE_CENTROID_IN_SUPPORT = _os.environ.get("TRUFFLEPIG_CENTROID_IN_SUPPORT", "0") == "1"
-
-
-def _centroid_support_factor(cen_corr, max_cen, power=_CENTROID_FACTOR_POWER):
-    """Centroid correlation as a [0,1] support factor, RELATIVE to the best candidate.
-
-    `(max(0, corr) / max_corr) ** power` — the top-correlated candidate gets 1.0; a candidate whose
-    whole-profile correlation is below the best is penalised, amplified by `power` (Spearman corrs sit
-    in a narrow high band, so a raw ratio barely discriminates). Returns None when unavailable.
-    """
-    if cen_corr is None or max_cen is None or not (float(max_cen) > 0):
-        return None
-    try:
-        rel = max(0.0, float(cen_corr)) / float(max_cen)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(rel):
-        return None
-    return float(np.clip(rel, 0.0, 1.0) ** power)
+# NOTE: folding the whole-profile centroid in as an explicit support-score factor was implemented,
+# A/B'd, and is a DOCUMENTED NEGATIVE RESULT — end-to-end it was ~neutral on the 565 (entity 432->431)
+# and broke cases the whole profile genuinely can't separate (it tied COAD/READ then the signature
+# tiebreak flipped COAD->READ; SARC self-call + decomposition routing). The centroid's lineage value is
+# already captured by the compartment_call leaf-restriction (#83), and its fine-subtype value by the
+# resolve_fine_subtype / centroid-veto path (#98), so it is deliberately NOT a support-score factor.
 
 _CANCER_FAMILY_DISPLAY = {
     "CRC": "CRC",
@@ -4363,6 +4333,7 @@ def rank_cancer_type_candidates(
                 hallmark_fit,
                 hallmark_veto,
                 range_plausibility,
+                resolve_fine_subtype,
                 restrict_rows_to_compartment,
             )
             from trufflepig.cancer_ontology import cancer_lineage_group
@@ -4379,26 +4350,16 @@ def rank_cancer_type_candidates(
                 )
                 row["range_plausibility"] = range_plausibility(row["code"], sample_tpm)
                 row["hallmark_fit"] = hallmark_fit(row["code"], sample_tpm)
-
-            # Fold the whole-profile centroid into support_score as a 6th factor (relative to the
-            # best candidate), then re-sort. The eval (scripts/classification_strategy_eval.py) showed
-            # Spearman-to-centroid dominates the panel signature on hard/lineage cases; this demotes
-            # candidates whose whole transcriptome doesn't match, which the ~20-gene signature misses.
-            if _USE_CENTROID_IN_SUPPORT:
-                _cand_corrs = [
-                    r["centroid_correlation"] for r in rows
-                    if np.isfinite(r.get("centroid_correlation", float("nan")))
-                ]
-                _max_cen = max(_cand_corrs, default=0.0)
-                if _max_cen > 0:
-                    for row in rows:
-                        cf = _centroid_support_factor(row.get("centroid_correlation"), _max_cen)
-                        row["centroid_support_factor"] = cf
-                        if cf is not None:
-                            _recompute_candidate_support(row, family_params)
-                    rows.sort(
-                        key=lambda r: (-r["support_score"], -r["signature_score"], r["code"])
-                    )
+                # Centroid-authoritative fine-subtype resolution (#98): anchor the fine
+                # subtype to the whole-profile centroid (which knows SARC_OS is osteosarcoma
+                # even when the curated/signature path mislabels it SARC_LMS or defaults to
+                # the degenerate SARC_DDLPS). Overrides the curated/signature label only when
+                # it is clearly centroid-INFERIOR to the best child; a centroid-competitive
+                # label is kept (curation refines the near-tie). Degenerate-pair tiebreakers
+                # downstream still refine the anchored label.
+                row["winning_subtype"] = resolve_fine_subtype(
+                    row["code"], cen_corr, current_subtype=row.get("winning_subtype")
+                )
 
             # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
             # above out-of-compartment ones (stable -> within-tier order preserved).

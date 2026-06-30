@@ -89,14 +89,12 @@ visible to type-calling, decomposition, and purity.
   gate reuses `_ranker_expr_lineage`, so it does NOT recompute the centroid.
 
 **Cancer-TYPE call** = rank by `support_score`, the GEOMETRIC MEAN of:
-  `signature × purity × lineage_support × signature_stability × family_factor × centroid_factor`
-`_candidate_support_score` (tumor_purity.py). The **centroid_factor** (`_centroid_support_factor`) is
-a candidate's centroid correlation RELATIVE to the best candidate, raised to `_CENTROID_FACTOR_POWER` —
-so a candidate whose whole transcriptome doesn't match is demoted even when its ~20-gene signature
-scores high (the panel signature can't see this; the eval `scripts/classification_strategy_eval.py`
-showed Spearman-to-centroid is perfect on lineage and beats every panel strategy on hard cases). Gated
-by `TRUFFLEPIG_CENTROID_IN_SUPPORT` (default on). The pre-existing `compartment_call` leaf-restriction
-still runs on top (coarse, confidence-gated); the factor adds the finer per-type whole-profile signal.
+  `signature × purity × lineage_support × signature_stability × family_factor`
+`_candidate_support_score` (tumor_purity.py). The whole-profile centroid is NOT a support-score factor
+(folding it in was a documented negative result — see the note in tumor_purity). Instead the centroid
+drives the call two ways it's stronger at: the `compartment_call` leaf-restriction (coarse,
+confidence-gated, #83) and centroid-authoritative fine-subtype resolution + veto (`resolve_fine_subtype`
+/ `_apply_centroid_fine_subtype_veto`, #98).
 
 **Decomposition** (`decompose_expression`) runs ONCE for the winner. FEATURE SPACE = within-sample
 **percentile** (`space="percentile"`). Lineage-ROUTED by `compartment_call` (same centroid signal) →

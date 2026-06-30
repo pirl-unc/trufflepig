@@ -190,11 +190,11 @@ def compute_subtype_signature_stats(
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
-    # Same full ~170-cohort HK reference the broad signature uses (default ON), so broad + subtype
-    # cohort-percentiles are on one comparable footing. Falls back to the 33-cohort expr_matrix.
-    from .plot_embedding import _USE_FULL_COHORT_REFERENCE, _full_cohort_hk_reference
+    # Same full ~170-cohort HK reference the broad signature uses, so broad + subtype cohort-percentiles
+    # are on one comparable footing.
+    from .plot_embedding import _full_cohort_hk_reference
 
-    full_ref = _full_cohort_hk_reference() if _USE_FULL_COHORT_REFERENCE else None
+    full_ref = _full_cohort_hk_reference()
     # Same COMBINED filter the broad signature uses (HK-migration #7): cross-cohort percentile x
     # within-sample percentile — specificity + score spread from the cohort leg, purity-robustness
     # from the within-sample leg. Within-sample percentile computed once.

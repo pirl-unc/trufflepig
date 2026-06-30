@@ -487,23 +487,28 @@ def compartment_call(sample_tpm_by_symbol, _corr=None):
 def in_compartment(code, compartment):
     """Does leaf ``code`` belong to histogenesis ``compartment``?
 
-    Pure membership test via ``cancer_lineage_group`` — the basis for stage-1 leaf
-    restriction. Sarcoma is broad: every ``SARC``/``SARC_*`` subtype maps to the
-    ``Sarcoma`` group, so all of them are in-compartment when the call is Sarcoma,
-    and none of them is ever promoted to a single sarcoma leaf by this test.
-    Codes with no known lineage group are treated as in-compartment (never
-    excluded on missing metadata — fail-open).
+    Membership test via :func:`cancer_type_ontology.compatible_compartments` — the basis
+    for stage-1 leaf restriction. A candidate is in-compartment if ``compartment`` matches
+    its primary ``cancer_lineage_group`` OR any of its SECONDARY programs (polyphenotypic
+    biphasic / blastomatous entities — HEPB's hepatic/``Epithelial``, DSRCT's
+    keratin/``Epithelial`` …). Without the secondary check, a confident whole-profile
+    compartment call that locks onto a tumor's secondary program marks the correct
+    candidate out-of-compartment and floats a look-alike above it (the HEPB→LIHC case).
+    Sarcoma is broad: every ``SARC``/``SARC_*`` subtype maps to the ``Sarcoma`` group, so
+    all of them are in-compartment when the call is Sarcoma, and none is ever promoted to
+    a single sarcoma leaf by this test. Codes with no known lineage group are treated as
+    in-compartment (never excluded on missing metadata — fail-open).
     """
     if not compartment:
         return True
     try:
-        from trufflepig.cancer_ontology import cancer_lineage_group
+        from trufflepig.cancer_type_ontology import compatible_compartments
     except Exception:  # noqa: BLE001
         return True
-    grp = cancer_lineage_group(str(code))
-    if not grp:
+    compartments = compatible_compartments(str(code))
+    if not compartments:
         return True
-    return grp == compartment
+    return compartment in compartments
 
 
 def restrict_rows_to_compartment(rows, compartment, confident):
@@ -536,6 +541,121 @@ def restrict_rows_to_compartment(rows, compartment, confident):
     if restricted:
         rows.sort(key=lambda r: 0 if r["compartment_in_set"] else 1)
     return rows, restricted
+
+
+# --------------------------------------------------------------------------- #
+# Centroid-authoritative fine-subtype resolution (#98).
+# --------------------------------------------------------------------------- #
+# The whole-profile centroid (which subtype-medoid does the WHOLE transcriptome look
+# like) is a strong, purity-robust, contaminant-resistant signal that frequently knows
+# the correct FINE subtype — and the marker/signature path then discards it: the SARC_OS
+# medoid is centroid-rank #1 for SARC_OS yet was labelled SARC_LMS, and an MDM2-amplified
+# osteosarcoma defaults to the degenerate SARC_DDLPS "junk drawer" (which ranks #73 on its
+# OWN medoid — heterogeneous reference, so nothing matches it well but everything matches
+# it weakly). We let the centroid ANCHOR the fine subtype: among the broad call's children
+# present in the reference, take the centroid-best when it leads the runner-up child by a
+# clear margin; otherwise KEEP the existing curated/signature label (the centroid only
+# overrides when it clearly knows better — it never downgrades a present label to broad on
+# a near-tie). Curated specs + degenerate-pair tiebreakers still REFINE the anchored label
+# (e.g. a genuinely ambiguous MDM2+ OS-vs-DDLPS with a site hint); they no longer DEFAULT.
+#
+# The override question is NOT "does the centroid's best child lead the runner-up" — high-
+# grade sarcomas are genuinely similar, so even a TRUE subtype self-leads by only ~0.003
+# (SARC_UPS: 0.964 vs SARC_LPS_UNSPEC 0.961), which a lead gate would wrongly abstain on.
+# The right question is "is the EXISTING curated/signature label centroid-COMPETITIVE with
+# the best child?": keep it on a near-tie (curation refines what the centroid can't split),
+# override it when it is clearly centroid-inferior (the centroid has positive evidence the
+# curated label is wrong). The margin is that competitiveness band, in Spearman-rho over
+# subtype medoids. Measured on the SARC battery: SARC_UPS's wrong curated SARC_LMS sits
+# 0.021 below the best child (override -> SARC_UPS), while a genuine near-tie (the runner-up
+# within ~0.003) is kept; 0.015 separates "clearly inferior" from "too close to overrule".
+_FINE_SUBTYPE_MARGIN = 0.015
+
+
+def _fine_subtype_candidates(broad_code, available):
+    """The fine subtypes to resolve a broad call among, restricted to ``available`` codes.
+
+    The broad call's transitive registry subtypes (``cancer_type_subtypes_of``) when it has
+    any (``SARC`` -> every ``SARC_*``; ``BRCA`` -> ``BRCA_Basal``…); otherwise, if the call
+    is itself a subtype leaf, its SIBLINGS (the parent's subtypes), so a leaf winner can
+    still be re-resolved against its peers. ``available`` is normally the centroid reference
+    index, so only subtypes with a real medoid to correlate against are returned.
+    """
+    try:
+        from trufflepig.cancer_ontology import (
+            cancer_type_subtypes_of,
+            registry_parent_code,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    code = str(broad_code)
+    children = list(cancer_type_subtypes_of(code) or [])
+    if not children:
+        parent = registry_parent_code(code)
+        if parent:
+            children = list(cancer_type_subtypes_of(parent) or [])
+    avail = set(available)
+    return [c for c in children if c in avail]
+
+
+def resolve_fine_subtype(
+    broad_code,
+    cen_corr,
+    current_subtype=None,
+    margin=_FINE_SUBTYPE_MARGIN,
+):
+    """Centroid-authoritative fine subtype for a broad cancer-type call.
+
+    The whole-profile centroid's best-matching child of ``broad_code`` ANCHORS the fine
+    subtype; the existing curated/signature ``current_subtype`` REFINES it. Concretely:
+
+    * If ``current_subtype`` is one of the broad call's reference-present children and is
+      centroid-competitive with the best child (within ``margin`` rho), KEEP it — the
+      centroid can't separate them, so curation breaks the tie (e.g. an MDM2+ OS-vs-DDLPS
+      call the centroid sees as a near-tie stays with whatever the spec/site rule chose).
+    * Otherwise the curated label is absent or clearly centroid-INFERIOR, so the centroid
+      has positive evidence it is wrong: anchor to the centroid's best child (this is what
+      flips the mislabelled SARC_OS/SARC_UPS medoids onto themselves, and pfo004's
+      junk-drawer SARC_DDLPS onto SARC_OS).
+    * With NO curated label to refine (``current_subtype`` is None / not a child), only
+      commit to a fine label when the centroid actually separates its best child from the
+      runner-up by ``margin``; else abstain to ``current_subtype`` (the broad call).
+
+    Parameters
+    ----------
+    broad_code : str
+        The broad cancer-type call whose fine subtype is being resolved.
+    cen_corr : pandas.Series
+        ``{cohort_code: rho}`` from :func:`centroid_correlations` (the whole-profile pass
+        the ranker already computed). Its index supplies the available subtypes.
+    current_subtype : str or None
+        The label the curated/signature path produced; the refinement anchor.
+    margin : float
+        Centroid-competitiveness band (see :data:`_FINE_SUBTYPE_MARGIN`).
+    """
+    if cen_corr is None or len(cen_corr) == 0 or not broad_code:
+        return current_subtype
+    candidates = _fine_subtype_candidates(broad_code, cen_corr.index)
+    scored = [
+        (float(cen_corr[c]), c)
+        for c in candidates
+        if c in cen_corr.index and np.isfinite(cen_corr[c])
+    ]
+    if not scored:
+        return current_subtype
+    scored.sort(reverse=True)
+    top_rho, top_code = scored[0]
+    runner_rho = scored[1][0] if len(scored) > 1 else float("-inf")
+    child_rho = {c: r for r, c in scored}
+
+    # Keep a centroid-competitive curated label (curation refines a near-tie).
+    if current_subtype in child_rho and child_rho[current_subtype] >= top_rho - margin:
+        return current_subtype
+    # Curated label is centroid-inferior -> the centroid overrides it; with no curated
+    # label, only commit when the centroid separates its best child from the field.
+    if current_subtype in child_rho or (top_rho - runner_rho) >= margin:
+        return top_code
+    return current_subtype
 
 
 # --------------------------------------------------------------------------- #

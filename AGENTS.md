@@ -41,11 +41,9 @@ signals are computed ONCE per sample and shared across stages.
   `_ranker_expr_lineage` (no centroid recompute).
 
 **Cancer-TYPE call** = rank by `support_score` = GEOMETRIC MEAN of `signature × purity ×
-lineage_support × signature_stability × family_factor × centroid_factor` (`_candidate_support_score`).
-`centroid_factor` (`_centroid_support_factor`) = the candidate's centroid correlation RELATIVE to the
-best, raised to `_CENTROID_FACTOR_POWER` — demotes whole-profile-mismatched candidates the ~20-gene
-signature can't catch (eval: `scripts/classification_strategy_eval.py`). Gated by
-`TRUFFLEPIG_CENTROID_IN_SUPPORT` (default on).
+lineage_support × signature_stability × family_factor` (`_candidate_support_score`). The whole-profile
+centroid is NOT a support-score factor (folding it in was a documented negative result); it drives the
+call via the `compartment_call` leaf-restriction (#83) and fine-subtype resolution/veto (#98) instead.
 
 **Decomposition** (`decompose_expression`, winner only): FEATURE SPACE = within-sample **percentile**
 (`space="percentile"`). Lineage-routed by `compartment_call` → one of 4 modes (solid / mesenchymal /

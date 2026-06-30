@@ -2,6 +2,33 @@ import pandas as pd
 from types import SimpleNamespace
 
 
+def test_centroid_veto_exempts_direct_fusion_but_vetoes_expression():
+    """The whole-profile-EXPRESSION centroid veto must not override a definitive MOLECULAR call.
+    A ``direct_fusion`` hypothesis (e.g. EWSR1-FLI1 -> SARC_EWS) stays selectable even when the
+    centroid prefers an expression sibling; an expression-derived sibling (SARC_DDLPS via its
+    MDM2/CDK4 amplicon) is still vetoed. Guards the #98 fusion-override regression."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _apply_centroid_fine_subtype_veto,
+    )
+
+    fusion = CancerTypeEvidence(cancer_type="SARC_EWS")
+    fusion.can_select_report_label = True
+    fusion.selected_by = "direct_fusion"
+    marker = CancerTypeEvidence(cancer_type="SARC_DDLPS")
+    marker.can_select_report_label = True
+    marker.selected_by = "local_expression_reference"
+    hyps = {"SARC_EWS": fusion, "SARC_DDLPS": marker}
+
+    # centroid clearly prefers SARC_OS over both -> resolve_fine_subtype(SARC, cen, X) == SARC_OS != X
+    cen = pd.Series({"SARC_OS": 0.95, "SARC_UPS": 0.79, "SARC_EWS": 0.80, "SARC_DDLPS": 0.78})
+    _apply_centroid_fine_subtype_veto(hyps, cen)
+
+    assert fusion.can_select_report_label is True   # direct_fusion exempt — expression never overrides it
+    assert marker.can_select_report_label is False  # expression-derived sibling IS vetoed
+    assert marker.label_status == "blocked"
+
+
 def _analysis(*rows):
     return {
         "cancer_type": rows[0][0],

@@ -44,7 +44,6 @@ from .analyze import (
     should_adopt_decomposition_purity,
     write_json,
 )
-from .version import print_name_and_version
 from .tumor_purity import (
     analyze_sample,
     get_tumor_purity_parameters,
@@ -5165,7 +5164,16 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
         from .tumor_purity import estimate_tumor_purity
 
         # full recompute for the refined call → consistent gating / overall / compartment / decomposition
-        analysis["purity"] = estimate_tumor_purity(df_expr, cancer_type=refined_code, reference_optional=True)
+        rerouted = estimate_tumor_purity(df_expr, cancer_type=refined_code, reference_optional=True)
+        analysis["purity"] = rerouted
+        # Keep the candidate_trace row for the refined call in sync. ``decompose_sample`` is later
+        # handed ``candidate_rows=analysis['candidate_trace']`` and reuses the matching row's
+        # ``purity_result``; left stale (the pre-evidence ranking's purity), it would overwrite the
+        # rerouted ``analysis['purity']`` and the report would lose the refined lineage/gating.
+        for row in analysis.get("candidate_trace") or []:
+            if str(row.get("code")) == str(refined_code):
+                row["purity_result"] = rerouted
+                break
     except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
         _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
 

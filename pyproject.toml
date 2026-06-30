@@ -15,6 +15,11 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     "pirlygenes>=5.2.0,<6",
+    # oncoref is the canonical cancer-type ontology + normalization source (imported
+    # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
+    # expression_classifier). Without it declared, a clean install raises
+    # ModuleNotFoundError before the pirlygenes ontology fallback can run.
+    "oncoref>=1.8.0,<2",
     "numpy>=2.0.0",
     "pandas>=2.0",
     "matplotlib>=3.5.0",

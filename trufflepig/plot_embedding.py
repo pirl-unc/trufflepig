@@ -145,13 +145,10 @@ _signature_panel_cache = {}
 _full_cohort_hk_reference_cache = {}
 _full_cohort_signature_panels_cache = {}
 
-# Part-2: exclude molecular subtypes from the broad signature panels (default). A subtype as a
-# competing candidate CODE leaks into decomposition routing; the subtype-signature refines on top.
-# Set TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES=0 to INCLUDE them (A/B — they help subtype medoids but break
-# the synthetic decomposition tests; see the medoid-regression diagnosis).
-import os as _os_p2
-
-_PART2_EXCLUDE_SUBTYPES = _os_p2.environ.get("TRUFFLEPIG_PART2_EXCLUDE_SUBTYPES", "1") != "0"
+# Part-2: molecular subtypes are excluded from the broad signature panels. A subtype as a competing
+# candidate CODE leaks into decomposition routing, and the subtype-signature refines the broad call on
+# top anyway (the leak fix in 173c372). Including them helps subtype medoids but breaks the synthetic
+# decomposition tests, so exclusion is the locked behavior.
 _embedding_gene_cache = {}
 _tme_gene_cache = {}
 _bottleneck_gene_cache = {}
@@ -255,27 +252,21 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
     # already refines those on top of the broad call. A code is a SUBTYPE iff its registry parent is a
     # cohort we already score (the 33 TCGA panels) or another cancer_reference cohort — NOT a prefix
     # check (cancer_reference ships SARC_LMS but no broad "SARC" column, so a prefix check silently
-    # failed and let the subtypes through). Only when the full-cohort reference is active.
-    if _USE_FULL_COHORT_REFERENCE:
-        from .analyze.cancer_type_context import registry_parent_code
+    # failed and let the subtypes through).
+    from .analyze.cancer_type_context import registry_parent_code
 
-        extra = _full_cohort_signature_panels(n=n_signature_genes)
-        all_cohorts = set(extra.keys())
-        for code, genes in extra.items():
-            if code in panels:
-                continue
-            try:
-                parent = registry_parent_code(code)
-            except Exception:  # noqa: BLE001
-                parent = None
-            if (
-                _PART2_EXCLUDE_SUBTYPES
-                and parent
-                and (parent in panels or parent in all_cohorts)
-            ):
-                continue  # molecular subtype of a scored cohort — call the parent; subtype-sig refines
-            if len(genes) >= max(5, n_signature_genes // 2):
-                panels[code] = list(genes)
+    extra = _full_cohort_signature_panels(n=n_signature_genes)
+    all_cohorts = set(extra.keys())
+    min_genes = max(5, n_signature_genes // 2)
+    for code, genes in extra.items():
+        if code in panels or len(genes) < min_genes:
+            continue
+        # Part-2: skip a molecular subtype whose parent is already a scored cohort — the broad call
+        # goes to the parent and the subtype-signature refines it (a subtype CODE here leaks into routing).
+        parent = registry_parent_code(code)
+        if parent and (parent in panels or parent in all_cohorts):
+            continue
+        panels[code] = list(genes)
 
     _signature_panel_cache[cache_key] = {
         code: tuple(genes) for code, genes in panels.items()
@@ -306,13 +297,9 @@ _WITHIN_PCT_WEIGHT = 1.0
 # The signature cohort-percentile leg ranks the sample against the FULL ~170-cohort HK reference (120
 # cancer cohorts from cancer_reference_expression + 50 HPA normals) instead of the 33 TCGA cohort
 # medians. HK-normalization bridges the differing clean-TPM scales of the sources (see
-# _full_cohort_hk_reference). DEFAULT ON — validated on ALL 565 samples (+6 entity 414→420, +12 subtype)
+# _full_cohort_hk_reference). LOCKED — validated on ALL 565 samples (+6 entity 414→420, +12 subtype)
 # AND the 118 medoids (+1 lineage), local reports flat at 7/8. The 33-cohort reference dropped 85 of the
-# 118 types (ATRT/BL/SCLC/heme/molecular subtypes) and quantized the percentile to ~1/33 steps. Set env
-# TRUFFLEPIG_FULL_COHORT_REF=0 to fall back to the 33-cohort reference (A/B reproducibility).
-import os as _os
-
-_USE_FULL_COHORT_REFERENCE = _os.environ.get("TRUFFLEPIG_FULL_COHORT_REF", "1") != "0"
+# 118 types (ATRT/BL/SCLC/heme/molecular subtypes) and quantized the percentile to ~1/33 steps.
 
 
 def _full_cohort_hk_reference():
@@ -376,14 +363,19 @@ def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
     df = cancer_reference_expression(format="wide")
     cols = [c for c in df.columns if str(c).endswith("_TPM_clean")]
     syms = df["Symbol"].astype(str).to_numpy()
-    mat = df[cols].astype(float)
+    # Clip to nonnegative BEFORE any log-ratio: a handful of reference cells carry small
+    # negative TPM-proxy values (deconvolution/normalization residue), and a negative
+    # `cross_mean` or `v` makes `x + 1` non-positive → log2 of a non-positive number emits
+    # a RuntimeWarning and yields NaN / spuriously inflated ratios. Clean-TPM is a
+    # nonnegative abundance proxy, so flooring the noise at 0 restores its semantics.
+    mat = df[cols].astype(float).clip(lower=0.0)
     cross_mean = mat.mean(axis=1).to_numpy()  # pandas skips NaN per gene
     cross_mean = np.nan_to_num(cross_mean, nan=0.0)
     is_excluded = _compile_excluded_gene_matcher()
     panels = {}
     for c in cols:
         code = c.replace("_TPM_clean", "")
-        v = np.nan_to_num(df[c].astype(float).to_numpy(), nan=0.0)  # cancer_reference has NaN cells
+        v = np.nan_to_num(mat[c].to_numpy(), nan=0.0)  # clipped; cancer_reference has NaN cells
         log2r = np.log2((v + 1.0) / (cross_mean + 1.0))
         idx = np.where((v >= min_tpm) & (log2r >= min_log2_vs_mean))[0]
         ranked = sorted(
@@ -428,7 +420,7 @@ def _compute_cancer_type_signature_stats(
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
     # A/B: rank against the full ~170-cohort HK reference (118 cancer + 50 normal) instead of 33.
-    full_ref = _full_cohort_hk_reference() if _USE_FULL_COHORT_REFERENCE else None
+    full_ref = _full_cohort_hk_reference()
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
