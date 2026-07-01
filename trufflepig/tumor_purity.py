@@ -234,16 +234,14 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
     for family in _CANCER_FAMILY_BY_CODE.values()
 )
 
-# Cancer-type ranking: support_score is the PRODUCT of the per-candidate
-# evidence factors assembled in _recompute_candidate_support. purity_estimate is
-# deliberately NOT one of them: per-candidate purity measures how much the
-# sample's *composition* matches a cohort, which double-counts signature_score
-# and structurally rewards whichever lineage dominates the sample — i.e. stroma
-# (MESENCHYMAL/SARC) in any low-purity tumor — over the true tumor lineage. (It
-# sank true COAD calls below stroma-pure SARC on stroma-diluted colorectal
-# samples.) Purity is reported separately, never as cancer-type evidence. The
-# geomean exponent must track the factor count so support_geomean stays
-# comparable across the post-rescue recomputations below.
+# Cancer-type ranking: support_score is the GEOMETRIC MEAN of the per-candidate
+# evidence factors assembled in _candidate_support_score / _recompute_candidate_support.
+# It still includes candidate-specific purity for compatibility with the calibrated
+# truth set, but that term is no longer allowed to stand alone as tumor identity:
+# cancer_call.CancerCallFeatureFrame adds staged identity evidence and can demote a
+# candidate whose apparent tumor support is better explained by a dominant normal
+# tissue of origin. The geomean exponent must track the factor count so
+# support_geomean stays comparable across the post-rescue recomputations below.
 _SUPPORT_FACTOR_COUNT = 5
 _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 
@@ -3664,6 +3662,7 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
         family_params,
         centroid_factor=row.get("centroid_support_factor"),  # None unless the centroid pass set it
     )
+    score *= float(row.get("staged_identity_factor") or 1.0)
     # support_score IS the geomean now (computed once, in [0, 1]); support_geomean
     # is retained as an alias only so existing readers keep resolving.
     row["support_score"] = score
@@ -4220,6 +4219,12 @@ def rank_cancer_type_candidates(
             row["code"],
         )
     )
+    if sample_tpm:
+        from .cancer_call import CancerCallFeatureFrame, apply_staged_identity_evidence
+
+        call_frame = CancerCallFeatureFrame.from_sample(sample_tpm)
+        rows = apply_staged_identity_evidence(rows, call_frame)
+
     if unconstrained:
         if tissue_signal is None:
             needs_coarse_context = (

@@ -22,6 +22,22 @@ to a leaf only *within* that compartment. The cross-compartment saturation error
 (colorectal→SARC, sarcoma→HNSC) simply cannot occur once the leaves are restricted
 to the pinned compartment.
 
+2026-07 implementation note: the hierarchy now has additional guard rails.
+First, candidate rows carry staged identity evidence so a dominant normal tissue
+can demote a same-origin cancer label when candidate-distinctive tumor markers
+do not corroborate it. Second, whole-profile centroid corroboration is no longer
+free to slide among same-lineage sibling subtypes on the global margin alone;
+same-lineage subtype swaps require ontology marker sanity support unless the
+centroid margin is decisively wider for that dense lineage.
+Third, the broad ranker's own `winning_subtype` is emitted as a
+`broad_rna_subtype` report-scope hypothesis, so a resolved parent candidate can
+defend its subtype against unrelated local exact-reference attractors.
+Fourth, a guarded `learned_expression_classifier` hypothesis adds a
+full-profile discriminative vote after the broad hierarchy has supplied context.
+It is selectable only when probability, margin, ontology marker sanity, broad
+candidate support, and compartment/background checks agree; it is evidence for
+the hierarchy, not a replacement for it.
+
 ## Stage 1 — compartment call (LOCKED, 15/15)
 
 `cancer_type_centroid.compartment_call(sample_tpm_by_symbol)`.
@@ -206,3 +222,22 @@ Each is scored from expression alone — the cancer type is **not** passed in.
 
 Stage 1: **15/15** compartments correct. Stage 2 (epithelial leaf, family-aware):
 best method 7/12 (0.58); the misses are the rare/admixed cases noted above.
+
+## 565-sample refactor checkpoint
+
+The 2026-07 staged-identity plus guarded learned-classifier refactor moved the
+565-sample harness from 450/565 entity-compatible and 534/565 lineage-compatible
+to:
+
+| category | n |
+|---|---:|
+| exact | 471 |
+| subtype-compatible | 27 |
+| sibling-compatible | 20 |
+| lineage-only | 28 |
+| miss | 19 |
+
+That is 518/565 entity-compatible (92%) and 546/565 lineage-compatible (97%).
+The sarcoma RMS regression that motivated #102 is fixed in the available set:
+SARC_RMS_ERMS, SARC_RMS_ARMS, and SARC_RMS_SSRMS each score 5/5 exact in the
+spot check.

@@ -48,6 +48,40 @@ def test_pick_selected_centroid_corroborates_among_selectable():
     assert _pick_selected(hyps(), cen=near, compartment_confident=True).cancer_type == "ADCC"
 
 
+def test_pick_selected_same_lineage_centroid_needs_marker_corroboration():
+    """A close whole-profile centroid match cannot slip among sarcoma siblings by itself.
+
+    Guards the #102 SARC_RMS_ERMS regression: ERMS markers are present, while the sibling
+    sarcoma subtype has only a modest centroid advantage and no matching marker program.
+    """
+    from trufflepig.cancer_type_evidence import _pick_selected
+
+    hyps = {
+        "SARC_RMS_ERMS": _selectable(
+            "SARC_RMS_ERMS",
+            "lineage_panel",
+            (2, 0.9, 4),
+        ),
+        "SARC_MYXFIB": _selectable(
+            "SARC_MYXFIB",
+            "local_expression_reference",
+            (1, 0.9, 4),
+        ),
+    }
+    cen = pd.Series({"SARC_MYXFIB": 0.85, "SARC_RMS_ERMS": 0.82})
+    sample = {"MYOD1": 40.0, "MYOG": 35.0, "DES": 60.0, "MYF5": 10.0, "MYF6": 8.0}
+
+    assert (
+        _pick_selected(
+            hyps,
+            cen=cen,
+            compartment_confident=True,
+            sample_tpm_by_symbol=sample,
+        ).cancer_type
+        == "SARC_RMS_ERMS"
+    )
+
+
 def _analysis(*rows):
     return {
         "cancer_type": rows[0][0],
@@ -473,6 +507,46 @@ def test_composition_reference_tie_with_broad_winner_stays_contextual():
     ucec = next(row for row in result["evidence"] if row["cancer_type"] == "UCEC")
     assert ucec["can_select_report_label"] is False
     assert any("tied with the first-pass RNA winner" in r for r in ucec["blocking_reasons"])
+
+
+def test_composition_reference_cannot_escape_crc_family_without_specific_hits():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("stomach_nTPM", 0.86),
+            ("rectum_nTPM", 0.84),
+            ("colon_nTPM", 0.83),
+        ],
+        top_tcga_cohorts=[
+            ("STAD_TPM", 0.86),
+            ("PAAD_TPM", 0.84),
+            ("ESCA_TPM", 0.83),
+        ],
+        type_specific_cohort="",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        {
+            "cancer_type": "READ",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "READ", "support_fraction_of_top": 1.0},
+                {"code": "COAD", "support_fraction_of_top": 0.82},
+                {"code": "STAD", "support_fraction_of_top": 0.78},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["can_select_report_label"] is False
+    assert stad["coarse_reference_crc_family_lock"]["blocked_code"] == "STAD"
+    assert any("CRC family" in reason for reason in stad["blocking_reasons"])
 
 
 def test_composition_reference_can_use_primary_normal_tissue_support():
@@ -1277,6 +1351,282 @@ def test_strong_marker_coherence_rescues_near_high_exact_reference(monkeypatch):
     assert result["selected"]["local_reference_reference_high_confidence"] is False
     assert result["selected"]["local_reference_marker_coherence_supported"] is True
     assert result["selected"]["local_reference_context_is_top"] is True
+
+
+def test_mixed_cross_lineage_local_reference_cannot_select_label(monkeypatch):
+    """A local sarcoma reference can be context evidence, but mixed ontology markers cannot
+    override a first-pass epithelial context across lineages."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("MDM2", "FRS2", "TP53", "CDK4", "HMGA2")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_DDLPS": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "family": "sarcoma",
+                "primary_tissue": "adipose",
+                "source_cohort": "GSE75885_DELESPAUL_2017",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    expression = {
+        **{gene: 150.0 for gene in markers},
+        # Expected-low/conflicting lineage markers make SARC_DDLPS "mixed", not clean.
+        "EPCAM": 200.0,
+        "KRT8": 200.0,
+        "KRT18": 200.0,
+        "PTPRC": 50.0,
+        "CD3D": 50.0,
+        "MS4A1": 50.0,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(expression),
+        _analysis(("READ", 1.0), ("SARC", 0.92), ("COAD", 0.85)),
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    ddlps = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_DDLPS")
+    assert ddlps["can_select_report_label"] is False
+    assert ddlps["local_reference_cross_lineage_marker_conflict"] is True
+    assert any("while the compatible RNA context is READ" in r for r in ddlps["blocking_reasons"])
+
+
+def test_generic_smooth_muscle_reference_yields_to_epithelial_compartment(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ACTA2", "CALD1", "MYH11", "DES")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_LMS": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "family": "sarcoma",
+                "primary_tissue": "smooth_muscle",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda sample_tpm_by_symbol: (None, False),
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 160.0 for gene in markers}),
+        _candidate_analysis(
+            [
+                {
+                    "code": "SARC",
+                    "support_fraction_of_top": 1.0,
+                    "signature_score": 0.84,
+                    "family_label": "MESENCHYMAL",
+                    "centroid_coarse_lineage": "Epithelial",
+                    "compartment_in_set": False,
+                    "winning_subtype": "SARC_LMS",
+                },
+                {
+                    "code": "READ",
+                    "support_fraction_of_top": 0.97,
+                    "signature_score": 0.60,
+                    "family_label": "CRC",
+                    "family_score": 0.40,
+                },
+                {
+                    "code": "COAD",
+                    "support_fraction_of_top": 0.80,
+                    "signature_score": 0.59,
+                    "family_label": "CRC",
+                    "family_score": 0.40,
+                },
+            ]
+        ),
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    assert result["selected"]["selected_by"] == "tumor_label_refinement"
+    assert result["selected"]["tumor_label_compartment_conflict_override"] is True
+    lms = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LMS")
+    assert lms["can_select_report_label"] is False
+    assert lms["broad_subtype_background_compartment_conflict"]["winning_subtype"] == "SARC_LMS"
+    assert lms["local_reference_background_compartment_conflict"] is True
+    assert any("mesenchymal exact-reference" in r for r in lms["blocking_reasons"])
+
+
+def test_basal_brca_candidate_overrides_background_label_refinement():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    analysis = _candidate_analysis(
+        [
+            {
+                "code": "UCS",
+                "support_fraction_of_top": 1.0,
+                "signature_score": 0.56,
+                "family_label": "MESENCHYMAL",
+            },
+            {
+                "code": "ESCA",
+                "support_fraction_of_top": 0.94,
+                "signature_score": 0.49,
+                "family_label": "ESCA_SQ",
+                "family_score": 1.0,
+            },
+            {
+                "code": "BRCA",
+                "support_fraction_of_top": 0.67,
+                "signature_score": 0.53,
+                "winning_subtype": "BRCA_Basal",
+            },
+        ]
+    )
+
+    result = select_report_scope_from_evidence(_empty_expression_frame(), analysis)
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    assert result["selected"]["tumor_label_basal_brca_override"] is True
+
+
+def test_broad_winning_subtype_competes_with_local_sarcoma_reference(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("CDK4", "HMGA2", "MDM2", "TSPAN31", "YEATS4", "FRS2")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_LPS_UNSPEC": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "family": "sarcoma",
+                "primary_tissue": "adipose",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+            }
+        },
+    )
+    analysis = _candidate_analysis(
+        [
+            {
+                "code": "SARC",
+                "support_fraction_of_top": 1.0,
+                "signature_score": 0.8,
+                "winning_subtype": "SARC_RMS_ERMS",
+            }
+        ]
+    )
+    expression = {
+        **{gene: 150.0 for gene in markers},
+        "MYOD1": 40.0,
+        "MYOG": 35.0,
+        "DES": 60.0,
+        "MYF5": 10.0,
+        "MYF6": 8.0,
+    }
+
+    result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
+
+    assert result["selected"]["cancer_type"] == "SARC_RMS_ERMS"
+    assert result["selected"]["selected_by"] == "broad_rna_subtype"
+    lps = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LPS_UNSPEC")
+    assert lps["can_select_report_label"] is True
+
+
+def test_learned_expression_classifier_can_rescue_context_supported_type(monkeypatch):
+    """A decisive learned full-profile vote can resolve a context-supported ambiguity."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+    import trufflepig.expression_classifier as classifier
+
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [("STAD", 0.92), ("READ", 0.04), ("COAD", 0.03)],
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+
+    analysis = _candidate_analysis(
+        [
+            {"code": "READ", "support_fraction_of_top": 1.0},
+            {"code": "STAD", "support_fraction_of_top": 0.42},
+        ]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"EPCAM": 100.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD"
+    assert result["selected"]["selected_by"] == "learned_expression_classifier"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["metrics"]["learned_expression_support"] == 0.92
+
+
+def test_learned_expression_classifier_blocks_background_compartment_flip(monkeypatch):
+    """A learned sarcoma-like vote stays contextual in a PFO002-style epithelial case."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+    import trufflepig.expression_classifier as classifier
+
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [
+            ("SARC_LMS", 0.96),
+            ("READ", 0.02),
+            ("STAD", 0.01),
+        ],
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+
+    analysis = _candidate_analysis(
+        [
+            {
+                "code": "SARC",
+                "support_fraction_of_top": 1.0,
+                "family_label": "MESENCHYMAL",
+                "signature_score": 0.70,
+                "centroid_coarse_lineage": "Epithelial",
+                "centroid_lineage_confident": True,
+                "compartment_in_set": False,
+                "winning_subtype": "SARC_LMS",
+            },
+            {
+                "code": "READ",
+                "support_fraction_of_top": 0.90,
+                "signature_score": 0.66,
+                "family_score": 0.75,
+                "family_label": "CARCINOMA-GI",
+            },
+        ]
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"EPCAM": 120.0, "KRT20": 80.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    sarc_lms = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LMS")
+    assert sarc_lms["label_decision"]["status"] == "blocked"
+    assert any(
+        "background-like SARC context" in reason
+        for reason in sarc_lms["blocking_reasons"]
+    )
 
 
 def test_status_child_parent_fallback_does_not_outrank_direct_exact_reference(monkeypatch):

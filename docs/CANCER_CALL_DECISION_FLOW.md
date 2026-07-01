@@ -4,6 +4,19 @@ This document is the canonical map of how trufflepig goes from a sample
 TPM table to a final cancer-type call, decomposition, therapy
 shortlist, and report.
 
+> 2026-07 update: the high-level flow below remains useful, but the current
+> implementation now includes the staged identity refactor described in
+> `docs/rnaseq-cancer-call-redesign.md`. In particular, candidate rows carry
+> `staged_identity_evidence`; dominant normal tissue can demote a same-origin
+> cancer candidate; same-lineage centroid subtype swaps are marker-gated; and
+> `local_expression_reference` cross-lineage report-scope flips are marker-gated
+> and vetoed when the bulk classifier and confident compartment call agree
+> against them. The broad ranker's own `winning_subtype` is also represented as
+> a `broad_rna_subtype` selector so subtype evidence can compete explicitly with
+> local exact references. A guarded `learned_expression_classifier` selector can
+> now add a full-profile discriminative vote when probability, margin, marker
+> sanity, broad context, and compartment/background checks agree.
+
 It exists because:
 1. The flow has 12 stages with non-trivial conditional branching;
    debugging requires knowing which stage produced a value.
@@ -53,9 +66,10 @@ Conclusions are summarized at the bottom in tabular form.
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  STAGE 2 — Broad lineage triage (PROPOSED: Tier 1)                   │
-│    CURRENT: flat scoring against all ~35 family panels at once       │
-│    PROPOSED: score against ~7 broad-lineage panels first:            │
+│  STAGE 2 — Broad lineage triage / family-panel admission             │
+│    Current: flat scoring against family panels plus staged identity   │
+│    evidence. Proposed future: score against ~7 broad-lineage panels   │
+│    first:                                                            │
 │      EPITHELIAL_GLANDULAR, EPITHELIAL_SQUAMOUS, MESENCHYMAL,         │
 │      NEURAL_GLIAL, MELANOCYTIC, HEMATOPOIETIC, GERM_CELL,            │
 │      NEUROENDOCRINE                                                  │
@@ -66,7 +80,7 @@ Conclusions are summarized at the bottom in tabular form.
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  STAGE 3 — Within-lineage child cohort scoring (PROPOSED: Tier 2)    │
+│  STAGE 3 — Within-lineage child cohort scoring                       │
 │    For each surviving tier-1 lineage, score the child cohort         │
 │    panels (e.g. within EPITHELIAL_GLANDULAR: MAMMARY_LUMINAL,        │
 │    GI_ADENO, HEPATOBILIARY, PANCREATIC_DUCTAL, LUNG_ADENO,           │
@@ -78,7 +92,7 @@ Conclusions are summarized at the bottom in tabular form.
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│  STAGE 4 — Lineage discrimination & rescues (Tier 3)                 │
+│  STAGE 4 — Lineage discrimination, staged identity, and rescues       │
 │    Fires only when tier-2 winner has multiple TCGA cohorts.          │
 │                                                                      │
 │    Existing rescues (already wired):                                 │
@@ -86,6 +100,9 @@ Conclusions are summarized at the bottom in tabular form.
 │        7-gate discriminator promoting BRCA when classifier lands     │
 │        on ESCA/LUSC/HNSC/CESC but basal cytokeratin + FOXC1 +        │
 │        MIA pattern is present.                                       │
+│      normal-origin dominance: same-origin candidates are demoted      │
+│        when dominant normal tissue explains their support and         │
+│        candidate-distinctive tumor markers do not corroborate them.   │
 │                                                                      │
 │    PROPOSED LINEAGE_DISCRIMINATION_PANELS (data exists,              │
 │    not yet wired):                                                   │
@@ -127,6 +144,8 @@ Conclusions are summarized at the bottom in tabular form.
 │    Optional compartment gates: adipocyte (BRCA/SARC), Schwann        │
 │      (PRAD/PAAD/HNSC/CHOL), erythroid (all solid).                   │
 │    Outputs: per-gene tumor fraction, per-compartment TPM share.      │
+│    Site-specific met templates are favored when both host-tissue      │
+│      score and fitted site-specific component fraction are strong.    │
 │    Used by all downstream therapy attribution.                       │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
@@ -146,17 +165,22 @@ Conclusions are summarized at the bottom in tabular form.
 ┌──────────────────────────────────────────────────────────────────────┐
 │  STAGE 8 — Cancer-type evidence consolidation (PR-41 core)           │
 │    cancer_type_evidence.select_report_scope_from_evidence            │
-│    Runs 6 selectors in priority order:                               │
+│    Runs selector channels with explicit priority and tie-break rules: │
 │      1. direct_fusion           (priority 1)                         │
 │      2. rare_marker             (priority 2)                         │
-│      3. tumor_label_refinement  (priority 3)                         │
-│      4. fine_reference          (priority 3)                         │
-│      5. local_expression_reference  (priority 3)                     │
-│      6. primary_expression_match  (priority 4 — fallback)            │
+│      3. broad_rna_subtype       (ranker winning_subtype)             │
+│      4. tumor_label_refinement  (priority 3)                         │
+│      5. fine_reference          (priority 3)                         │
+│      6. local_expression_reference  (priority 3)                     │
+│      7. learned_expression_classifier (guarded full-profile vote)    │
+│      8. primary_expression_match  (priority 4 — fallback)            │
 │    Each selector produces hypotheses; consolidator picks one         │
 │      winner (selected_by) and reports the full evidence chain.       │
 │    Promotes report_scope_cancer_type ONLY when a non-                │
 │      primary_expression_match selector wins.                         │
+│    Centroid corroboration can choose among selectable hypotheses,     │
+│      but same-lineage subtype swaps require subtype marker support    │
+│      unless the centroid margin is decisive.                          │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -181,6 +205,10 @@ Conclusions are summarized at the bottom in tabular form.
 │    Else → use cancer_type_evidence.selected.cancer_type.             │
 │    Sets up downstream therapy registry queries, biomarker panels,    │
 │    expression-reference cohort selection.                            │
+│    local_expression_reference cross-lineage flips are vetoed when     │
+│      the bulk call and confident compartment call agree against them. │
+│    Blocked/contextual alternatives may appear in evidence text, but   │
+│      they do not drive decomposition, biomarker scope, or therapy.    │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -241,6 +269,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | Met-site auto-detection | Stage 5 | Switches decomposition template from solid_primary → met_<site> | tissue_score ≥ 0.90 + ≥ 0.10 ahead of primary + no explicit hint |
 | Rare-marker promotion | Stage 8 selector #2 | Promotes a rare cancer (NUTM, salivary, etc.) when marker gene + context match | Marker TPM ≥ threshold + (top context promotes to full XOR top_context_weight applied) |
 | Fine reference promotion | Stage 8 selector #4 | Promotes a fine label (OS-within-SARC) | All metrics in `FineReferenceSpec.minimum_metrics` met, support ≥ 0.70 |
+| Learned expression classifier | Stage 8 selector | Adds a selectable full-profile discriminative vote | Probability/margin pass, marker sanity is coherent, broad context supports the label or the probability is strong, and compartment/background checks do not contradict it |
 | User --cancer-type override | Stage 10 | Forces report scope but does NOT silence broad-classifier disagreement | Always when supplied |
 
 ---
@@ -274,7 +303,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | 5 | candidate_trace + tissue_scores | Met-site inference (auto or from user) | Decomposition template choice |
 | 6 | Cleaned TPM + template | NNLS fit, optional compartment gates | Per-gene tumor fraction |
 | 7 | Decomposition output | Purity ensemble + subtype scoring | Purity range, subtype label |
-| 8 | All prior | 6-selector evidence consolidation (PR-41) | `selected_by`, `report_scope_cancer_type` |
+| 8 | All prior | Evidence consolidation across fusion, marker, broad-subtype, refinement, reference, learned-classifier, and fallback channels | `selected_by`, `report_scope_cancer_type` |
 | 9 | candidate_trace + subtype | Tie checks, spread checks | Confidence badge |
 | 10 | Stage 8 output + user hint | Choose report scope | Report cancer type |
 | 11 | Report scope + ranges_df | Therapy registry + 3-state observation classifier | Therapy shortlist, outliers, CTAs |
@@ -283,7 +312,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 **The five key concepts a debugger should know:**
 
 1. **Broad classification and report scope are decoupled.** Stages 2-3 do RNA-inferred classification; Stage 10 chooses what label the report wears. A user-supplied `--cancer-type` overrides 10 but does not silence 2-3, so disagreement is always reported.
-2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, tumor_label_refinement, fine_reference, local_expression_reference, primary_expression_match) is independently scoreable. The one that wins is `selected_by`.
+2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, broad_rna_subtype, tumor_label_refinement, fine_reference, local_expression_reference, learned_expression_classifier, primary_expression_match) is independently scoreable. The one that wins is `selected_by`.
 3. **Special rescues are conditional, not pipeline stages.** basal-BRCA rescue, met-site auto-detection, rare-marker promotion are gated overrides that fire under specific signatures — they're not always-on.
 4. **Decomposition is downstream of classification, not upstream.** Stage 6 fits non-tumor compartments using the template chosen in Stage 5 — which itself depends on what cancer was called in Stages 2-3.
 5. **Confidence is independent of correctness.** A high-confidence call can still be wrong (HCC1395 with `--cancer-type BRCA` would show "moderate confidence" even though the broad RNA classifier disagrees); a low-confidence call can still be right (HCC1395 unhinted picks BRCA via rescue with "provisional" badge).

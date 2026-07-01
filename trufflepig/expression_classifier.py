@@ -91,6 +91,8 @@ def classify_expression(sample_tpm_by_symbol, top_k=5):
     """
     if not sample_tpm_by_symbol:
         return []
+    if len(sample_tpm_by_symbol) < _MIN_SHARED_GENES:
+        return []
     trained = _trained_model()
     if trained is None:
         return []

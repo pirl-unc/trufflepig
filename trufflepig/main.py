@@ -2351,8 +2351,8 @@ def _analyze_body(run: AnalyzeRun):
             rare_scope_inference=rare_scope_inference,
             fine_scope_inference=fine_scope_inference,
         )
-    # Veto a deconvolved local-reference flip that crosses lineage against an agreeing bulk + compartment
-    # call (the epithelial→sarcoma attractor, e.g. colon → SARC_DDLPS). No-op for fusion/marker rescues.
+    # Veto a deconvolved local-reference flip that crosses lineage against an agreeing bulk +
+    # compartment call. No-op for fusion, rare-marker, and fine-reference rescues.
     report_scope_cancer_type = _veto_local_reference_lineage_flip(
         analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope)
     if not report_scope_cancer_type:
@@ -4554,6 +4554,8 @@ def _selected_report_scope_basis_label(analysis):
         "rare_marker": "rare RNA-marker and expression-context evidence",
         "local_expression_reference": "exact local expression-reference evidence",
         "fine_reference": "fine-grained expression-reference evidence",
+        "learned_expression_classifier": "learned full-profile expression classifier evidence",
+        "broad_rna_subtype": "broad RNA subtype evidence",
         "lineage_panel": "lineage-panel evidence",
         "tumor_label_refinement": "tumor-label refinement evidence",
         "primary_expression_match": "the leading RNA expression-reference match",
@@ -4581,8 +4583,13 @@ def _candidate_label_options(analysis):
     if len(candidate_trace) >= 2 and fit_quality.get("label") in {"weak", "ambiguous"}:
         labels.append(candidate_trace[1]["code"])
     selected_report_scope = _selected_report_scope_label(analysis)
-    if selected_report_scope and selected_report_scope not in labels:
-        return [selected_report_scope]
+    if selected_report_scope:
+        if selected_report_scope not in labels:
+            return [selected_report_scope]
+        if labels and labels[0] != selected_report_scope:
+            reordered = [selected_report_scope]
+            reordered.extend(label for label in labels if label != selected_report_scope)
+            return reordered[:2]
     return labels[:2]
 
 
@@ -5198,16 +5205,17 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
 def _veto_local_reference_lineage_flip(
     analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope
 ):
-    """Veto a LOCAL-EXPRESSION-REFERENCE (deconvolved) flip that crosses lineage against an agreeing
+    """Veto a LOCAL-EXPRESSION-REFERENCE flip that crosses lineage against an agreeing
     bulk classifier + compartment_call.
 
     The deconvolved local-reference channel mis-rescues epithelial samples to sarcoma (the
-    epithelial→sarcoma attractor — e.g. a colon sample whose correct READ call is flipped to
-    SARC_DDLPS). Targeted, low-regression: only the ``local_expression_reference`` channel is vetoed
-    (a fusion / marker / literature rescue is trusted), and only when the refined lineage disagrees
-    with BOTH the bulk classifier's call AND the compartment_call top — two independent signals
-    agreeing on the lineage outweigh a single deconvolved-reference flip. Returns the (possibly
-    reverted) ``report_scope_cancer_type`` and records the veto on ``analysis``.
+    epithelial→sarcoma attractor was the original failure mode, but the same contract applies to
+    any cross-lineage local-reference flip. Targeted, low-regression: only the
+    ``local_expression_reference`` channel is vetoed (a fusion / marker / literature rescue is
+    trusted), and only when the refined lineage disagrees with BOTH the bulk classifier's call AND
+    the compartment_call top — two independent signals agreeing on the lineage outweigh a single
+    deconvolved-reference flip. Returns the (possibly reverted) ``report_scope_cancer_type`` and
+    records the veto on ``analysis``.
     """
     if not report_scope_cancer_type or report_scope_cancer_type == rna_inferred_cancer_type:
         return report_scope_cancer_type
@@ -5233,16 +5241,14 @@ def _veto_local_reference_lineage_flip(
         refined = _group_to_mode(cancer_lineage_group(report_scope_cancer_type) or "")
         pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
                if rna_inferred_cancer_type else None)
-        # Target only the DOCUMENTED attractor — epithelial bulk → SARCOMA deconvolved centroids. A
-        # local-ref flip INTO a non-sarcoma lineage (e.g. HEPB → embryonal) is a legitimate rescue and
-        # must NOT be vetoed; only an into-mesenchymal flip against an agreeing bulk + compartment is.
-        if comp and refined and pre and refined == "mesenchymal" and refined != comp and pre == comp:
+        if comp and refined and pre and refined != comp and pre == comp:
             analysis["cancer_type_evidence_vetoed"] = {
                 "vetoed_call": report_scope_cancer_type,
                 "kept_call": rna_inferred_cancer_type,
-                "reason": (f"local_expression_reference flip to sarcoma conflicts with the bulk "
-                           f"classifier ({pre}) and compartment_call ({comp}) — the deconvolved "
-                           f"epithelial→sarcoma attractor"),
+                "reason": (
+                    f"local_expression_reference cross-lineage flip ({pre} → {refined}) "
+                    f"conflicts with the bulk classifier ({pre}) and compartment_call ({comp})"
+                ),
             }
             # _apply_cancer_type_evidence already wrote the vetoed selection into the analysis; revert
             # those analysis-level keys too, or downstream label helpers re-surface the vetoed SARC_* call.
@@ -6127,7 +6133,20 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 sentence += f", with {_cancer_label(runner['code'])} the next candidate"
         elif runner is not None:
             runner_norm = float(runner.get("support_fraction_of_top", 0.0) or 0.0)
-            if runner_norm > 0:
+            runner_code = str(runner.get("code") or "").strip()
+            if (
+                evidence_selected_discordant
+                and runner_code == str(cancer_code or "").strip()
+            ):
+                if runner_norm > 0:
+                    sentence += (
+                        f"; selected report label is RNA rank 2 "
+                        f"({_cancer_label(cancer_code)} support "
+                        f"{runner_norm:.2f}x of top {_cancer_label(best['code'])})"
+                    )
+                else:
+                    sentence += "; selected report label is the next RNA candidate"
+            elif runner_norm > 0:
                 sentence += (
                     f", ahead of {_cancer_label(runner['code'])} "
                     f"by {1.0 / runner_norm:.1f}x on normalized support"
@@ -8582,6 +8601,7 @@ def _build_target_report(
     else:
         lines.append(f"- **Working label**: **{_cancer_label(cancer_code)}**.")
     supplied_discordant = False
+    evidence_selected_discordant = False
     candidate_trace = analysis.get("candidate_trace") or []
     if candidate_trace:
         top_code = str(candidate_trace[0].get("code") or "").strip()
@@ -8590,11 +8610,18 @@ def _build_target_report(
             and top_code
             and top_code != str(cancer_code).strip()
         )
-    if family_display and supplied_discordant:
+        evidence_selected_discordant = (
+            analysis.get("cancer_type_source") == "auto-detected"
+            and top_code
+            and top_code != str(cancer_code).strip()
+            and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
+        )
+    if family_display and (supplied_discordant or evidence_selected_discordant):
+        source_label = "supplied" if supplied_discordant else "selected"
         lines.append(
             f"- **RNA family signal**: {family_display}; interpret this as "
             "classifier-conflict/background context, not as a replacement for "
-            f"the supplied {_cancer_label(cancer_code)} label."
+            f"the {source_label} {_cancer_label(cancer_code)} label."
         )
     elif family_display:
         lines.append(f"- **Family-level framing**: {family_display}.")

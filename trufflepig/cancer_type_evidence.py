@@ -28,6 +28,8 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "fine_reference": 5,
     "local_expression_reference": 4,
     "lineage_panel": 4,
+    "broad_rna_subtype": 4,
+    "learned_expression_classifier": 4,
     "contrast_discriminator": 3,
     "tumor_label_refinement": 3,
     "coarse_composition_reference": 2,
@@ -45,6 +47,7 @@ _DEFINITIVE_SELECTORS: frozenset[str] = frozenset({"direct_fusion"})
 # winner by at least this much — enough to flip a marker tie (NUT carcinoma over the salivary ADCC
 # look-alike; osteosarcoma over the MDM2-amplicon liposarcoma) while leaving near-ties to the markers.
 _CENTROID_CORROBORATION_MARGIN = 0.015
+_CENTROID_SAME_LINEAGE_MARKER_MARGIN = 0.035
 
 # Thresholds for the lineage_panel selector — gates when a
 # trufflepig.lineage_panels panel result is strong enough to
@@ -93,9 +96,14 @@ _OS_MATRIX_MARKERS = (
 )
 _OS_AMPLICON_MARKERS = ("MDM2", "CDK4", "FRS2")
 _BACKGROUND_LIKE_FAMILIES = frozenset({"MESENCHYMAL"})
+_CRC_REGISTRY_ROOT = "CRC"
 _TUMOR_LABEL_MIN_SUPPORT = 0.70
 _TUMOR_LABEL_MIN_SIGNATURE_RATIO = 0.85
 _TUMOR_LABEL_MIN_FAMILY_SUPPORT = 0.65
+_LEARNED_EXPRESSION_MIN_PROBABILITY = 0.55
+_LEARNED_EXPRESSION_STRONG_PROBABILITY = 0.85
+_LEARNED_EXPRESSION_MIN_MARGIN = 0.10
+_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT = 0.30
 _LOCAL_REFERENCE_TOP_MARKERS = 24
 _LOCAL_REFERENCE_MIN_TPM = 5.0
 _LOCAL_REFERENCE_MIN_LOG2_VS_PAN = 1.0
@@ -131,7 +139,10 @@ _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_BURDEN_RATIO = 0.50
 _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_MARKERS = 2
 _LOCAL_REFERENCE_SIGNATURE_ANCHOR_MIN_SPECIFIC_FRACTION = 0.30
 _LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare"})
-_LOCAL_REFERENCE_CROSS_LINEAGE_MARKER_STATUSES = frozenset({"consistent", "mixed"})
+# Cross-lineage local-reference promotions need a clean ontology marker program.
+# ``mixed`` means expected-low/conflicting markers are also present; that can be
+# useful annotation, but it is not enough to relabel a sample across lineages.
+_LOCAL_REFERENCE_CROSS_LINEAGE_MARKER_STATUSES = frozenset({"consistent"})
 _LOCAL_REFERENCE_SIGNATURE_ANCHOR_GENERIC_PRIMARY_TISSUES = frozenset(
     {"", "soft_tissue", "connective_tissue", "smooth_muscle"}
 )
@@ -261,6 +272,7 @@ class CancerTypeEvidence:
     background_label_support: float = 0.0
     coarse_composition_support: float = 0.0
     contrast_discriminator_support: float = 0.0
+    learned_expression_support: float = 0.0
     report_label_candidate: bool = False
     can_select_report_label: bool = False
     blocking_reasons: tuple[str, ...] = ()
@@ -329,6 +341,10 @@ class CancerTypeEvidence:
             ),
             "contrast_discriminator_support": round(
                 float(self.contrast_discriminator_support),
+                4,
+            ),
+            "learned_expression_support": round(
+                float(self.learned_expression_support),
                 4,
             ),
         }
@@ -599,6 +615,8 @@ def _selection_method_label(selected_by: str) -> str:
         "coarse_composition_reference": "coarse_composition_reference",
         "local_expression_reference": "local_expression_reference",
         "fine_reference": "fine_reference",
+        "broad_rna_subtype": "broad_rna_subtype",
+        "learned_expression_classifier": "learned_expression_classifier",
         "contrast_discriminator": "contrast_discriminator",
         "rare_marker": "rna_marker_with_expression_context",
         "direct_fusion": "direct_fusion",
@@ -621,6 +639,8 @@ def _decision_stage_for_selector(selected_by: str) -> str:
         "fine_reference",
         "local_expression_reference",
         "lineage_panel",
+        "broad_rna_subtype",
+        "learned_expression_classifier",
         "rare_marker",
         "contrast_discriminator",
     }:
@@ -728,6 +748,24 @@ def _hypothesis_evidence_channels(
         code=hypothesis.cancer_type,
         context_code=hypothesis.related_context_code,
         status="context_only",
+    )
+    add(
+        channel="learned_expression_classifier",
+        stage="exact_subtype",
+        role="full_profile_discriminative_vote",
+        support=hypothesis.learned_expression_support,
+        selector="learned_expression_classifier",
+        context_code=hypothesis.details.get("learned_expression_context_code") or "",
+        details={
+            "probability": hypothesis.details.get("learned_expression_probability"),
+            "margin": hypothesis.details.get("learned_expression_margin"),
+            "context_support": hypothesis.details.get(
+                "learned_expression_context_support"
+            ),
+            "top_predictions": hypothesis.details.get(
+                "learned_expression_top_predictions"
+            ),
+        },
     )
     add(
         channel="composition_reference",
@@ -1040,6 +1078,111 @@ def _marker_coherence_strong(coherence: Mapping[str, Any]) -> bool:
     )
 
 
+def _row_bool(row: Mapping[str, Any], key: str, default: bool = False) -> bool:
+    if key not in row:
+        return bool(default)
+    value = row.get(key)
+    if isinstance(value, bool):
+        return value
+    return _safe_bool(value, default=default)
+
+
+def _background_top_compartment_conflict(top: Mapping[str, Any]) -> str:
+    """Return the centroid compartment when a background-like broad top conflicts.
+
+    Background-like broad labels such as SARC can win by stromal/smooth-muscle
+    expression. If the same candidate row carries a whole-profile compartment
+    outside that lineage, downstream exact references should treat the
+    background label as context rather than a report-scope anchor.
+    """
+    if not _is_background_like_candidate(top):
+        return ""
+    compartment_lineage = _lineage_token(top.get("centroid_coarse_lineage"))
+    if not compartment_lineage:
+        return ""
+    top_lineage = _code_lineage_token(_clean(top.get("code")))
+    if not top_lineage or top_lineage == compartment_lineage:
+        return ""
+    if "compartment_in_set" in top and _row_bool(top, "compartment_in_set", True):
+        return ""
+    return compartment_lineage
+
+
+def _close_trace_candidate_for_lineage(
+    rows: list[dict[str, Any]],
+    lineage: str,
+    *,
+    min_support: float = 0.80,
+) -> dict[str, Any]:
+    lineage_token = _lineage_token(lineage)
+    best: dict[str, Any] = {}
+    best_support = 0.0
+    for row in rows:
+        code = _clean(row.get("code"))
+        support = _safe_float(row.get("support_fraction_of_top"))
+        if (
+            code
+            and support >= min_support
+            and _code_lineage_token(code) == lineage_token
+            and support > best_support
+        ):
+            best = dict(row)
+            best_support = support
+    return best
+
+
+def _crc_family_locked_against_non_crc_composition(
+    *,
+    broad_top_code: str,
+    top_code: str,
+    type_specific_count: int,
+    analysis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return context when a close CRC-family RNA call should not yield to site.
+
+    COAD/READ/CRC subtype labels are intentionally allowed to mix up with one
+    another, but a generic GI composition/reference signal should not move a
+    tight CRC-family RNA call to another GI site unless that site contributes
+    tumor-specific hits. This keeps host/normal tissue context from becoming a
+    second cancer-type classifier.
+    """
+    if not _code_has_registry_ancestor(broad_top_code, _CRC_REGISTRY_ROOT):
+        return {}
+    if _code_has_registry_ancestor(top_code, _CRC_REGISTRY_ROOT):
+        return {}
+    rows = _candidate_rows(analysis)
+    crc_rows = [
+        row
+        for row in rows[:5]
+        if _code_has_registry_ancestor(_clean(row.get("code")), _CRC_REGISTRY_ROOT)
+    ]
+    if not crc_rows:
+        return {}
+    close_crc_rows = [
+        row
+        for row in crc_rows
+        if _safe_float(row.get("support_fraction_of_top")) >= 0.75
+    ]
+    if not close_crc_rows:
+        return {}
+    return {
+        "broad_top_code": broad_top_code,
+        "blocked_code": top_code,
+        "crc_candidates": [
+            {
+                "code": _clean(row.get("code")),
+                "support_fraction_of_top": round(
+                    _safe_float(row.get("support_fraction_of_top")),
+                    4,
+                ),
+            }
+            for row in close_crc_rows
+        ],
+        "required_type_specific_hits": _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS,
+        "observed_type_specific_hits": int(type_specific_count),
+    }
+
+
 def _mtc_neural_crest_conflict(
     *,
     top_code: str,
@@ -1180,6 +1323,50 @@ def _local_reference_cross_lineage_conflict(
         "detected": detected,
         "total": total,
         "required_for_consistent": required,
+    }
+
+
+def _local_reference_background_compartment_conflict(
+    code: str,
+    panel: Mapping[str, Any],
+    analysis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Block mesenchymal exact references against an epithelial compartment.
+
+    Mesenchymal programs can be real biology in an epithelial specimen, but
+    they are often matched-normal/stromal signal. If the first-pass broad top
+    is background-like, the whole-profile compartment points elsewhere, and a
+    close candidate exists in that compartment, the local exact reference is
+    annotation unless another selector supplies a more specific tumor anchor.
+    """
+    if _code_lineage_token(code) != "mesenchymal":
+        return {}
+    primary_tissue = _clean(panel.get("primary_tissue")).lower()
+    rows = _candidate_rows(analysis)
+    if not rows:
+        return {}
+    top = rows[0]
+    compartment_lineage = _background_top_compartment_conflict(top)
+    if not compartment_lineage:
+        return {}
+    close_candidate = _close_trace_candidate_for_lineage(
+        rows[1:],
+        compartment_lineage,
+        min_support=0.80,
+    )
+    if not close_candidate:
+        return {}
+    return {
+        "code": _clean(code),
+        "local_reference_primary_tissue": primary_tissue,
+        "background_top_code": _clean(top.get("code")),
+        "background_top_family": _clean(top.get("family_label")),
+        "centroid_compartment_lineage": compartment_lineage,
+        "close_compartment_candidate": _clean(close_candidate.get("code")),
+        "close_compartment_candidate_support": round(
+            _safe_float(close_candidate.get("support_fraction_of_top")),
+            4,
+        ),
     }
 
 
@@ -2232,6 +2419,43 @@ def _registry_parent_chain(code: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _code_has_registry_ancestor(code: str, ancestor: str) -> bool:
+    code_text = _clean(code)
+    ancestor_text = _clean(ancestor)
+    return bool(
+        code_text
+        and ancestor_text
+        and (
+            code_text == ancestor_text
+            or ancestor_text in _registry_parent_chain(code_text)
+        )
+    )
+
+
+def _lineage_token(value: Any) -> str:
+    text = _clean(value).lower().replace("-", "_").replace(" ", "_")
+    return {
+        "epithelial": "epithelial",
+        "carcinoma": "epithelial",
+        "sarcoma": "mesenchymal",
+        "mesenchymal": "mesenchymal",
+        "hematolymphoid": "hematolymphoid",
+        "heme": "hematolymphoid",
+        "melanoma": "melanocytic",
+        "melanocytic": "melanocytic",
+        "neuroendocrine": "neuroendocrine",
+        "neural": "neural",
+        "cns": "neural",
+        "embryonal": "embryonal",
+        "germ": "germ",
+        "germ_cell": "germ",
+    }.get(text, text)
+
+
+def _code_lineage_token(code: str) -> str:
+    return _lineage_token(_broad_lineage_for_code(code))
+
+
 def _code_suffix_for_parent(code: str, parent_code: str = "") -> str:
     code_text = _clean(code)
     parent_text = _clean(parent_code)
@@ -3075,7 +3299,8 @@ def _add_broad_rna_features(
     hypotheses: dict[str, CancerTypeEvidence],
     analysis: Mapping[str, Any],
 ) -> None:
-    for rank, row in enumerate(_candidate_rows(analysis), start=1):
+    candidate_rows = _candidate_rows(analysis)
+    for rank, row in enumerate(candidate_rows, start=1):
         code = _clean(row.get("code"))
         if not code:
             continue
@@ -3097,6 +3322,272 @@ def _add_broad_rna_features(
                 blocking_reasons=(),
                 priority=(0, support),
             )
+        winning_subtype = _clean(row.get("winning_subtype"))
+        if winning_subtype and winning_subtype != code:
+            subtype_hypothesis = _hypothesis(hypotheses, winning_subtype)
+            subtype_hypothesis.add_source("broad_rna_subtype")
+            subtype_hypothesis.expression_reference_cancer_type = winning_subtype
+            subtype_hypothesis.reference_cancer_type = code
+            subtype_hypothesis.related_context_code = code
+            subtype_hypothesis.related_context_support = max(
+                subtype_hypothesis.related_context_support,
+                support,
+            )
+            subtype_hypothesis.broad_rna_support = max(
+                subtype_hypothesis.broad_rna_support,
+                support,
+            )
+            subtype_hypothesis.broad_rna_rank = rank
+            subtype_hypothesis.basis = subtype_hypothesis.basis or (
+                f"{code} broad RNA winner resolves to {winning_subtype}"
+            )
+            subtype_hypothesis.details.update(
+                {
+                    "parent_broad_rna_code": code,
+                    "parent_broad_rna_rank": rank,
+                    "parent_support_fraction_of_top": round(float(support), 4),
+                    "winning_subtype_from_candidate_trace": winning_subtype,
+                }
+            )
+            if rank == 1:
+                blockers: list[str] = []
+                background_compartment = _background_top_compartment_conflict(row)
+                close_candidate = (
+                    _close_trace_candidate_for_lineage(
+                        candidate_rows[rank:],
+                        background_compartment,
+                        min_support=0.80,
+                    )
+                    if background_compartment
+                    else {}
+                )
+                if close_candidate:
+                    subtype_hypothesis.details[
+                        "broad_subtype_background_compartment_conflict"
+                    ] = {
+                        "parent_code": code,
+                        "winning_subtype": winning_subtype,
+                        "centroid_compartment_lineage": background_compartment,
+                        "close_compartment_candidate": _clean(
+                            close_candidate.get("code")
+                        ),
+                        "close_compartment_candidate_support": round(
+                            _safe_float(
+                                close_candidate.get("support_fraction_of_top")
+                            ),
+                            4,
+                        ),
+                    }
+                    blockers.append(
+                        f"{code} winning subtype {winning_subtype} is treated "
+                        "as background/context because the broad parent is "
+                        "background-like while the whole-profile compartment "
+                        f"and a close broad candidate support {background_compartment} "
+                        f"({subtype_hypothesis.details['broad_subtype_background_compartment_conflict']['close_compartment_candidate']})"
+                    )
+                subtype_hypothesis.consider_for_report_label(
+                    selected_by="broad_rna_subtype",
+                    can_select=not blockers,
+                    blocking_reasons=blockers,
+                    priority=(2, 1.0 + 0.25 * support),
+                )
+
+
+def _context_support_for_code_or_parent(
+    code: str,
+    support_by_code: Mapping[str, float],
+) -> tuple[float, str]:
+    code = _clean(code)
+    for candidate in (code, *_registry_parent_chain(code)):
+        support = _safe_float(support_by_code.get(candidate))
+        if support > 0:
+            return support, candidate
+    return 0.0, ""
+
+
+def _add_learned_expression_classifier_features(
+    hypotheses: dict[str, CancerTypeEvidence],
+    sample_tpm_by_symbol: Mapping[str, float],
+    analysis: Mapping[str, Any],
+) -> None:
+    """Add the optional discriminative full-profile classifier as a gated co-signal.
+
+    The learned classifier is strong on reference-like whole-transcriptome profiles, but it is
+    deliberately not an oracle: it only selects a report label when its probability/margin are
+    adequate and the staged ranker, marker ontology, and compartment evidence do not contradict it.
+    """
+    if not sample_tpm_by_symbol:
+        return
+    try:
+        from .expression_classifier import classify_expression
+    except ImportError:
+        return
+    try:
+        predictions = classify_expression(sample_tpm_by_symbol, top_k=5)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("learned expression classifier failed", exc_info=True)
+        return
+    if not predictions:
+        return
+
+    code = _clean(predictions[0][0])
+    probability = _safe_float(predictions[0][1])
+    second_probability = _safe_float(predictions[1][1]) if len(predictions) > 1 else 0.0
+    margin = probability - second_probability
+    if not code or code not in _registry_by_code():
+        return
+
+    support_by_code = _context_support_by_code(analysis)
+    context_support, context_code = _context_support_for_code_or_parent(
+        code,
+        support_by_code,
+    )
+    candidate_rows = _candidate_rows(analysis)
+    top_row = candidate_rows[0] if candidate_rows else {}
+    top_code = _clean(top_row.get("code")) or _clean(analysis.get("cancer_type"))
+    learned_lineage = _code_lineage_token(code)
+    top_lineage = _code_lineage_token(top_code)
+    marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+
+    blockers: list[str] = []
+    if probability < _LEARNED_EXPRESSION_MIN_PROBABILITY:
+        blockers.append(
+            f"learned classifier probability {probability:.2f} is below "
+            f"{_LEARNED_EXPRESSION_MIN_PROBABILITY:.2f}"
+        )
+    if margin < _LEARNED_EXPRESSION_MIN_MARGIN:
+        blockers.append(
+            f"learned classifier margin {margin:.2f} is below "
+            f"{_LEARNED_EXPRESSION_MIN_MARGIN:.2f}"
+        )
+    if (
+        marker_coherence
+        and not _marker_coherence_selection_grade(marker_coherence)
+    ):
+        blockers.append(
+            f"{code} marker program is {marker_coherence.get('status')} "
+            f"({marker_coherence.get('detected')}/"
+            f"{marker_coherence.get('total')} expected high markers; "
+            f"{marker_coherence.get('required_for_consistent')} required)"
+        )
+
+    background_compartment = _background_top_compartment_conflict(top_row)
+    close_candidate: dict[str, Any] = {}
+    if background_compartment and learned_lineage != _lineage_token(background_compartment):
+        close_candidate = _close_trace_candidate_for_lineage(
+            candidate_rows[1:],
+            background_compartment,
+            min_support=0.80,
+        )
+        if close_candidate:
+            blockers.append(
+                f"learned {code} call follows a background-like {top_code} "
+                "context while the whole-profile compartment and a close broad "
+                f"candidate support {background_compartment} "
+                f"({_clean(close_candidate.get('code'))})"
+            )
+
+    compartment_lineage = _lineage_token(top_row.get("centroid_coarse_lineage"))
+    compartment_confident = _safe_bool(
+        top_row.get("centroid_lineage_confident"),
+        default=False,
+    )
+    compartment_in_set = _row_bool(top_row, "compartment_in_set", True)
+    if (
+        compartment_confident
+        and compartment_lineage
+        and learned_lineage
+        and learned_lineage != compartment_lineage
+        and not compartment_in_set
+    ):
+        blockers.append(
+            f"learned {code} lineage ({learned_lineage}) conflicts with "
+            f"confident whole-profile compartment {compartment_lineage}"
+        )
+
+    strong_probability = probability >= _LEARNED_EXPRESSION_STRONG_PROBABILITY
+    context_corrob = context_support >= _LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT
+    same_context = bool(
+        code == top_code
+        or _code_has_registry_ancestor(code, top_code)
+        or _code_has_registry_ancestor(top_code, code)
+    )
+    if not context_corrob and not (strong_probability and same_context):
+        blockers.append(
+            f"learned {code} call lacks broad-ranker context support "
+            f"({context_support:.2f}; need "
+            f"{_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT:.2f} or same-context "
+            f"probability >= {_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f})"
+        )
+
+    cross_lineage = bool(top_lineage and learned_lineage and learned_lineage != top_lineage)
+    if cross_lineage and not (strong_probability and context_corrob):
+        blockers.append(
+            f"cross-lineage learned call {code} needs probability >= "
+            f"{_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f} and broad-ranker "
+            f"context support >= {_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT:.2f}"
+        )
+
+    hypothesis = _hypothesis(hypotheses, code)
+    hypothesis.add_source("learned_expression_classifier")
+    hypothesis.expression_reference_cancer_type = (
+        hypothesis.expression_reference_cancer_type or code
+    )
+    hypothesis.reference_cancer_type = hypothesis.reference_cancer_type or (
+        context_code or code
+    )
+    hypothesis.related_context_code = (
+        hypothesis.related_context_code or context_code or top_code
+    )
+    hypothesis.related_context_support = max(
+        hypothesis.related_context_support,
+        context_support,
+    )
+    hypothesis.learned_expression_support = max(
+        hypothesis.learned_expression_support,
+        probability,
+    )
+    top_predictions = [
+        {"code": _clean(pred_code), "probability": round(_safe_float(prob), 4)}
+        for pred_code, prob in predictions
+    ]
+    hypothesis.details.update(
+        {
+            "learned_expression_probability": round(float(probability), 4),
+            "learned_expression_second_probability": round(
+                float(second_probability),
+                4,
+            ),
+            "learned_expression_margin": round(float(margin), 4),
+            "learned_expression_context_support": round(float(context_support), 4),
+            "learned_expression_context_code": context_code,
+            "learned_expression_top_predictions": top_predictions,
+            "learned_expression_broad_top_code": top_code,
+            "learned_expression_broad_top_lineage": top_lineage,
+            "learned_expression_lineage": learned_lineage,
+            "learned_expression_marker_coherence": marker_coherence,
+        }
+    )
+    if close_candidate:
+        hypothesis.details["learned_expression_background_conflict"] = {
+            "centroid_compartment_lineage": background_compartment,
+            "close_compartment_candidate": _clean(close_candidate.get("code")),
+            "close_compartment_candidate_support": round(
+                _safe_float(close_candidate.get("support_fraction_of_top")),
+                4,
+            ),
+        }
+    hypothesis.basis = hypothesis.basis or (
+        f"full-profile learned expression classifier supports {code} "
+        f"(p={probability:.2f}, margin={margin:.2f})"
+    )
+    priority_strength = 1.0 + 0.5 * probability + 0.25 * min(context_support, 1.0)
+    hypothesis.consider_for_report_label(
+        selected_by="learned_expression_classifier",
+        can_select=not blockers,
+        blocking_reasons=blockers,
+        priority=(2, priority_strength),
+    )
 
 
 def _add_coarse_composition_reference_features(
@@ -3213,6 +3704,19 @@ def _add_coarse_composition_reference_features(
             f"winner ({broad_top_code}); type-specific tumor-up evidence alone "
             "does not override the broad RNA call"
         )
+    crc_family_lock = _crc_family_locked_against_non_crc_composition(
+        broad_top_code=broad_top_code,
+        top_code=top_code,
+        type_specific_count=type_specific_count,
+        analysis=analysis,
+    )
+    if crc_family_lock:
+        blockers.append(
+            "first-pass RNA support is concentrated in the CRC family "
+            f"({', '.join(row['code'] for row in crc_family_lock['crc_candidates'])}); "
+            f"{top_code} composition remains contextual unless an "
+            "exact-reference selector corroborates that non-CRC report label"
+        )
 
     support = float(
         np.clip(
@@ -3271,6 +3775,7 @@ def _add_coarse_composition_reference_features(
             "coarse_reference_cancer_hint": cancer_hint,
             "coarse_reference_type_specific_cohort": type_specific_cohort,
             "coarse_reference_type_specific_hit_count": type_specific_count,
+            "coarse_reference_crc_family_lock": crc_family_lock,
             "coarse_reference_top_type_specific_hits": top_hit_symbols,
             "coarse_reference_broad_top_code": broad_top_code,
             "coarse_reference_broad_fit_label": fit_label,
@@ -3317,9 +3822,11 @@ def _add_tumor_label_refinement_features(
     top_signature = _safe_float(top.get("signature_score"))
     if not top_code or top_support <= 0 or top_signature <= 0:
         return
+    top_compartment_conflict = _background_top_compartment_conflict(top)
 
     best: dict[str, Any] | None = None
     best_priority = 0.0
+    basal_brca_best: dict[str, Any] | None = None
     for row in rows[1:]:
         code = _clean(row.get("code"))
         if not code or _is_background_like_candidate(row):
@@ -3330,21 +3837,66 @@ def _add_tumor_label_refinement_features(
         # the conditional is kept defensive but is always-true here.
         signature_ratio = signature / top_signature
         family_support = _family_marker_support(row)
-        if support < _TUMOR_LABEL_MIN_SUPPORT:
+        basal_brca_override = (
+            code == "BRCA"
+            and _clean(row.get("winning_subtype")) == "BRCA_Basal"
+        )
+        row_in_conflict_compartment = bool(
+            top_compartment_conflict
+            and _code_lineage_token(code) == top_compartment_conflict
+        )
+        min_support = (
+            0.60
+            if basal_brca_override
+            else (0.90 if row_in_conflict_compartment else _TUMOR_LABEL_MIN_SUPPORT)
+        )
+        if support < min_support:
             continue
-        if signature_ratio < _TUMOR_LABEL_MIN_SIGNATURE_RATIO:
+        min_signature_ratio = (
+            0.60
+            if basal_brca_override
+            else (
+                0.70
+                if row_in_conflict_compartment
+                else _TUMOR_LABEL_MIN_SIGNATURE_RATIO
+            )
+        )
+        if signature_ratio < min_signature_ratio:
             continue
-        if family_support < _TUMOR_LABEL_MIN_FAMILY_SUPPORT:
+        effective_family_support = max(
+            family_support,
+            1.0 if basal_brca_override else 0.0,
+        )
+        if effective_family_support < _TUMOR_LABEL_MIN_FAMILY_SUPPORT:
             continue
         priority = (
             0.55 * support
             + 0.25 * min(signature_ratio, 1.0)
-            + 0.20 * family_support
+            + 0.20 * effective_family_support
+            + (0.30 if basal_brca_override else 0.0)
+            + (0.10 if row_in_conflict_compartment else 0.0)
         )
         if best is None or priority > best_priority:
             best = dict(row)
+            best["tumor_label_basal_brca_override"] = basal_brca_override
+            best["tumor_label_effective_family_support"] = effective_family_support
+            best["tumor_label_compartment_conflict_override"] = (
+                row_in_conflict_compartment
+            )
+            best["tumor_label_compartment_conflict_lineage"] = (
+                top_compartment_conflict
+            )
             best_priority = float(priority)
+        if basal_brca_override:
+            basal_brca_best = dict(row)
+            basal_brca_best["tumor_label_basal_brca_override"] = True
+            basal_brca_best["tumor_label_effective_family_support"] = (
+                effective_family_support
+            )
+            basal_brca_best["tumor_label_priority"] = float(priority)
 
+    if basal_brca_best is not None:
+        best = basal_brca_best
     if best is None:
         return
 
@@ -3353,7 +3905,10 @@ def _add_tumor_label_refinement_features(
     signature = _safe_float(best.get("signature_score"))
     # ``top_signature > 0`` is guaranteed by the outer guard at line 854.
     signature_ratio = signature / top_signature
-    family_support = _family_marker_support(best)
+    family_support = _safe_float(
+        best.get("tumor_label_effective_family_support"),
+        default=_family_marker_support(best),
+    )
     hypothesis = _hypothesis(hypotheses, code)
     hypothesis.add_source("tumor_label_refinement")
     hypothesis.expression_reference_cancer_type = code
@@ -3384,6 +3939,15 @@ def _add_tumor_label_refinement_features(
             "tumor_label_signature_ratio": round(float(signature_ratio), 4),
             "tumor_label_family": _clean(best.get("family_label")),
             "tumor_label_family_support": round(float(family_support), 4),
+            "tumor_label_basal_brca_override": bool(
+                best.get("tumor_label_basal_brca_override")
+            ),
+            "tumor_label_compartment_conflict_override": bool(
+                best.get("tumor_label_compartment_conflict_override")
+            ),
+            "tumor_label_compartment_conflict_lineage": _clean(
+                best.get("tumor_label_compartment_conflict_lineage")
+            ),
         }
     )
     hypothesis.consider_for_report_label(
@@ -3617,6 +4181,16 @@ def _add_local_expression_reference_features(
                     code_marker_coherence,
                 )
             )
+            if not cross_lineage_marker_conflict and primary_contexts:
+                cross_lineage_marker_conflict = (
+                    _local_reference_cross_lineage_conflict(
+                        code,
+                        tuple(c for c in primary_contexts if c),
+                        code_marker_coherence,
+                    )
+                )
+                if cross_lineage_marker_conflict:
+                    cross_lineage_marker_conflict["basis"] = "first_pass_context"
         primary_tissue = _clean(panel.get("primary_tissue")).lower()
         signature_anchor_support = (
             0.0
@@ -3703,6 +4277,23 @@ def _add_local_expression_reference_features(
                 f"markers ({cross_lineage_marker_conflict['marker_status']}) "
                 "while the compatible RNA context is "
                 f"{', '.join(cross_lineage_marker_conflict['context_codes'])}"
+            )
+        background_compartment_conflict = (
+            _local_reference_background_compartment_conflict(
+                code,
+                panel,
+                analysis,
+            )
+        )
+        if background_compartment_conflict:
+            blockers.append(
+                "mesenchymal exact-reference support is treated as "
+                "background/context because the broad top is background-like "
+                f"({background_compartment_conflict['background_top_code']}) "
+                "while the whole-profile compartment and a close broad "
+                "candidate support "
+                f"{background_compartment_conflict['centroid_compartment_lineage']} "
+                f"({background_compartment_conflict['close_compartment_candidate']})"
             )
         molecular_status_blocker = (
             "molecular-status expression reference requires direct molecular "
@@ -3952,6 +4543,9 @@ def _add_local_expression_reference_features(
                 "local_reference_cross_lineage_marker_conflict": bool(
                     cross_lineage_marker_conflict
                 ),
+                "local_reference_background_compartment_conflict": bool(
+                    background_compartment_conflict
+                ),
                 "fusion_defined_context_conflict": bool(
                     fusion_defined_context_conflict
                 ),
@@ -3989,6 +4583,10 @@ def _add_local_expression_reference_features(
         if cross_lineage_marker_conflict:
             hypothesis.details["local_reference_cross_lineage_marker_conflict_details"] = (
                 cross_lineage_marker_conflict
+            )
+        if background_compartment_conflict:
+            hypothesis.details["local_reference_background_compartment_conflict_details"] = (
+                background_compartment_conflict
             )
         hypothesis.consider_for_report_label(
             selected_by="local_expression_reference",
@@ -4994,7 +5592,86 @@ def _build_staged_evidence_graph(
     }
 
 
-def _pick_selected(hypotheses, cen=None, compartment_confident=False):
+def _same_lineage_subtype_pair(left: str, right: str) -> bool:
+    """Return true for sibling/same-lineage labels that need marker support to swap."""
+
+    left = str(left or "").strip()
+    right = str(right or "").strip()
+    if not left or not right or left == right:
+        return False
+    try:
+        from .tumor_type_ontology import is_sarcoma_code, tumor_type_ontology_entry
+
+        if is_sarcoma_code(left) and is_sarcoma_code(right):
+            return True
+        left_entry = tumor_type_ontology_entry(left)
+        right_entry = tumor_type_ontology_entry(right)
+    except Exception:  # noqa: BLE001
+        return False
+    if left_entry is None or right_entry is None:
+        return False
+    if left_entry.parent_code and left_entry.parent_code == right_entry.parent_code:
+        return True
+    if left in right_entry.ancestors or right in left_entry.ancestors:
+        return True
+    return False
+
+
+def _marker_status_rank(status: str) -> int:
+    return {"consistent": 3, "partial": 2, "mixed": 1, "weak": 0}.get(
+        str(status or "").strip(),
+        0,
+    )
+
+
+def _centroid_subtype_override_allowed(
+    *,
+    winner,
+    best,
+    win_rho: float,
+    best_rho: float,
+    sample_tpm_by_symbol: Mapping[str, float] | None,
+) -> bool:
+    """Gate same-lineage centroid subtype swaps with marker expectations.
+
+    Whole-profile centroids are excellent broad-lineage corroborators, but
+    within one lineage they can prefer a sibling cohort because of shared stroma,
+    differentiation state, or batch effects. For those swaps, require the target
+    subtype's positive/negative marker sanity check to corroborate the centroid,
+    or demand a wider centroid margin.
+    """
+
+    if not _same_lineage_subtype_pair(winner.cancer_type, best.cancer_type):
+        return True
+    if best_rho - win_rho >= _CENTROID_SAME_LINEAGE_MARKER_MARGIN:
+        return True
+    if not sample_tpm_by_symbol:
+        return False
+    try:
+        from .tumor_type_ontology import tumor_type_sanity_check
+
+        best_sanity = tumor_type_sanity_check(best.cancer_type, sample_tpm_by_symbol)
+        win_sanity = tumor_type_sanity_check(winner.cancer_type, sample_tpm_by_symbol)
+    except Exception:  # noqa: BLE001
+        return False
+
+    best_rank = _marker_status_rank(str(best_sanity.get("status") or ""))
+    win_rank = _marker_status_rank(str(win_sanity.get("status") or ""))
+    best_fraction = float(best_sanity.get("expected_high_detected_fraction") or 0.0)
+    win_fraction = float(win_sanity.get("expected_high_detected_fraction") or 0.0)
+    if best_rank < _marker_status_rank("consistent"):
+        return False
+    if win_rank >= _marker_status_rank("partial") and best_fraction <= win_fraction + 0.10:
+        return False
+    return True
+
+
+def _pick_selected(
+    hypotheses,
+    cen=None,
+    compartment_confident=False,
+    sample_tpm_by_symbol: Mapping[str, float] | None = None,
+):
     """Select the report label from the selectable hypotheses (replaces the centroid veto, #98/#99).
 
     Authority first: among the selectable hypotheses the highest ``selection_priority`` (class_rank,
@@ -5040,8 +5717,19 @@ def _pick_selected(hypotheses, cen=None, compartment_confident=False):
             best, best_rho = row, rho
     # Defer to the best-correlated hypothesis only when BOTH it and the authority winner are
     # centroid-visible and the margin is clear — otherwise keep the authority winner.
-    if (best is not winner and win_rho == win_rho and best_rho == best_rho
-            and best_rho - win_rho >= _CENTROID_CORROBORATION_MARGIN):
+    if (
+        best is not winner
+        and win_rho == win_rho
+        and best_rho == best_rho
+        and best_rho - win_rho >= _CENTROID_CORROBORATION_MARGIN
+        and _centroid_subtype_override_allowed(
+            winner=winner,
+            best=best,
+            win_rho=win_rho,
+            best_rho=best_rho,
+            sample_tpm_by_symbol=sample_tpm_by_symbol,
+        )
+    ):
         return best
     return winner
 
@@ -5102,6 +5790,11 @@ def select_report_scope_from_evidence(
 
     hypotheses: dict[str, CancerTypeEvidence] = {}
     _add_broad_rna_features(hypotheses, analysis)
+    _add_learned_expression_classifier_features(
+        hypotheses,
+        sample_tpm_by_symbol,
+        analysis,
+    )
     _add_coarse_composition_reference_features(
         hypotheses,
         sample_tpm_by_symbol,
@@ -5145,7 +5838,12 @@ def select_report_scope_from_evidence(
     _cen, _cen_confident = _centroid_and_confidence(sample_tpm_by_symbol)
 
     rows = list(hypotheses.values())
-    selected = _pick_selected(hypotheses, cen=_cen, compartment_confident=_cen_confident)
+    selected = _pick_selected(
+        hypotheses,
+        cen=_cen,
+        compartment_confident=_cen_confident,
+        sample_tpm_by_symbol=sample_tpm_by_symbol,
+    )
 
     primary_context = _top_code(analysis)
     primary_context_support = _candidate_support_by_code(analysis).get(
