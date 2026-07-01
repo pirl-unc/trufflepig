@@ -128,14 +128,6 @@ TCGA_MEDIAN_PURITY = {
 # aneuploidy-purity calibration so a missing type isn't mistakenly treated as a pure (purity=1) reference.
 _DEFAULT_MEDIAN_PURITY = round(sum(TCGA_MEDIAN_PURITY.values()) / len(TCGA_MEDIAN_PURITY), 3)
 
-# A niche / pediatric cohort (NBL, ...) can have a strong cross-cohort SIGNATURE but NO purity
-# REFERENCE (no pan-cancer TPM column, no local purity panel). The candidate loop used to DROP such a
-# code outright, silently excluding it from ever being called even when its signature is the single
-# best (NBL scored 0.98 yet never reached the candidate list -> the call defaulted to an adult
-# look-alike). We instead let a CLEARLY-EXPRESSED niche signature compete with a neutral purity; this
-# floor keeps faint family-expansion codes out (the signature still gates the winner).
-_NICHE_CANDIDATE_MIN_SIGNATURE = 0.6
-
 _HOST_SITE_BACKGROUND_TISSUES = {
     "bone_marrow",
     "lymph_node",
@@ -1803,9 +1795,14 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
         from .purity_calibration import _type_reference_sample
         aneu_ref = next((c for c in (reference_code, cancer_code, _broad_purity_fallback_code(cancer_code))
                          if c and _type_reference_sample(c) is not None), None)
+        # ``aneu_ref`` may be a subtype (its reference resolves via the parent), which has no own
+        # median prior — fall back to the broad parent's median, never the global default for a
+        # subtype whose parent has one.
+        aneu_median = (TCGA_MEDIAN_PURITY.get(aneu_ref)
+                       or TCGA_MEDIAN_PURITY.get(_broad_purity_fallback_code(aneu_ref))
+                       or _DEFAULT_MEDIAN_PURITY) if aneu_ref else _DEFAULT_MEDIAN_PURITY
         aneu = None if (conflict or not aneu_ref) else aneuploidy_purity(
-            tpm, aneu_ref, median_purity=TCGA_MEDIAN_PURITY.get(aneu_ref, _DEFAULT_MEDIAN_PURITY),
-            bulk_amplitude=bulk_amp)
+            tpm, aneu_ref, median_purity=aneu_median, bulk_amplitude=bulk_amp)
         return {"mode": r["selected_mode"], "compartment": r["lineage"]["compartment"],
                 "residual_fraction": r["purity"]["residual_fraction"],
                 "bulk_aneuploidy_amplitude": bulk_amp,
@@ -1822,18 +1819,26 @@ def _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=No
 
 
 def _reference_free_purity(sample_tpm, cancer_code, lineage_compartment, expr_compartment,
-                           estimate_invalid_lineage):
+                           estimate_invalid_lineage, include_decomposition=True):
     """Purity result for a type with NO pan-cancer reference (heme/rare/pediatric).
 
     Signature / lineage / ESTIMATE purity all need a per-type reference; without one we return the
     lineage DECOMPOSITION — which uses HPA cell templates, not a per-type reference — as the purity
     signal: ``residual_fraction`` (monotone with purity, NOT absolute) + heme sub-lineage + aneuploidy.
-    The cancer type is explicit here (this path is reference_optional), so the code is trusted (no
-    lineage override). Shaped like the normal result, with reference-dependent fields set to None.
+    The code is trusted here (no lineage override). Shaped like the normal result, with
+    reference-dependent fields set to None.
+
+    ``include_decomposition`` mirrors the normal path: the decomposition is the only signal here but
+    is expensive, so during candidate RANKING (False) it is skipped and purity is a neutral prior —
+    the winner's real ``residual_fraction`` is computed once downstream (``analyze_sample``).
     """
-    dc = _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
-                                         allow_lineage_override=False)
-    overall = dc.get("residual_fraction") if isinstance(dc, dict) else None
+    if include_decomposition:
+        dc = _decomposition_purity_component(sample_tpm, cancer_code, expr_compartment=expr_compartment,
+                                             allow_lineage_override=False)
+        overall = dc.get("residual_fraction") if isinstance(dc, dict) else None
+    else:
+        dc = None
+        overall = _DEFAULT_MEDIAN_PURITY
     # Shape-COMPATIBLE with the normal purity result so report/plot consumers never crash: report
     # consumers read components["stromal"/"immune"]["enrichment"] and overall_lower/upper directly
     # (and do arithmetic on them). The reference-dependent fields are absent for a reference-free type,
@@ -1861,7 +1866,7 @@ def _reference_free_purity(sample_tpm, cancer_code, lineage_compartment, expr_co
             "expression_lineage_compartment": expr_compartment,
             "lineage_compartment": lineage_compartment,
             "decomposition": dc,
-            "integration": {"source": "decomposition"},
+            "integration": {"source": "decomposition" if dc is not None else "neutral_prior"},
         },
         "note": "No pan-cancer reference for this cancer type — purity is the lineage-decomposition "
                 "residual fraction (heme/rare-safe; monotone with purity, NOT calibrated to absolute). "
@@ -1891,8 +1896,15 @@ def _purity_reconciliation(overall, decomposition, estimate_value):
 
 
 def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decomposition=True,
-                          reference_optional=False, expr_lineage=None):
+                          expr_lineage=None):
     """Estimate tumor purity from expression data.
+
+    One purity mode with a clearly stated dependency on a reference: when the cancer type has a
+    pan-cancer (or parent / deconvolved) expression reference, purity is the reference-calibrated
+    signature / lineage / ESTIMATE estimate; when it has none (rare / pediatric / heme types like
+    NUTM, NBL, ATRT — there is no such reference to build), purity falls back to the reference-free
+    lineage-decomposition signal. The fallback is automatic and never raises, so auto-detection
+    (which cannot know the detected type has no reference) and explicit calls behave identically.
 
     Parameters
     ----------
@@ -1943,13 +1955,13 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     try:
         reference_context = _resolve_purity_reference(cancer_code, ref_by_sym)
     except ValueError:
-        # Heme/rare/pediatric types have no pan-cancer reference; the signature/lineage/ESTIMATE
-        # purity all need one. With reference_optional, fall back to the lineage DECOMPOSITION (which
-        # uses HPA cell templates, not a per-type reference) so these types still get a purity signal.
-        if not reference_optional:
-            raise
+        # No pan-cancer reference for this type (rare / pediatric / heme) — fall back to the
+        # reference-free lineage-decomposition signal. Always graceful (see the function docstring):
+        # the caller, especially auto-detection, cannot know in advance that the type lacks a
+        # reference, so a missing reference must never raise.
         return _reference_free_purity(sample_tpm, cancer_code, lineage_compartment,
-                                      expr_compartment, estimate_invalid_lineage)
+                                      expr_compartment, estimate_invalid_lineage,
+                                      include_decomposition=include_decomposition)
     reference_cancer_code = reference_context["reference_cancer_code"]
     ref_expr = reference_context["ref_expr"]
     reference_expression_source = reference_context["reference_expression_source"]
@@ -4034,39 +4046,13 @@ def rank_cancer_type_candidates(
     top_family_label = hard_ranked_families[0][0] if hard_ranked_families else None
     non_penalizing_families = soft_families
     for code in ordered_codes:
-        # A candidate pulled in by family-expansion may lack a scoreable purity
-        # reference (e.g. a deconvolved-only subtype with no pan-cancer column and
-        # no broad fallback). Skip *only that* case rather than abort the ranking —
-        # it simply doesn't compete. Re-raise any other ValueError so a genuine bug
-        # isn't silently swallowed.
-        try:
-            # Rank on scalar/signature/lineage purity only. The lineage decomposition isn't used for
-            # ranking and is expensive per candidate — it's computed once for the winner (analyze_sample).
-            purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code, include_decomposition=False,
-                                                  expr_lineage=_ranker_expr_lineage)
-        except ValueError as exc:
-            if "no pan-cancer TPM column" in str(exc) or (
-                "no direct purity marker panel" in str(exc)
-            ):
-                # No purity REFERENCE for this code. Drop a faint candidate, but rescue a
-                # clearly-expressed niche signature so it still COMPETES. Route it through the
-                # existing reference-free path (lineage-decomposition residual as the purity signal),
-                # which returns a shape-complete result so the winner finalises correctly. Fixes niche
-                # types (NBL) being excluded from candidacy entirely despite a top signature.
-                if (
-                    float(signature_score_map.get(code, 0.0))
-                    < _NICHE_CANDIDATE_MIN_SIGNATURE
-                ):
-                    continue
-                purity_result = estimate_tumor_purity(
-                    df_gene_expr,
-                    cancer_type=code,
-                    include_decomposition=False,
-                    expr_lineage=_ranker_expr_lineage,
-                    reference_optional=True,
-                )
-            else:
-                raise
+        # Rank on scalar/signature/lineage purity only. The lineage decomposition isn't used for
+        # ranking and is expensive per candidate — it's computed once for the winner (analyze_sample).
+        # estimate_tumor_purity falls back to the reference-free decomposition signal for types with
+        # no pan-cancer reference (NUTM / NBL / heme), so every admitted candidate is scoreable —
+        # a faint one simply ranks low on its support score rather than being dropped here.
+        purity_result = estimate_tumor_purity(df_gene_expr, cancer_type=code, include_decomposition=False,
+                                              expr_lineage=_ranker_expr_lineage)
         purity_estimate = float(purity_result["overall_estimate"] or 0.0)
         broad_signature_score = float(signature_score_map.get(code, 0.0))
         signature_score = broad_signature_score
@@ -4363,8 +4349,10 @@ def rank_cancer_type_candidates(
 
             # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
             # above out-of-compartment ones (stable -> within-tier order preserved).
+            # Passes the centroid's top cohort so the restriction abstains when its own
+            # best single match is out-of-compartment (the aggregate is then inconsistent).
             rows, compartment_restricted = restrict_rows_to_compartment(
-                rows, cen_coarse, comp["confident"]
+                rows, cen_coarse, comp["confident"], centroid_top_code=cen_top_code
             )
 
             # Hallmark veto: when the compartment call is confident, drop
@@ -4580,8 +4568,12 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         # per candidate); compute it once for the winning type so the report still includes it.
         if isinstance(purity, dict) and (purity.get("components") or {}).get("decomposition") is None:
             comps = dict(purity.get("components") or {})
+            # Pass the resolved reference code (the parent cohort for a subtype, e.g. LUAD for
+            # LUAD_EGFR) so the aneuploidy calibration anchors to the SAME reference the rest of the
+            # purity estimate used — not the subtype code, which has no own A_ref or median prior.
             dc = _decomposition_purity_component(sample_tpm, cancer_code,
-                                                 allow_lineage_override=(cancer_type is None))
+                                                 allow_lineage_override=(cancer_type is None),
+                                                 reference_code=purity.get("reference_cancer_type"))
             comps["decomposition"] = dc
             # Use the GATED estimate (None when gated for lineage) so a gated-out ESTIMATE can't flag.
             gated_est = None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")

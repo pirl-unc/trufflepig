@@ -2,31 +2,50 @@ import pandas as pd
 from types import SimpleNamespace
 
 
-def test_centroid_veto_exempts_direct_fusion_but_vetoes_expression():
-    """The whole-profile-EXPRESSION centroid veto must not override a definitive MOLECULAR call.
-    A ``direct_fusion`` hypothesis (e.g. EWSR1-FLI1 -> SARC_EWS) stays selectable even when the
-    centroid prefers an expression sibling; an expression-derived sibling (SARC_DDLPS via its
-    MDM2/CDK4 amplicon) is still vetoed. Guards the #98 fusion-override regression."""
-    from trufflepig.cancer_type_evidence import (
-        CancerTypeEvidence,
-        _apply_centroid_fine_subtype_veto,
-    )
+def _selectable(code, selected_by, priority):
+    from trufflepig.cancer_type_evidence import CancerTypeEvidence
 
-    fusion = CancerTypeEvidence(cancer_type="SARC_EWS")
-    fusion.can_select_report_label = True
-    fusion.selected_by = "direct_fusion"
-    marker = CancerTypeEvidence(cancer_type="SARC_DDLPS")
-    marker.can_select_report_label = True
-    marker.selected_by = "local_expression_reference"
+    h = CancerTypeEvidence(cancer_type=code)
+    h.can_select_report_label = True
+    h.selected_by = selected_by
+    h.selection_priority = priority
+    return h
+
+
+def test_pick_selected_definitive_fusion_is_never_overridden_by_centroid():
+    """A definitive molecular call (a detected fusion) outranks whole-profile expression and the
+    centroid corroboration must never override it. Guards the #98 fusion-override regression."""
+    from trufflepig.cancer_type_evidence import _pick_selected
+
+    fusion = _selectable("SARC_EWS", "direct_fusion", (3, 1.0, 6))
+    marker = _selectable("SARC_DDLPS", "local_expression_reference", (2, 0.9, 4))
     hyps = {"SARC_EWS": fusion, "SARC_DDLPS": marker}
+    # Even though the centroid prefers SARC_DDLPS's sibling cohorts, the fusion call stands.
+    cen = pd.Series({"SARC_OS": 0.95, "SARC_DDLPS": 0.90, "SARC_EWS": 0.70})
+    assert _pick_selected(hyps, cen=cen, compartment_confident=True).cancer_type == "SARC_EWS"
 
-    # centroid clearly prefers SARC_OS over both -> resolve_fine_subtype(SARC, cen, X) == SARC_OS != X
-    cen = pd.Series({"SARC_OS": 0.95, "SARC_UPS": 0.79, "SARC_EWS": 0.80, "SARC_DDLPS": 0.78})
-    _apply_centroid_fine_subtype_veto(hyps, cen)
 
-    assert fusion.can_select_report_label is True   # direct_fusion exempt — expression never overrides it
-    assert marker.can_select_report_label is False  # expression-derived sibling IS vetoed
-    assert marker.label_status == "blocked"
+def test_pick_selected_centroid_corroborates_among_selectable():
+    """At a confident compartment the centroid re-ranks the SELECTABLE hypotheses, deferring to the
+    one it matches best — the salivary-ADCC vs NUT-carcinoma case: ADCC wins on marker authority but
+    the whole profile is NUTM. Only acts on a clear margin and only on hypotheses a selector proposed
+    (so it can't promote a contaminant), and only when the compartment call is confident."""
+    from trufflepig.cancer_type_evidence import _pick_selected
+
+    def hyps():
+        return {
+            "ADCC": _selectable("ADCC", "local_expression_reference", (2, 0.8, 4)),
+            "NUTM": _selectable("NUTM", "rare_marker", (1, 0.9, 2)),
+        }
+
+    # ADCC wins on authority (higher class_rank); the centroid clearly prefers NUTM (0.85 vs 0.82).
+    cen = pd.Series({"NUTM": 0.85, "ADCC": 0.82})
+    assert _pick_selected(hyps(), cen=cen, compartment_confident=True).cancer_type == "NUTM"
+    # Not confident → defer to marker authority (the centroid is review-only on an unsure compartment).
+    assert _pick_selected(hyps(), cen=cen, compartment_confident=False).cancer_type == "ADCC"
+    # Within-margin near-tie → keep the authority winner (curation/markers break it, not the centroid).
+    near = pd.Series({"NUTM": 0.826, "ADCC": 0.82})
+    assert _pick_selected(hyps(), cen=near, compartment_confident=True).cancer_type == "ADCC"
 
 
 def _analysis(*rows):

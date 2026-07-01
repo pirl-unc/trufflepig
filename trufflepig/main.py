@@ -2837,7 +2837,9 @@ def _analyze_body(run: AnalyzeRun):
         if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
             effective_purity = best_decomp.purity_result
             if isinstance(effective_purity, dict):
-                analysis["purity"] = effective_purity
+                # Single source of truth: analysis['purity'] and the winner's candidate_trace row
+                # become the same object, so the in-place lineage-panel override below stays in sync.
+                _set_analysis_purity(analysis, effective_purity)
                 purity = analysis["purity"]
 
         # Propagate a lineage-panel purity override back into
@@ -5136,6 +5138,24 @@ def _report_scope_cancer_type(cancer_type):
     return None
 
 
+def _set_analysis_purity(analysis, purity, code=None):
+    """Single source of truth for the winner's purity.
+
+    Writes ``analysis['purity']`` and the matching ``candidate_trace`` row's ``purity_result`` to
+    the SAME object in one step. The winner's purity lives in both places — ``analysis['purity']``
+    is what reports read, and ``decompose_sample`` reuses the candidate row — so every write must
+    update both or a later consumer reads a stale duplicate (the reroute-desync bug class). Routing
+    all purity writes through here makes that impossible by construction. ``code`` selects the row
+    (defaults to the current call); pass it explicitly when writing before ``cancer_type`` is set.
+    """
+    analysis["purity"] = purity
+    target = str(code or analysis.get("cancer_type") or "")
+    for row in analysis.get("candidate_trace") or []:
+        if str(row.get("code")) == target:
+            row["purity_result"] = purity
+            break
+
+
 def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
     """When the cancer-type EVIDENCE selector refines the call to a DIFFERENT lineage than the
     pre-evidence ranking winner, recompute the WHOLE purity for the refined call.
@@ -5164,16 +5184,13 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
         from .tumor_purity import estimate_tumor_purity
 
         # full recompute for the refined call → consistent gating / overall / compartment / decomposition
-        rerouted = estimate_tumor_purity(df_expr, cancer_type=refined_code, reference_optional=True)
-        analysis["purity"] = rerouted
-        # Keep the candidate_trace row for the refined call in sync. ``decompose_sample`` is later
-        # handed ``candidate_rows=analysis['candidate_trace']`` and reuses the matching row's
-        # ``purity_result``; left stale (the pre-evidence ranking's purity), it would overwrite the
-        # rerouted ``analysis['purity']`` and the report would lose the refined lineage/gating.
-        for row in analysis.get("candidate_trace") or []:
-            if str(row.get("code")) == str(refined_code):
-                row["purity_result"] = rerouted
-                break
+        # (the refined call can be a reference-free rare type; estimate_tumor_purity degrades gracefully)
+        rerouted = estimate_tumor_purity(df_expr, cancer_type=refined_code)
+        # Single source of truth: write analysis['purity'] AND the refined call's candidate_trace row
+        # together. ``decompose_sample`` is later handed ``candidate_rows`` and reuses that row's
+        # ``purity_result``; left stale it would overwrite the rerouted purity and the report would
+        # lose the refined lineage/gating. (cancer_type isn't set to refined_code yet here → pass it.)
+        _set_analysis_purity(analysis, rerouted, code=refined_code)
     except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
         _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
 

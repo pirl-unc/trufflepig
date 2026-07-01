@@ -35,10 +35,16 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "primary_expression_match": 1,
 }
 
-# Selectors the whole-profile-expression centroid veto must NOT override: a definitive molecular
-# call (a detected fusion) outranks expression, which can be contaminated / low-purity. See
-# ``_apply_centroid_fine_subtype_veto``.
-_CENTROID_VETO_EXEMPT_SELECTORS: frozenset[str] = frozenset({"direct_fusion"})
+# Definitive molecular evidence: a detected fusion is diagnostic and outranks whole-profile
+# expression (which can be contaminated / low-purity), so the centroid corroboration in
+# ``_pick_selected`` never overrides it.
+_DEFINITIVE_SELECTORS: frozenset[str] = frozenset({"direct_fusion"})
+
+# Whole-profile centroid corroboration margin (Spearman rho). At a CONFIDENT compartment call the
+# centroid re-ranks the already-selectable hypotheses, preferring one it out-correlates the authority
+# winner by at least this much — enough to flip a marker tie (NUT carcinoma over the salivary ADCC
+# look-alike; osteosarcoma over the MDM2-amplicon liposarcoma) while leaving near-ties to the markers.
+_CENTROID_CORROBORATION_MARGIN = 0.015
 
 # Thresholds for the lineage_panel selector — gates when a
 # trufflepig.lineage_panels panel result is strong enough to
@@ -4988,92 +4994,75 @@ def _build_staged_evidence_graph(
     }
 
 
-def _apply_centroid_fine_subtype_veto(
-    hypotheses: dict[str, "CancerTypeEvidence"],
-    cen,
-) -> None:
-    """Strip report-label selectability from a fine subtype the whole-profile centroid rejects (#98).
+def _pick_selected(hypotheses, cen=None, compartment_confident=False):
+    """Select the report label from the selectable hypotheses (replaces the centroid veto, #98/#99).
 
-    The curated marker / local-expression-reference path can nominate a fine subtype the
-    whole-transcriptome centroid clearly contradicts — the canonical case is an MDM2/CDK4
-    amplicon scoring ``SARC_DDLPS`` (a degenerate "junk-drawer" reference) on a sample whose
-    whole profile is unmistakably ``SARC_OS`` (osteosarcoma). The centroid is the robust,
-    purity-/contaminant-resistant signal here, so when it prefers a SIBLING of a candidate's
-    broad family by a clear margin (``resolve_fine_subtype``), we drop that candidate's
-    selectability and record the reason. The report then falls back to the centroid-anchored
-    ``winning_subtype`` (which the ranker already resolved the same way) or the broad context,
-    instead of committing to the centroid-contradicted subtype. ``cen`` is the precomputed
-    :func:`centroid_correlations` Series. Only a fine subtype with its OWN reference medoid is
-    judged (so the centroid can actually see it); fail-open on any error.
+    Authority first: among the selectable hypotheses the highest ``selection_priority`` (class_rank,
+    then strength, then the source tiebreak; ascending ``cancer_type`` for determinism) wins, and a
+    definitive molecular call (a detected fusion) outranks everything else.
 
-    AUTHORITY: the centroid is whole-profile EXPRESSION, so it may only override OTHER
-    expression-derived selectors — never a definitive molecular call. A ``direct_fusion``
-    hypothesis (the actual detected driver, e.g. EWSR1-FLI1 -> SARC_EWS) is diagnostic and
-    outranks expression (which can be contaminated / low-purity), so it is exempt.
+    Then the whole-profile centroid CORROBORATES: when the compartment call is confident it re-ranks
+    ONLY the already-selectable hypotheses, deferring to the one it best matches if that
+    out-correlates the authority winner by ``_CENTROID_CORROBORATION_MARGIN``. This tips a marker tie
+    toward the cohort the whole transcriptome actually looks like (NUT carcinoma over the salivary
+    ADCC look-alike; osteosarcoma over the MDM2-amplicon liposarcoma) WITHOUT proposing a type no
+    selector supported — so it can never promote a tissue contaminant the markers never backed. It
+    replaces the centroid veto + its snapshot / conditional-undo + cross-lineage-flip guard.
     """
-    if cen is None or len(cen) == 0:
-        return
-    try:
-        from trufflepig.cancer_ontology import registry_parent_code
+    sel = [row for row in hypotheses.values() if row.can_select_report_label]
+    if not sel:
+        return None
 
-        from .cancer_type_centroid import resolve_fine_subtype
-    except Exception:  # noqa: BLE001 — never let the veto crash report scoping
-        return
-    cen_index = set(cen.index)
-    for code, hyp in hypotheses.items():
-        if not hyp.can_select_report_label or code not in cen_index:
-            continue
-        if hyp.selected_by in _CENTROID_VETO_EXEMPT_SELECTORS:
-            continue  # definitive molecular evidence — expression must not override it
-        parent = registry_parent_code(code)
-        if not parent:  # broad type, not a fine subtype — nothing to re-resolve
-            continue
-        preferred = resolve_fine_subtype(parent, cen, current_subtype=code)
-        if preferred and preferred != code:
-            hyp.can_select_report_label = False
-            hyp.label_status = "blocked"
-            hyp.blocking_reasons = tuple(hyp.blocking_reasons) + (
-                f"whole-profile centroid prefers {preferred} over {code}",
-            )
+    def _authority_key(row):
+        return (-row.selection_priority[0], -row.selection_priority[1],
+                -row.selection_priority[2], row.cancer_type)
+
+    # Definitive molecular evidence (a detected fusion) is never overridden by expression.
+    definitive = [row for row in sel if row.selected_by in _DEFINITIVE_SELECTORS]
+    if definitive:
+        return min(definitive, key=_authority_key)
+
+    winner = min(sel, key=_authority_key)
+    if cen is None or not compartment_confident:
+        return winner
+
+    def _rho(code):
+        try:
+            return float(cen.get(code, float("nan")))
+        except (TypeError, ValueError):
+            return float("nan")
+
+    win_rho = _rho(winner.cancer_type)
+    best, best_rho = winner, win_rho
+    for row in sel:
+        rho = _rho(row.cancer_type)
+        if rho == rho and (best_rho != best_rho or rho > best_rho):  # rho == rho skips NaN
+            best, best_rho = row, rho
+    # Defer to the best-correlated hypothesis only when BOTH it and the authority winner are
+    # centroid-visible and the margin is clear — otherwise keep the authority winner.
+    if (best is not winner and win_rho == win_rho and best_rho == best_rho
+            and best_rho - win_rho >= _CENTROID_CORROBORATION_MARGIN):
+        return best
+    return winner
 
 
-def _centroid_and_compartment_for_veto(sample_tpm_by_symbol: Mapping[str, float]):
-    """``(centroid_correlations Series, compartment_call dict)`` for the veto, or ``(None, None)``.
+def _centroid_and_confidence(sample_tpm_by_symbol: Mapping[str, float]):
+    """``(centroid_correlations Series, compartment-confident bool)`` for selection, or ``(None, False)``.
 
-    One whole-profile centroid pass, shared by the fine-subtype veto and its lineage-flip
-    guard. Fail-open (returns ``(None, None)``) so the veto simply does not run on any error.
+    One whole-profile centroid pass, used by ``_pick_selected`` to corroborate the selectable
+    hypotheses. Fail-open (``(None, False)``) so selection simply falls back to authority priority
+    on any error.
     """
     if not sample_tpm_by_symbol:
-        return None, None
+        return None, False
     try:
         from .cancer_type_centroid import centroid_correlations, compartment_call
 
         cen = centroid_correlations(sample_tpm_by_symbol)
         comp = compartment_call(sample_tpm_by_symbol, _corr=cen)
-        return cen, comp
+        return cen, bool(comp.get("confident"))
     except Exception:  # noqa: BLE001
-        return None, None
-
-
-def _veto_lineage_flip_allowed(pre, post, comp) -> bool:
-    """May the centroid veto move the report scope from ``pre`` to ``post``?
-
-    Always yes within a broad lineage (a same-lineage fine refinement). Across lineages,
-    yes only when ``post``'s broad lineage is the one the whole-profile compartment call
-    points at — so the centroid that demoted ``pre`` is also the authority for the new
-    lineage. Fail-open to allowed on any lookup error (the centroid already chose ``post``).
-    """
-    try:
-        from .cancer_type_ontology import _BROAD_TO_COMPARTMENT, broad_lineage
-
-        pre_lin = broad_lineage(pre.cancer_type)
-        post_lin = broad_lineage(post.cancer_type)
-        if pre_lin == post_lin:
-            return True
-        compartment = (comp or {}).get("compartment")
-        return bool(compartment) and _BROAD_TO_COMPARTMENT.get(post_lin) == compartment
-    except Exception:  # noqa: BLE001
-        return True
+        return None, False
 
 
 def select_report_scope_from_evidence(
@@ -5152,58 +5141,11 @@ def select_report_scope_from_evidence(
             sample_tpm_by_symbol,
         )
 
-    def _pick_selected(hyps):
-        # Tie-break: highest selection_priority first (class_rank, then strength, then
-        # tiebreak slot), then *ascending* cancer_type alphabetical for determinism. The
-        # previous form ``sort((priority, cancer_type), reverse=True)`` flipped both
-        # fields, producing Z-before-A on ties (e.g. UCS over THCA at equal priority).
-        sel = [row for row in hyps.values() if row.can_select_report_label]
-        if not sel:
-            return None
-        sel.sort(key=lambda row: (-row.selection_priority[0], -row.selection_priority[1],
-                                  -row.selection_priority[2], row.cancer_type))
-        return sel[0]
-
-    # Whole-profile centroid veto (#98): a curated marker / local-reference hypothesis must
-    # not commit the report to a fine subtype the whole transcriptome contradicts (SARC_OS
-    # mislabelled SARC_DDLPS via its MDM2/CDK4 amplicon). Applied before selection so a
-    # vetoed subtype drops out of the candidate set and the report falls back to the
-    # centroid-anchored fine label.
-    #
-    # The veto may CHANGE the report's broad lineage, but only TOWARD the whole-profile
-    # compartment call. A demotion that exposes a different-lineage look-alike is allowed
-    # iff that look-alike's lineage is the one the centroid's compartment aggregation points
-    # at — the same whole-profile signal, now adjudicating the cross-lineage case (e.g. a
-    # colon carcinoma mislabelled SARC_DDLPS whose compartment is Epithelial flips to STAD).
-    # Otherwise it is reverted: on a lineage-ambiguous sample (a low-quality sarcoma whose
-    # weak centroid grazes the embryonal cohorts) demoting SARC_DDLPS would expose MBL while
-    # the compartment still reads Sarcoma — strictly worse than the in-lineage baseline.
-    _cen, _comp = _centroid_and_compartment_for_veto(sample_tpm_by_symbol)
-    _pre_veto = _pick_selected(hypotheses)
-    # Snapshot EVERY field the veto mutates, so a disallowed cross-lineage revert restores the
-    # hypothesis exactly — otherwise it is emitted with can_select_report_label=True but a stale
-    # label_status='blocked' and a leftover centroid-veto blocking reason.
-    _veto_snapshot = {
-        c: (h.can_select_report_label, h.label_status, h.blocking_reasons)
-        for c, h in hypotheses.items()
-    }
-    _apply_centroid_fine_subtype_veto(hypotheses, _cen)
-    _post_veto = _pick_selected(hypotheses)
-    if (
-        _pre_veto is not None
-        and _post_veto is not None
-        and _pre_veto is not _post_veto
-        and not _veto_lineage_flip_allowed(_pre_veto, _post_veto, _comp)
-    ):
-        for c, h in hypotheses.items():  # disallowed cross-lineage flip — fully restore pre-veto state
-            (
-                h.can_select_report_label,
-                h.label_status,
-                h.blocking_reasons,
-            ) = _veto_snapshot[c]
+    # One whole-profile centroid pass, used to corroborate the selectable hypotheses below.
+    _cen, _cen_confident = _centroid_and_confidence(sample_tpm_by_symbol)
 
     rows = list(hypotheses.values())
-    selected = _pick_selected(hypotheses)
+    selected = _pick_selected(hypotheses, cen=_cen, compartment_confident=_cen_confident)
 
     primary_context = _top_code(analysis)
     primary_context_support = _candidate_support_by_code(analysis).get(

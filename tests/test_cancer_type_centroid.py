@@ -267,6 +267,13 @@ def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
             "scores": pd.Series({"Epithelial": 0.90, "Sarcoma": 0.70}),
         },
     )
+    # The restriction abstains when the centroid's single best cohort disagrees with the
+    # (here forced) compartment, so stub the centroid to an Epithelial-topped series — a
+    # self-consistent confident Epithelial call that legitimately floats COAD over SARC.
+    monkeypatch.setattr(
+        ctc, "centroid_correlations",
+        lambda sample, restrict_to=None: pd.Series({"COAD": 0.90, "SARC": 0.70}),
+    )
     monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
 
     rows = rank_cancer_type_candidates(

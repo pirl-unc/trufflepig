@@ -511,7 +511,7 @@ def in_compartment(code, compartment):
     return compartment in compartments
 
 
-def restrict_rows_to_compartment(rows, compartment, confident):
+def restrict_rows_to_compartment(rows, compartment, confident, centroid_top_code=None):
     """Stage-1 leaf restriction for the ranker's candidate rows.
 
     Annotates every row with ``compartment_in_set`` and, when the compartment call
@@ -520,6 +520,14 @@ def restrict_rows_to_compartment(rows, compartment, confident):
     leaves above out-of-compartment ones. Stable -> within each tier the incoming
     order (the marker-panel support ranking) is preserved untouched, so the only
     reorder is across the compartment boundary — exactly the saturation mis-calls.
+
+    Abstains when the call is internally inconsistent: if ``centroid_top_code`` (the
+    single best-correlating cohort) is itself OUT of ``compartment``, the coarse
+    top-K-mean aggregation disagrees with the strongest single match, so the
+    restriction would demote the cohort the whole profile looks most like (e.g. the
+    PCPG median: PCPG is centroid #1, yet the tightly-clustered NBL cohorts pull the
+    aggregate to Embryonal and would float NBL above PCPG). The aggregate is only
+    trusted to restrict when its own top hit agrees with it.
 
     Never restricts to an empty set: if every candidate is out-of-compartment (e.g. a
     caller-constrained set), nothing is reordered (and the disagreement stays visible
@@ -532,9 +540,11 @@ def restrict_rows_to_compartment(rows, compartment, confident):
         r["compartment_in_set"] = bool(
             compartment is None or in_compartment(r["code"], compartment)
         )
+    top_hit_agrees = centroid_top_code is None or in_compartment(centroid_top_code, compartment)
     restricted = bool(
         compartment is not None
         and confident
+        and top_hit_agrees
         and any(not r["compartment_in_set"] for r in rows)
         and any(r["compartment_in_set"] for r in rows)
     )

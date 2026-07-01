@@ -735,11 +735,18 @@ def estimate_tumor_expression_ranges(
     # infiltrate for a nodal met (#13). Uniform median falls back to
     # the default curated set.
     effective_tme_tissues = set(_TME_TISSUES)
+    host_tissues: set = set()
     if met_site:
-        effective_tme_tissues |= MET_SITE_TISSUE_AUGMENTATION.get(met_site, set())
+        host_tissues = MET_SITE_TISSUE_AUGMENTATION.get(met_site, set())
+        effective_tme_tissues |= host_tissues
     tme_cols = [
         c for c in ntpm_nonrepro if c.removesuffix("_nTPM") in effective_tme_tissues
     ]
+    # The biopsy's host organ is the DOMINANT background, not one tissue among many — a
+    # median over the curated TME set would dilute a host-specific gene (ALB in a liver met
+    # sits among ~10 immune/stromal zeros, so the median stays ~0 and ALB is mis-attributed to
+    # the tumor). So a gene's background is floored below by its host-organ expression (#13).
+    host_tme_cols = [c for c in tme_cols if c.removesuffix("_nTPM") in host_tissues]
 
     # --- HK-normalize reference columns ---
     # Each column (nTPM tissue or TCGA cohort TPM) gets its own HK median.
@@ -1088,6 +1095,16 @@ def estimate_tumor_expression_ranges(
         tme_fold_lo = float(np.percentile(tme_folds, 25))
         tme_fold_med = float(np.median(tme_folds))
         tme_fold_hi = float(np.percentile(tme_folds, 75))
+        # Floor the background by the met host organ (see host_tme_cols) — a median can't
+        # represent the dominant host tissue from a single column.
+        if host_tme_cols and not decomp_backgrounds:
+            host_fold = max(
+                (float(ref_dedup.loc[symbol, col]) / ref_hk_medians[col]
+                 for col in host_tme_cols if ref_hk_medians.get(col, 0) > 0),
+                default=0.0,
+            )
+            tme_fold_med = max(tme_fold_med, host_fold)
+            tme_fold_hi = max(tme_fold_hi, host_fold)
 
         # TME-explainability flag: the max TPM this gene reaches in ANY
         # single healthy reference tissue. Used below to decide how

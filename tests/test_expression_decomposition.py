@@ -341,16 +341,19 @@ def test_lineage_decomposition_surfaced_in_evidence_graph():
 
 
 def test_reference_free_purity_for_heme_rare_types():
-    # heme/rare types lack a pan-cancer reference; with reference_optional=True they still get a
-    # lineage-decomposition purity (the default raises, preserving the candidate-ranking skip).
-    import pytest
+    # heme/rare types lack a pan-cancer reference — estimate_tumor_purity falls back to the
+    # lineage-decomposition purity for them by default (one mode; a missing reference never raises).
     from trufflepig.tumor_purity import estimate_tumor_purity
-    r = estimate_tumor_purity(_df("CLL"), cancer_type="CLL", reference_optional=True)
+    r = estimate_tumor_purity(_df("CLL"), cancer_type="CLL")
     assert r["overall_estimate"] is not None and 0.0 < r["overall_estimate"] <= 1.0
     assert r["components"]["decomposition"]["mode"] == "heme"
     assert r["components"]["integration"]["source"] == "decomposition"
-    with pytest.raises(ValueError):
-        estimate_tumor_purity(_df("CLL"), cancer_type="CLL")        # no reference, not optional → raises
+    # Ranking path: the expensive decomposition is skipped (include_decomposition=False) and purity is
+    # a neutral prior — the winner's real residual is computed downstream by analyze_sample.
+    ranked = estimate_tumor_purity(_df("CLL"), cancer_type="CLL", include_decomposition=False)
+    assert ranked["components"]["decomposition"] is None
+    assert ranked["components"]["integration"]["source"] == "neutral_prior"
+    assert ranked["overall_estimate"] is not None and 0.0 < ranked["overall_estimate"] <= 1.0
     # shape-COMPATIBLE with the normal result so report/plot consumers don't crash (Codex P1): they
     # read components['stromal'/'immune']['enrichment'] + overall_lower/upper directly and do arithmetic.
     comps = r["components"]
