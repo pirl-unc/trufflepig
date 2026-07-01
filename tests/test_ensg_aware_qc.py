@@ -13,6 +13,7 @@ Pins:
 """
 
 import pandas as pd
+import pytest
 
 from trufflepig.expression_qc import classify_gene_qc
 from trufflepig.expression_normalize import (
@@ -96,13 +97,14 @@ def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
                 "ENSG00000111640",
                 "ENSG00000136997",
             ],
-            # Symbols deliberately wrong; ENSG path should still match
-            # the HK panel by stable ID.
+            # Symbols deliberately wrong; the ENSG path should still match the HK panel by stable ID.
             "Symbol": ["NOT_ACTB", "NOT_GAPDH", "MYC"],
             "S_TPM": [100.0, 100.0, 200.0],
         }
     )
     out, record = tpm_to_housekeeping_normalized(df)
-    assert record["match_mode"] == "ensembl_id"
-    assert record["panel_present_in_table"] >= 2
+    # The symbols are deliberately wrong, so the two HK-panel genes (ACTB, GAPDH) can only have
+    # been found via their stable Ensembl IDs — oncoref's record reports them as present. If
+    # matching fell back to symbols, none would match (NOT_ACTB/NOT_GAPDH aren't HK; MYC isn't HK).
+    assert record["panel_genes_present"] >= 2
     assert record["applied"]

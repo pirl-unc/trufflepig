@@ -267,6 +267,13 @@ def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
             "scores": pd.Series({"Epithelial": 0.90, "Sarcoma": 0.70}),
         },
     )
+    # The restriction abstains when the centroid's single best cohort disagrees with the
+    # (here forced) compartment, so stub the centroid to an Epithelial-topped series — a
+    # self-consistent confident Epithelial call that legitimately floats COAD over SARC.
+    monkeypatch.setattr(
+        ctc, "centroid_correlations",
+        lambda sample, restrict_to=None: pd.Series({"COAD": 0.90, "SARC": 0.70}),
+    )
     monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
 
     rows = rank_cancer_type_candidates(
@@ -407,6 +414,24 @@ def test_in_compartment_sarcoma_is_broad():
     assert in_compartment("COAD", None)
 
 
+def test_in_compartment_honors_secondary_lineage():
+    """A polyphenotypic tumor is in-compartment for its SECONDARY program too, so a
+    confident compartment call that locks onto that program does not float a look-alike
+    above it. HEPB (embryonal blastoma, hepatic/epithelial differentiation) reads as
+    Epithelial -> it must NOT be demoted below LIHC."""
+    from trufflepig.cancer_type_centroid import in_compartment
+
+    # primary compartment still holds
+    assert in_compartment("HEPB", "Embryonal")
+    # secondary (epithelial/hepatic) program — the regression this fixes
+    assert in_compartment("HEPB", "Epithelial")
+    # synovial sarcoma is biphasic: in both Sarcoma and Epithelial
+    assert in_compartment("SARC_SYN", "Sarcoma")
+    assert in_compartment("SARC_SYN", "Epithelial")
+    # a unilineage carcinoma gains no spurious sarcoma membership
+    assert not in_compartment("COAD", "Sarcoma")
+
+
 def test_restrict_rows_floats_in_compartment_leaf_when_confident():
     """The core stage-1 behavior: a confident compartment call floats in-compartment
     leaves above out-of-compartment ones, preserving within-tier order (stable)."""
@@ -446,6 +471,68 @@ def test_restrict_rows_never_restricts_to_empty():
     out, restricted = restrict_rows_to_compartment(rows, "Sarcoma", confident=True)
     assert restricted is False
     assert [r["code"] for r in out] == ["COAD", "HNSC"]
+
+
+# --------------------------------------------------------------------------- #
+# Centroid-authoritative fine-subtype resolution (#98).
+# --------------------------------------------------------------------------- #
+def _sarc_corr(**rho):
+    """A centroid Series over SARC children with the given rhos (others low)."""
+    base = {
+        "SARC_OS": 0.5, "SARC_LMS": 0.5, "SARC_UPS": 0.5, "SARC_DDLPS": 0.5,
+        "SARC_LPS_UNSPEC": 0.5, "SARC_SYN": 0.5, "SARC_MPNST": 0.5,
+    }
+    base.update(rho)
+    return pd.Series(base)
+
+
+def test_resolve_fine_subtype_overrides_inferior_curated_label():
+    """The SARC_UPS-medoid case: the centroid clearly prefers SARC_UPS over the curated
+    SARC_LMS (>margin below), so the centroid overrides — even though UPS leads its
+    runner-up by less than the margin (a lead gate would wrongly abstain)."""
+    from trufflepig.cancer_type_centroid import resolve_fine_subtype
+
+    cc = _sarc_corr(SARC_UPS=0.964, SARC_LPS_UNSPEC=0.961, SARC_LMS=0.943)
+    assert resolve_fine_subtype("SARC", cc, current_subtype="SARC_LMS") == "SARC_UPS"
+
+
+def test_resolve_fine_subtype_keeps_competitive_curated_label():
+    """When the curated label is centroid-competitive with the best child (within margin),
+    curation breaks the near-tie — the centroid does not overrule it."""
+    from trufflepig.cancer_type_centroid import resolve_fine_subtype
+
+    # SARC_DDLPS curated, centroid top SARC_OS only 0.004 higher -> keep DDLPS.
+    cc = _sarc_corr(SARC_OS=0.960, SARC_DDLPS=0.956)
+    assert resolve_fine_subtype("SARC", cc, current_subtype="SARC_DDLPS") == "SARC_DDLPS"
+
+
+def test_resolve_fine_subtype_anchors_when_curated_label_wrong():
+    """The pfo004 case: curated SARC_DDLPS but the whole-profile centroid is unmistakably
+    SARC_OS — the centroid anchors the call onto SARC_OS."""
+    from trufflepig.cancer_type_centroid import resolve_fine_subtype
+
+    cc = _sarc_corr(SARC_OS=0.86, SARC_LMS=0.80, SARC_DDLPS=0.77)
+    assert resolve_fine_subtype("SARC", cc, current_subtype="SARC_DDLPS") == "SARC_OS"
+
+
+def test_resolve_fine_subtype_abstains_to_broad_without_curated_label():
+    """No curated label and the centroid can't separate its top child from the field ->
+    abstain to the broad call (None), never invent a fine label on noise."""
+    from trufflepig.cancer_type_centroid import resolve_fine_subtype
+
+    cc = _sarc_corr(SARC_OS=0.901, SARC_LMS=0.900)  # 0.001 lead, no curated label
+    assert resolve_fine_subtype("SARC", cc, current_subtype=None) is None
+    # but a clear lead does commit a fine label even with no curated anchor
+    cc2 = _sarc_corr(SARC_OS=0.95, SARC_LMS=0.90)
+    assert resolve_fine_subtype("SARC", cc2, current_subtype=None) == "SARC_OS"
+
+
+def test_resolve_fine_subtype_no_children_keeps_current():
+    """A broad call with no reference-present children leaves the label untouched."""
+    from trufflepig.cancer_type_centroid import resolve_fine_subtype
+
+    cc = pd.Series({"GBM": 0.9, "LGG": 0.8})
+    assert resolve_fine_subtype("GBM", cc, current_subtype=None) is None
 
 
 # --------------------------------------------------------------------------- #

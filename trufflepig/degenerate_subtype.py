@@ -42,7 +42,7 @@ the full context, not any single gene in isolation.
 import logging
 from functools import lru_cache
 
-from pirlygenes.gene_sets_cancer import resolve_cancer_type
+from trufflepig.cancer_ontology import resolve_cancer_type
 from pirlygenes.load_dataset import get_data
 
 logger = logging.getLogger(__name__)

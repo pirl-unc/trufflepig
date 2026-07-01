@@ -44,7 +44,6 @@ from .analyze import (
     should_adopt_decomposition_purity,
     write_json,
 )
-from .version import print_name_and_version
 from .tumor_purity import (
     analyze_sample,
     get_tumor_purity_parameters,
@@ -331,9 +330,10 @@ def print_cancer_registry(
     """
     from collections import defaultdict
 
+    from trufflepig.cancer_ontology import cancer_type_registry
     from pirlygenes.gene_sets_cancer import (
 
-        cancer_type_registry, cancer_biomarker_genes, cancer_therapy_targets,
+        cancer_biomarker_genes, cancer_therapy_targets,
 
     )
 
@@ -2351,6 +2351,12 @@ def _analyze_body(run: AnalyzeRun):
             rare_scope_inference=rare_scope_inference,
             fine_scope_inference=fine_scope_inference,
         )
+    # Veto a deconvolved local-reference flip that crosses lineage against an agreeing bulk + compartment
+    # call (the epithelial→sarcoma attractor, e.g. colon → SARC_DDLPS). No-op for fusion/marker rescues.
+    report_scope_cancer_type = _veto_local_reference_lineage_flip(
+        analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope)
+    if not report_scope_cancer_type:
+        selected_scope = None  # veto cleared the evidence selection → fall back to the bulk classifier call
     if report_scope_cancer_type:
         selected_reference_cancer_type = (
             (selected_scope or {}).get("reference_cancer_type")
@@ -2366,6 +2372,10 @@ def _analyze_body(run: AnalyzeRun):
             selected_reference_cancer_type or rna_inferred_cancer_name,
         )
         analysis["report_scope_cancer_type"] = report_scope_cancer_type
+        # (b) Re-route the purity DECOMPOSITION to the EVIDENCE-refined call: analyze_sample computed
+        # it for the pre-evidence ranking winner, so an ATRT scored as LGG had a solid-mode
+        # decomposition; once evidence calls ATRT (embryonal) the reported purity lineage should match.
+        _reroute_decomposition_to_call(analysis, df_expr, report_scope_cancer_type)
         if analysis_cancer_type:
             analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
         elif fine_scope_inference and fine_scope_inference.get("reference_cancer_type"):
@@ -2827,7 +2837,9 @@ def _analyze_body(run: AnalyzeRun):
         if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
             effective_purity = best_decomp.purity_result
             if isinstance(effective_purity, dict):
-                analysis["purity"] = effective_purity
+                # Single source of truth: analysis['purity'] and the winner's candidate_trace row
+                # become the same object, so the in-place lineage-panel override below stays in sync.
+                _set_analysis_purity(analysis, effective_purity)
                 purity = analysis["purity"]
 
         # Propagate a lineage-panel purity override back into
@@ -4683,7 +4695,7 @@ def _primary_tissues_for_analysis(analysis=None, cancer_code=None):
     except Exception:
         pass
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(lookup_code)]
@@ -5012,7 +5024,7 @@ def _analysis_primary_descriptor(analysis=None, cancer_code=None):
     if not lookup_code:
         return "", None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"] == lookup_code]
@@ -5109,7 +5121,7 @@ def _report_scope_cancer_type(cancer_type):
         return aliases[norm]
     code = text.upper()
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         codes_by_upper = {
@@ -5124,6 +5136,126 @@ def _report_scope_cancer_type(cancer_type):
     except Exception:
         return None
     return None
+
+
+def _set_analysis_purity(analysis, purity, code=None):
+    """Single source of truth for the winner's purity.
+
+    Writes ``analysis['purity']`` and the matching ``candidate_trace`` row's ``purity_result`` to
+    the SAME object in one step. The winner's purity lives in both places — ``analysis['purity']``
+    is what reports read, and ``decompose_sample`` reuses the candidate row — so every write must
+    update both or a later consumer reads a stale duplicate (the reroute-desync bug class). Routing
+    all purity writes through here makes that impossible by construction. ``code`` selects the row
+    (defaults to the current call); pass it explicitly when writing before ``cancer_type`` is set.
+    """
+    analysis["purity"] = purity
+    target = str(code or analysis.get("cancer_type") or "")
+    for row in analysis.get("candidate_trace") or []:
+        if str(row.get("code")) == target:
+            row["purity_result"] = purity
+            break
+
+
+def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
+    """When the cancer-type EVIDENCE selector refines the call to a DIFFERENT lineage than the
+    pre-evidence ranking winner, recompute the WHOLE purity for the refined call.
+
+    analyze_sample computed purity for the pre-evidence winner, so EVERYTHING code/lineage-dependent —
+    ``cancer_type``, ``lineage_compartment``, ``estimate_gated_for_lineage``, the gated
+    ``overall_estimate``, integration source, the signature/reference purity, AND the decomposition —
+    reflects the wrong code (an ATRT scored as LGG, or a Sarcoma/Heme rescue still using ESTIMATE).
+    Recomputing the full purity for ``refined_code`` (explicit → trusted, no expression override) makes
+    the entire purity result consistent with the final call. Fires whenever the evidence-refined code
+    differs from the code the purity was computed for; fully fallback-safe.
+    """
+    try:
+        purity = analysis.get("purity") or {}
+        dc = (purity.get("components") or {}).get("decomposition") or {}
+        if not refined_code or not isinstance(dc, dict) or not dc.get("mode"):
+            return
+        # Recompute whenever the evidence-refined call differs from the code the purity was
+        # actually computed for (``purity['cancer_type']``). Comparing the decomposition
+        # ``dc['mode']`` instead is unsafe: the decomposition component may have ALREADY
+        # lineage-overridden its mode to the refined lineage, so equal modes can still hide a
+        # stale cancer_type / lineage_compartment / ESTIMATE-gating / signature+reference purity
+        # (the report would say SARC while every other purity field came from the pre-evidence code).
+        if str(refined_code) == str(purity.get("cancer_type") or ""):
+            return  # purity already computed for the final code → consistent
+        from .tumor_purity import estimate_tumor_purity
+
+        # full recompute for the refined call → consistent gating / overall / compartment / decomposition
+        # (the refined call can be a reference-free rare type; estimate_tumor_purity degrades gracefully)
+        rerouted = estimate_tumor_purity(df_expr, cancer_type=refined_code)
+        # Single source of truth: write analysis['purity'] AND the refined call's candidate_trace row
+        # together. ``decompose_sample`` is later handed ``candidate_rows`` and reuses that row's
+        # ``purity_result``; left stale it would overwrite the rerouted purity and the report would
+        # lose the refined lineage/gating. (cancer_type isn't set to refined_code yet here → pass it.)
+        _set_analysis_purity(analysis, rerouted, code=refined_code)
+    except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
+        _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
+
+
+def _veto_local_reference_lineage_flip(
+    analysis, df_expr, report_scope_cancer_type, rna_inferred_cancer_type, selected_scope
+):
+    """Veto a LOCAL-EXPRESSION-REFERENCE (deconvolved) flip that crosses lineage against an agreeing
+    bulk classifier + compartment_call.
+
+    The deconvolved local-reference channel mis-rescues epithelial samples to sarcoma (the
+    epithelial→sarcoma attractor — e.g. a colon sample whose correct READ call is flipped to
+    SARC_DDLPS). Targeted, low-regression: only the ``local_expression_reference`` channel is vetoed
+    (a fusion / marker / literature rescue is trusted), and only when the refined lineage disagrees
+    with BOTH the bulk classifier's call AND the compartment_call top — two independent signals
+    agreeing on the lineage outweigh a single deconvolved-reference flip. Returns the (possibly
+    reverted) ``report_scope_cancer_type`` and records the veto on ``analysis``.
+    """
+    if not report_scope_cancer_type or report_scope_cancer_type == rna_inferred_cancer_type:
+        return report_scope_cancer_type
+    if (selected_scope or {}).get("selected_by") != "local_expression_reference":
+        return report_scope_cancer_type
+    try:
+        from .cancer_type_centroid import compartment_call
+        from .expression_decomposition import _group_to_mode
+        from trufflepig.cancer_ontology import cancer_lineage_group
+        from .tumor_purity import _build_sample_tpm_by_symbol
+
+        # Only treat the compartment as a corroborating signal when it ACTUALLY returned a
+        # confident call: an abstention (compartment=None) or a near-tie (confident=False) is not
+        # an independent signal, and mapping its empty/grazing label through _group_to_mode would
+        # silently default to "solid" — making the veto fire as if two signals agreed when one was
+        # simply absent. Leave comp=None in those cases so the `comp and …` guard below short-circuits.
+        comp_call = compartment_call(_build_sample_tpm_by_symbol(df_expr))
+        comp = (
+            _group_to_mode(comp_call["compartment"])
+            if comp_call.get("compartment") and comp_call.get("confident")
+            else None
+        )
+        refined = _group_to_mode(cancer_lineage_group(report_scope_cancer_type) or "")
+        pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
+               if rna_inferred_cancer_type else None)
+        # Target only the DOCUMENTED attractor — epithelial bulk → SARCOMA deconvolved centroids. A
+        # local-ref flip INTO a non-sarcoma lineage (e.g. HEPB → embryonal) is a legitimate rescue and
+        # must NOT be vetoed; only an into-mesenchymal flip against an agreeing bulk + compartment is.
+        if comp and refined and pre and refined == "mesenchymal" and refined != comp and pre == comp:
+            analysis["cancer_type_evidence_vetoed"] = {
+                "vetoed_call": report_scope_cancer_type,
+                "kept_call": rna_inferred_cancer_type,
+                "reason": (f"local_expression_reference flip to sarcoma conflicts with the bulk "
+                           f"classifier ({pre}) and compartment_call ({comp}) — the deconvolved "
+                           f"epithelial→sarcoma attractor"),
+            }
+            # _apply_cancer_type_evidence already wrote the vetoed selection into the analysis; revert
+            # those analysis-level keys too, or downstream label helpers re-surface the vetoed SARC_* call.
+            analysis["inferred_cancer_type"] = rna_inferred_cancer_type
+            analysis["expression_reference_cancer_type"] = rna_inferred_cancer_type
+            analysis.pop("primary_expression_context", None)
+            cte = analysis.get("cancer_type_evidence")
+            if isinstance(cte, dict):
+                cte["selected"] = None
+            return None  # revert to the pre-evidence (bulk) call
+    except Exception:  # noqa: BLE001 — refinement guard; never break the analysis
+        _LOGGER.warning("local-reference lineage veto failed", exc_info=True)
+    return report_scope_cancer_type
 
 
 def _apply_cancer_type_evidence(
@@ -5301,7 +5433,7 @@ def _is_defining_fusion_label(code):
     if not code:
         return False
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(code)]
@@ -5319,7 +5451,7 @@ def _registry_parent_analysis_scope(report_scope):
     if not report_scope:
         return None
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
         from .plot import resolve_cancer_type
 
         reg = cancer_type_registry()
@@ -5423,7 +5555,7 @@ def _is_registry_only_label(code):
     if not code:
         return False
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"].astype(str) == str(code)]

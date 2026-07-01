@@ -91,6 +91,38 @@ def test_smooth_muscle_sample_picks_sarc_lms_subtype():
     )
 
 
+def _subtype_pseudo_sample_tpm(subtype_code) -> dict:
+    """{symbol: tpm} from a subtype's tumor-only profile (over the SARC background)."""
+    sub = subtype_deconvolved_expression()
+    prof = sub[sub["cancer_code"] == subtype_code][["symbol", "tumor_tpm_median"]]
+    pan = pan_cancer_expression().drop_duplicates(subset="Symbol")
+    merged = pan.merge(prof, left_on="Symbol", right_on="symbol", how="left")
+    merged["tpm"] = merged["tumor_tpm_median"].fillna(merged["SARC_TPM"])
+    return dict(zip(merged["Symbol"].astype(str), merged["tpm"].astype(float)))
+
+
+@pytest.mark.parametrize("subtype", ["SARC_LMS", "SARC_SYN", "SARC_LPS_UNSPEC"])
+def test_mixture_summary_percentile_pick_recovers_subtype(subtype):
+    """The percentile-cosine pick (#171, 4c) must recover each SARC subtype from its own
+    tumor profile. The prior HK TME-weighted concordance confused these mesenchymal subtypes
+    (SARC_LPS_UNSPEC was an attractor: production pick accuracy was 6/15); the percentile
+    pick over the union panel lifts it to ~14/15. Pins that SYN/LPS no longer collapse."""
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+    from trufflepig.tumor_purity import _mixture_cohort_lineage_summary
+
+    pan = pan_cancer_expression(technical_rna_normalize=True)
+    id2sym = dict(zip(pan["Ensembl_Gene_ID"], pan["Symbol"]))
+    hk_syms = [id2sym[g] for g in housekeeping_gene_ids() if g in id2sym]
+
+    sample_tpm = _subtype_pseudo_sample_tpm(subtype)
+    summary = _mixture_cohort_lineage_summary("SARC", sample_tpm, hk_syms)
+    assert summary is not None, "mixture summary returned None"
+    assert summary["code"] == subtype, (
+        f"expected pick {subtype}, got {summary['code']} (pick_score="
+        f"{summary.get('pick_score')})"
+    )
+
+
 def test_winning_subtype_none_for_non_mixture():
     """Non-mixture cohorts must always report ``winning_subtype=None``
     — the subtype-aware path must not fire outside mixture parents."""

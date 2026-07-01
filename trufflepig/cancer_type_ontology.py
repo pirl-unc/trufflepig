@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import functools
 
-from pirlygenes.gene_sets_cancer import cancer_type_registry
+from trufflepig.cancer_ontology import cancer_type_registry
 
 # --------------------------------------------------------------------------
 # Ontology definition
@@ -142,7 +142,7 @@ def _pirlygenes_broad_lineage(code: str) -> str | None:
     API is unavailable, so the caller falls back to the local family map.
     """
     try:
-        from pirlygenes.gene_sets_cancer import cancer_lineage_group
+        from trufflepig.cancer_ontology import cancer_lineage_group
 
         group = cancer_lineage_group(code)
     except Exception:  # noqa: BLE001 — caller falls back to the local family map
@@ -192,6 +192,110 @@ def ontology_path(code: str) -> list[str]:
         differentiation, organ = _CARCINOMA_DIFFERENTIATION[code]
         return ["root", broad, differentiation, organ, code]
     return ["root", broad, code]
+
+
+# Polyphenotypic / biphasic tumors co-express TWO lineage programs, so a single
+# ``broad_lineage`` label makes the lineage-exclusion and compartment gates VETO the
+# correct call whenever the whole-profile / marker evidence reads the *secondary*
+# program. The canonical failure: neuroblastoma's neural-crest catecholamine
+# (neuroendocrine) program demotes its "embryonal" label, handing the call to SCLC;
+# likewise DSRCT/epithelioid-sarcoma's keratin program demotes "mesenchymal" -> UCS/CESC,
+# and hepatoblastoma's hepatic program floats LIHC above it. Each entry lists the
+# SECONDARY broad lineage(s) the entity co-expresses (primary stays ``broad_lineage``).
+#
+# Deliberately SURGICAL: only textbook-multiphenotypic *specific* entities appear. Broad
+# SARC and the common carcinoma/sarcoma subtypes stay single-lineage, so the gates still
+# demote genuine saturation mis-calls (a stroma-contaminated tumor mis-read as SARC, a
+# squamous-contaminated tumor mis-read as HNSC). A secondary lineage only ever *prevents
+# demotion* — the panel signature still decides the winner among undemoted candidates, so
+# protecting a type it doesn't match costs nothing.
+# Keys MUST be supported registry codes (see ``cancer_type_registry``); a typo'd code
+# silently never applies its secondary lineages, re-exposing the sample to the very
+# demotion/compartment gates this table exists to prevent. ``test_secondary_lineage_keys
+# _are_registry_codes`` pins every key to a real code.
+_SECONDARY_LINEAGES: dict[str, tuple[str, ...]] = {
+    # Blastomas — embryonal tumors differentiating toward an organ lineage
+    "NBL": ("neuroendocrine", "neural"),   # neural-crest sympathoadrenal, catecholamine+
+    "HEPB": ("epithelial",),               # hepatic differentiation, AFP+
+    "WILMS": ("epithelial",),              # nephroblastoma: blastema + epithelial tubules
+    "RB": ("neural",),                     # retinoblastoma
+    # Biphasic mesenchymal -> epithelial. NOTE the directional asymmetry: a SECONDARY
+    # lineage makes a candidate in-compartment for that lineage too, so a *common* type
+    # given a secondary program intrudes on the secondary compartment and beats its true
+    # residents (e.g. epithelial UCS/MESO marked "mesenchymal" out-competes real sarcomas
+    # on a Sarcoma sample — a measured regression). Only RARE, signature-distinct entities
+    # whose own panel gates them belong here; common carcinosarcoma/mesothelioma do not.
+    "SARC_DSRCT": ("epithelial", "neural"),  # EWSR1-WT1 polyphenotypic epithelial/myogenic/neural
+    "SARC_EPITH": ("epithelial",),         # epithelioid sarcoma (keratin+, SMARCB1-loss)
+    "SARC_SYN": ("epithelial",),           # synovial sarcoma (biphasic)
+}
+
+
+def lineage_compatibility(code: str, _registry=None) -> frozenset[str]:
+    """Broad lineages a cohort code is COMPATIBLE with (primary + any secondary programs).
+
+    For a unilineage tumor this is just ``{broad_lineage(code)}``. For the textbook
+    biphasic / blastomatous entities in :data:`_SECONDARY_LINEAGES` it also includes the
+    co-expressed program(s), so a lineage gate that reads the secondary program does not
+    veto the correct call. Subtype codes (``NBL_MYCNamp``) inherit their parent's
+    secondary set via the ``CODE_SUFFIX`` -> ``CODE`` fallback.
+    """
+    primary = broad_lineage(code, _registry=_registry)
+    extra = _SECONDARY_LINEAGES.get(code)
+    if extra is None and "_" in code:
+        extra = _SECONDARY_LINEAGES.get(code.rsplit("_", 1)[0])
+    return frozenset((primary, *(extra or ())))
+
+
+# The two lineage vocabularies in this codebase are SEPARATE namespaces and must be
+# reconciled before they can be compared. ``broad_lineage`` / ``lineage_compatibility``
+# speak the histology-of-origin vocabulary (lowercase: ``epithelial``, ``mesenchymal``,
+# ``neural`` …); the whole-profile compartment call (``cancer_type_centroid`` →
+# pirlygenes ``cancer_lineage_group``) speaks the capitalized compartment vocabulary
+# (``Epithelial``, ``Sarcoma``, ``CNS`` …). The map is bijective over every registry
+# code — ``cancer_lineage_group(code) == _BROAD_TO_COMPARTMENT[broad_lineage(code)]`` for
+# all of them (pinned by a test) — so it round-trips a primary lineage and, crucially,
+# lets the SECONDARY lineages cross the namespace into compartment space.
+_BROAD_TO_COMPARTMENT: dict[str, str] = {
+    "epithelial": "Epithelial",
+    "mesenchymal": "Sarcoma",
+    "neuroendocrine": "Neuroendocrine",
+    "neural": "CNS",
+    "embryonal": "Embryonal",
+    "hematolymphoid": "Heme",
+    "melanocytic": "Melanoma",
+    "germ": "Germ cell",
+}
+
+
+def compatible_compartments(code: str, _registry=None) -> frozenset[str]:
+    """Compartments (``cancer_lineage_group`` vocabulary) a cohort code is compatible with.
+
+    The compartment-space counterpart of :func:`lineage_compatibility`: the candidate's
+    authoritative primary compartment (``cancer_lineage_group``) UNION every compatible
+    lineage mapped through :data:`_BROAD_TO_COMPARTMENT`. For a unilineage tumor this is
+    the single primary compartment; for the biphasic / blastomatous entities in
+    :data:`_SECONDARY_LINEAGES` it also carries the co-expressed program(s) — so a
+    confident whole-profile compartment call that locks onto a tumor's SECONDARY program
+    (HEPB reading hepatic/``Epithelial``, DSRCT reading keratin/``Epithelial`` …) does not
+    mark the correct candidate out-of-compartment and demote it below a look-alike. The
+    primary is unioned in directly (never dropped) so this only ever WIDENS the existing
+    membership test — fail-open on any code with no known group.
+    """
+    compartments: set[str] = set()
+    try:
+        from trufflepig.cancer_ontology import cancer_lineage_group
+
+        primary = cancer_lineage_group(str(code))
+        if primary:
+            compartments.add(str(primary))
+    except Exception:  # noqa: BLE001 — fail-open: missing metadata never excludes
+        pass
+    for lineage in lineage_compatibility(code, _registry=_registry):
+        mapped = _BROAD_TO_COMPARTMENT.get(lineage)
+        if mapped:
+            compartments.add(mapped)
+    return frozenset(compartments)
 
 
 # Registry lookup (family by code), loaded lazily on first use so importing this

@@ -136,7 +136,7 @@ def filter_current_therapy_targets(targets_df):
 @lru_cache(maxsize=1)
 def _cancer_registry_display_names():
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         df = cancer_type_registry()
     except Exception:
@@ -159,7 +159,7 @@ def _cancer_registry_display_names():
 @lru_cache(maxsize=1)
 def _cancer_registry_parent_codes():
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         df = cancer_type_registry()
     except Exception:
@@ -2207,8 +2207,9 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
     )
 
     try:
+        from trufflepig.cancer_ontology import cancer_type_registry
         from pirlygenes.gene_sets_cancer import (
-            cancer_key_genes_cancer_types, cancer_type_registry,
+            cancer_key_genes_cancer_types,
         )
 
         curated_codes = {_clean_text(code) for code in cancer_key_genes_cancer_types()}
@@ -2251,7 +2252,7 @@ def subtype_key_for_analysis(analysis, ranges_df=None):
         return None
 
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
 
         reg = cancer_type_registry()
         match = reg[reg["code"] == winning_subtype]

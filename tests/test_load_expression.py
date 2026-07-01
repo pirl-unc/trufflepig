@@ -319,10 +319,11 @@ def test_normalize_expression_optional_noncoding_gate_keeps_ig_tcr():
         }
     )
 
+    # oncoref's default remove_groups already drops the poly-A-biased lncRNA group
+    # (MALAT1) while keeping protein-coding / IG / TCR — the old remove_noncoding=True behavior.
     out, record = normalize_expression(
         df,
         value_cols=["TPM"],
-        remove_noncoding=True,
     )
 
     assert record["applied"] is True
@@ -350,10 +351,11 @@ def test_normalize_expression_optional_noncoding_gate_keeps_unmatched_joined_bio
     )
     df = expression.merge(partial_annotation, on="Symbol", how="left")
 
+    # oncoref's default remove_groups already drops the poly-A-biased lncRNA group
+    # (MALAT1) while keeping protein-coding / IG / TCR — the old remove_noncoding=True behavior.
     out, record = normalize_expression(
         df,
         value_cols=["TPM"],
-        remove_noncoding=True,
     )
 
     assert record["applied"] is True
@@ -406,6 +408,29 @@ def test_expression_qc_rescue_removes_rrna_like_dominator():
     assert rescued["TPM"].sum() == pytest.approx(1_000_000.0)
     assert rescued.loc[rescued["gene"] == "KLK3", "TPM"].item() == pytest.approx(
         25_000.0 / 450_000.0 * 1_000_000.0
+    )
+
+
+def test_expression_qc_rescue_removes_polya_lncrna_by_default():
+    """A MALAT1-dominated sample must have the poly-A-biased lncRNA artifact removed at
+    the DEFAULT (remove_noncoding=False): technical_rna_mask flags MALAT1 (so it trips the
+    rescue), so the removal must match — otherwise the rescue reports high-burden but
+    returns the artifact intact. Regression guard for the remove_groups mapping."""
+    df = pd.DataFrame(
+        {
+            "gene": ["MALAT1", "KLK3", "ACTB"],
+            "TPM": [600_000.0, 150_000.0, 250_000.0],
+        }
+    )
+
+    rescued, record = le.apply_expression_qc_rescue(df, mode="auto")
+
+    assert record["applied"] is True
+    assert rescued.loc[rescued["gene"] == "MALAT1", "TPM"].item() == 0.0
+    assert rescued["TPM"].sum() == pytest.approx(1_000_000.0)
+    # The retained protein-coding genes keep their relative proportions.
+    assert rescued.loc[rescued["gene"] == "KLK3", "TPM"].item() == pytest.approx(
+        150_000.0 / 400_000.0 * 1_000_000.0
     )
 
 

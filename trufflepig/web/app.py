@@ -39,7 +39,6 @@ from .runs import (
     RunStore,
     WebRun,
     aiter_log_events,
-    iter_log_events,
 )
 
 

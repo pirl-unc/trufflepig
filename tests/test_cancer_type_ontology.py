@@ -8,6 +8,8 @@ or invoke the signature engine.
 from pirlygenes.gene_sets_cancer import cancer_type_registry
 from trufflepig.cancer_type_ontology import (
     broad_lineage,
+    compatible_compartments,
+    lineage_compatibility,
     ontology_path,
 )
 
@@ -54,3 +56,54 @@ def test_carcinoma_path_descends_to_organ_and_leaf():
 
 def test_non_carcinoma_path_is_broad_then_code():
     assert ontology_path("SARC") == ["root", "mesenchymal", "SARC"]
+
+
+def test_secondary_lineage_keys_are_registry_codes():
+    """Every ``_SECONDARY_LINEAGES`` key must be a supported registry code. A typo'd
+    code (the historical ``WT``/``RBL``/``SARC_SS``/``PBL`` bug) silently never applies
+    its secondary lineages, re-exposing those tumors to the demotion/compartment gates
+    the table exists to prevent — so pin the keys to real codes loudly."""
+    from trufflepig.cancer_type_ontology import _SECONDARY_LINEAGES
+
+    codes = set(cancer_type_registry()["code"].astype(str))
+    unsupported = [k for k in _SECONDARY_LINEAGES if k not in codes]
+    assert not unsupported, (
+        f"_SECONDARY_LINEAGES keys are not registry codes: {unsupported} — "
+        f"a typo'd code silently never applies its secondary lineages"
+    )
+
+
+def test_broad_to_compartment_map_is_bijective_over_registry():
+    """``compatible_compartments`` crosses the broad-lineage vocabulary into the
+    compartment (``cancer_lineage_group``) vocabulary via ``_BROAD_TO_COMPARTMENT``.
+    That crossing is only sound if the map agrees with ``cancer_lineage_group`` on every
+    primary — pin it so a vocabulary drift on either side fails loudly here."""
+    from pirlygenes.gene_sets_cancer import cancer_lineage_group
+
+    from trufflepig.cancer_type_ontology import _BROAD_TO_COMPARTMENT
+
+    codes = cancer_type_registry()["code"].astype(str).tolist()
+    mismatches = []
+    for code in codes:
+        clg = cancer_lineage_group(code)
+        mapped = _BROAD_TO_COMPARTMENT.get(broad_lineage(code))
+        if clg and mapped != clg:
+            mismatches.append((code, broad_lineage(code), mapped, clg))
+    assert not mismatches, (
+        f"_BROAD_TO_COMPARTMENT disagrees with cancer_lineage_group: {mismatches[:10]}"
+    )
+
+
+def test_compatible_compartments_carries_secondary_programs():
+    """A polyphenotypic tumor is in-compartment for BOTH its primary and secondary
+    program; a unilineage tumor for only its primary. This is what stops a confident
+    whole-profile compartment call on the secondary program (HEPB→Epithelial,
+    SARC_SYN→Epithelial) from marking the correct candidate out-of-compartment."""
+    # HEPB: embryonal blastoma with hepatic (epithelial) differentiation.
+    assert compatible_compartments("HEPB") == frozenset({"Embryonal", "Epithelial"})
+    # Synovial sarcoma: biphasic mesenchymal + epithelial.
+    assert compatible_compartments("SARC_SYN") == frozenset({"Sarcoma", "Epithelial"})
+    # Unilineage carcinoma: primary only.
+    assert compatible_compartments("COAD") == frozenset({"Epithelial"})
+    # Subtype codes inherit the parent's secondary set via the suffix fallback.
+    assert "epithelial" in lineage_compatibility("SARC_SYN")

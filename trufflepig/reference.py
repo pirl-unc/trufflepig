@@ -152,7 +152,7 @@ def _canonicalize_cancer_code_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     if "cancer_code" not in df.columns:
         return df
-    from pirlygenes.gene_sets_cancer import resolve_cancer_type
+    from trufflepig.cancer_ontology import resolve_cancer_type
 
     def _resolve(code: str) -> str:
         try:
@@ -601,7 +601,7 @@ def cancer_expression(cancer_type, genes=None) -> pd.DataFrame:
     Columns: ``Ensembl_Gene_ID``, ``Symbol``, ``expression``
     (housekeeping-normalized, technical-RNA-normalized).
     """
-    from pirlygenes.gene_sets_cancer import resolve_cancer_type
+    from trufflepig.cancer_ontology import resolve_cancer_type
 
     code = resolve_cancer_type(cancer_type)
     df = pan_cancer_expression(
@@ -619,7 +619,7 @@ def cancer_enriched_genes(
     min_expression: float = 0.01,
 ) -> pd.DataFrame:
     """Genes enriched in one cancer type vs the median of all others."""
-    from pirlygenes.gene_sets_cancer import resolve_cancer_type
+    from trufflepig.cancer_ontology import resolve_cancer_type
 
     code = resolve_cancer_type(cancer_type)
     df = pan_cancer_expression(normalize="housekeeping", technical_rna_normalize=True)

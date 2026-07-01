@@ -14,10 +14,12 @@ from trufflepig.tumor_purity import (
     TUMOR_PURITY_PARAMETERS,
     _combine_purity_estimates,
     _compile_excluded_gene_matcher,
+    _override_collapsed_signature_purity,
     _signature_conflicts_with_lineage,
     _summarize_gene_level_purity,
     _select_tumor_specific_genes_for_panel,
 )
+from trufflepig.purity_calibration import _reference_code_candidates
 
 
 # ── _compile_excluded_gene_matcher ───────────────────────────────────────
@@ -344,3 +346,49 @@ def test_summarize_stability_increases_with_tighter_distribution():
     _, _, _, stab_tight = _summarize_gene_level_purity(tight)
     _, _, _, stab_wide = _summarize_gene_level_purity(wide)
     assert stab_tight > stab_wide
+
+
+def test_override_collapsed_signature_purity_consensus():
+    """A wrong-type signature collapse (≈0) is overridden by the ESTIMATE + decomposition-residual
+    consensus (the hcc1395 cell-line case: breast line miscalled HNSC → signature silent)."""
+    overall, lower, upper, source = _override_collapsed_signature_purity(
+        0.075, 0.0, 0.15, "signature",
+        sig_purity=0.006, lineage_purity=None, estimate_purity=0.93,
+        decomposition={"residual_fraction": 0.77})
+    assert source == "estimate+decomposition"
+    assert 0.7 < overall < 0.95          # consensus of 0.93 and 0.77, not the 0.075 signature drag
+
+
+def test_override_collapsed_signature_noop_during_ranking():
+    """No decomposition (the candidate-ranking path) → strict no-op, so a low signature stays the
+    discriminator between candidate types."""
+    result = _override_collapsed_signature_purity(
+        0.075, 0.0, 0.15, "signature",
+        sig_purity=0.006, lineage_purity=None, estimate_purity=0.93, decomposition=None)
+    assert result == (0.075, 0.0, 0.15, "signature")
+
+
+def test_override_collapsed_signature_noop_when_residual_uncorroborated():
+    """Only ONE type-agnostic signal high (ESTIMATE) while the residual is low → no override (the
+    low-coverage guard: both ESTIMATE and residual must corroborate)."""
+    result = _override_collapsed_signature_purity(
+        0.075, 0.0, 0.15, "signature",
+        sig_purity=0.006, lineage_purity=None, estimate_purity=0.93,
+        decomposition={"residual_fraction": 0.2})
+    assert result == (0.075, 0.0, 0.15, "signature")
+
+
+def test_override_collapsed_signature_noop_with_lineage_anchor():
+    """A present lineage anchor means the signature wasn't the sole driver → no override."""
+    result = _override_collapsed_signature_purity(
+        0.4, 0.2, 0.6, "signature",
+        sig_purity=0.006, lineage_purity=0.5, estimate_purity=0.93,
+        decomposition={"residual_fraction": 0.8})
+    assert result == (0.4, 0.2, 0.6, "signature")
+
+
+def test_aneuploidy_reference_parent_fallback_candidates():
+    """A sarcoma subtype without its own pan-cancer column falls back to the SARC parent."""
+    candidates = _reference_code_candidates("SARC_DSRCT")
+    assert candidates[0] == "SARC_DSRCT"
+    assert "SARC" in candidates

@@ -206,7 +206,7 @@ _DEFAULT_LOW_GENES = ("PTPRC", "CD3D", "MS4A1", "EPCAM", "KRT8", "KRT18")
 
 @lru_cache(maxsize=1)
 def _registry() -> dict[str, dict[str, Any]]:
-    from pirlygenes.gene_sets_cancer import cancer_type_registry
+    from trufflepig.cancer_ontology import cancer_type_registry
 
     df = cancer_type_registry().fillna("")
     return {_clean(row["code"]): dict(row) for _, row in df.iterrows()}

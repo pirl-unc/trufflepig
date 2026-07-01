@@ -35,6 +35,17 @@ _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "primary_expression_match": 1,
 }
 
+# Definitive molecular evidence: a detected fusion is diagnostic and outranks whole-profile
+# expression (which can be contaminated / low-purity), so the centroid corroboration in
+# ``_pick_selected`` never overrides it.
+_DEFINITIVE_SELECTORS: frozenset[str] = frozenset({"direct_fusion"})
+
+# Whole-profile centroid corroboration margin (Spearman rho). At a CONFIDENT compartment call the
+# centroid re-ranks the already-selectable hypotheses, preferring one it out-correlates the authority
+# winner by at least this much — enough to flip a marker tie (NUT carcinoma over the salivary ADCC
+# look-alike; osteosarcoma over the MDM2-amplicon liposarcoma) while leaving near-ties to the markers.
+_CENTROID_CORROBORATION_MARGIN = 0.015
+
 # Thresholds for the lineage_panel selector — gates when a
 # trufflepig.lineage_panels panel result is strong enough to
 # propose a cancer type. See issue #42 + lineage_panels.py for
@@ -2564,7 +2575,7 @@ def _rare_rules_by_id() -> dict[str, dict[str, Any]]:
 @lru_cache(maxsize=1)
 def _registry_by_code() -> dict[str, dict[str, Any]]:
     try:
-        from pirlygenes.gene_sets_cancer import cancer_type_registry
+        from trufflepig.cancer_ontology import cancer_type_registry
     except ImportError:
         _LOGGER.warning(
             "pirlygenes.gene_sets_cancer.cancer_type_registry is unavailable; "
@@ -4814,7 +4825,7 @@ def _public_evidence_sort_key(evidence: CancerTypeEvidence):
 
     The negation pattern lets the caller use plain ``sorted(...)``
     (ascending) so the alphabetical-tie field stays in natural
-    ascending order. Mirrors ``_selectable_sort_key`` in
+    ascending order. Mirrors ``_pick_selected`` in
     ``select_report_scope_from_evidence`` — both must agree so the
     "selected" hypothesis matches the top of the evidence list on
     ties.
@@ -4867,6 +4878,32 @@ def _post_label_context_channels(analysis: Mapping[str, Any]) -> list[dict[str, 
             status="downstream_consumer_not_selector",
         )
     )
+    # Lineage-routed decomposition + purity signals, surfaced alongside the cancer-type evidence so all
+    # axes can be reasoned about together (mode / lineage_fit residual / aneuploidy / ESTIMATE gating /
+    # purity reconciliation). Context only — never selects the report label.
+    purity = analysis.get("purity") or {}
+    comps = purity.get("components") or {}
+    dc = comps.get("decomposition") if isinstance(comps.get("decomposition"), Mapping) else {}
+    if dc and dc.get("mode"):
+        channels.append(
+            CancerTypeEvidenceChannel(
+                channel="lineage_decomposition",
+                stage="family",
+                role="post_label_lineage_purity_context",
+                code=str(dc.get("mode") or ""),
+                context_code=str(comps.get("lineage_compartment") or ""),
+                support=_safe_float(dc.get("residual_fraction") or 0.0),
+                status="not_used_for_report_label",
+                details={
+                    "residual_fraction": dc.get("residual_fraction"),
+                    "aneuploidy_purity": dc.get("aneuploidy_purity"),
+                    "expression_lineage": dc.get("expression_lineage"),
+                    "lineage_conflict": dc.get("lineage_conflict"),
+                    "estimate_gated_for_lineage": comps.get("estimate_gated_for_lineage"),
+                    "purity_consistency": purity.get("purity_consistency") or [],
+                },
+            )
+        )
     return [channel.public_dict() for channel in channels]
 
 
@@ -4957,6 +4994,77 @@ def _build_staged_evidence_graph(
     }
 
 
+def _pick_selected(hypotheses, cen=None, compartment_confident=False):
+    """Select the report label from the selectable hypotheses (replaces the centroid veto, #98/#99).
+
+    Authority first: among the selectable hypotheses the highest ``selection_priority`` (class_rank,
+    then strength, then the source tiebreak; ascending ``cancer_type`` for determinism) wins, and a
+    definitive molecular call (a detected fusion) outranks everything else.
+
+    Then the whole-profile centroid CORROBORATES: when the compartment call is confident it re-ranks
+    ONLY the already-selectable hypotheses, deferring to the one it best matches if that
+    out-correlates the authority winner by ``_CENTROID_CORROBORATION_MARGIN``. This tips a marker tie
+    toward the cohort the whole transcriptome actually looks like (NUT carcinoma over the salivary
+    ADCC look-alike; osteosarcoma over the MDM2-amplicon liposarcoma) WITHOUT proposing a type no
+    selector supported — so it can never promote a tissue contaminant the markers never backed. It
+    replaces the centroid veto + its snapshot / conditional-undo + cross-lineage-flip guard.
+    """
+    sel = [row for row in hypotheses.values() if row.can_select_report_label]
+    if not sel:
+        return None
+
+    def _authority_key(row):
+        return (-row.selection_priority[0], -row.selection_priority[1],
+                -row.selection_priority[2], row.cancer_type)
+
+    # Definitive molecular evidence (a detected fusion) is never overridden by expression.
+    definitive = [row for row in sel if row.selected_by in _DEFINITIVE_SELECTORS]
+    if definitive:
+        return min(definitive, key=_authority_key)
+
+    winner = min(sel, key=_authority_key)
+    if cen is None or not compartment_confident:
+        return winner
+
+    def _rho(code):
+        try:
+            return float(cen.get(code, float("nan")))
+        except (TypeError, ValueError):
+            return float("nan")
+
+    win_rho = _rho(winner.cancer_type)
+    best, best_rho = winner, win_rho
+    for row in sel:
+        rho = _rho(row.cancer_type)
+        if rho == rho and (best_rho != best_rho or rho > best_rho):  # rho == rho skips NaN
+            best, best_rho = row, rho
+    # Defer to the best-correlated hypothesis only when BOTH it and the authority winner are
+    # centroid-visible and the margin is clear — otherwise keep the authority winner.
+    if (best is not winner and win_rho == win_rho and best_rho == best_rho
+            and best_rho - win_rho >= _CENTROID_CORROBORATION_MARGIN):
+        return best
+    return winner
+
+
+def _centroid_and_confidence(sample_tpm_by_symbol: Mapping[str, float]):
+    """``(centroid_correlations Series, compartment-confident bool)`` for selection, or ``(None, False)``.
+
+    One whole-profile centroid pass, used by ``_pick_selected`` to corroborate the selectable
+    hypotheses. Fail-open (``(None, False)``) so selection simply falls back to authority priority
+    on any error.
+    """
+    if not sample_tpm_by_symbol:
+        return None, False
+    try:
+        from .cancer_type_centroid import centroid_correlations, compartment_call
+
+        cen = centroid_correlations(sample_tpm_by_symbol)
+        comp = compartment_call(sample_tpm_by_symbol, _corr=cen)
+        return cen, bool(comp.get("confident"))
+    except Exception:  # noqa: BLE001
+        return None, False
+
+
 def select_report_scope_from_evidence(
     df_expr,
     analysis: Mapping[str, Any],
@@ -5033,22 +5141,11 @@ def select_report_scope_from_evidence(
             sample_tpm_by_symbol,
         )
 
-    rows = list(hypotheses.values())
-    selectable = [row for row in rows if row.can_select_report_label]
-    selected = None
-    if selectable:
-        # Tie-break: highest selection_priority first (class_rank, then
-        # strength, then tiebreak slot), then *ascending* cancer_type
-        # alphabetical for determinism. The previous form
-        # ``sort((priority, cancer_type), reverse=True)`` flipped both
-        # fields, producing Z-before-A on ties (e.g. UCS over THCA at
-        # equal priority) — surprising and undocumented.
-        def _selectable_sort_key(row):
-            cls, strength, tb = row.selection_priority
-            return (-cls, -strength, -tb, row.cancer_type)
+    # One whole-profile centroid pass, used to corroborate the selectable hypotheses below.
+    _cen, _cen_confident = _centroid_and_confidence(sample_tpm_by_symbol)
 
-        selectable.sort(key=_selectable_sort_key)
-        selected = selectable[0]
+    rows = list(hypotheses.values())
+    selected = _pick_selected(hypotheses, cen=_cen, compartment_confident=_cen_confident)
 
     primary_context = _top_code(analysis)
     primary_context_support = _candidate_support_by_code(analysis).get(

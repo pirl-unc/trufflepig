@@ -70,3 +70,48 @@ A consumer that reads a panel **raw** (bypassing its folding accessor) silently
 misses a folded member — route every panel→expression lookup through the accessor
 or `fold_panel_symbols`. `tests/test_proteoform_key_space.py` pins that each live
 accessor folds.
+
+## Pipeline: evidence → cancer-type call → decomposition → aneuploidy
+
+`analyze_sample` → `rank_cancer_type_candidates` → (winner) `decompose_expression`. The expensive
+whole-profile signals are computed ONCE per sample and shared across stages — the same evidence is
+visible to type-calling, decomposition, and purity.
+
+**Three evidence signals (each computed once):**
+- **signature_score** (`plot_embedding._compute_cancer_type_signature_stats`) — mean over a curated
+  ~20-gene panel of `cohort_pct × within_sample_pct`, per cancer type. Cohort reference = the
+  **170-cohort HK-bridged** matrix (118 cancer + 50 normal; `_full_cohort_hk_reference`). Panels exist
+  for ~93 types incl. the missing base types. Cached as `stats`.
+- **centroid correlation** (`cancer_type_centroid.centroid_correlations`) — Spearman of the WHOLE
+  transcriptome to ~116 cohort centroids; `compartment_call` aggregates it to a coarse histogenesis
+  group + confidence. Computed once as `_ranker_cen_corr`, reused everywhere.
+- **purity** (`estimate_tumor_purity`, per candidate) — signature/ESTIMATE/lineage; its compartment
+  gate reuses `_ranker_expr_lineage`, so it does NOT recompute the centroid.
+
+**Cancer-TYPE call** = rank by `support_score`, the GEOMETRIC MEAN of:
+  `signature × purity × lineage_support × signature_stability × family_factor`
+`_candidate_support_score` (tumor_purity.py). The whole-profile centroid is NOT a support-score factor
+(folding it in was a documented negative result — see the note in tumor_purity). Instead the centroid
+drives the call two ways it's stronger at: the `compartment_call` leaf-restriction (coarse,
+confidence-gated, #83) and centroid-authoritative fine-subtype resolution + veto (`resolve_fine_subtype`
+/ `_apply_centroid_fine_subtype_veto`, #98).
+
+**Decomposition** (`decompose_expression`) runs ONCE for the winner. FEATURE SPACE = within-sample
+**percentile** (`space="percentile"`). Lineage-ROUTED by `compartment_call` (same centroid signal) →
+one of 4 modes: **solid / mesenchymal / heme / embryonal** (not confident → run top+runner-up, resolve
+by residual `lineage_fit`). Each mode runs an **NNLS background subtraction** over that mode's
+stroma/immune/normal-tissue templates → tumor-specific **residual** = `sample − reconstructed_background`
+(clipped ≥0). `residual_fraction` (residual's mass fraction) is the PRIMARY purity signal.
+
+**Aneuploidy — two distinct readouts:**
+- **bulk** (`bulk_aneuploidy_amplitude`) — chromosome-arm coherence on the BULK sample (noise-floor
+  subtracted), ∝ purity → a purity CORROBORATOR. `aneuploidy_purity = clip(A_obs / A_ref(type), 0, 1)`,
+  where `A_ref` (`purity_calibration.aneuploidy_reference`) extrapolates the cohort reference amplitude
+  to purity≈1 at the type's median purity. (Mixed-case subtype codes fall back to the parent reference.)
+- **residual** (`aneuploidy_score(residual)`) — same arm-coherence on the purity-corrected RESIDUAL;
+  tumor CHARACTERIZATION (with proliferation), orthogonal to lineage.
+
+**Downstream fit:** type call selects the cohort → decomposition routes by that cohort's compartment
+and yields the residual + `residual_fraction` (primary purity) → bulk aneuploidy corroborates purity
+(gated low when ambiguous) → residual aneuploidy + proliferation characterize the tumor on the
+purity-corrected residual.

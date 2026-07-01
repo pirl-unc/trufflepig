@@ -190,6 +190,21 @@ def compute_subtype_signature_stats(
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
+    # Same full ~170-cohort HK reference the broad signature uses, so broad + subtype cohort-percentiles
+    # are on one comparable footing.
+    from .plot_embedding import _full_cohort_hk_reference
+
+    full_ref = _full_cohort_hk_reference()
+    # Same COMBINED filter the broad signature uses (HK-migration #7): cross-cohort percentile x
+    # within-sample percentile — specificity + score spread from the cohort leg, purity-robustness
+    # from the within-sample leg. Within-sample percentile computed once.
+    import pandas as _pd
+
+    within_pct_by_symbol = (
+        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
+        if sample_raw_by_symbol
+        else {}
+    )
 
     results: dict[str, list[dict]] = {}
     for (code, subtype), panel in panels.items():
@@ -198,17 +213,27 @@ def compute_subtype_signature_stats(
         percentiles: list[float] = []
         details: list[dict] = []
         for gene in panel:
-            if gene not in ref_by_sym.index:
-                continue
             sample_hk_val = float(sample_hk_by_symbol.get(gene, 0.0) or 0.0)
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0) or 0.0)
-            ref_vals = expr_matrix.loc[gene].values
+            if full_ref is not None and gene in full_ref.index:
+                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
+                ref_vals = ref_vals[~np.isnan(ref_vals)]
+            elif gene in ref_by_sym.index:
+                ref_vals = expr_matrix.loc[gene].values
+            else:
+                continue
             n = len(ref_vals)
             if n == 0:
                 continue
             below = int(np.sum(ref_vals < sample_hk_val))
             equal = int(np.sum(np.isclose(ref_vals, sample_hk_val, atol=1e-6)))
-            percentile = float((below + 0.5 * equal) / n)
+            cohort_pct = float((below + 0.5 * equal) / n)
+            # cohort-pct dominant, within-pct as a [1-w, 1] factor — same weight as the broad
+            # signature so broad + subtype scores stay on one comparable scale.
+            from .plot_embedding import _WITHIN_PCT_WEIGHT as _w
+
+            within_pct = float(within_pct_by_symbol.get(gene, 0.5))
+            percentile = cohort_pct * ((1.0 - _w) + _w * within_pct)
             percentiles.append(percentile)
             details.append(
                 {

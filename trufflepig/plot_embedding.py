@@ -142,6 +142,13 @@ _CURATED_PAN_REFERENCE_ANCHORS = [
 ]
 
 _signature_panel_cache = {}
+_full_cohort_hk_reference_cache = {}
+_full_cohort_signature_panels_cache = {}
+
+# Part-2: molecular subtypes are excluded from the broad signature panels. A subtype as a competing
+# candidate CODE leaks into decomposition routing, and the subtype-signature refines the broad call on
+# top anyway (the leak fix in 173c372). Including them helps subtype medoids but breaks the synthetic
+# decomposition tests, so exclusion is the locked behavior.
 _embedding_gene_cache = {}
 _tme_gene_cache = {}
 _bottleneck_gene_cache = {}
@@ -236,6 +243,31 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
                 break
         panels[code] = genes[:n_signature_genes]
 
+    # Part 2: add broad panels for the missing BASE cancer types (ATRT/BL/SCLC/heme/...) that have no
+    # deconvolved tumor reference, so the broad signature can SCORE them (not only the
+    # ontology/subtype/centroid layers). MOLECULAR SUBTYPES are deliberately EXCLUDED: a subtype as a
+    # competing candidate CODE (SARC_LMS vs SARC, COAD_MSS vs COAD) ties with / beats its parent and
+    # leaks into decomposition routing (winning_subtype + support_fraction_of_top) — flipping a primary
+    # to a met template or reclassifying a contaminated tumor to a subtype. The subtype-signature
+    # already refines those on top of the broad call. A code is a SUBTYPE iff its registry parent is a
+    # cohort we already score (the 33 TCGA panels) or another cancer_reference cohort — NOT a prefix
+    # check (cancer_reference ships SARC_LMS but no broad "SARC" column, so a prefix check silently
+    # failed and let the subtypes through).
+    from .analyze.cancer_type_context import registry_parent_code
+
+    extra = _full_cohort_signature_panels(n=n_signature_genes)
+    all_cohorts = set(extra.keys())
+    min_genes = max(5, n_signature_genes // 2)
+    for code, genes in extra.items():
+        if code in panels or len(genes) < min_genes:
+            continue
+        # Part-2: skip a molecular subtype whose parent is already a scored cohort — the broad call
+        # goes to the parent and the subtype-signature refines it (a subtype CODE here leaks into routing).
+        parent = registry_parent_code(code)
+        if parent and (parent in panels or parent in all_cohorts):
+            continue
+        panels[code] = list(genes)
+
     _signature_panel_cache[cache_key] = {
         code: tuple(genes) for code, genes in panels.items()
     }
@@ -251,6 +283,108 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
 # boundary, not tuned to any sample (it must stay low enough that a genuinely-but-
 # weakly-expressed marker of the true type is NOT clamped).
 _SIGNATURE_DETECTION_FLOOR_HK = 0.1
+
+# Weight of the within-sample-percentile leg in the combined signature filter. cohort-pct (HK) is
+# DOMINANT; within-pct enters as a [1-w, 1] factor. 0.0 = pure cohort-pct (pre-#7); 1.0 = full product.
+# Set to 1.0 (full product): the ALL-SAMPLES 565 eval (the authority — medoids mislead) showed w=0.5
+# is strictly WORSE than w=1.0 on every metric incl. exact (242 vs 246 exact, 409 vs 414 entity, 523 vs
+# 526 lineage). The single-medoid "COAD>READ recovered exact" smoke was an artifact; on 565 samples the
+# full product wins. (Cohort leg stays HK: switching to raw clean-TPM regressed -4 — HK bridges the
+# different clean-TPM scales of sample vs reference; it is load-bearing here, not redundant.)
+_WITHIN_PCT_WEIGHT = 1.0
+
+
+# The signature cohort-percentile leg ranks the sample against the FULL ~170-cohort HK reference (120
+# cancer cohorts from cancer_reference_expression + 50 HPA normals) instead of the 33 TCGA cohort
+# medians. HK-normalization bridges the differing clean-TPM scales of the sources (see
+# _full_cohort_hk_reference). LOCKED — validated on ALL 565 samples (+6 entity 414→420, +12 subtype)
+# AND the 118 medoids (+1 lineage), local reports flat at 7/8. The 33-cohort reference dropped 85 of the
+# 118 types (ATRT/BL/SCLC/heme/molecular subtypes) and quantized the percentile to ~1/33 steps.
+
+
+def _full_cohort_hk_reference():
+    """~170-col HK-normalized cohort reference (Symbol-indexed): 120 cancer cohorts + 50 HPA normals.
+
+    Each cohort column is HK-normalized by its OWN trufflepig-HK-panel median, which bridges the
+    different absolute clean-TPM scales of cancer_reference_expression (~4310 ACTB), pan_cancer
+    normals, and the conformed sample — so the cross-cohort midrank is computed in one HK-relative
+    space (the same bridge the 33-cohort expr_matrix(HK) uses). Cached on the function object.
+    """
+    if "ref" in _full_cohort_hk_reference_cache:
+        return _full_cohort_hk_reference_cache["ref"]
+    import pandas as _pd
+    from .reference import cancer_reference_expression, pan_cancer_expression
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
+
+    hk_ids = {str(x).split(".")[0] for x in housekeeping_gene_ids()}
+
+    def _hk_norm_block(df, value_cols, label):
+        ids = df["Ensembl_Gene_ID"].astype(str).str.split(".").str[0]
+        hk_rows = ids.isin(hk_ids)
+        out = {}
+        for c in value_cols:
+            vals = df[c].astype(float)
+            med = vals[hk_rows & (vals > 0)].median()
+            if med and med > 0:
+                out[label(c)] = (vals / med).to_numpy()
+        return _pd.DataFrame(out, index=df["Symbol"].astype(str))
+
+    cref = cancer_reference_expression(format="wide")
+    cancer_cols = [c for c in cref.columns if str(c).endswith("_TPM_clean")]
+    cancer_hk = _hk_norm_block(cref, cancer_cols, lambda c: c.replace("_TPM_clean", ""))
+
+    pan = pan_cancer_expression()
+    normal_cols = [c for c in pan.columns if str(c).endswith("_nTPM")]
+    normal_hk = _hk_norm_block(pan, normal_cols, lambda c: c)
+
+    full = cancer_hk.join(normal_hk, how="outer")
+    full = full[~full.index.duplicated(keep="first")]
+    _full_cohort_hk_reference_cache["ref"] = full
+    return full
+
+
+def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
+    """Derive a broad signature panel (top-N cohort-specific genes) for ALL 118 cancer cohorts.
+
+    The legacy `_get_cancer_type_signature_panels` only builds panels for the 33 TCGA cohorts it has
+    deconvolved tumor references for, so the broad signature could never SCORE the other 85 types
+    (ATRT/BL/SCLC/heme/molecular subtypes) — they were callable only via the ontology/subtype/centroid
+    layers. This derives panels for every cohort in `cancer_reference_expression` (120) the same way
+    `subtype_signature.subtype_signature_panels` does: a gene is in cohort C's panel if it is expressed
+    (>= min_tpm) AND elevated vs the cross-cohort mean (log2((C+1)/(mean+1)) >= min_log2_vs_mean),
+    ranked by that log2 ratio. Family/HK/excluded genes dropped. Cached on the function object.
+    """
+    key = (n, min_tpm, min_log2_vs_mean)
+    if key in _full_cohort_signature_panels_cache:
+        return _full_cohort_signature_panels_cache[key]
+    from .reference import cancer_reference_expression
+    from .tumor_purity import _compile_excluded_gene_matcher
+
+    df = cancer_reference_expression(format="wide")
+    cols = [c for c in df.columns if str(c).endswith("_TPM_clean")]
+    syms = df["Symbol"].astype(str).to_numpy()
+    # Clip to nonnegative BEFORE any log-ratio: a handful of reference cells carry small
+    # negative TPM-proxy values (deconvolution/normalization residue), and a negative
+    # `cross_mean` or `v` makes `x + 1` non-positive → log2 of a non-positive number emits
+    # a RuntimeWarning and yields NaN / spuriously inflated ratios. Clean-TPM is a
+    # nonnegative abundance proxy, so flooring the noise at 0 restores its semantics.
+    mat = df[cols].astype(float).clip(lower=0.0)
+    cross_mean = mat.mean(axis=1).to_numpy()  # pandas skips NaN per gene
+    cross_mean = np.nan_to_num(cross_mean, nan=0.0)
+    is_excluded = _compile_excluded_gene_matcher()
+    panels = {}
+    for c in cols:
+        code = c.replace("_TPM_clean", "")
+        v = np.nan_to_num(mat[c].to_numpy(), nan=0.0)  # clipped; cancer_reference has NaN cells
+        log2r = np.log2((v + 1.0) / (cross_mean + 1.0))
+        idx = np.where((v >= min_tpm) & (log2r >= min_log2_vs_mean))[0]
+        ranked = sorted(
+            ((float(log2r[i]), syms[i]) for i in idx if syms[i] and not is_excluded(syms[i])),
+            reverse=True,
+        )
+        panels[code] = tuple(s for _, s in ranked[:n])
+    _full_cohort_signature_panels_cache[key] = panels
+    return panels
 
 
 def _compute_cancer_type_signature_stats(
@@ -273,13 +407,30 @@ def _compute_cancer_type_signature_stats(
     sample_raw_by_symbol, sample_hk_by_symbol = _sample_expression_by_symbol(
         df_gene_expr
     )
-    # HK-normalize both sides so percentile comparison is on the same
-    # scale (sample TPM/hk vs reference cohort TPM/hk). This is consistent
-    # normalization, not mixed — both are divided by their own HK median.
+    # Per-gene score basis: the COMBINED filter cross-cohort-percentile x within-sample-percentile
+    # (two weak filters multiplied). The cohort-percentile leg supplies SPECIFICITY + the score spread
+    # the ranker's margins need; the within-sample-percentile leg supplies purity-ROBUSTNESS (a
+    # within-sample rank of curated markers survives proportional dilution, whereas cross-cohort
+    # percentile is purity-SENSITIVE — dilution shifts where the sample falls in the cohort
+    # distribution). A/B'd on 392 rep samples + dilution (scripts/signature_basis_ab.py) and validated
+    # end-to-end: the medoid AUTO cancer-type lineage rises 95->99/118 vs the HK-percentile basis
+    # (within-sample-pct ALONE regressed -3 because its compressed scores collapse the ranker margins;
+    # the product keeps the spread). Both legs in [0,1] -> product in [0,1].
     ref_matrices = _cached_reference_matrices(normalize="housekeeping")
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
+    # A/B: rank against the full ~170-cohort HK reference (118 cancer + 50 normal) instead of 33.
+    full_ref = _full_cohort_hk_reference()
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
+
+    # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
+    import pandas as _pd
+
+    _within_pct = (
+        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
+        if sample_raw_by_symbol
+        else {}
+    )
 
     stats = []
     if candidate_codes is None:
@@ -297,25 +448,32 @@ def _compute_cancer_type_signature_stats(
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0))
             sample_hk = float(sample_hk_by_symbol.get(gene, 0.0))
             cohort_hk = 0.0
-            percentile = 0.5
+            cohort_pct = 0.5
             if gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
                 cohort_hk = float(ref_by_sym.loc[gene, cohort_col])
-                # Midrank percentile: robust to ties at zero
-                ref_vals = expr_matrix.loc[gene].values
+            if full_ref is not None and gene in full_ref.index:
+                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
+                ref_vals = ref_vals[~np.isnan(ref_vals)]
+            elif gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
+                ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK, 33)
+            else:
+                ref_vals = np.array([])
+            if ref_vals.size:
                 n = len(ref_vals)
                 below = np.sum(ref_vals < sample_hk)
                 equal = np.sum(np.isclose(ref_vals, sample_hk, atol=1e-6))
-                percentile = float((below + 0.5 * equal) / n)
-                # Fix the "zero-floor percentile inflation" pathology: a *specific*
-                # marker is near-zero across non-target cancers, so its cross-cancer
-                # reference is a floor of zeros and ANY nonzero sample value — incl.
-                # quantifier noise — clears it and scores ~1.0, false evidence of
-                # expression. A gene the sample does not detectably express
-                # (sample_hk below the HK-relative detection floor) cannot be
-                # positive evidence: clamp to the neutral 0.5. Genes the sample
-                # genuinely expresses are unaffected.
-                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:
-                    percentile = min(percentile, 0.5)
+                cohort_pct = float((below + 0.5 * equal) / n)
+                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:  # zero-floor inflation guard
+                    cohort_pct = min(cohort_pct, 0.5)
+            # COMBINED filter (two weak filters): cross-cohort percentile (specificity + the
+            # discrimination SPREAD the ranker margins need) modulated by within-sample percentile
+            # (dominance, purity-robust — a within-sample rank survives proportional dilution).
+            # cohort-pct DOMINANT; within-pct is a [1-w, 1] factor (w=_WITHIN_PCT_WEIGHT) so it never
+            # zeros the cohort discrimination and the score stays near the cohort-pct scale the
+            # thresholds expect. w=1.0 (full product) — the 565 all-samples eval beat w=0.5 on every
+            # metric (see _WITHIN_PCT_WEIGHT). Both legs [0,1] → result [0,1].
+            within_pct = float(_within_pct.get(gene, 0.5))
+            percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)
             log_diff = abs(np.log2(sample_hk + 1) - np.log2(cohort_hk + 1))
             gene_details.append(
@@ -1021,9 +1179,14 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
         n_signature_genes=n_signature_genes,
     )
     sample_scores = np.zeros(len(labels))
+    _label_pos = {code: i for i, code in enumerate(labels)}
     for stat in sample_stats:
-        j = labels.index(stat["code"])
-        sample_scores[j] = stat["score"]
+        # _compute_cancer_type_signature_stats now scores ~93 codes (part-2 added panels for the
+        # missing base types); this embedding only plots its own `labels` reference set, so ignore
+        # codes outside it instead of labels.index() raising ValueError on e.g. SARC_UPS.
+        j = _label_pos.get(stat["code"])
+        if j is not None:
+            sample_scores[j] = stat["score"]
 
     matrix = np.vstack([ref_scores, sample_scores[None, :]])
     labels.append("SAMPLE")
