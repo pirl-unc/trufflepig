@@ -56,6 +56,8 @@ _CENTROID_SAME_LINEAGE_MARKER_MARGIN = 0.035
 # on clean within-family discrimination cases.
 _LINEAGE_PANEL_MIN_SCORE = 0.60
 _LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND = 0.20
+_LINEAGE_PANEL_OUT_OF_BEAM_MIN_SCORE = 0.85
+_LINEAGE_PANEL_OUT_OF_BEAM_MIN_MARGIN = 0.25
 
 # How many evaluated panels to record in ``lineage_panel_all`` for
 # downstream rendering / debugging. Mirrors the broad-top-5 cap
@@ -102,8 +104,11 @@ _TUMOR_LABEL_MIN_SIGNATURE_RATIO = 0.85
 _TUMOR_LABEL_MIN_FAMILY_SUPPORT = 0.65
 _LEARNED_EXPRESSION_MIN_PROBABILITY = 0.55
 _LEARNED_EXPRESSION_STRONG_PROBABILITY = 0.85
+_LEARNED_EXPRESSION_CONTEXT_FREE_STRONG_PROBABILITY = 0.97
 _LEARNED_EXPRESSION_MIN_MARGIN = 0.10
+_LEARNED_EXPRESSION_CONTEXT_FREE_MIN_MARGIN = 0.50
 _LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT = 0.30
+_LEARNED_EXPRESSION_MIN_HIERARCHICAL_CONTEXT = 0.70
 _LOCAL_REFERENCE_TOP_MARKERS = 24
 _LOCAL_REFERENCE_MIN_TPM = 5.0
 _LOCAL_REFERENCE_MIN_LOG2_VS_PAN = 1.0
@@ -750,6 +755,24 @@ def _hypothesis_evidence_channels(
         status="context_only",
     )
     add(
+        channel="lineage_panel",
+        stage="exact_subtype",
+        role="positive_negative_marker_panel",
+        support=hypothesis.details.get("lineage_panel_score"),
+        selector="lineage_panel",
+        details={
+            "panel": hypothesis.details.get("lineage_panel_top"),
+            "margin": hypothesis.details.get("lineage_panel_margin_over_second"),
+            "rationale": hypothesis.details.get("lineage_panel_rationale"),
+            "out_of_beam_rescue": hypothesis.details.get(
+                "lineage_panel_out_of_beam_rescue"
+            ),
+            "marker_coherence": hypothesis.details.get(
+                "lineage_panel_marker_coherence"
+            ),
+        },
+    )
+    add(
         channel="learned_expression_classifier",
         stage="exact_subtype",
         role="full_profile_discriminative_vote",
@@ -767,6 +790,41 @@ def _hypothesis_evidence_channels(
             ),
         },
     )
+    stage_map = {
+        "compartment": "family",
+        "family": "family",
+        "entity": "coarse_type",
+        "subtype_axis": "exact_subtype",
+    }
+    for vote in hypothesis.details.get("learned_expression_hierarchical_votes") or []:
+        learned_stage = _clean(vote.get("stage"))
+        label = _clean(vote.get("label"))
+        if not learned_stage or not label:
+            continue
+        add(
+            channel="learned_expression_classifier",
+            stage=stage_map.get(learned_stage, learned_stage),
+            role=f"hierarchical_{learned_stage}_vote",
+            support=_safe_float(vote.get("probability")),
+            code=label,
+            context_code=hypothesis.cancer_type,
+            status="admission_context",
+            details={
+                "learned_stage": learned_stage,
+                "label_space": vote.get("label_space"),
+                "margin": vote.get("margin"),
+                "top_predictions": vote.get("top_predictions"),
+                "training_split_policy": vote.get("training_split_policy"),
+                "holdout_top1_accuracy": vote.get("holdout_top1_accuracy"),
+                "holdout_medoid_top1_accuracy": vote.get(
+                    "holdout_medoid_top1_accuracy"
+                ),
+                "oof_precision_at_threshold": vote.get(
+                    "oof_precision_at_threshold"
+                ),
+                "oof_top3_recovery": vote.get("oof_top3_recovery"),
+            },
+        )
     add(
         channel="composition_reference",
         stage="coarse_type",
@@ -3405,6 +3463,63 @@ def _context_support_for_code_or_parent(
     return 0.0, ""
 
 
+def _learned_hierarchical_votes(
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> list[dict[str, Any]]:
+    if not sample_tpm_by_symbol:
+        return []
+    try:
+        from .expression_classifier import classify_expression_hierarchy
+    except ImportError:
+        return []
+    try:
+        return [vote.public_dict() for vote in classify_expression_hierarchy(sample_tpm_by_symbol)]
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("hierarchical learned expression classifier failed", exc_info=True)
+        return []
+
+
+def _learned_vote_supports_by_stage(
+    votes: list[Mapping[str, Any]],
+) -> dict[str, dict[str, float]]:
+    out: dict[str, dict[str, float]] = {}
+    for vote in votes:
+        stage = _clean(vote.get("stage"))
+        if not stage:
+            continue
+        supports = out.setdefault(stage, {})
+        for item in vote.get("top_predictions") or []:
+            label = _clean(item.get("label") or item.get("code"))
+            if label:
+                supports[label] = max(supports.get(label, 0.0), _safe_float(item.get("probability")))
+    return out
+
+
+def _learned_entity_context_support(
+    code: str,
+    supports_by_stage: Mapping[str, Mapping[str, float]],
+) -> tuple[float, str]:
+    return _context_support_for_code_or_parent(
+        code,
+        supports_by_stage.get("entity", {}),
+    )
+
+
+def _learned_compartment_context(
+    code: str,
+    supports_by_stage: Mapping[str, Mapping[str, float]],
+) -> tuple[float, str]:
+    learned_lineage = _code_lineage_token(code)
+    compartment_supports = supports_by_stage.get("compartment", {})
+    best_label = ""
+    best_support = 0.0
+    for label, support in compartment_supports.items():
+        if _lineage_token(label) == learned_lineage and support > best_support:
+            best_label = label
+            best_support = _safe_float(support)
+    return best_support, best_label
+
+
 def _add_learned_expression_classifier_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
@@ -3429,6 +3544,8 @@ def _add_learned_expression_classifier_features(
         return
     if not predictions:
         return
+    hierarchical_votes = _learned_hierarchical_votes(sample_tpm_by_symbol)
+    hierarchical_supports = _learned_vote_supports_by_stage(hierarchical_votes)
 
     code = _clean(predictions[0][0])
     probability = _safe_float(predictions[0][1])
@@ -3441,6 +3558,14 @@ def _add_learned_expression_classifier_features(
     context_support, context_code = _context_support_for_code_or_parent(
         code,
         support_by_code,
+    )
+    learned_entity_support, learned_entity_context = _learned_entity_context_support(
+        code,
+        hierarchical_supports,
+    )
+    learned_compartment_support, learned_compartment_label = _learned_compartment_context(
+        code,
+        hierarchical_supports,
     )
     candidate_rows = _candidate_rows(analysis)
     top_row = candidate_rows[0] if candidate_rows else {}
@@ -3460,10 +3585,11 @@ def _add_learned_expression_classifier_features(
             f"learned classifier margin {margin:.2f} is below "
             f"{_LEARNED_EXPRESSION_MIN_MARGIN:.2f}"
         )
-    if (
+    marker_blocks_selection = bool(
         marker_coherence
         and not _marker_coherence_selection_grade(marker_coherence)
-    ):
+    )
+    if marker_blocks_selection:
         blockers.append(
             f"{code} marker program is {marker_coherence.get('status')} "
             f"({marker_coherence.get('detected')}/"
@@ -3512,20 +3638,36 @@ def _add_learned_expression_classifier_features(
         or _code_has_registry_ancestor(code, top_code)
         or _code_has_registry_ancestor(top_code, code)
     )
-    if not context_corrob and not (strong_probability and same_context):
+    learned_hierarchical_context = max(
+        learned_entity_support,
+        learned_compartment_support,
+    )
+    learned_hierarchical_rescue = bool(
+        probability >= _LEARNED_EXPRESSION_CONTEXT_FREE_STRONG_PROBABILITY
+        and margin >= _LEARNED_EXPRESSION_CONTEXT_FREE_MIN_MARGIN
+        and learned_hierarchical_context >= _LEARNED_EXPRESSION_MIN_HIERARCHICAL_CONTEXT
+        and not marker_blocks_selection
+    )
+    if not context_corrob and not (strong_probability and same_context) and not learned_hierarchical_rescue:
         blockers.append(
             f"learned {code} call lacks broad-ranker context support "
             f"({context_support:.2f}; need "
             f"{_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT:.2f} or same-context "
-            f"probability >= {_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f})"
+            f"probability >= {_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f}; "
+            "context-free selection requires strong hierarchical learned "
+            f"support >= {_LEARNED_EXPRESSION_MIN_HIERARCHICAL_CONTEXT:.2f})"
         )
 
     cross_lineage = bool(top_lineage and learned_lineage and learned_lineage != top_lineage)
-    if cross_lineage and not (strong_probability and context_corrob):
+    if cross_lineage and not (
+        strong_probability
+        and (context_corrob or learned_hierarchical_rescue)
+    ):
         blockers.append(
             f"cross-lineage learned call {code} needs probability >= "
-            f"{_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f} and broad-ranker "
-            f"context support >= {_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT:.2f}"
+            f"{_LEARNED_EXPRESSION_STRONG_PROBABILITY:.2f} and either "
+            f"broad-ranker context support >= {_LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT:.2f} "
+            "or calibrated hierarchical learned context support"
         )
 
     hypothesis = _hypothesis(hypotheses, code)
@@ -3561,6 +3703,22 @@ def _add_learned_expression_classifier_features(
             "learned_expression_margin": round(float(margin), 4),
             "learned_expression_context_support": round(float(context_support), 4),
             "learned_expression_context_code": context_code,
+            "learned_expression_hierarchical_context_support": round(
+                float(learned_hierarchical_context),
+                4,
+            ),
+            "learned_expression_entity_context_support": round(
+                float(learned_entity_support),
+                4,
+            ),
+            "learned_expression_entity_context": learned_entity_context,
+            "learned_expression_compartment_support": round(
+                float(learned_compartment_support),
+                4,
+            ),
+            "learned_expression_compartment_label": learned_compartment_label,
+            "learned_expression_hierarchical_rescue": bool(learned_hierarchical_rescue),
+            "learned_expression_hierarchical_votes": hierarchical_votes,
             "learned_expression_top_predictions": top_predictions,
             "learned_expression_broad_top_code": top_code,
             "learned_expression_broad_top_lineage": top_lineage,
@@ -3581,7 +3739,12 @@ def _add_learned_expression_classifier_features(
         f"full-profile learned expression classifier supports {code} "
         f"(p={probability:.2f}, margin={margin:.2f})"
     )
-    priority_strength = 1.0 + 0.5 * probability + 0.25 * min(context_support, 1.0)
+    priority_strength = (
+        1.0
+        + 0.5 * probability
+        + 0.20 * min(max(context_support, learned_entity_support), 1.0)
+        + (0.20 if learned_hierarchical_rescue else 0.0)
+    )
     hypothesis.consider_for_report_label(
         selected_by="learned_expression_classifier",
         can_select=not blockers,
@@ -4780,6 +4943,56 @@ def _rare_marker_expression_support(
     return float(0.75 * primary_support + 0.25 * co_marker_support)
 
 
+def _analysis_has_expression_concentration_warning(analysis: Mapping[str, Any]) -> bool:
+    """Whether broad whole-profile calls should be treated as technically fragile."""
+
+    def _level_is_concentrated(value: Any) -> bool:
+        return _clean(value).lower() in {"high", "extreme"}
+
+    def _flags_have_concentration(flags: Any) -> bool:
+        return any(
+            "concentration" in str(flag).lower()
+            or "dominated by a tiny transcript set" in str(flag).lower()
+            for flag in (flags or [])
+        )
+
+    for key in ("expression_scale_qc", "raw_expression_scale_qc"):
+        scale_qc = analysis.get(key)
+        if not isinstance(scale_qc, Mapping):
+            continue
+        if _level_is_concentrated(
+            scale_qc.get("expression_concentration_level")
+            or scale_qc.get("concentration_level")
+        ):
+            return True
+        if _flags_have_concentration(scale_qc.get("warnings")):
+            return True
+        if _safe_float(scale_qc.get("top_gene_share_of_total_tpm")) >= 0.20:
+            return True
+
+    sample_context = analysis.get("sample_context")
+    if isinstance(sample_context, Mapping):
+        signals = sample_context.get("signals") or {}
+        flags = sample_context.get("flags") or []
+    else:
+        signals = getattr(sample_context, "signals", {}) if sample_context is not None else {}
+        flags = getattr(sample_context, "flags", []) if sample_context is not None else []
+    if isinstance(signals, Mapping):
+        if _level_is_concentrated(signals.get("expression_concentration_level")):
+            return True
+        if _safe_float(signals.get("top_gene_share_of_total_tpm")) >= 0.20:
+            return True
+    if _flags_have_concentration(flags):
+        return True
+
+    quality = analysis.get("quality")
+    if isinstance(quality, Mapping) and _flags_have_concentration(
+        quality.get("filtered_flags") or quality.get("flags")
+    ):
+        return True
+    return False
+
+
 def _add_lineage_panel_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
@@ -4983,15 +5196,29 @@ def _add_lineage_panel_features(
     broad_top_code = _clean(trace[0].get("code")) if trace else ""
     same_code = bool(broad_top_code and broad_top_code == code)
 
-    can_promote = bool(in_broad_top and (same_code or broad_uncertain))
+    marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+    concentration_warning = _analysis_has_expression_concentration_warning(analysis)
+    out_of_beam_rescue = bool(
+        not in_broad_top
+        and concentration_warning
+        and top_score >= _LINEAGE_PANEL_OUT_OF_BEAM_MIN_SCORE
+        and margin >= _LINEAGE_PANEL_OUT_OF_BEAM_MIN_MARGIN
+    )
+
+    can_promote = bool(
+        (in_broad_top and (same_code or broad_uncertain))
+        or out_of_beam_rescue
+    )
     blockers: list[str] = []
-    if not in_broad_top:
+    if not in_broad_top and not out_of_beam_rescue:
         blockers.append(
             f"{code} is not among the top-5 first-pass RNA candidates; "
             "lineage panels only refine candidates the first-pass "
-            "classifier already considered"
+            "classifier already considered unless a very strong panel is "
+            "paired with a technical expression-concentration warning and "
+            "coherent marker sanity"
         )
-    elif not (same_code or broad_uncertain):
+    elif not out_of_beam_rescue and not (same_code or broad_uncertain):
         blockers.append(
             f"first-pass top-1 ({broad_top_code or 'unknown'}) differs "
             f"from panel parent_cohort ({code}) and the first-pass "
@@ -5022,10 +5249,10 @@ def _add_lineage_panel_features(
             "override"
         )
         can_promote = False
-    marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
     if (
         can_promote
         and not same_code
+        and not out_of_beam_rescue
         and marker_coherence
         and not _marker_coherence_selection_grade(marker_coherence)
     ):
@@ -5038,6 +5265,14 @@ def _add_lineage_panel_features(
         can_promote = False
     if marker_coherence:
         hypothesis.details["lineage_panel_marker_coherence"] = marker_coherence
+    if out_of_beam_rescue:
+        hypothesis.details["lineage_panel_out_of_beam_rescue"] = {
+            "score": round(top_score, 4),
+            "margin_over_second": round(margin, 4),
+            "expression_concentration_warning": bool(concentration_warning),
+            "panel_marker_coherence": top_rationale,
+            "generic_marker_coherence": marker_coherence,
+        }
     # Class-rank policy:
     #   - SAME-CODE REINFORCEMENT (panel agrees with broad top-1) →
     #     class 2. This lets the panel DEFEND a correct broad call

@@ -1556,6 +1556,48 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
         "classify_expression",
         lambda _sample, top_k=5: [("STAD", 0.92), ("READ", 0.04), ("COAD", 0.03)],
     )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "compartment",
+                    "label_space": "learned_compartment",
+                    "label": "epithelial",
+                    "probability": 0.99,
+                    "margin": 0.95,
+                    "top_predictions": [
+                        {"label": "epithelial", "probability": 0.99}
+                    ],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "family",
+                    "label_space": "learned_family",
+                    "label": "carcinoma-gi",
+                    "probability": 0.92,
+                    "margin": 0.70,
+                    "top_predictions": [
+                        {"label": "carcinoma-gi", "probability": 0.92}
+                    ],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label_space": "learned_entity",
+                    "label": "STAD",
+                    "probability": 0.92,
+                    "margin": 0.70,
+                    "top_predictions": [
+                        {"label": "STAD", "probability": 0.92}
+                    ],
+                }
+            ),
+        ],
+    )
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
 
     analysis = _candidate_analysis(
@@ -1574,6 +1616,87 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
     assert result["selected"]["selected_by"] == "learned_expression_classifier"
     stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
     assert stad["metrics"]["learned_expression_support"] == 0.92
+    learned_channels = [
+        row for row in result["staged_evidence_graph"]["channels"]
+        if row["channel"] == "learned_expression_classifier"
+        and row.get("candidate_code") == "STAD"
+    ]
+    assert any(row["role"] == "full_profile_discriminative_vote" for row in learned_channels)
+    assert any(row["role"] == "hierarchical_compartment_vote" for row in learned_channels)
+    assert any(row["role"] == "hierarchical_family_vote" for row in learned_channels)
+    assert any(row["role"] == "hierarchical_entity_vote" for row in learned_channels)
+
+
+def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(monkeypatch):
+    """A very strong learned hierarchy can beat an unsupported primary-expression attractor."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+    import trufflepig.expression_classifier as classifier
+
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [("SARC_ASPS", 0.992), ("HNSC", 0.002)],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "compartment",
+                    "label_space": "learned_compartment",
+                    "label": "mesenchymal",
+                    "probability": 0.992,
+                    "margin": 0.90,
+                    "top_predictions": [
+                        {"label": "mesenchymal", "probability": 0.992}
+                    ],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "family",
+                    "label_space": "learned_family",
+                    "label": "SARC_MELANOCYTIC_TRANSLOCATION",
+                    "probability": 0.992,
+                    "margin": 0.90,
+                    "top_predictions": [
+                        {
+                            "label": "SARC_MELANOCYTIC_TRANSLOCATION",
+                            "probability": 0.992,
+                        }
+                    ],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label_space": "learned_entity",
+                    "label": "SARC_ASPS",
+                    "probability": 0.992,
+                    "margin": 0.90,
+                    "top_predictions": [
+                        {"label": "SARC_ASPS", "probability": 0.992}
+                    ],
+                }
+            ),
+        ],
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"EPCAM": 10.0, "ASPSCR1": 100.0}),
+        _candidate_analysis(
+            [
+                {"code": "HNSC", "support_fraction_of_top": 1.0},
+            ]
+        ),
+    )
+
+    assert result["selected"]["cancer_type"] == "SARC_ASPS"
+    assert result["selected"]["selected_by"] == "learned_expression_classifier"
+    assert result["selected"]["learned_expression_hierarchical_rescue"] is True
 
 
 def test_learned_expression_classifier_blocks_background_compartment_flip(monkeypatch):

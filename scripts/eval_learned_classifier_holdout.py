@@ -35,6 +35,11 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from eval_per_sample_confusion import match_level
+from trufflepig.expression_classifier import (
+    _learned_compartment_for_code,
+    _learned_entity_for_code,
+    _learned_family_for_code,
+)
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,64 @@ def _fit_model(
     return model, genes
 
 
+def _fit_stage_model(
+    clean_tpm_matrix: pd.DataFrame,
+    labels: dict[str, str],
+    train_cols: list[str],
+    genes: list[str],
+    labeler,
+):
+    log_tpm = np.log1p(clean_tpm_matrix.clip(lower=0))
+    stage_labels = [labeler(labels[col]) for col in train_cols]
+    keep = [bool(label) for label in stage_labels]
+    if sum(keep) < 2 or len(set(label for label in stage_labels if label)) < 2:
+        return None
+    kept_cols = [col for col, use in zip(train_cols, keep, strict=True) if use]
+    kept_labels = [label for label, use in zip(stage_labels, keep, strict=True) if use]
+    x_train = np.nan_to_num(
+        log_tpm.loc[genes, kept_cols].T.to_numpy(),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    model = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=2000, C=1.0, class_weight="balanced"),
+    )
+    model.fit(x_train, np.asarray(kept_labels))
+    return model
+
+
+def _fit_stage_models(
+    clean_tpm_matrix: pd.DataFrame,
+    labels: dict[str, str],
+    train_cols: list[str],
+    genes: list[str],
+):
+    labelers = {
+        "compartment": _learned_compartment_for_code,
+        "family": _learned_family_for_code,
+        "entity": _learned_entity_for_code,
+    }
+    return {
+        stage: model
+        for stage, model in (
+            (
+                stage,
+                _fit_stage_model(
+                    clean_tpm_matrix,
+                    labels,
+                    train_cols,
+                    genes,
+                    labeler,
+                ),
+            )
+            for stage, labeler in labelers.items()
+        )
+        if model is not None
+    }
+
+
 def _predict_matrix(model, genes: list[str], clean_tpm_matrix: pd.DataFrame, cols: list[str], top_k: int):
     if not cols:
         return {}
@@ -149,6 +212,10 @@ def _predict_matrix(model, genes: list[str], clean_tpm_matrix: pd.DataFrame, col
         order = np.argsort(row)[::-1][:top_k]
         out[col] = [(str(classes[i]), float(row[i])) for i in order]
     return out
+
+
+def _predict_stage_matrix(model, genes: list[str], clean_tpm_matrix: pd.DataFrame, cols: list[str], top_k: int):
+    return _predict_matrix(model, genes, clean_tpm_matrix, cols, top_k)
 
 
 def _predict_medoids(
@@ -178,6 +245,25 @@ def _predict_medoids(
         order = np.argsort(row)[::-1][:top_k]
         out[code] = [(str(classes[i]), float(row[i])) for i in order]
     return out
+
+
+def _predict_stage_medoids(
+    model,
+    genes: list[str],
+    clean_tpm_matrix: pd.DataFrame,
+    per_type: dict[str, list[str]],
+    *,
+    columns_by_type: dict[str, list[str]] | None,
+    top_k: int,
+):
+    return _predict_medoids(
+        model,
+        genes,
+        clean_tpm_matrix,
+        per_type,
+        columns_by_type=columns_by_type,
+        top_k=top_k,
+    )
 
 
 def _records_for_predictions(labels: dict[str, str], predictions: dict[str, list[tuple[str, float]]]):
@@ -227,6 +313,41 @@ def _records_for_medoids(predictions: dict[str, list[tuple[str, float]]], *, spl
             }
         )
     return records
+
+
+def _stage_accuracy(
+    labels: dict[str, str],
+    predictions: dict[str, list[tuple[str, float]]],
+    labeler,
+) -> tuple[int, int]:
+    correct = 0
+    total = 0
+    for sample_id, top in predictions.items():
+        if not top:
+            continue
+        truth = labeler(labels[sample_id])
+        if not truth:
+            continue
+        total += 1
+        correct += int(top[0][0] == truth)
+    return correct, total
+
+
+def _stage_medoid_accuracy(
+    predictions: dict[str, list[tuple[str, float]]],
+    labeler,
+) -> tuple[int, int]:
+    correct = 0
+    total = 0
+    for truth_code, top in predictions.items():
+        if not top:
+            continue
+        truth = labeler(truth_code)
+        if not truth:
+            continue
+        total += 1
+        correct += int(top[0][0] == truth)
+    return correct, total
 
 
 def _summary(records: list[dict[str, object]]) -> dict[str, object]:
@@ -314,6 +435,12 @@ def main() -> int:
         train_cols,
         n_genes=args.n_genes,
     )
+    stage_models = _fit_stage_models(
+        split_data.clean_tpm,
+        split_data.labels,
+        train_cols,
+        genes,
+    )
     test_predictions = _predict_matrix(
         model,
         genes,
@@ -322,6 +449,16 @@ def main() -> int:
         args.top_k,
     )
     test_records = _records_for_predictions(split_data.labels, test_predictions)
+    stage_test_predictions = {
+        stage: _predict_stage_matrix(
+            stage_model,
+            genes,
+            split_data.clean_tpm,
+            test_cols,
+            args.top_k,
+        )
+        for stage, stage_model in stage_models.items()
+    }
 
     test_by_type: dict[str, list[str]] = collections.defaultdict(list)
     for col in test_cols:
@@ -348,6 +485,25 @@ def main() -> int:
         ),
         split="medoid_test",
     )
+    stage_medoid_test_predictions = {
+        stage: _predict_stage_medoids(
+            stage_model,
+            genes,
+            split_data.clean_tpm,
+            split_data.per_type,
+            columns_by_type=dict(test_by_type),
+            top_k=args.top_k,
+        )
+        for stage, stage_model in stage_models.items()
+    }
+    entity_test_records = _records_for_predictions(
+        split_data.labels,
+        stage_test_predictions.get("entity", {}),
+    )
+    entity_medoid_test_records = _records_for_medoids(
+        stage_medoid_test_predictions.get("entity", {}),
+        split="hier_entity_medoid_test",
+    )
 
     print(
         f"# {len(types)} cohorts, {len(split_data.labels)} samples; "
@@ -355,10 +511,50 @@ def main() -> int:
         f"genes={len(genes)}, seed={args.seed}, shuffle={not args.no_shuffle}"
     )
     _print_summary("held-out samples", test_records)
+    if entity_test_records:
+        _print_summary("held-out samples, hierarchy entity model", entity_test_records)
     _print_summary("all-sample medoids", medoid_all_records)
     _print_summary("held-out medoids", medoid_test_records)
+    if entity_medoid_test_records:
+        _print_summary("held-out medoids, hierarchy entity model", entity_medoid_test_records)
+    print("\n==== hierarchy stage top-1 accuracy ====")
+    stage_labelers = {
+        "compartment": _learned_compartment_for_code,
+        "family": _learned_family_for_code,
+        "entity": _learned_entity_for_code,
+    }
+    for stage, labeler in stage_labelers.items():
+        if stage not in stage_test_predictions:
+            continue
+        correct, total = _stage_accuracy(
+            split_data.labels,
+            stage_test_predictions[stage],
+            labeler,
+        )
+        med_correct, med_total = _stage_medoid_accuracy(
+            stage_medoid_test_predictions.get(stage, {}),
+            labeler,
+        )
+        print(
+            f"  {stage:11s}: held-out {correct:3d}/{total:<3d} "
+            f"({100*correct/total if total else 0.0:5.1f}%)  "
+            f"medoid {med_correct:3d}/{med_total:<3d} "
+            f"({100*med_correct/med_total if med_total else 0.0:5.1f}%)"
+        )
     _print_misses("held-out sample", test_records, limit=args.miss_limit)
+    if entity_test_records:
+        _print_misses(
+            "held-out hierarchy-entity sample",
+            entity_test_records,
+            limit=args.miss_limit,
+        )
     _print_misses("held-out medoid", medoid_test_records, limit=args.miss_limit)
+    if entity_medoid_test_records:
+        _print_misses(
+            "held-out hierarchy-entity medoid",
+            entity_medoid_test_records,
+            limit=args.miss_limit,
+        )
 
     if args.jsonl:
         with open(args.jsonl, "w") as handle:
@@ -366,6 +562,14 @@ def main() -> int:
                 ("heldout", test_records),
                 ("medoid_all", medoid_all_records),
                 ("medoid_test", medoid_test_records),
+            ):
+                for row in records:
+                    out = dict(row)
+                    out["split"] = split
+                    handle.write(json.dumps(out, sort_keys=True) + "\n")
+            for split, records in (
+                ("heldout_hierarchy_entity", entity_test_records),
+                ("medoid_test_hierarchy_entity", entity_medoid_test_records),
             ):
                 for row in records:
                     out = dict(row)

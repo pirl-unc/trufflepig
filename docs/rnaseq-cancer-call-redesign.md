@@ -548,6 +548,75 @@ beside centroid, marker, decomposition, local-reference, fusion, tumor-up, and
 normal-background evidence so a reviewer can reason over the whole decision
 rather than seeing only the winning selector.
 
+### Current PR implementation status
+
+This PR implements the first usable slice of the learned-evidence redesign
+without replacing the primary ranker.
+
+- `expression_classifier.classify_expression` remains the flat all-entity
+  full-profile logistic-regression vote.
+- `expression_classifier.classify_expression_hierarchy` now emits explicit
+  stage-scoped votes:
+  - `learned_compartment`: a separate compartment model,
+  - `learned_family`: a separate coarse-family model,
+  - `learned_entity`: a separate parent/entity model,
+  - `learned_subtype_axis`: a sparse parent-scoped rollup from the flat model.
+- `cancer_type_evidence` preserves those votes in every learned hypothesis as
+  `learned_expression_hierarchical_votes` and renders them as
+  `learned_expression_classifier` channels in the staged evidence graph.
+- The learned selector still prefers broad-ranker context. A context-free
+  learned rescue is only selectable when the flat probability is at least
+  `0.97`, the flat margin is at least `0.50`, either the learned entity or
+  learned compartment support is at least `0.70`, and marker sanity does not
+  block the candidate.
+- Cross-lineage learned calls still need strong probability and either
+  broad-ranker support or the hierarchical rescue condition. Otherwise they are
+  retained as context/blocked evidence, not used as the report label.
+- Strong lineage-marker panels can now rescue a candidate that the broad ranker
+  omitted only when the broad expression distribution carries a technical
+  concentration warning, the panel score is at least `0.85`, the panel margin
+  is at least `0.25`, and no independent composition conflict blocks it. This
+  preserves the old top-5 guard for normal inputs while fixing the local
+  HCC1395/StringTie case where a BRCA_BASAL positive/negative marker program
+  was previously noted but unable to correct a T_ALL artifact call.
+- The detailed evidence markdown now includes a `Cancer-type decision evidence
+  trace` table before the target evidence. It shows selected, blocked, and
+  context-only channels with staged learned votes beside centroid, marker,
+  local-reference, fusion, composition, and tumor-up signals.
+- Hierarchical learned-vote rows carry the training policy plus held-out
+  calibration fields where available (`holdout_top1_accuracy`,
+  `holdout_medoid_top1_accuracy`, and `oof_top3_recovery`). These values are
+  rendered for interpretation only; the selector thresholds use the live
+  probability/margin/context fields.
+
+The 3-training/2-testing holdout harness now evaluates both flat and staged
+learned models. Across five random seeds, the staged compartment model is the
+most reliable new signal; the staged entity model is not better than the flat
+entity classifier as a stand-alone oracle. That supports using the hierarchy
+for admission and corroboration rather than replacing the final selector:
+
+- flat held-out entity-compatible mean: `0.882`;
+- flat held-out lineage-compatible mean: `0.969`;
+- staged-entity held-out entity-compatible mean: `0.882`;
+- staged-entity held-out lineage-compatible mean: `0.966`;
+- staged compartment top-1 on seed 0: `219/223` held-out samples and
+  `116/117` held-out medoids.
+
+End-to-end 565-sample behavior for the current PR:
+
+- original broad/evidence baseline: `450/565` entity-compatible and `534/565`
+  lineage-compatible;
+- previous flat learned-channel selector: `518/565` entity-compatible and
+  `546/565` lineage-compatible;
+- current hierarchical learned-admission selector: `536/565`
+  entity-compatible and `558/565` lineage-compatible.
+
+Notable resolved misses include the prior NBL-to-SCLC slips, SARC_ASPS to
+SKCM, SARC_ANGIO to HNSC, SARC_CCS to UVM, SARC_DSRCT to ESCA, and the
+SARC_RMS_ERMS subtype regression from #102. Remaining misses are isolated and
+mostly concentrated in rare sarcoma/melanocytic-neural boundaries, embryonal
+tumor boundaries, and a few epithelial-neuroendocrine lookalikes.
+
 ## Proposed confluent algorithm
 
 ### Stage 0: compute a single reusable feature frame

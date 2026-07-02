@@ -13,9 +13,12 @@ shortlist, and report.
 > and vetoed when the bulk classifier and confident compartment call agree
 > against them. The broad ranker's own `winning_subtype` is also represented as
 > a `broad_rna_subtype` selector so subtype evidence can compete explicitly with
-> local exact references. A guarded `learned_expression_classifier` selector can
-> now add a full-profile discriminative vote when probability, margin, marker
-> sanity, broad context, and compartment/background checks agree.
+> local exact references. A guarded `learned_expression_classifier` selector now
+> preserves flat plus hierarchical compartment/family/entity/subtype votes in the
+> staged evidence graph. Strong lineage-panel evidence can also rescue a
+> candidate outside the broad top-5 only when the broad expression distribution
+> carries a technical concentration warning and the panel score/margin are very
+> high.
 
 It exists because:
 1. The flow has 12 stages with non-trivial conditional branching;
@@ -269,7 +272,8 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | Met-site auto-detection | Stage 5 | Switches decomposition template from solid_primary → met_<site> | tissue_score ≥ 0.90 + ≥ 0.10 ahead of primary + no explicit hint |
 | Rare-marker promotion | Stage 8 selector #2 | Promotes a rare cancer (NUTM, salivary, etc.) when marker gene + context match | Marker TPM ≥ threshold + (top context promotes to full XOR top_context_weight applied) |
 | Fine reference promotion | Stage 8 selector #4 | Promotes a fine label (OS-within-SARC) | All metrics in `FineReferenceSpec.minimum_metrics` met, support ≥ 0.70 |
-| Learned expression classifier | Stage 8 selector | Adds a selectable full-profile discriminative vote | Probability/margin pass, marker sanity is coherent, broad context supports the label or the probability is strong, and compartment/background checks do not contradict it |
+| Learned expression classifier | Stage 8 selector | Adds selectable/contextual flat and hierarchical full-profile votes | Flat probability/margin pass, marker sanity is coherent, broad context or hierarchical context supports the label, and compartment/background checks do not contradict it |
+| QC-guarded lineage-panel out-of-beam rescue | Stage 8 selector | Lets a strong lineage panel admit a code omitted by the broad top-5 | Expression concentration warning + lineage-panel score ≥ 0.85 + margin ≥ 0.25 + no independent composition conflict |
 | User --cancer-type override | Stage 10 | Forces report scope but does NOT silence broad-classifier disagreement | Always when supplied |
 
 ---
@@ -312,7 +316,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 **The five key concepts a debugger should know:**
 
 1. **Broad classification and report scope are decoupled.** Stages 2-3 do RNA-inferred classification; Stage 10 chooses what label the report wears. A user-supplied `--cancer-type` overrides 10 but does not silence 2-3, so disagreement is always reported.
-2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, broad_rna_subtype, tumor_label_refinement, fine_reference, local_expression_reference, learned_expression_classifier, primary_expression_match) is independently scoreable. The one that wins is `selected_by`.
+2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, lineage_panel, broad_rna_subtype, tumor_label_refinement, fine_reference, local_expression_reference, learned_expression_classifier, primary_expression_match) is independently scoreable. The one that wins is `selected_by`.
 3. **Special rescues are conditional, not pipeline stages.** basal-BRCA rescue, met-site auto-detection, rare-marker promotion are gated overrides that fire under specific signatures — they're not always-on.
 4. **Decomposition is downstream of classification, not upstream.** Stage 6 fits non-tumor compartments using the template chosen in Stage 5 — which itself depends on what cancer was called in Stages 2-3.
 5. **Confidence is independent of correctness.** A high-confidence call can still be wrong (HCC1395 with `--cancer-type BRCA` would show "moderate confidence" even though the broad RNA classifier disagrees); a low-confidence call can still be right (HCC1395 unhinted picks BRCA via rescue with "provisional" badge).

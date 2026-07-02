@@ -514,6 +514,43 @@ def test_gate_blocks_when_proposed_code_outside_broad_top_5():
     assert "top-5" in blocked or "broad rna candidates" in blocked
 
 
+def test_strong_panel_can_rescue_out_of_beam_when_expression_qc_is_fragile():
+    """A very strong lineage panel can rescue a missing candidate when the
+    broad expression distribution is technically unreliable.
+
+    This pins the HCC1395/StringTie failure mode: a concentrated transcript
+    artifact lets the broad softmax jump to an unrelated lineage, while the
+    BRCA_BASAL positive/negative marker program is coherent.
+    """
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "T_ALL", "family_label": "heme-tcell", "support_score": 0.9},
+            {"code": "ESCA", "family_label": "squamous", "support_score": 0.7},
+            {"code": "SKCM", "family_label": "melanoma", "support_score": 0.6},
+            {"code": "SARC", "family_label": "sarcoma", "support_score": 0.5},
+            {"code": "UCS", "family_label": "mullerian", "support_score": 0.4},
+        ],
+        "sample_context": {
+            "signals": {
+                "expression_concentration_level": "extreme",
+                "top_gene_share_of_total_tpm": 0.20,
+            },
+            "flags": [
+                "Expression distribution is extremely concentrated",
+            ],
+        },
+    }
+
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    assert brca is not None
+    public = brca.public_dict() or {}
+    assert public.get("can_select_report_label") is True
+    assert public.get("selected_by") == "lineage_panel"
+    assert public.get("lineage_panel_out_of_beam_rescue")
+
+
 def test_main_propagates_lineage_panel_evidence_to_analysis_dict(monkeypatch):
     """``_apply_cancer_type_evidence`` copies ``lineage_panel_evidence``
     from the cancer_type_evidence return onto the ``analysis`` dict

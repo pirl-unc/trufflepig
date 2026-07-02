@@ -6651,6 +6651,98 @@ def _alteration_effect_markdown(
     return "\n".join(lines)
 
 
+def _decision_channel_detail_summary(details):
+    if not isinstance(details, dict) or not details:
+        return ""
+    parts = []
+    if details.get("learned_stage"):
+        parts.append(f"learned stage {details.get('learned_stage')}")
+    if details.get("label_space"):
+        parts.append(f"space {details.get('label_space')}")
+    if details.get("training_split_policy"):
+        parts.append(f"training {details.get('training_split_policy')}")
+    if details.get("panel"):
+        parts.append(f"panel {details.get('panel')}")
+    if details.get("out_of_beam_rescue"):
+        parts.append("out-of-beam rescue")
+    for key, label in (
+        ("probability", "p"),
+        ("margin", "margin"),
+        ("context_support", "context"),
+        ("holdout_top1_accuracy", "held-out top1"),
+        ("holdout_medoid_top1_accuracy", "medoid top1"),
+        ("oof_top3_recovery", "top3 recovery"),
+        ("rho", "rho"),
+    ):
+        value = details.get(key)
+        if isinstance(value, (int, float)):
+            parts.append(f"{label}={value:.3f}")
+    top = details.get("top_predictions") or []
+    if top:
+        formatted = []
+        for row in top[:3]:
+            if not isinstance(row, dict):
+                continue
+            code = row.get("code") or row.get("label")
+            probability = row.get("probability")
+            if code and isinstance(probability, (int, float)):
+                formatted.append(f"{code} {probability:.2f}")
+            elif code:
+                formatted.append(str(code))
+        if formatted:
+            parts.append("top " + ", ".join(formatted))
+    rationale = details.get("rationale")
+    if rationale:
+        parts.append(str(rationale)[:140])
+    return "; ".join(parts)
+
+
+def _cancer_type_decision_trace_markdown(analysis):
+    evidence = analysis.get("cancer_type_evidence") or {}
+    graph = evidence.get("staged_evidence_graph") or {}
+    channels = graph.get("channels") or []
+    if not channels:
+        return ""
+    selected = graph.get("selected") or {}
+    lines = ["## Cancer-type decision evidence trace\n"]
+    if selected:
+        selected_code = selected.get("code") or ""
+        lines.append(
+            f"Selected report label: **{_cancer_label(selected_code)}** via "
+            f"`{selected.get('selected_by') or 'primary_expression_context'}`. "
+            "Rows below include selected, blocked, and context-only signals used "
+            "by the cancer-type decision process.\n"
+        )
+    lines.append("| Stage | Candidate | Channel | Role | Status | Support | Details |")
+    lines.append("|---|---|---|---|---|---:|---|")
+    ordered = sorted(
+        channels,
+        key=lambda row: (
+            str(row.get("stage") or ""),
+            str(row.get("candidate_code") or row.get("code") or ""),
+            str(row.get("channel") or ""),
+            str(row.get("role") or ""),
+        ),
+    )
+    for row in ordered[:80]:
+        support = row.get("support")
+        support_text = (
+            f"{float(support):.3f}" if isinstance(support, (int, float)) else ""
+        )
+        candidate = row.get("candidate_code") or row.get("code") or ""
+        detail = _decision_channel_detail_summary(row.get("details") or {})
+        lines.append(
+            f"| {row.get('stage') or ''} | {_cancer_label(candidate)} | "
+            f"`{row.get('channel') or ''}` | {row.get('role') or ''} | "
+            f"{row.get('status') or ''} | {support_text} | {detail or '—'} |"
+        )
+    if len(ordered) > 80:
+        lines.append(
+            f"\nAdditional low-priority/context rows omitted from this table: {len(ordered) - 80}."
+        )
+    return "\n".join(lines)
+
+
 def _build_evidence_report(
     analysis,
     ranges_df,
@@ -6725,6 +6817,10 @@ def _build_evidence_report(
     alteration_body = _alteration_effect_markdown(analysis)
     if alteration_body:
         lines.append(alteration_body)
+        lines.append("")
+    decision_trace_body = _cancer_type_decision_trace_markdown(analysis)
+    if decision_trace_body:
+        lines.append(decision_trace_body)
         lines.append("")
     lines.append("## Full target evidence\n")
     lines.append(target_body)
