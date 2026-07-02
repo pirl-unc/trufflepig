@@ -87,6 +87,26 @@ Validation on 2026-07-01 shows a large improvement but not the aspirational
   the selected label for biomarker/therapy scope and decomposition; contextual
   alternatives remain evidence/context only.
 
+Learned-expression classifier leakage audit (2026-07-02):
+
+- Added `scripts/eval_learned_classifier_holdout.py` to train the learned
+  classifier on up to 3 representative samples per cohort and test on up to 2
+  held-out samples per cohort. The scaler, high-variance gene selection, and
+  logistic model are fit on the training split only.
+- Five shuffled 3/2 splits use 342 training samples and 223 held-out samples.
+  Held-out sample means: exact 66.9%, entity-compatible 88.2% (range
+  86.5-91.9%), lineage-compatible 96.9% (range 96.0-98.7%), top-3
+  entity-compatible 96.6%.
+- Held-out medoid means: exact 69.1%, entity-compatible 90.6%,
+  lineage-compatible 97.3%, top-3 entity-compatible 99.0%. All-sample medoids
+  remain near-perfect, but that view includes training samples and is not the
+  honest estimate.
+- On the current 19 cross-lineage miss targets, held-out observations across
+  seeds were 12 exact, 2 subtype-compatible, 1 sibling-compatible, and 12 miss.
+  The full-trained p~0.99 truth votes are therefore partly training leakage,
+  but the holdout signal is still strong enough to justify using the learned
+  classifier as a guarded co-signal rather than an oracle.
+
 Local report audit highlights:
 
 - PFO002 Personalis/Tempus/Kallisto reports select READ/colorectal scope;
