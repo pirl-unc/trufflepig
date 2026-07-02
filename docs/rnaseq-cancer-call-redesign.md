@@ -500,6 +500,54 @@ This prevents the two common mistakes:
 - treating a subtype without a direct reference as unevaluable when it may have
   strong defining positive/negative markers.
 
+### Learned models should be hierarchical evidence, not a separate oracle
+
+The flat learned expression classifier is useful, but it asks too many
+biological questions in one softmax: compartment, family, exact entity,
+histologic subtype, molecular state, and fusion-defined rare entity. The
+redesign should split learned evidence into stage-specific co-signals:
+
+- **compartment learned vote**: epithelial, mesenchymal/sarcoma,
+  hematolymphoid, melanocytic, CNS, embryonal, neuroendocrine, germ-cell;
+- **family learned vote within compartment**: e.g. GI/hepatobiliary/breast/
+  squamous/renal/gynecologic/lung/urothelial for epithelial, and
+  liposarcoma/RMS/GIST/vascular/nerve-sheath/undifferentiated/
+  melanocytic-translocation-like groups for sarcoma;
+- **entity learned vote within family**: exact labels only after the relevant
+  family has been admitted;
+- **subtype or molecular-axis learned vote**: BRCA basal/luminal/HER2,
+  LUAD EGFR/KRAS/STK11, SCLC ASCL1/NEUROD1/POU2F3/YAP1, MBL groups, and
+  similar axes after the parent is accepted.
+
+Each learned vote should have an out-of-fold calibration record and a declared
+role:
+
+```text
+learned_vote.stage
+learned_vote.label_space
+learned_vote.top_predictions
+learned_vote.probability_or_score
+learned_vote.margin
+learned_vote.oof_precision_at_threshold
+learned_vote.oof_top3_recovery
+learned_vote.training_split_policy
+learned_vote.admits_candidate
+learned_vote.selects_candidate
+learned_vote.blocking_or_caution_reasons
+```
+
+The learned signal should generally admit candidates before it selects them.
+Selection requires agreement with the appropriate stage evidence: compartment,
+marker sanity, fusion status, expression-reference support, decomposition
+residual, or direct molecular evidence. A high flat probability without such
+corroboration is context, not authority.
+
+All learned evidence must be serialized into the same evidence trace as the
+non-learned signals. The detailed markdown report should show these votes
+beside centroid, marker, decomposition, local-reference, fusion, tumor-up, and
+normal-background evidence so a reviewer can reason over the whole decision
+rather than seeing only the winning selector.
+
 ## Proposed confluent algorithm
 
 ### Stage 0: compute a single reusable feature frame
@@ -520,6 +568,8 @@ sample-level signals exactly once:
 - subtype ontology entries and expression-reference options for every admitted
   candidate,
 - positive/negative marker sanity checks for every admitted entity/subtype,
+- hierarchical learned-expression votes at compartment, family, entity, and
+  subtype/molecular-axis resolution, including out-of-fold calibration metadata,
 - bulk aneuploidy and residual characterization.
 
 This frame is read-only. Later stages consume it and write a decision trace;
@@ -558,6 +608,7 @@ explicit stage decision:
 ```text
 compartment = confident centroid compartment
             OR consensus(lineage panels, residual lineage_fit, broad signatures)
+            OR calibrated learned compartment vote
             OR abstain
 ```
 
@@ -584,6 +635,11 @@ Use contrast panels and tumor-intrinsic lineage panels here. Existing rescues
 become ordinary discriminators with weights and blockers, not post-hoc
 overrides.
 
+Use the learned family vote as a candidate-admission and corroboration signal,
+not a replacement for family evidence. A learned family can keep a family in the
+beam even when the flat broad ranker misses it, but exact entity selection still
+requires the Stage 4 evidence model.
+
 The broad ranker should no longer mix family factor, purity, and exact label
 in one geomean. It should produce stage-specific support:
 
@@ -608,6 +664,7 @@ entity_score =
   + residual_signature_identity
   + direct_molecular_evidence
   + centroid_broad_corroboration
+  + learned_entity_corroboration
   - normal_origin_dominance
   - compartment_incompatibility
   - hallmark_absence
@@ -631,6 +688,9 @@ it.
 Rules:
 
 - centroid can anchor a subtype only inside the selected parent/family;
+- learned subtype/molecular-axis votes can refine only inside the accepted
+  parent/family unless a defining molecular event upgrades the child to an
+  entity;
 - same-lineage subtype flips require subtype-specific marker/hallmark support
   or a family-specific decisive centroid margin;
 - sarcoma subtype margins should be stricter than epithelial parent margins;
@@ -659,6 +719,7 @@ subtype_decision
 orthogonal_axes
 purity_and_decomposition
 evidence_trace
+learned_evidence_trace
 abstentions_and_conflicts
 ```
 
@@ -666,6 +727,14 @@ Reports, therapy selection, ranges, provenance, and confidence should read
 that object. `cancer_type_evidence` can remain as a renderer/serializer of the
 trace, but it should stop being a second selector that can require a later
 purity/decomposition reroute.
+
+The rendered `*-evidence.md` and detailed `*-analysis.md` files should preserve
+the complete decision evidence table: selected and blocked candidates, learned
+votes at every stage, calibration caveats, marker positive/negative axes,
+centroid/compartment support, decomposition/residual signals, fusions, and
+normal-background explanations. The report should make clear which signals
+admitted a hypothesis, which signals blocked it, and which signals actually
+selected the final label.
 
 ## Implementation plan
 
@@ -678,7 +747,9 @@ Acceptance:
 
 - no behavior changes,
 - no duplicate centroid/decomposition/purity recomputation in hot paths,
-- 565 harness records per-sample feature terms and stage decisions.
+- 565 harness records per-sample feature terms and stage decisions,
+- evidence markdown includes a complete trace of learned and non-learned
+  co-signals for selected and blocked hypotheses.
 
 ### Phase 2: candidate universe and stage separation
 
@@ -688,6 +759,8 @@ stage has plausible support.
 
 Move family panels, lineage exclusion, hallmark veto, and normal-tissue
 evidence into stage-specific columns rather than post-rank sort mutations.
+Add learned compartment/family/entity votes as admission evidence with explicit
+out-of-fold calibration metadata; do not let admission imply selection.
 
 Acceptance:
 
@@ -756,7 +829,20 @@ to record:
 - the first stage where the truth candidate lost,
 - every selector/demotion that changed the winner,
 - and ablation deltas for centroid, residual, normal-origin dominance, and
-  subtype policy.
+  subtype policy,
+- out-of-fold learned predictions for flat and hierarchical learned models.
+
+Add a hierarchical learned-model harness:
+
+```text
+compartment model -> family-within-compartment model
+                  -> entity-within-family model
+                  -> subtype/molecular-axis model
+```
+
+Compare flat 118-way top-1/top-3, hierarchical top-1/top-3, and hybrid
+candidate-admission performance. Thresholds used by production selectors must
+come from out-of-fold or held-out estimates, not from all-trained probabilities.
 
 Targets:
 
