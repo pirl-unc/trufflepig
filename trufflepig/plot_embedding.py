@@ -143,6 +143,7 @@ _CURATED_PAN_REFERENCE_ANCHORS = [
 
 _signature_panel_cache = {}
 _full_cohort_hk_reference_cache = {}
+_full_cohort_raw_reference_cache = {}
 _full_cohort_signature_panels_cache = {}
 
 # Part-2: molecular subtypes are excluded from the broad signature panels. A subtype as a competing
@@ -343,6 +344,39 @@ def _full_cohort_hk_reference():
     return full
 
 
+def _full_cohort_raw_reference():
+    """~170-column raw clean-TPM/nTPM reference for signature-basis A/B tests."""
+    if "ref" in _full_cohort_raw_reference_cache:
+        return _full_cohort_raw_reference_cache["ref"]
+    import pandas as _pd
+    from .reference import cancer_reference_expression, pan_cancer_expression
+
+    cref = cancer_reference_expression(format="wide")
+    cancer_cols = [c for c in cref.columns if str(c).endswith("_TPM_clean")]
+    cancer_raw = _pd.DataFrame(
+        {
+            c.replace("_TPM_clean", ""): cref[c].astype(float).clip(lower=0.0).to_numpy()
+            for c in cancer_cols
+        },
+        index=cref["Symbol"].astype(str),
+    )
+
+    pan = pan_cancer_expression()
+    normal_cols = [c for c in pan.columns if str(c).endswith("_nTPM")]
+    normal_raw = _pd.DataFrame(
+        {
+            c: pan[c].astype(float).clip(lower=0.0).to_numpy()
+            for c in normal_cols
+        },
+        index=pan["Symbol"].astype(str),
+    )
+
+    full = cancer_raw.join(normal_raw, how="outer")
+    full = full[~full.index.duplicated(keep="first")]
+    _full_cohort_raw_reference_cache["ref"] = full
+    return full
+
+
 def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
     """Derive a broad signature panel (top-N cohort-specific genes) for ALL 118 cancer cohorts.
 
@@ -392,6 +426,7 @@ def _compute_cancer_type_signature_stats(
     n_signature_genes=20,
     min_fold=2.0,
     candidate_codes=None,
+    cohort_basis="hk",
 ):
     """Score each cancer type by how well the sample matches its signature genes.
 
@@ -420,7 +455,16 @@ def _compute_cancer_type_signature_stats(
     ref_by_sym = ref_matrices["ref_by_sym"]
     expr_matrix = ref_matrices["expr_matrix"]
     # A/B: rank against the full ~170-cohort HK reference (118 cancer + 50 normal) instead of 33.
-    full_ref = _full_cohort_hk_reference()
+    basis = str(cohort_basis or "hk").strip().lower().replace("-", "_")
+    if basis not in {"hk", "raw", "within_sample"}:
+        raise ValueError(
+            "cohort_basis must be one of 'hk', 'raw', or 'within_sample'"
+        )
+    full_ref = (
+        _full_cohort_hk_reference()
+        if basis == "hk"
+        else (_full_cohort_raw_reference() if basis == "raw" else None)
+    )
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
@@ -447,12 +491,16 @@ def _compute_cancer_type_signature_stats(
         for gene in genes:
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0))
             sample_hk = float(sample_hk_by_symbol.get(gene, 0.0))
+            sample_basis_value = sample_hk if basis == "hk" else sample_raw
             cohort_hk = 0.0
             cohort_pct = 0.5
             if gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
                 cohort_hk = float(ref_by_sym.loc[gene, cohort_col])
-            if full_ref is not None and gene in full_ref.index:
-                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
+            if basis == "within_sample":
+                ref_vals = np.array([])
+                cohort_pct = 1.0
+            elif full_ref is not None and gene in full_ref.index:
+                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort reference
                 ref_vals = ref_vals[~np.isnan(ref_vals)]
             elif gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
                 ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK, 33)
@@ -460,10 +508,12 @@ def _compute_cancer_type_signature_stats(
                 ref_vals = np.array([])
             if ref_vals.size:
                 n = len(ref_vals)
-                below = np.sum(ref_vals < sample_hk)
-                equal = np.sum(np.isclose(ref_vals, sample_hk, atol=1e-6))
+                below = np.sum(ref_vals < sample_basis_value)
+                equal = np.sum(np.isclose(ref_vals, sample_basis_value, atol=1e-6))
                 cohort_pct = float((below + 0.5 * equal) / n)
-                if sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:  # zero-floor inflation guard
+                if basis == "hk" and sample_hk < _SIGNATURE_DETECTION_FLOOR_HK:
+                    cohort_pct = min(cohort_pct, 0.5)
+                elif basis == "raw" and sample_raw < 1.0:
                     cohort_pct = min(cohort_pct, 0.5)
             # COMBINED filter (two weak filters): cross-cohort percentile (specificity + the
             # discrimination SPREAD the ranker margins need) modulated by within-sample percentile
@@ -482,6 +532,8 @@ def _compute_cancer_type_signature_stats(
                     "sample_raw": sample_raw,
                     "sample_hk": sample_hk,
                     "cohort_hk": cohort_hk,
+                    "signature_basis": basis,
+                    "sample_basis_value": sample_basis_value,
                     "log_diff": log_diff,
                     "percentile": percentile,
                 }

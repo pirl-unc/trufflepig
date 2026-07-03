@@ -261,7 +261,10 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     bullets = _integrated_evidence_bullets(analysis)
     text = "\n".join(bullets)
     assert "**RNA classifier line**" in text
-    assert "SARC (Sarcoma) is the leading broad RNA candidate" in text
+    assert (
+        "SARC (Sarcoma) is the leading pan-cancer signature-ranker candidate"
+        in text
+    )
     assert "integrated evidence selected COAD (Colon Adenocarcinoma)" in text
     assert "SARC (Sarcoma) is the leading label" not in text
 
@@ -294,7 +297,10 @@ def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference
 
     text = "\n".join(_integrated_evidence_bullets(analysis))
 
-    assert "CESC (Cervical Squamous / Adenocarcinoma) is the leading broad RNA candidate" in text
+    assert (
+        "CESC (Cervical Squamous / Adenocarcinoma) is the leading "
+        "pan-cancer signature-ranker candidate"
+    ) in text
     assert (
         "BRCA (Breast Invasive Carcinoma) is the active fallback "
         "expression/reference context"

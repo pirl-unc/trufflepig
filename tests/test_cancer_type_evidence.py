@@ -228,7 +228,14 @@ def test_broad_only_channels_require_positive_signal():
     selected_channels = result["selected"]["evidence_channels"]
     assert [
         (row["channel"], row["role"]) for row in selected_channels
-    ] == [("bulk_rna", "primary_expression_candidate")]
+    ] == [
+        ("pan_cancer_signature_ranker", "top_ranked_candidate"),
+        ("fused_evidence", "integrated_evidence_selection"),
+    ]
+    assert selected_channels[0]["status"] == "candidate_generation"
+    assert selected_channels[0]["selects_report_label"] is False
+    assert selected_channels[1]["status"] == "informative"
+    assert selected_channels[1]["selects_report_label"] is False
 
     graph_channels = [
         row for row in result["staged_evidence_graph"]["channels"]
@@ -236,7 +243,10 @@ def test_broad_only_channels_require_positive_signal():
     ]
     assert [
         (row["channel"], row["role"]) for row in graph_channels
-    ] == [("bulk_rna", "primary_expression_candidate")]
+    ] == [
+        ("pan_cancer_signature_ranker", "top_ranked_candidate"),
+        ("fused_evidence", "integrated_evidence_selection"),
+    ]
 
 
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
@@ -382,11 +392,14 @@ def test_broad_context_is_part_of_unified_evidence_view():
     assert result["selected"]["cancer_type"] == "READ"
     assert result["selected"]["inferred_cancer_type"] == "READ"
     assert result["selected"]["expression_reference_cancer_type"] == "READ"
-    assert result["selected"]["selected_by"] == "primary_expression_match"
+    assert result["selected"]["selected_by"] == "pan_cancer_signature_ranker"
     assert result["primary_expression_context"]["cancer_type"] == "READ"
     assert [row["cancer_type"] for row in result["evidence"]] == ["READ", "COAD"]
-    assert result["evidence"][0]["evidence_sources"] == ["broad_rna"]
+    assert result["evidence"][0]["evidence_sources"] == [
+        "pan_cancer_signature_ranker"
+    ]
     assert result["evidence"][0]["metrics"]["broad_rna_support"] == 1.0
+    assert result["evidence"][0]["metrics"]["pan_cancer_signature_support"] == 1.0
     assert result["evidence"][0]["report_label_candidate"] is True
 
 
@@ -709,7 +722,7 @@ def test_composition_reference_beats_status_child_when_broad_fit_is_ambiguous(mo
     assert result["selected"]["cancer_type"] == "BLCA"
     assert result["selected"]["selected_by"] == "coarse_composition_reference"
     brca = next(row for row in result["evidence"] if row["cancer_type"] == "BRCA")
-    assert brca["selected_by"] == "primary_expression_match"
+    assert brca["selected_by"] == "pan_cancer_signature_ranker"
     assert brca["local_reference_conflicting_coarse_reference"]["code"] == "BLCA"
 
 
@@ -741,7 +754,7 @@ def test_background_like_top_label_can_yield_to_supported_tumor_label():
     assert result["selected"]["cancer_type"] == "COAD"
     assert result["selected"]["reference_cancer_type"] == "COAD"
     assert result["selected"]["evidence_sources"] == [
-        "broad_rna",
+        "pan_cancer_signature_ranker",
         "tumor_label_refinement",
     ]
     assert result["selected"]["label_decision"]["status"] == "selected"
@@ -775,7 +788,7 @@ def test_background_like_top_label_does_not_yield_to_weak_tumor_label():
     )
 
     assert result["selected"]["cancer_type"] == "SARC"
-    assert result["selected"]["selected_by"] == "primary_expression_match"
+    assert result["selected"]["selected_by"] == "pan_cancer_signature_ranker"
 
 
 def test_local_expression_reference_can_select_future_exact_cohort(monkeypatch):
@@ -1498,7 +1511,7 @@ def test_basal_brca_candidate_overrides_background_label_refinement():
     assert result["selected"]["tumor_label_basal_brca_override"] is True
 
 
-def test_broad_winning_subtype_competes_with_local_sarcoma_reference(monkeypatch):
+def test_local_sarcoma_reference_beats_ranker_only_winning_subtype(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -1539,8 +1552,11 @@ def test_broad_winning_subtype_competes_with_local_sarcoma_reference(monkeypatch
 
     result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
 
-    assert result["selected"]["cancer_type"] == "SARC_RMS_ERMS"
-    assert result["selected"]["selected_by"] == "broad_rna_subtype"
+    assert result["selected"]["cancer_type"] == "SARC_LPS_UNSPEC"
+    assert result["selected"]["selected_by"] == "local_expression_reference"
+    rms = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_RMS_ERMS")
+    assert rms["evidence_sources"] == ["pan_cancer_signature_subtype"]
+    assert rms["can_select_report_label"] is False
     lps = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LPS_UNSPEC")
     assert lps["can_select_report_label"] is True
 
@@ -2115,7 +2131,7 @@ def test_local_reference_does_not_override_broad_coarse_consensus(monkeypatch):
     exact = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_MYXFIB")
     assert exact["can_select_report_label"] is False
     assert any(
-        "broad RNA ranking and coarse reference matching both support ACC" in reason
+        "pan-cancer signature-ranker context and coarse reference matching both support ACC" in reason
         for reason in exact["blocking_reasons"]
     )
 
@@ -2484,7 +2500,7 @@ def test_lineage_panel_does_not_override_broad_coarse_consensus(monkeypatch):
     esca = next(row for row in result["evidence"] if row["cancer_type"] == "ESCA")
     assert esca["can_select_report_label"] is False
     assert any(
-        "broad RNA ranking and coarse reference matching both support CESC" in reason
+        "pan-cancer signature-ranker context and coarse reference matching both support CESC" in reason
         for reason in esca["blocking_reasons"]
     )
     assert result["lineage_panel_evidence"]["promotion"] == {
@@ -2736,6 +2752,77 @@ def test_direct_cml_reference_beats_aml_status_child_parent(monkeypatch):
     laml = next(row for row in result["evidence"] if row["cancer_type"] == "LAML")
     assert laml["can_select_report_label"] is True
     assert laml["local_reference_status_child_code"] == "LAML_ELNadv"
+
+
+def test_fusion_driven_subtype_reference_respects_supplied_negative_fusions(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ACTA2", "TFE3", "MITF", "RNF213")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_PEC": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "soft_tissue",
+                "source_cohort": "GSE328026_PECOMA_2026",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "subtype",
+                "fusion_driver": "SFPQ-TFE3; DVL2-TFE3",
+            }
+        },
+    )
+    expression = _expression_frame({gene: 90.0 for gene in markers})
+
+    no_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
+    no_fusion = select_report_scope_from_evidence(expression, no_fusion_analysis)
+    assert no_fusion["selected"]["cancer_type"] == "SARC_PEC"
+    assert no_fusion["selected"]["local_reference_requires_fusion_confirmation"] is True
+
+    matching_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
+    matching_fusion_analysis["fusion_inputs_supplied"] = True
+    matching_fusion_analysis["fusion_records"] = [
+        {"gene_a": "SFPQ", "gene_b": "TFE3", "pair": "SFPQ--TFE3"}
+    ]
+    matching_fusion = select_report_scope_from_evidence(
+        expression,
+        matching_fusion_analysis,
+    )
+    assert matching_fusion["selected"]["cancer_type"] == "SARC_PEC"
+    assert (
+        matching_fusion["selected"]["local_reference_explicit_negative_fusion"]
+        is False
+    )
+
+    negative_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
+    negative_fusion_analysis["fusion_inputs_supplied"] = True
+    negative_fusion_analysis["fusion_records"] = [
+        {"gene_a": "ALK", "gene_b": "EML4", "pair": "EML4--ALK"}
+    ]
+    negative_fusion = select_report_scope_from_evidence(
+        expression,
+        negative_fusion_analysis,
+    )
+
+    assert negative_fusion["selected"]["cancer_type"] == "SARC"
+    pec = next(
+        row for row in negative_fusion["evidence"]
+        if row["cancer_type"] == "SARC_PEC"
+    )
+    assert pec["can_select_report_label"] is False
+    assert pec["local_reference_explicit_negative_fusion"] is True
+    assert any(
+        "fusion input was supplied" in reason and "SFPQ-TFE3" in reason
+        for reason in pec["blocking_reasons"]
+    )
 
 
 def test_molecular_status_expression_reference_promotes_parent_label(monkeypatch):
@@ -3843,7 +3930,7 @@ def test_single_element_candidate_trace_runs_only_broad_path():
     selected = result["selected"]
     assert selected is not None
     assert selected["cancer_type"] == "BRCA"
-    assert selected["selected_by"] == "primary_expression_match"
+    assert selected["selected_by"] == "pan_cancer_signature_ranker"
 
 
 def test_equally_prioritized_hypotheses_break_ties_alphabetically():
@@ -4231,4 +4318,4 @@ def test_same_top_contrast_does_not_outrank_exact_reference(monkeypatch):
     assert result["selected"]["selected_by"] == "local_expression_reference"
     luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
     assert "contrast_discriminator" in luad["evidence_sources"]
-    assert luad["selected_by"] == "primary_expression_match"
+    assert luad["selected_by"] == "pan_cancer_signature_ranker"

@@ -11,14 +11,19 @@ shortlist, and report.
 > cancer candidate; same-lineage centroid subtype swaps are marker-gated; and
 > `local_expression_reference` cross-lineage report-scope flips are marker-gated
 > and vetoed when the bulk classifier and confident compartment call agree
-> against them. The broad ranker's own `winning_subtype` is also represented as
-> a `broad_rna_subtype` selector so subtype evidence can compete explicitly with
-> local exact references. A guarded `learned_expression_classifier` selector now
-> preserves flat plus hierarchical compartment/family/entity/subtype votes in the
-> staged evidence graph. Strong lineage-panel evidence can also rescue a
+> against them. The pan-cancer signature ranker's own `winning_subtype` is now
+> represented as `pan_cancer_signature_subtype` evidence in the trace, but ranker
+> output remains candidate/context evidence unless the fused model has a
+> non-ranker admission path. A guarded learned-expression layer now preserves
+> flat plus hierarchical compartment/family/entity/subtype votes in the staged
+> evidence graph. Strong learned entity calls can admit a candidate only when
+> probability, margin, entity support, hierarchy support, and flat-lineage
+> support agree. Curated marker/reference thresholds with expected-low conflicts
+> remain visible as contextual evidence but cannot select against a contradictory
+> learned neighborhood. Strong lineage-panel evidence can also rescue a
 > candidate outside the broad top-5 only when the broad expression distribution
-> carries a technical concentration warning and the panel score/margin are very
-> high.
+> carries a technical concentration warning or decomposition reports an
+> expression/code lineage conflict, and the panel score/margin are very high.
 
 It exists because:
 1. The flow has 12 stages with non-trivial conditional branching;
@@ -88,8 +93,8 @@ Conclusions are summarized at the bottom in tabular form.
 │    panels (e.g. within EPITHELIAL_GLANDULAR: MAMMARY_LUMINAL,        │
 │    GI_ADENO, HEPATOBILIARY, PANCREATIC_DUCTAL, LUNG_ADENO,           │
 │    GYNECOLOGIC_GLANDULAR, UROTHELIAL_LUMINAL, etc.)                  │
-│    Combine with broad RNA classifier signature scores (raw           │
-│    expression-vs-reference correlation).                             │
+│    Combine with pan-cancer signature-ranker scores and any           │
+│    independent learned / centroid / reference evidence.              │
 │    Output: ranked candidate_trace, family_label per row.             │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
@@ -171,16 +176,23 @@ Conclusions are summarized at the bottom in tabular form.
 │    Runs selector channels with explicit priority and tie-break rules: │
 │      1. direct_fusion           (priority 1)                         │
 │      2. rare_marker             (priority 2)                         │
-│      3. broad_rna_subtype       (ranker winning_subtype)             │
+│      3. pan_cancer_signature_ranker (candidate/context only)         │
 │      4. tumor_label_refinement  (priority 3)                         │
 │      5. fine_reference          (priority 3)                         │
 │      6. local_expression_reference  (priority 3)                     │
-│      7. learned_expression_classifier (guarded full-profile vote)    │
-│      8. primary_expression_match  (priority 4 — fallback)            │
+│      7. learned_expression_classifier / learned hierarchy features    │
+│      8. fused_evidence          (requires non-ranker admission path) │
 │    Each selector produces hypotheses; consolidator picks one         │
 │      winner (selected_by) and reports the full evidence chain.       │
-│    Promotes report_scope_cancer_type ONLY when a non-                │
-│      primary_expression_match selector wins.                         │
+│    Curated exact/local references and pan-cancer marker programs      │
+│      are evidence channels, not escape hatches: expected-low marker   │
+│      conflicts block them unless independent learned/centroid/fusion/ │
+│      lineage-panel evidence supports the same lineage.               │
+│    Promotes report_scope_cancer_type only when a selector other than │
+│      pan_cancer_signature_ranker / primary_expression_match wins.    │
+│    When no selector can promote a label, the top ranker row may be    │
+│      retained as fallback RNA context; the evidence appendix labels   │
+│      this as context, not as an independently selected report label.  │
 │    Centroid corroboration can choose among selectable hypotheses,     │
 │      but same-lineage subtype swaps require subtype marker support    │
 │      unless the centroid margin is decisive.                          │
@@ -205,7 +217,9 @@ Conclusions are summarized at the bottom in tabular form.
 │  STAGE 10 — Report scope selection                                   │
 │    If --cancer-type supplied → use it (report still surfaces RNA     │
 │      disagreement transparently).                                    │
-│    Else → use cancer_type_evidence.selected.cancer_type.             │
+│    Else → use cancer_type_evidence.selected.cancer_type only when     │
+│      the selected evidence row actually selects a report label.       │
+│      Nonselecting pan-cancer ranker rows remain fallback RNA context. │
 │    Sets up downstream therapy registry queries, biomarker panels,    │
 │    expression-reference cohort selection.                            │
 │    local_expression_reference cross-lineage flips are vetoed when     │
@@ -273,7 +287,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | Rare-marker promotion | Stage 8 selector #2 | Promotes a rare cancer (NUTM, salivary, etc.) when marker gene + context match | Marker TPM ≥ threshold + (top context promotes to full XOR top_context_weight applied) |
 | Fine reference promotion | Stage 8 selector #4 | Promotes a fine label (OS-within-SARC) | All metrics in `FineReferenceSpec.minimum_metrics` met, support ≥ 0.70 |
 | Learned expression classifier | Stage 8 selector | Adds selectable/contextual flat and hierarchical full-profile votes | Flat probability/margin pass, marker sanity is coherent, broad context or hierarchical context supports the label, and compartment/background checks do not contradict it |
-| QC-guarded lineage-panel out-of-beam rescue | Stage 8 selector | Lets a strong lineage panel admit a code omitted by the broad top-5 | Expression concentration warning + lineage-panel score ≥ 0.85 + margin ≥ 0.25 + no independent composition conflict |
+| QC/decomposition-guarded lineage-panel out-of-beam rescue | Stage 8 selector | Lets a strong lineage panel admit a code omitted by the broad top-5 | Expression concentration warning or expression/code lineage conflict + lineage-panel score ≥ 0.85 + margin ≥ 0.25 + no independent composition conflict |
 | User --cancer-type override | Stage 10 | Forces report scope but does NOT silence broad-classifier disagreement | Always when supplied |
 
 ---
@@ -307,7 +321,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | 5 | candidate_trace + tissue_scores | Met-site inference (auto or from user) | Decomposition template choice |
 | 6 | Cleaned TPM + template | NNLS fit, optional compartment gates | Per-gene tumor fraction |
 | 7 | Decomposition output | Purity ensemble + subtype scoring | Purity range, subtype label |
-| 8 | All prior | Evidence consolidation across fusion, marker, broad-subtype, refinement, reference, learned-classifier, and fallback channels | `selected_by`, `report_scope_cancer_type` |
+| 8 | All prior | Evidence consolidation across fusion, marker, pan-cancer signature-ranker context, refinement, reference, learned-classifier, centroid, and fused channels | `selected_by`, `report_scope_cancer_type` |
 | 9 | candidate_trace + subtype | Tie checks, spread checks | Confidence badge |
 | 10 | Stage 8 output + user hint | Choose report scope | Report cancer type |
 | 11 | Report scope + ranges_df | Therapy registry + 3-state observation classifier | Therapy shortlist, outliers, CTAs |
@@ -315,8 +329,8 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 
 **The five key concepts a debugger should know:**
 
-1. **Broad classification and report scope are decoupled.** Stages 2-3 do RNA-inferred classification; Stage 10 chooses what label the report wears. A user-supplied `--cancer-type` overrides 10 but does not silence 2-3, so disagreement is always reported.
-2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, lineage_panel, broad_rna_subtype, tumor_label_refinement, fine_reference, local_expression_reference, learned_expression_classifier, primary_expression_match) is independently scoreable. The one that wins is `selected_by`.
+1. **Ranker context and report scope are decoupled.** Stages 2-3 do RNA-inferred candidate generation; Stage 10 chooses what label the report wears. A user-supplied `--cancer-type` overrides 10 but does not silence 2-3, so disagreement is always reported.
+2. **Selectors are stage-8's atomic units.** Each selector (direct_fusion, rare_marker, lineage_panel, tumor_label_refinement, fine_reference, local_expression_reference, learned_expression_classifier, contrast_discriminator, coarse_composition_reference, fused_evidence, pan_cancer_signature_ranker) is independently scoreable. `pan_cancer_signature_ranker` is retained as non-promoting context/candidate generation; `fused_evidence` can select only when at least one non-ranker admission path supports the call.
 3. **Special rescues are conditional, not pipeline stages.** basal-BRCA rescue, met-site auto-detection, rare-marker promotion are gated overrides that fire under specific signatures — they're not always-on.
 4. **Decomposition is downstream of classification, not upstream.** Stage 6 fits non-tumor compartments using the template chosen in Stage 5 — which itself depends on what cancer was called in Stages 2-3.
-5. **Confidence is independent of correctness.** A high-confidence call can still be wrong (HCC1395 with `--cancer-type BRCA` would show "moderate confidence" even though the broad RNA classifier disagrees); a low-confidence call can still be right (HCC1395 unhinted picks BRCA via rescue with "provisional" badge).
+5. **Confidence is independent of correctness.** A high-confidence call can still be wrong (HCC1395 with `--cancer-type BRCA` would show "moderate confidence" even though the pan-cancer signature ranker disagrees); a low-confidence call can still be right (HCC1395 unhinted picks BRCA via rescue with "provisional" badge).

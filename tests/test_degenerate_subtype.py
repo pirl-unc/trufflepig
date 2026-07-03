@@ -701,6 +701,29 @@ def test_forced_cancer_type_does_not_inherit_unrelated_subtype():
     assert "leiomyosarcoma" not in summary.lower(), summary
 
 
+def test_learned_compartment_parent_call_does_not_inherit_trace_subtype():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    analysis = {
+        "cancer_type": "SARC",
+        "candidate_trace": [
+            {"code": "SCLC"},
+            {"code": "SARC", "winning_subtype": "SARC_PEC"},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "SARC",
+                "selected_by": "fused_evidence",
+                "decision_features": {
+                    "learned_compartment_anchored_pan_cancer_context": True,
+                },
+            }
+        },
+    }
+
+    assert candidate_winning_subtype_for_analysis(analysis) is None
+
+
 def test_brief_lusc_with_high_prame_mage_does_not_flag_nutm():
     """Pin the squamous-vs-NUTM correctness case: a LUSC sample with
     high PRAME + MAGEA3 (typical of LUSC) but silent NUTM1 should NOT

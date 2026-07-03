@@ -4532,7 +4532,10 @@ def _selected_report_scope_label(analysis):
         return ""
     code = str(selected.get("cancer_type") or "").strip()
     selected_by = str(selected.get("selected_by") or "").strip()
-    if code and selected_by and selected_by != "primary_expression_match":
+    if code and selected_by not in {
+        "primary_expression_match",
+        "pan_cancer_signature_ranker",
+    }:
         return code
     return ""
 
@@ -4555,10 +4558,12 @@ def _selected_report_scope_basis_label(analysis):
         "local_expression_reference": "exact local expression-reference evidence",
         "fine_reference": "fine-grained expression-reference evidence",
         "learned_expression_classifier": "learned full-profile expression classifier evidence",
-        "broad_rna_subtype": "broad RNA subtype evidence",
+        "broad_rna_subtype": "pan-cancer signature-ranker subtype context",
+        "pan_cancer_signature_subtype": "pan-cancer signature-ranker subtype context",
         "lineage_panel": "lineage-panel evidence",
         "tumor_label_refinement": "tumor-label refinement evidence",
-        "primary_expression_match": "the leading RNA expression-reference match",
+        "pan_cancer_signature_ranker": "pan-cancer signature-ranker context",
+        "primary_expression_match": "legacy leading RNA expression-reference context",
     }.get(selected_by, "integrated classifier evidence")
 
 
@@ -5341,7 +5346,10 @@ def _apply_cancer_type_evidence(
             (cancer_type_evidence or {}).get("primary_expression_context")
         )
         selected_by = str(selected_scope.get("selected_by") or "")
-        if selected_by != "primary_expression_match":
+        if selected_by not in {
+            "primary_expression_match",
+            "pan_cancer_signature_ranker",
+        }:
             report_scope_cancer_type = selected_scope["cancer_type"]
             # Route by the winning selector, not by evidence-source
             # set-membership: multiple selectors can fire on the same
@@ -6080,7 +6088,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         if evidence_selected_discordant:
             sentence = (
                 f"- **RNA classifier line**: {_cancer_label(best['code'])} is the "
-                "leading broad RNA candidate, but integrated evidence selected "
+                "leading pan-cancer signature-ranker candidate, but integrated evidence selected "
                 f"{_cancer_label(cancer_code)} as the report label"
             )
         elif distinct_reference_used and best_code == str(reference_cancer_code).strip():
@@ -6092,7 +6100,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         elif distinct_reference_used:
             sentence = (
                 f"- **RNA classifier line**: {_cancer_label(best['code'])} is the "
-                "leading broad RNA candidate, but "
+                "leading pan-cancer signature-ranker candidate, but "
                 f"{_cancer_label(reference_cancer_code)} is the active fallback "
                 "expression/reference context; "
                 f"{_cancer_label(cancer_code)} remains the report label"
@@ -6100,7 +6108,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         elif supplied_discordant:
             sentence = (
                 f"- **RNA classifier line**: {_cancer_label(best['code'])} is the "
-                "leading broad RNA candidate, but the supplied "
+                "leading pan-cancer signature-ranker candidate, but the supplied "
                 f"{_cancer_label(cancer_code)} label remains the report label"
             )
         else:
@@ -6707,12 +6715,20 @@ def _cancer_type_decision_trace_markdown(analysis):
     lines = ["## Cancer-type decision evidence trace\n"]
     if selected:
         selected_code = selected.get("code") or ""
-        lines.append(
-            f"Selected report label: **{_cancer_label(selected_code)}** via "
-            f"`{selected.get('selected_by') or 'primary_expression_context'}`. "
-            "Rows below include selected, blocked, and context-only signals used "
-            "by the cancer-type decision process.\n"
-        )
+        selected_by = selected.get("selected_by") or "primary_expression_context"
+        if not selected.get("selects_report_label"):
+            lines.append(
+                f"Fallback RNA context: **{_cancer_label(selected_code)}** via "
+                f"`{selected_by}`. This row did not independently select the "
+                "report label; rows below include selectable, blocked, and "
+                "context-only signals used by the cancer-type decision process.\n"
+            )
+        else:
+            lines.append(
+                f"Selected report label: **{_cancer_label(selected_code)}** via "
+                f"`{selected_by}`. Rows below include selected, blocked, and "
+                "context-only signals used by the cancer-type decision process.\n"
+            )
     lines.append("| Stage | Candidate | Channel | Role | Status | Support | Details |")
     lines.append("|---|---|---|---|---|---:|---|")
     ordered = sorted(

@@ -27,6 +27,13 @@ import pandas as pd
 # Informative-gene subset size (top cross-sample variance) — matches the validation harness.
 _N_GENES = 2000
 _MIN_SHARED_GENES = 200
+_EXPECTED_OPTIONAL_MODEL_ERRORS = (
+    ImportError,
+    OSError,
+    KeyError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass(frozen=True)
@@ -86,9 +93,12 @@ def _clean(value: Any) -> str:
 def _learned_compartment_for_code(code: str) -> str:
     try:
         from pirlygenes.gene_sets_cancer import cancer_lineage_group
-    except Exception:
+    except ImportError:
         return ""
-    group = _clean(cancer_lineage_group(code) if code else "")
+    try:
+        group = _clean(cancer_lineage_group(code) if code else "")
+    except (KeyError, TypeError, ValueError):
+        return ""
     return {
         "Epithelial": "epithelial",
         "Sarcoma": "mesenchymal",
@@ -109,7 +119,7 @@ def _learned_family_for_code(code: str) -> str:
         from pirlygenes.gene_sets_cancer import cancer_type_registry
 
         row = cancer_type_registry().set_index("code").to_dict("index").get(code, {})
-    except Exception:
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         row = {}
     family = _clean(row.get("family"))
     parent = _clean(row.get("parent_code"))
@@ -151,7 +161,7 @@ def _learned_entity_for_code(code: str) -> str:
         from pirlygenes.gene_sets_cancer import cancer_type_registry
 
         row = cancer_type_registry().set_index("code").to_dict("index").get(code, {})
-    except Exception:
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         row = {}
     parent = _clean(row.get("parent_code"))
     subtype_key = _clean(row.get("subtype_key"))
@@ -166,7 +176,7 @@ def _learned_subtype_axis_for_code(code: str) -> str:
         from pirlygenes.gene_sets_cancer import cancer_type_registry
 
         row = cancer_type_registry().set_index("code").to_dict("index").get(code, {})
-    except Exception:
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         row = {}
     parent = _clean(row.get("parent_code"))
     subtype_key = _clean(row.get("subtype_key"))
@@ -198,7 +208,7 @@ def _training_matrix():
             available_representative_cohorts,
             representative_cohort_samples,
         )
-    except Exception:  # noqa: BLE001 — optional dependency / environment
+    except ImportError:
         return None
 
     try:
@@ -227,7 +237,7 @@ def _training_matrix():
         X = np.nan_to_num(logc.loc[genes].T.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0)
         y = np.asarray(labels)
         return X, y, genes
-    except Exception:  # noqa: BLE001 — never let an optional co-signal crash a caller
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
 
@@ -258,7 +268,7 @@ def _trained_model():
         X, y, genes = training
         pipe = _fit_lr_model(X, y)
         return pipe, genes, list(pipe.classes_)
-    except Exception:  # noqa: BLE001 — never let an optional co-signal crash a caller
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
 
@@ -283,7 +293,7 @@ def _trained_hierarchy_models():
             pipe = _fit_lr_model(X[keep], stage_y[keep])
             models[stage] = (pipe, list(pipe.classes_))
         return genes, models
-    except Exception:  # noqa: BLE001 — never let an optional co-signal crash a caller
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
 
@@ -312,10 +322,7 @@ def _predict_with_model(
     vec: np.ndarray,
     top_k: int,
 ) -> tuple[tuple[str, float], ...]:
-    try:
-        proba = pipe.predict_proba(vec.reshape(1, -1))[0]
-    except Exception:  # noqa: BLE001
-        return ()
+    proba = pipe.predict_proba(vec.reshape(1, -1))[0]
     order = np.argsort(proba)[::-1][:top_k]
     return tuple((str(classes[i]), float(proba[i])) for i in order)
 

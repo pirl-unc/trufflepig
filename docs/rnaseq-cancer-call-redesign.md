@@ -33,10 +33,10 @@ for a full replacement classifier:
   swaps. It remains useful for broad/selectable rare entities, but it cannot
   slide SARC_RMS_ERMS to a sibling sarcoma subtype on a small whole-profile
   margin without subtype marker support.
-- The broad ranker's own `winning_subtype` is represented as a
-  `broad_rna_subtype` selector. This gives subtype evidence from the primary
-  candidate trace a first-class row, so exact local references can no longer
-  displace SARC_RMS_ERMS merely because the parent `SARC` row was broad.
+- The pan-cancer signature ranker's own `winning_subtype` is represented as
+  `pan_cancer_signature_subtype` evidence. This gives subtype evidence from the
+  primary candidate trace a first-class row in the trace, while still requiring
+  independent fused support before it can select a report label.
 - Cross-lineage local-expression references now require coherent marker
   support against both the active local-reference context and the first-pass
   RNA context. A `mixed` marker sanity result is recorded but is not enough to
@@ -53,6 +53,21 @@ for a full replacement classifier:
   compartment/background guards agree. It is not allowed to turn a
   background-like whole-profile match into a cross-lineage report label by
   itself.
+- The fused evidence layer now carries flat learned predictions plus staged
+  learned compartment/family/entity votes as first-class decision features.
+  A strong learned entity call must agree with its entity label, hierarchy
+  support, flat-lineage support, and margin before it can overrule weak or
+  blocked local-reference markers.
+- Curated local-expression references and pan-cancer marker programs retain
+  positive marker evidence in the trace, but expected-low conflicts make them
+  contextual unless independent learned, centroid, fusion, lineage-panel, or
+  marker-coherent evidence supports the same lineage. This is the rule that
+  keeps MBL-like threshold hits from overriding sarcoma evidence.
+- Strong lineage-marker panels can rescue a candidate omitted by the broad
+  ranker only when the panel score/margin are very high and the current broad
+  call is flagged as technically fragile by expression concentration or by an
+  expression/code lineage conflict from decomposition. This keeps the rescue
+  feature-level and inspectable rather than BRCA-specific.
 - Background-like mesenchymal or gastric hypotheses are now retained as
   blocked/contextual evidence when an epithelial compartment plus close
   colorectal candidate better explains the sample. The selected report label
@@ -63,29 +78,36 @@ for a full replacement classifier:
   context. For example, a colorectal call with sarcoma-like contextual signal
   should read as a READ/COAD report with sarcoma retained as non-driving
   evidence, not as a sarcoma therapeutic or decomposition scope.
+- Nonselecting ranker fallbacks are rendered as "Fallback RNA context" in the
+  evidence appendix, not as an independently selected report label.
 
 ## Validation status
 
-Validation on 2026-07-01 shows a large improvement but not the aspirational
-100% exact identification target:
+Validation through 2026-07-03 shows a large improvement, including removal of
+the severe cross-lineage failures that motivated this refactor:
 
-- Focused regression tests for decomposition, evidence selection, and local
-  reference vetoes: `142 passed`.
-- Report/evidence wording and selector regression tests:
-  `126 passed`.
+- Focused selector/report regression subset:
+  `5 passed` (`./test.sh -k ... -q`).
 - 565-sample baseline before the learned selector:
   entity-compatible 450/565 (80%), lineage-compatible 534/565 (95%).
-- 565-sample result after this refactor:
-  exact 471, subtype-compatible 27, sibling-compatible 20, lineage-only 28,
-  miss 19; entity-compatible 518/565 (92%), lineage-compatible 546/565 (97%).
+- 565-sample result after fused learned hierarchy/reference gating:
+  exact 500, subtype-compatible 43, sibling-compatible 21, lineage-only 1,
+  miss 0; entity-compatible 564/565 (100% rounded), lineage-compatible
+  565/565 (100%).
+- The only lineage-only residual is the close renal pair `KIRC -> KICH`.
 - #101 synthetic COAD+liver now passes without an xfail; liver is treated as
   structured host/background instead of letting LIHC win the type ranker.
-- #102 is fixed on the available RMS set: SARC_RMS_ERMS 5/5 exact, with
-  SARC_RMS_ARMS and SARC_RMS_SSRMS also 5/5 exact in the spot check.
+- #102 is fixed on the available RMS set in the 565 harness:
+  SARC_RMS_ERMS 5/5 exact, SARC_RMS_ARMS 5/5 exact, and
+  SARC_RMS_SSRMS 5/5 exact.
 - Local report replay completed for 19 available local samples with 0 failures
   and 2 skipped missing-input samples. The reviewed reports consistently use
   the selected label for biomarker/therapy scope and decomposition; contextual
   alternatives remain evidence/context only.
+- Blind no-hint validation is lineage-correct on 8/8 local truth samples and
+  14/14 medoids. HCC1395/StringTie still has a T_ALL pan-cancer ranker artifact,
+  but the strong BRCA_BASAL panel plus expression/code lineage conflict now
+  selects BRCA.
 
 Learned-expression classifier leakage audit (2026-07-02):
 
@@ -107,25 +129,24 @@ Learned-expression classifier leakage audit (2026-07-02):
   but the holdout signal is still strong enough to justify using the learned
   classifier as a guarded co-signal rather than an oracle.
 
-Local report audit highlights:
+Local report audit highlights from blind report regeneration:
 
-- PFO002 Personalis/Tempus/Kallisto reports select READ/colorectal scope;
-  decomposition, biomarker panel, and therapy target landscape all use READ.
-  Sarcoma/STAD-like signals are retained only as contextual or blocked evidence.
+- PFO002 WashU Kallisto/StringTie reports select READ/colorectal scope;
+  decomposition, biomarker panel, and therapy target landscape use READ/CRC
+  context. The evidence appendix labels the pan-cancer ranker row as fallback
+  RNA context rather than an independent selector. The PFO002 Personalis report
+  remains a local OOD/platform exception: it calls low-confidence STAD while
+  the companion WashU quantifications call READ.
 - PFO017 bladder/liver reports select BLCA; the liver sample uses liver host
   context in decomposition without changing the report label or therapy scope.
-- Local sarcoma reports select SARC_DDLPS, SARC_LMS, or SARC_OS as appropriate,
-  and their biomarker/therapy sections remain sarcoma-scoped.
+- Local sarcoma reports select SARC or SARC_OS as appropriate; biomarker and
+  therapy sections remain sarcoma-scoped. Alvin reports SARC via fused evidence
+  with EGFR KDD carried as orthogonal eligibility context.
 - NUTM fusion-supported reports select NUTM; ambiguous NUTM-marker-only reports
   keep NUTM1 as a rare-marker prompt without forcing NUTM therapy scope.
-- HCC1395 Kallisto selects BRCA_Basal with parent BRCA therapy scope; the
-  StringTie input still miscalls T_ALL and is treated as a residual input/report
-  quality artifact rather than a solved case.
-
-Important residual misses remain. They include some MBL/NPC and sarcoma
-outliers, a LUAD_STK11-to-BRCA cross-entity error, and a COAD_MSI-to-GBC
-error. These are now visible as bounded residuals rather than broad recurrent
-BRCA/SARC-type mixups.
+- HCC1395 Kallisto/StringTie both report BRCA after lineage-panel rescue,
+  although the StringTie input still carries a T_ALL bulk-ranker artifact in
+  the alternatives/decomposition context.
 
 ## Current decision process
 
@@ -158,7 +179,7 @@ emits context such as `tumor-consistent`, `possibly-tumor`, or
 `healthy-dominant`, plus tissue/cancer-reference matches that later selectors
 may use.
 
-### 3. Broad signature scoring
+### 3. Pan-cancer signature-ranker scoring
 
 `plot_embedding._compute_cancer_type_signature_stats` scores each candidate
 against curated cancer-type signature panels. For each signature gene, it
@@ -172,6 +193,14 @@ The cohort-percentile leg ranks the sample's HK-normalized expression against
 the full approximately 170-column reference set: broad cancer cohorts plus
 HPA normal tissues. The within-sample percentile leg makes the signal more
 robust to dilution. The cancer-type score is the mean over the panel.
+
+This is now explicitly the `pan_cancer_signature_ranker`, not an authoritative
+`primary_expression_match`. Its HK cohort-percentile basis is legacy and useful
+as candidate-generation/corroborating evidence, but it cannot select a report
+label by itself. The A/B harness
+`scripts/eval_pan_cancer_signature_ranker_ab.py` compares the HK basis against
+raw clean-TPM/nTPM cohort percentiles, within-sample percentiles, the learned
+classifier, centroid Spearman, and the fused report selector.
 
 Molecular subtype cohorts are mostly kept out of the broad candidate space so
 they do not leak into primary cancer-type routing. Separate subtype scoring
@@ -273,7 +302,7 @@ calls `cancer_type_evidence.select_report_scope_from_evidence`.
 
 That selector accumulates hypotheses from multiple channels:
 
-- broad RNA top candidate,
+- pan-cancer signature-ranker candidates and subtype suggestions,
 - coarse composition reference,
 - tumor-label refinement when the top broad label looks background-like,
 - fine reference panels,
@@ -284,12 +313,24 @@ That selector accumulates hypotheses from multiple channels:
 - rare RNA marker rules,
 - direct fusions.
 
-Each hypothesis can call `consider_for_report_label`, which sets a priority
-class, strength, and selector tie-break. `_pick_selected` first respects
-definitive fusions, then chooses the highest-priority selectable hypothesis.
-If the compartment call is confident, whole-profile centroid correlation can
-replace that authority winner with another selectable hypothesis that leads
-by at least 0.015 Spearman rho.
+The fused evidence layer records component scores for the signature ranker,
+learned classifiers, centroid support, local/fine references, lineage panels,
+composition references, contrast markers, rare markers, and fusions. A
+signature-ranker component can improve a fused score, but it is not an
+admission path: fused selection requires at least one non-ranker route such as
+strong learned/hierarchical support, a centroid-backed or marker-specific exact
+reference, a lineage panel, rare marker, contrast discriminator, composition
+reference, or tumor-label refinement.
+
+Each hypothesis can still call `consider_for_report_label`, which sets a
+priority class, strength, and selector tie-break. `_pick_selected` first
+respects definitive fusions, then chooses the highest-priority selectable
+hypothesis. If the compartment call is confident, whole-profile centroid
+correlation can replace that authority winner with another selectable
+hypothesis that leads by at least 0.015 Spearman rho. A ranker-only top
+candidate is retained as non-promoting context (`pan_cancer_signature_ranker`)
+so downstream text and evidence traces keep continuity with the working
+`analyze_sample` call.
 
 If this final report-scope label differs from the working `analyze_sample`
 label, `main._reroute_decomposition_to_call` recomputes purity/decomposition
@@ -574,11 +615,12 @@ without replacing the primary ranker.
   retained as context/blocked evidence, not used as the report label.
 - Strong lineage-marker panels can now rescue a candidate that the broad ranker
   omitted only when the broad expression distribution carries a technical
-  concentration warning, the panel score is at least `0.85`, the panel margin
-  is at least `0.25`, and no independent composition conflict blocks it. This
-  preserves the old top-5 guard for normal inputs while fixing the local
-  HCC1395/StringTie case where a BRCA_BASAL positive/negative marker program
-  was previously noted but unable to correct a T_ALL artifact call.
+  concentration warning or decomposition reports an expression/code lineage
+  conflict, the panel score is at least `0.85`, the panel margin is at least
+  `0.25`, and no independent composition conflict blocks it. This preserves the
+  old top-5 guard for normal inputs while fixing the local HCC1395/StringTie
+  case where a BRCA_BASAL positive/negative marker program was previously noted
+  but unable to correct a T_ALL artifact call.
 - The detailed evidence markdown now includes a `Cancer-type decision evidence
   trace` table before the target evidence. It shows selected, blocked, and
   context-only channels with staged learned votes beside centroid, marker,
@@ -608,14 +650,14 @@ End-to-end 565-sample behavior for the current PR:
   lineage-compatible;
 - previous flat learned-channel selector: `518/565` entity-compatible and
   `546/565` lineage-compatible;
-- current hierarchical learned-admission selector: `536/565`
-  entity-compatible and `558/565` lineage-compatible.
+- current fused learned-hierarchy selector: exact `500`, subtype-compatible
+  `43`, sibling-compatible `21`, lineage-only `1`, miss `0`; `564/565`
+  entity-compatible and `565/565` lineage-compatible.
 
 Notable resolved misses include the prior NBL-to-SCLC slips, SARC_ASPS to
 SKCM, SARC_ANGIO to HNSC, SARC_CCS to UVM, SARC_DSRCT to ESCA, and the
-SARC_RMS_ERMS subtype regression from #102. Remaining misses are isolated and
-mostly concentrated in rare sarcoma/melanocytic-neural boundaries, embryonal
-tumor boundaries, and a few epithelial-neuroendocrine lookalikes.
+SARC_RMS_ERMS subtype regression from #102. The only remaining
+non-entity-compatible row is the lineage-only close renal pair `KIRC -> KICH`.
 
 ## Proposed confluent algorithm
 

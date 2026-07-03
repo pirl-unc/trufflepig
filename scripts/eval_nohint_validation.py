@@ -73,6 +73,7 @@ def classify_without_hint(df):
     )
     analysis = analyze_sample(df)                                       # no cancer_type → auto-detect
     scope = select_report_scope_from_evidence(df, analysis)
+    analysis["cancer_type_evidence"] = scope
     selected = scope.get("selected") or {}
     bulk_classifier_call = analysis.get("cancer_type")
     evidence_call = (selected.get("cancer_type") or scope.get("top_reference_cancer_type")
@@ -100,6 +101,7 @@ def full_granularity_call(df):
 
     analysis = analyze_sample(df)
     scope = select_report_scope_from_evidence(df, analysis)
+    analysis["cancer_type_evidence"] = scope
     selected = scope.get("selected") or {}
     bulk_classifier_call = analysis.get("cancer_type")
     evidence_call = (selected.get("cancer_type") or scope.get("top_reference_cancer_type")

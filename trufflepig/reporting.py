@@ -2134,6 +2134,10 @@ def candidate_winning_subtype_for_analysis(analysis):
         return None
 
     active_code = _clean_text(analysis.get("cancer_type"))
+    selected_scope = (
+        (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+    )
+    selected_features = selected_scope.get("decision_features") or {}
     row = None
     if active_code:
         for candidate in candidate_trace:
@@ -2144,6 +2148,15 @@ def candidate_winning_subtype_for_analysis(analysis):
             return None
     else:
         row = candidate_trace[0]
+
+    if (
+        _clean_text(selected_scope.get("cancer_type")) == active_code
+        and _clean_text(selected_scope.get("selected_by")) == "fused_evidence"
+        and selected_features.get(
+            "learned_compartment_anchored_pan_cancer_context"
+        )
+    ):
+        return None
 
     return _clean_text(row.get("winning_subtype")) or None
 

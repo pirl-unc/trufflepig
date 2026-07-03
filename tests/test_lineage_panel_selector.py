@@ -551,6 +551,45 @@ def test_strong_panel_can_rescue_out_of_beam_when_expression_qc_is_fragile():
     assert public.get("lineage_panel_out_of_beam_rescue")
 
 
+def test_strong_panel_can_rescue_out_of_beam_when_expression_lineage_conflicts():
+    """A very strong lineage panel can rescue a missing candidate when the
+    current call's code lineage disagrees with the expression decomposition.
+
+    This is the HCC1395/StringTie no-hint pattern after the concentration
+    signal moved into decomposition: T-ALL is top-ranked, but its heme code
+    lineage conflicts with the mesenchymal expression decomposition and the
+    BRCA_BASAL positive/negative marker program is coherent.
+    """
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "T_ALL", "family_label": "heme-tcell", "support_score": 0.9},
+            {"code": "ESCA", "family_label": "squamous", "support_score": 0.7},
+            {"code": "SKCM", "family_label": "melanoma", "support_score": 0.6},
+            {"code": "SARC", "family_label": "sarcoma", "support_score": 0.5},
+            {"code": "UCS", "family_label": "mullerian", "support_score": 0.4},
+        ],
+        "purity": {
+            "components": {
+                "decomposition": {
+                    "lineage_conflict": True,
+                    "code_lineage": "Heme",
+                    "expression_lineage": "Sarcoma",
+                }
+            }
+        },
+    }
+
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+    brca = hyps.get("BRCA")
+    assert brca is not None
+    public = brca.public_dict() or {}
+    assert public.get("can_select_report_label") is True
+    rescue = public.get("lineage_panel_out_of_beam_rescue")
+    assert rescue
+    assert rescue.get("expression_lineage_conflict") is True
+
+
 def test_main_propagates_lineage_panel_evidence_to_analysis_dict(monkeypatch):
     """``_apply_cancer_type_evidence`` copies ``lineage_panel_evidence``
     from the cancer_type_evidence return onto the ``analysis`` dict

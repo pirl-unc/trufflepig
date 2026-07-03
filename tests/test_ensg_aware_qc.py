@@ -14,6 +14,7 @@ Pins:
 
 import pandas as pd
 import pytest
+from oncoref.normalization import housekeeping_reference_profile
 
 from trufflepig.expression_qc import classify_gene_qc
 from trufflepig.expression_normalize import (
@@ -89,16 +90,13 @@ def test_normalize_expression_without_id_col_falls_back_to_symbol():
 
 
 def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
-    # ACTB ENSG00000075624, GAPDH ENSG00000111640, MYC ENSG00000136997
+    ref = housekeeping_reference_profile().head(2)
+    panel_ids = ref["Ensembl_Gene_ID"].tolist()
     df = pd.DataFrame(
         {
-            "Ensembl_Gene_ID": [
-                "ENSG00000075624",
-                "ENSG00000111640",
-                "ENSG00000136997",
-            ],
+            "Ensembl_Gene_ID": panel_ids + ["ENSG00000136997"],
             # Symbols deliberately wrong; the ENSG path should still match the HK panel by stable ID.
-            "Symbol": ["NOT_ACTB", "NOT_GAPDH", "MYC"],
+            "Symbol": ["NOT_PANEL_1", "NOT_PANEL_2", "MYC"],
             "S_TPM": [100.0, 100.0, 200.0],
         }
     )
