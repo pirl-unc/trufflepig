@@ -1463,7 +1463,7 @@ def _close_trace_candidate_for_lineage(
     lineage_token = _lineage_token(lineage)
     best: dict[str, Any] = {}
     best_support = 0.0
-    for row in rows:
+    for rank, row in enumerate(rows, start=1):
         code = _clean(row.get("code"))
         support = _safe_float(row.get("support_fraction_of_top"))
         if support <= 0 and rank == 1:

@@ -4185,8 +4185,10 @@ def rank_cancer_type_candidates(
     # remain the primary guard against false positives (DLBC on a
     # COAD/lymph mix has sig 0.61 < 0.80, rejected there). Lowering
     # the ratio to 1.3 preserves the BLCA / PAAD wins without reopening
-    # the COAD/lymph regression.
-    _ORPHAN_DOMINANCE_RATIO = 1.3
+    # the COAD/lymph regression. Later staged-identity evidence narrowed
+    # BLCA-vs-LUSC to ~1.27× while BLCA remained the direct top call, so
+    # keep a small margin below that empirical median-battery boundary.
+    _ORPHAN_DOMINANCE_RATIO = 1.25
     _ORPHAN_DOMINANCE_MIN_SIGNATURE = 0.80
     _ORPHAN_DOMINANCE_MIN_PURITY = 0.40
     family_matched_rows = [r for r in rows if r["family_label"] is not None]

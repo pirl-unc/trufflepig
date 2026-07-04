@@ -3933,6 +3933,28 @@ def test_single_element_candidate_trace_runs_only_broad_path():
     assert selected["selected_by"] == "pan_cancer_signature_ranker"
 
 
+def test_close_lineage_trace_candidate_handles_missing_support():
+    """Legacy/hand-built candidate traces may omit normalized support.
+
+    The first trace row is still the ranker top hit and should be treated as
+    full support instead of crashing when local-reference conflict checks search
+    for a close same-lineage candidate.
+    """
+    from trufflepig import cancer_type_evidence as cte
+
+    missing = cte._close_trace_candidate_for_lineage(
+        [{"code": "SARC"}],
+        "Sarcoma",
+    )
+    zero = cte._close_trace_candidate_for_lineage(
+        [{"code": "SARC", "support_fraction_of_top": 0.0}],
+        "Sarcoma",
+    )
+
+    assert missing["code"] == "SARC"
+    assert zero["code"] == "SARC"
+
+
 def test_equally_prioritized_hypotheses_break_ties_alphabetically():
     """Two hypotheses with identical class_rank + strength + tiebreak
     must resolve deterministically (ascending cancer_type), not at
