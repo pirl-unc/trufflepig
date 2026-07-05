@@ -249,6 +249,70 @@ def test_broad_only_channels_require_positive_signal():
     ]
 
 
+def test_blocked_learned_selector_does_not_admit_fused_evidence():
+    """A rejected learned call must not become a non-ranker admission path."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fused_component_scores,
+        _fused_evidence_eligible,
+    )
+
+    hypothesis = CancerTypeEvidence(
+        cancer_type="SARC_ASPS",
+        learned_expression_support=0.90,
+    )
+    hypothesis.selected_by = "learned_expression_classifier"
+    hypothesis.label_status = "blocked"
+    hypothesis.can_select_report_label = False
+    hypothesis.blocking_reasons = ("learned call lacks broad-ranker context",)
+    hypothesis.details.update(
+        {
+            "learned_expression_hierarchical_context_support": 0.80,
+            "learned_expression_entity_support": 0.80,
+            "learned_expression_entity_label": "SARC_ASPS",
+            "learned_expression_margin": 0.60,
+        }
+    )
+
+    components = _fused_component_scores(hypothesis, centroid_support=0.0)
+    can_select, blockers = _fused_evidence_eligible(
+        hypothesis,
+        score=sum(components.values()),
+        centroid_support=0.0,
+        components=components,
+    )
+
+    assert can_select is False
+    assert any("lacks a non-ranker admission path" in reason for reason in blockers)
+
+
+def test_hierarchy_candidate_votes_are_preserved_in_trace_channels():
+    """Candidate-wide hierarchy votes use the shorter stored key name."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _hypothesis_evidence_channels,
+    )
+
+    hypothesis = CancerTypeEvidence(cancer_type="STAD")
+    hypothesis.details["learned_expression_hierarchy_votes"] = [
+        {
+            "stage": "entity",
+            "label": "STAD",
+            "probability": 0.31,
+            "top_predictions": [{"label": "STAD", "probability": 0.31}],
+        }
+    ]
+
+    channels = _hypothesis_evidence_channels(hypothesis)
+
+    assert any(
+        row["channel"] == "learned_expression_classifier"
+        and row["role"] == "hierarchical_entity_vote"
+        and row.get("code") == "STAD"
+        for row in channels
+    )
+
+
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

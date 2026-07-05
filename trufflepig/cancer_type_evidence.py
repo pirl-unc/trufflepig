@@ -862,7 +862,12 @@ def _hypothesis_evidence_channels(
         "entity": "coarse_type",
         "subtype_axis": "exact_subtype",
     }
-    for vote in hypothesis.details.get("learned_expression_hierarchical_votes") or []:
+    hierarchy_votes = (
+        hypothesis.details.get("learned_expression_hierarchical_votes")
+        or hypothesis.details.get("learned_expression_hierarchy_votes")
+        or []
+    )
+    for vote in hierarchy_votes:
         learned_stage = _clean(vote.get("stage"))
         label = _clean(vote.get("label"))
         if not learned_stage or not label:
@@ -7021,7 +7026,7 @@ def _fused_evidence_eligible(
     lineage_panel = _safe_float(hypothesis.details.get("lineage_panel_score"))
     raw_selected_by = _clean(hypothesis.selected_by)
     selected_by = raw_selected_by if hypothesis.can_select_report_label else ""
-    learned_admitted = raw_selected_by == "learned_expression_classifier"
+    learned_admitted = selected_by == "learned_expression_classifier"
     exact_reference_admitted = selected_by in {
         "fine_reference",
         "local_expression_reference",
