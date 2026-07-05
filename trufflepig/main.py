@@ -5247,13 +5247,14 @@ def _veto_local_reference_lineage_flip(
         pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
                if rna_inferred_cancer_type else None)
         if comp and refined and pre and refined != comp and pre == comp:
+            veto_reason = (
+                f"local_expression_reference cross-lineage flip ({pre} -> {refined}) "
+                f"conflicts with the bulk classifier ({pre}) and compartment_call ({comp})"
+            )
             analysis["cancer_type_evidence_vetoed"] = {
                 "vetoed_call": report_scope_cancer_type,
                 "kept_call": rna_inferred_cancer_type,
-                "reason": (
-                    f"local_expression_reference cross-lineage flip ({pre} → {refined}) "
-                    f"conflicts with the bulk classifier ({pre}) and compartment_call ({comp})"
-                ),
+                "reason": veto_reason,
             }
             # _apply_cancer_type_evidence already wrote the vetoed selection into the analysis; revert
             # those analysis-level keys too, or downstream label helpers re-surface the vetoed SARC_* call.
@@ -5263,6 +5264,29 @@ def _veto_local_reference_lineage_flip(
             cte = analysis.get("cancer_type_evidence")
             if isinstance(cte, dict):
                 cte["selected"] = None
+                graph = cte.get("staged_evidence_graph")
+                if isinstance(graph, dict):
+                    graph_selected = graph.get("selected")
+                    if graph_selected:
+                        graph["vetoed_selected"] = dict(graph_selected)
+                    graph["selected"] = None
+                    for channel in graph.get("channels") or []:
+                        if not isinstance(channel, dict):
+                            continue
+                        if not channel.get("selects_report_label"):
+                            continue
+                        candidate = (
+                            channel.get("candidate_code") or channel.get("code") or ""
+                        )
+                        if str(candidate) != str(report_scope_cancer_type):
+                            continue
+                        channel["selects_report_label"] = False
+                        channel["status"] = "vetoed"
+                        details = channel.get("details")
+                        if not isinstance(details, dict):
+                            details = {}
+                            channel["details"] = details
+                        details["veto_reason"] = veto_reason
             return None  # revert to the pre-evidence (bulk) call
     except Exception:  # noqa: BLE001 — refinement guard; never break the analysis
         _LOGGER.warning("local-reference lineage veto failed", exc_info=True)
@@ -6711,9 +6735,40 @@ def _cancer_type_decision_trace_markdown(analysis):
     channels = graph.get("channels") or []
     if not channels:
         return ""
-    selected = graph.get("selected") or {}
+    selected = evidence.get("selected") or {}
+    graph_selected = graph.get("selected") or {}
+    veto = analysis.get("cancer_type_evidence_vetoed") or {}
     lines = ["## Cancer-type decision evidence trace\n"]
-    if selected:
+    if veto:
+        kept = veto.get("kept_call") or analysis.get("inferred_cancer_type") or ""
+        vetoed = veto.get("vetoed_call") or (
+            graph.get("vetoed_selected") or {}
+        ).get("code")
+        lines.append(
+            f"Evidence selection vetoed: **{_cancer_label(vetoed)}** was not "
+            f"used as the report label; report scope reverted to "
+            f"**{_cancer_label(kept)}**. Rows below preserve the selected, "
+            "vetoed, blocked, and context-only signals used by the cancer-type "
+            "decision process.\n"
+        )
+    elif selected:
+        selected_code = selected.get("cancer_type") or selected.get("code") or ""
+        selected_by = selected.get("selected_by") or "primary_expression_context"
+        if not selected.get("can_select_report_label", True):
+            lines.append(
+                f"Fallback RNA context: **{_cancer_label(selected_code)}** via "
+                f"`{selected_by}`. This row did not independently select the "
+                "report label; rows below include selectable, blocked, and "
+                "context-only signals used by the cancer-type decision process.\n"
+            )
+        else:
+            lines.append(
+                f"Selected report label: **{_cancer_label(selected_code)}** via "
+                f"`{selected_by}`. Rows below include selected, blocked, and "
+                "context-only signals used by the cancer-type decision process.\n"
+            )
+    elif graph_selected:
+        selected = graph_selected
         selected_code = selected.get("code") or ""
         selected_by = selected.get("selected_by") or "primary_expression_context"
         if not selected.get("selects_report_label"):

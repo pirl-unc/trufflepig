@@ -406,6 +406,41 @@ def test_hierarchy_candidate_votes_are_preserved_in_trace_channels():
     )
 
 
+def test_candidate_wide_hierarchy_support_scores_fused_evidence():
+    """Fused evidence consumes the candidate-wide hierarchy support key."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fused_component_scores,
+        _fused_evidence_eligible,
+    )
+
+    hypothesis = CancerTypeEvidence(
+        cancer_type="SARC",
+        learned_expression_support=0.98,
+    )
+    hypothesis.details.update(
+        {
+            "learned_expression_hierarchy_support": 0.80,
+            "learned_expression_flat_lineage_support": 0.90,
+            "learned_expression_entity_support": 0.80,
+            "learned_expression_entity_label": "SARC",
+            "learned_expression_margin": 0.60,
+        }
+    )
+
+    components = _fused_component_scores(hypothesis, centroid_support=0.35)
+    can_select, blockers = _fused_evidence_eligible(
+        hypothesis,
+        score=sum(components.values()),
+        centroid_support=0.35,
+        components=components,
+    )
+
+    assert components["learned_hierarchy"] == 0.36
+    assert can_select is True
+    assert blockers == []
+
+
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

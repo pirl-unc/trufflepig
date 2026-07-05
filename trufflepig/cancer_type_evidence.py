@@ -634,6 +634,22 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
     return result
 
 
+def _learned_hierarchy_support(details: Mapping[str, Any]) -> float:
+    """Return the strongest candidate-wide learned hierarchy support.
+
+    Older learned-expression rows store the flat classifier's hierarchy context
+    as ``learned_expression_hierarchical_context_support``. The candidate-wide
+    hierarchy pass stores the same decision signal under the shorter
+    ``learned_expression_hierarchy_support`` key. Fused arbitration should see
+    either source without caring which stage attached it.
+    """
+
+    return max(
+        _safe_float(details.get("learned_expression_hierarchical_context_support")),
+        _safe_float(details.get("learned_expression_hierarchy_support")),
+    )
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))
@@ -1330,9 +1346,7 @@ def _hypothesis_decision_features(
         details.get("learned_expression_entity_support")
     )
     learned_margin = _safe_float(details.get("learned_expression_margin"))
-    learned_hierarchical_context = _safe_float(
-        details.get("learned_expression_hierarchical_context_support")
-    )
+    learned_hierarchical_context = _learned_hierarchy_support(details)
     learned_flat_lineage_support = _safe_float(
         details.get("learned_expression_flat_lineage_support")
     )
@@ -1398,6 +1412,7 @@ def _hypothesis_decision_features(
         "learned_expression_entity_label": learned_entity_label,
         "learned_expression_hierarchy_support": round(
             max(
+                learned_hierarchical_context,
                 learned_compartment_support,
                 learned_family_support,
                 learned_entity_support,
@@ -7079,9 +7094,7 @@ def _fused_component_scores(
     contrast_admitted = selected_by == "contrast_discriminator"
     refinement_admitted = selected_by == "tumor_label_refinement"
     composition_admitted = selected_by == "coarse_composition_reference"
-    learned_hierarchy = _safe_float(
-        details.get("learned_expression_hierarchical_context_support")
-    )
+    learned_hierarchy = _learned_hierarchy_support(details)
     lineage_panel = _safe_float(details.get("lineage_panel_score"))
     pan_signature_marker_support = _safe_float(
         features.get("pan_cancer_signature_marker_support")
@@ -7247,9 +7260,7 @@ def _fused_evidence_eligible(
         centroid_support=centroid_support,
     )
     learned = hypothesis.learned_expression_support
-    learned_hierarchy = _safe_float(
-        hypothesis.details.get("learned_expression_hierarchical_context_support")
-    )
+    learned_hierarchy = _learned_hierarchy_support(hypothesis.details)
     lineage_panel = _safe_float(hypothesis.details.get("lineage_panel_score"))
     raw_selected_by = _clean(hypothesis.selected_by)
     selected_by = raw_selected_by if hypothesis.can_select_report_label else ""
