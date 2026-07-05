@@ -103,6 +103,9 @@ _OS_MATRIX_MARKERS = (
 _OS_AMPLICON_MARKERS = ("MDM2", "CDK4", "FRS2")
 _BACKGROUND_LIKE_FAMILIES = frozenset({"MESENCHYMAL"})
 _CRC_REGISTRY_ROOT = "CRC"
+_CRC_FAMILY_COMPETITOR_MIN_SUPPORT = 0.80
+_CRC_FAMILY_COMPETITOR_MIN_FAMILY_SUPPORT = 0.60
+_CRC_FAMILY_COMPETITOR_MAX_RANK = 6
 _TUMOR_LABEL_MIN_SUPPORT = 0.70
 _TUMOR_LABEL_MIN_SIGNATURE_RATIO = 0.85
 _TUMOR_LABEL_MIN_FAMILY_SUPPORT = 0.65
@@ -180,6 +183,16 @@ _LOCAL_REFERENCE_SKIP_FAMILIES = frozenset({"rare"})
 _LOCAL_REFERENCE_CROSS_LINEAGE_MARKER_STATUSES = frozenset({"consistent"})
 _LOCAL_REFERENCE_SIGNATURE_ANCHOR_GENERIC_PRIMARY_TISSUES = frozenset(
     {"", "soft_tissue", "connective_tissue", "smooth_muscle"}
+)
+_PERMISSIVE_BACKGROUND_EXPECTED_LOW_GENES = frozenset(
+    {
+        "PTPRC",
+        "MS4A1",
+        "CD3D",
+        "CD3E",
+        "CD79A",
+        "CD79B",
+    }
 )
 _UNEXPECTED_LOW_GENE_LINEAGE: dict[str, str] = {
     "EPCAM": "epithelial",
@@ -1244,18 +1257,32 @@ def _marker_coherence_positive_complete(coherence: Mapping[str, Any]) -> bool:
     )
 
 
+def _permissive_background_expected_low_only(coherence: Mapping[str, Any]) -> bool:
+    genes = [
+        _clean(gene).upper()
+        for gene in (coherence.get("unexpected_low_genes") or [])
+        if _clean(gene)
+    ]
+    if not genes:
+        return True
+    return bool(
+        len(genes) == 1
+        and genes[0] in _PERMISSIVE_BACKGROUND_EXPECTED_LOW_GENES
+    )
+
+
 def _pan_signature_marker_program_selectable(coherence: Mapping[str, Any]) -> bool:
     """Return true when ranker marker evidence can admit a candidate.
 
-    Positive marker completeness is still recorded when expected-low markers
-    are also present, but that mixed state is contextual evidence only. A
-    pan-cancer signature-ranker marker program needs a clean negative-marker
-    side before it counts as an independent fused-evidence admission path.
+    Positive marker completeness is stronger than isolated immune background.
+    A single permissive expected-low immune marker (for example PTPRC) is kept
+    as a caveat but does not erase a complete positive tumor program. Broader
+    expected-low mixtures still stay contextual only.
     """
 
     return bool(
         _marker_coherence_positive_complete(coherence)
-        and _marker_coherence_unexpected_low_count(coherence) == 0
+        and _permissive_background_expected_low_only(coherence)
     )
 
 
@@ -1526,49 +1553,126 @@ def _crc_family_locked_against_non_crc_composition(
     top_code: str,
     type_specific_count: int,
     analysis: Mapping[str, Any],
+    sample_tpm_by_symbol: Mapping[str, float],
 ) -> dict[str, Any]:
     """Return context when a close CRC-family RNA call should not yield to site.
 
     COAD/READ/CRC subtype labels are intentionally allowed to mix up with one
     another, but a generic GI composition/reference signal should not move a
     tight CRC-family RNA call to another GI site unless that site contributes
-    tumor-specific hits. This keeps host/normal tissue context from becoming a
-    second cancer-type classifier.
+    coherent marker evidence. This keeps host/normal tissue context from
+    becoming a second cancer-type classifier.
     """
-    if not _code_has_registry_ancestor(broad_top_code, _CRC_REGISTRY_ROOT):
-        return {}
     if _code_has_registry_ancestor(top_code, _CRC_REGISTRY_ROOT):
         return {}
-    rows = _candidate_rows(analysis)
-    crc_rows = [
-        row
-        for row in rows[:5]
-        if _code_has_registry_ancestor(_clean(row.get("code")), _CRC_REGISTRY_ROOT)
-    ]
-    if not crc_rows:
+    broad_top_is_crc = _code_has_registry_ancestor(broad_top_code, _CRC_REGISTRY_ROOT)
+    crc_candidate = _best_crc_family_trace_candidate(
+        analysis,
+        min_support=0.75 if broad_top_is_crc else _CRC_FAMILY_COMPETITOR_MIN_SUPPORT,
+        min_family_support=0.0 if broad_top_is_crc else _CRC_FAMILY_COMPETITOR_MIN_FAMILY_SUPPORT,
+    )
+    if not crc_candidate:
         return {}
-    close_crc_rows = [
-        row
-        for row in crc_rows
-        if _safe_float(row.get("support_fraction_of_top")) >= 0.75
-    ]
-    if not close_crc_rows:
+    support_by_code = _candidate_support_by_code(analysis)
+    top_support = _safe_float(support_by_code.get(top_code))
+    crc_support = _safe_float(crc_candidate.get("support_fraction_of_top"))
+    if not broad_top_is_crc and top_support > 0 and crc_support < 0.95 * top_support:
         return {}
+    marker_coherence = _marker_coherence(top_code, sample_tpm_by_symbol)
+    if not broad_top_is_crc:
+        if not marker_coherence:
+            return {}
+        if (
+            _marker_coherence_strong(marker_coherence)
+            and _marker_coherence_unexpected_low_count(marker_coherence) == 0
+        ):
+            return {}
     return {
         "broad_top_code": broad_top_code,
         "blocked_code": top_code,
+        "blocked_code_support_fraction_of_top": round(float(top_support), 4),
+        "blocked_code_marker_coherence": marker_coherence,
         "crc_candidates": [
             {
-                "code": _clean(row.get("code")),
-                "support_fraction_of_top": round(
-                    _safe_float(row.get("support_fraction_of_top")),
+                "code": _clean(crc_candidate.get("code")),
+                "support_fraction_of_top": round(float(crc_support), 4),
+                "rank": _safe_int(crc_candidate.get("rank"), 0),
+                "family_support": round(
+                    _safe_float(crc_candidate.get("family_support")),
                     4,
                 ),
             }
-            for row in close_crc_rows
         ],
         "required_type_specific_hits": _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS,
         "observed_type_specific_hits": int(type_specific_count),
+    }
+
+
+def _best_crc_family_trace_candidate(
+    analysis: Mapping[str, Any],
+    *,
+    min_support: float = _CRC_FAMILY_COMPETITOR_MIN_SUPPORT,
+    min_family_support: float = _CRC_FAMILY_COMPETITOR_MIN_FAMILY_SUPPORT,
+    max_rank: int = _CRC_FAMILY_COMPETITOR_MAX_RANK,
+) -> dict[str, Any]:
+    """Return the strongest close COAD/READ/CRC trace row with marker support."""
+
+    best: dict[str, Any] = {}
+    best_priority = 0.0
+    for rank, row in enumerate(_candidate_rows(analysis), start=1):
+        if rank > max_rank:
+            break
+        code = _clean(row.get("code"))
+        if not code or not _code_has_registry_ancestor(code, _CRC_REGISTRY_ROOT):
+            continue
+        support = _safe_float(row.get("support_fraction_of_top"))
+        family_support = _family_marker_support(row)
+        if support < min_support or family_support < min_family_support:
+            continue
+        priority = support + 0.20 * family_support - 0.01 * rank
+        if not best or priority > best_priority:
+            best = {
+                "code": code,
+                "rank": rank,
+                "support_fraction_of_top": round(float(support), 4),
+                "signature_score": round(_safe_float(row.get("signature_score")), 4),
+                "family_label": _clean(row.get("family_label")),
+                "family_score": round(_safe_float(row.get("family_score")), 4),
+                "family_support": round(float(family_support), 4),
+                "min_support": float(min_support),
+                "min_family_support": float(min_family_support),
+            }
+            best_priority = float(priority)
+    return best
+
+
+def _top_label_can_yield_to_crc_family(
+    top: Mapping[str, Any],
+    analysis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Context for a likely immune/background top label yielding to CRC evidence."""
+
+    top_code = _clean(top.get("code"))
+    if not top_code or _code_has_registry_ancestor(top_code, _CRC_REGISTRY_ROOT):
+        return {}
+    top_lineage = _code_lineage_token(top_code)
+    if top_lineage != "hematolymphoid":
+        return {}
+    crc_candidate = _best_crc_family_trace_candidate(analysis)
+    if not crc_candidate:
+        return {}
+    return {
+        "competing_top_code": top_code,
+        "competing_top_lineage": top_lineage,
+        "competing_top_support_fraction_of_top": round(
+            _safe_float(top.get("support_fraction_of_top")),
+            4,
+        ),
+        "crc_candidate": crc_candidate,
+        "reason": (
+            "hematolymphoid top-ranked RNA context has a close CRC-family "
+            "candidate with explicit family-marker support"
+        ),
     }
 
 
@@ -3795,6 +3899,12 @@ def add_pan_cancer_signature_ranker_evidence(
         hypothesis.details["support_fraction_of_top"] = round(support, 4)
         hypothesis.details["pan_cancer_signature_support"] = round(support, 4)
         hypothesis.details["pan_cancer_signature_rank"] = rank
+        if not _code_has_registry_ancestor(code, _CRC_REGISTRY_ROOT):
+            crc_competitor = _best_crc_family_trace_candidate(analysis)
+            if crc_competitor:
+                hypothesis.details["pan_cancer_signature_crc_family_competitor"] = (
+                    crc_competitor
+                )
         if rank == 1:
             hypothesis.basis = hypothesis.basis or (
                 "top pan-cancer signature-ranker match"
@@ -4443,13 +4553,15 @@ def _add_coarse_composition_reference_features(
         top_code=top_code,
         type_specific_count=type_specific_count,
         analysis=analysis,
+        sample_tpm_by_symbol=sample_tpm_by_symbol,
     )
     if crc_family_lock:
         blockers.append(
             "first-pass RNA support is concentrated in the CRC family "
             f"({', '.join(row['code'] for row in crc_family_lock['crc_candidates'])}); "
-            f"{top_code} composition remains contextual unless an "
-            "exact-reference selector corroborates that non-CRC report label"
+            f"{top_code} composition remains contextual unless an exact-reference "
+            "selector or a coherent marker program corroborates that non-CRC "
+            "report label"
         )
 
     support = float(
@@ -4544,7 +4656,11 @@ def _add_tumor_label_refinement_features(
     if len(rows) < 2:
         return
     top = rows[0]
-    if not _is_background_like_candidate(top):
+    top_is_background_like = _is_background_like_candidate(top)
+    crc_family_context: dict[str, Any] = {}
+    if not top_is_background_like:
+        crc_family_context = _top_label_can_yield_to_crc_family(top, analysis)
+    if not top_is_background_like and not crc_family_context:
         return
 
     top_code = _clean(top.get("code"))
@@ -4564,6 +4680,11 @@ def _add_tumor_label_refinement_features(
     for row in rows[1:]:
         code = _clean(row.get("code"))
         if not code or _is_background_like_candidate(row):
+            continue
+        if crc_family_context and not _code_has_registry_ancestor(
+            code,
+            _CRC_REGISTRY_ROOT,
+        ):
             continue
         support = _safe_float(row.get("support_fraction_of_top"))
         signature = _safe_float(row.get("signature_score"))
@@ -4682,6 +4803,7 @@ def _add_tumor_label_refinement_features(
             "tumor_label_compartment_conflict_lineage": _clean(
                 best.get("tumor_label_compartment_conflict_lineage")
             ),
+            "tumor_label_crc_family_context": crc_family_context,
         }
     )
     hypothesis.consider_for_report_label(
@@ -6208,6 +6330,25 @@ def _add_rare_marker_features(
             "ADCC RNA promotion requires a complete MYB-axis co-marker set "
             "or high-confidence ADCC expression-reference support"
         )
+    if (
+        code == "ADCC"
+        and rule_promotes
+        and not has_direct_fusion
+        and not has_high_confidence_local_exact_support
+    ):
+        adcc_marker_coherence = hypothesis.details.get("local_reference_marker_coherence")
+        if not isinstance(adcc_marker_coherence, Mapping):
+            adcc_marker_coherence = _marker_coherence(code, sample_tpm_by_symbol)
+        unexpected_low_genes = list(
+            (adcc_marker_coherence or {}).get("unexpected_low_genes") or []
+        )
+        if unexpected_low_genes:
+            blockers.append(
+                "ADCC RNA promotion without fusion or high-confidence exact "
+                "expression-reference support requires a clean marker program; "
+                "expected-low markers are present "
+                f"({', '.join(_clean(gene) for gene in unexpected_low_genes[:6])})"
+            )
     if not top_lineage_passes:
         allowed = ", ".join(sorted(policy.required_top_lineages))
         observed = _broad_lineage_for_code(top) or "unknown"
@@ -6281,6 +6422,12 @@ def _add_rare_marker_features(
             "top_reference_cancer_type": top,
             "top_is_context": top_is_context,
             "marker_context_support": round(float(marker_context_support), 4),
+            "rare_marker_can_select": not blockers,
+            "rare_marker_blocking_reasons": list(blockers),
+            "rare_marker_complete_context_gated_axis": False,
+            "strong_fusion_defined_rna_surrogate": (
+                dict(strong_rna_surrogate) if strong_rna_surrogate else {}
+            ),
             "fusion_defined_context_conflict": bool(
                 fusion_defined_context_conflict
             ),
@@ -6314,7 +6461,14 @@ def _add_rare_marker_features(
         and marker_support >= 0.95
         and (top_is_context or context_support >= 0.90)
     )
-    if complete_context_gated_marker_axis:
+    hypothesis.details["rare_marker_complete_context_gated_axis"] = (
+        complete_context_gated_marker_axis
+    )
+    if (
+        complete_context_gated_marker_axis
+        and fusion_defined_code
+        and bool(strong_rna_surrogate.get("strong"))
+    ):
         priority_class = 3
         priority_strength = max(marker_context_support, marker_support)
     if fusion_defined_code and has_local_exact_support:
@@ -6835,6 +6989,72 @@ def _centroid_anchored_expression_reference_supported(
     return bool(status in {"consistent", "partial"} and detected >= 3)
 
 
+def _weak_non_crc_fused_call_conflicts_with_crc_family(
+    hypothesis: CancerTypeEvidence,
+    features: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the close CRC competitor context for a weak non-CRC epithelial call."""
+
+    if _code_has_registry_ancestor(hypothesis.cancer_type, _CRC_REGISTRY_ROOT):
+        return {}
+    if _code_lineage_token(hypothesis.cancer_type) != "epithelial":
+        return {}
+    competitor = hypothesis.details.get("pan_cancer_signature_crc_family_competitor")
+    if not isinstance(competitor, Mapping):
+        return {}
+    competitor_support = _safe_float(competitor.get("support_fraction_of_top"))
+    if competitor_support <= 0:
+        return {}
+    if hypothesis.broad_rna_support > 0 and competitor_support < (
+        0.90 * hypothesis.broad_rna_support
+    ):
+        return {}
+    learned = _safe_float(features.get("learned_expression_probability"))
+    learned_entity = _safe_float(features.get("learned_expression_entity_support"))
+    learned_margin = _safe_float(features.get("learned_expression_margin"))
+    learned_is_weak = bool(
+        learned < _LEARNED_EXPRESSION_MIN_PROBABILITY
+        or learned_entity < _LEARNED_EXPRESSION_MIN_PROBABILITY
+        or learned_margin < _FUSED_EVIDENCE_STRONG_LEARNED_ENTITY_MARGIN
+    )
+    if not learned_is_weak:
+        return {}
+    marker_status = _clean(
+        features.get("pan_cancer_signature_marker_status")
+    ).lower()
+    marker_unexpected_low = _safe_int(
+        features.get("pan_cancer_signature_marker_unexpected_low_count"),
+        0,
+    )
+    marker_mixed = bool(marker_unexpected_low > 0 or "mixed" in marker_status)
+    if not marker_mixed:
+        return {}
+    return {
+        "candidate_code": hypothesis.cancer_type,
+        "candidate_support_fraction_of_top": round(
+            float(hypothesis.broad_rna_support),
+            4,
+        ),
+        "candidate_learned_probability": round(float(learned), 4),
+        "candidate_learned_entity_support": round(float(learned_entity), 4),
+        "candidate_learned_margin": round(float(learned_margin), 4),
+        "candidate_marker_status": marker_status,
+        "candidate_unexpected_low_marker_count": int(marker_unexpected_low),
+        "crc_candidate": dict(competitor),
+    }
+
+
+def _rare_marker_channel_admitted(hypothesis: CancerTypeEvidence) -> bool:
+    """Whether rare-marker evidence can contribute as an admitted evidence channel."""
+
+    return bool(
+        hypothesis.can_select_report_label
+        and hypothesis.rna_marker_support > 0
+        and "rare_marker" in hypothesis.evidence_sources
+        and hypothesis.details.get("rare_marker_can_select")
+    )
+
+
 def _fused_component_scores(
     hypothesis: CancerTypeEvidence,
     *,
@@ -6848,7 +7068,14 @@ def _fused_component_scores(
     selected_by = hypothesis.selected_by if hypothesis.can_select_report_label else ""
     exact_reference_admitted = selected_by in {"fine_reference", "local_expression_reference"}
     lineage_panel_admitted = selected_by == "lineage_panel"
-    rare_marker_admitted = selected_by == "rare_marker"
+    rare_marker_admitted = _rare_marker_channel_admitted(hypothesis)
+    strong_rare_rna_surrogate = bool(
+        (details.get("strong_fusion_defined_rna_surrogate") or {}).get("strong")
+    )
+    rare_marker_component_admitted = bool(
+        rare_marker_admitted
+        and (not exact_reference_admitted or strong_rare_rna_surrogate)
+    )
     contrast_admitted = selected_by == "contrast_discriminator"
     refinement_admitted = selected_by == "tumor_label_refinement"
     composition_admitted = selected_by == "coarse_composition_reference"
@@ -6972,13 +7199,13 @@ def _fused_component_scores(
         ),
         "direct_fusion": 2.0 * hypothesis.direct_fusion_support,
         "rare_marker": (
-            1.10 * hypothesis.rna_marker_support
-            if rare_marker_admitted
+            2.00 * hypothesis.rna_marker_support
+            if rare_marker_component_admitted
             else 0.0
         ),
         "marker_program": (
             0.60 * max(hypothesis.family_marker_support, hypothesis.rna_marker_support)
-            if refinement_admitted or rare_marker_admitted
+            if refinement_admitted or rare_marker_component_admitted
             else 0.0
         ),
         "background_label": (
@@ -7085,6 +7312,36 @@ def _fused_evidence_eligible(
             )
         )
     )
+    crc_family_conflict = _weak_non_crc_fused_call_conflicts_with_crc_family(
+        hypothesis,
+        features,
+    )
+    if (
+        crc_family_conflict
+        and not strong_independent_learned_call
+        and not exact_reference_admitted
+        and selected_by
+        not in {
+            "lineage_panel",
+            "rare_marker",
+            "contrast_discriminator",
+            "tumor_label_refinement",
+            "coarse_composition_reference",
+        }
+    ):
+        crc_candidate = crc_family_conflict.get("crc_candidate") or {}
+        blockers.append(
+            "weak non-CRC epithelial fused evidence is competing with close "
+            f"CRC-family RNA support ({crc_candidate.get('code', 'CRC')} "
+            f"rank {crc_candidate.get('rank', '?')}, "
+            f"{_safe_float(crc_candidate.get('support_fraction_of_top')):.2f}x top; "
+            f"family support {_safe_float(crc_candidate.get('family_support')):.2f}); "
+            "require stronger learned, exact-reference, marker, lineage-panel, "
+            "fusion, or contrast support before selecting the non-CRC label"
+        )
+        hypothesis.details["fused_evidence_crc_family_conflict"] = (
+            crc_family_conflict
+        )
     if hypothesis.details.get("local_reference_explicit_negative_fusion"):
         details = (
             hypothesis.details.get("local_reference_explicit_negative_fusion_details")
@@ -7176,9 +7433,7 @@ def _fused_evidence_eligible(
             "local expression reference; require coherent marker fraction and "
             "burden before overriding the pan-cancer signature context"
         )
-    rare_marker_admitted = bool(
-        hypothesis.can_select_report_label and hypothesis.selected_by == "rare_marker"
-    )
+    rare_marker_admitted = _rare_marker_channel_admitted(hypothesis)
     independent_channels = sum(
         1
         for key, threshold in (

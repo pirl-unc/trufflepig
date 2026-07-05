@@ -83,15 +83,15 @@ for a full replacement classifier:
 
 ## Validation status
 
-Validation through 2026-07-03 shows a large improvement, including removal of
+Validation through 2026-07-05 shows a large improvement, including removal of
 the severe cross-lineage failures that motivated this refactor:
 
 - Focused selector/report regression subset:
-  `5 passed` (`./test.sh -k ... -q`).
+  `109 passed` (`./test.sh tests/test_cancer_type_evidence.py -q`).
 - 565-sample baseline before the learned selector:
   entity-compatible 450/565 (80%), lineage-compatible 534/565 (95%).
 - 565-sample result after fused learned hierarchy/reference gating:
-  exact 500, subtype-compatible 43, sibling-compatible 21, lineage-only 1,
+  exact 495, subtype-compatible 48, sibling-compatible 21, lineage-only 1,
   miss 0; entity-compatible 564/565 (100% rounded), lineage-compatible
   565/565 (100%).
 - The only lineage-only residual is the close renal pair `KIRC -> KICH`.
@@ -101,13 +101,14 @@ the severe cross-lineage failures that motivated this refactor:
   SARC_RMS_ERMS 5/5 exact, SARC_RMS_ARMS 5/5 exact, and
   SARC_RMS_SSRMS 5/5 exact.
 - Local report replay completed for 19 available local samples with 0 failures
-  and 2 skipped missing-input samples. The reviewed reports consistently use
-  the selected label for biomarker/therapy scope and decomposition; contextual
-  alternatives remain evidence/context only.
-- Blind no-hint validation is lineage-correct on 8/8 local truth samples and
-  14/14 medoids. HCC1395/StringTie still has a T_ALL pan-cancer ranker artifact,
-  but the strong BRCA_BASAL panel plus expression/code lineage conflict now
-  selects BRCA.
+  and 2 skipped missing-input samples. Report scoring on the manifest-truth
+  subset is 8/8 compatible; generated-report audit found 0 issues. The reviewed
+  reports consistently use the selected label for biomarker/therapy scope and
+  decomposition; contextual alternatives remain evidence/context only.
+- Blind no-hint validation is entity- and lineage-compatible on 14/14 local
+  truth samples and 14/14 medoids. HCC1395/StringTie still has a T_ALL
+  pan-cancer ranker artifact, but the strong BRCA_BASAL panel plus
+  expression/code lineage conflict now selects BRCA.
 
 Learned-expression classifier leakage audit (2026-07-02):
 
@@ -131,19 +132,23 @@ Learned-expression classifier leakage audit (2026-07-02):
 
 Local report audit highlights from blind report regeneration:
 
-- PFO002 WashU Kallisto/StringTie reports select READ/colorectal scope;
+- PFO002 reports select READ/colorectal scope where a concrete child is
+  supported; weak non-CRC GI fused/composition calls are blocked when they
+  compete with a close CRC-family ranker row carrying explicit CRC
+  family-marker support and lack a coherent non-CRC marker program.
   decomposition, biomarker panel, and therapy target landscape use READ/CRC
   context. The evidence appendix labels the pan-cancer ranker row as fallback
-  RNA context rather than an independent selector. The PFO002 Personalis report
-  remains a local OOD/platform exception: it calls low-confidence STAD while
-  the companion WashU quantifications call READ.
+  RNA context rather than an independent selector. Capture-like/OOD inputs may
+  degrade to unresolved CRC-favored, but should not select STAD without stronger
+  independent corroboration.
 - PFO017 bladder/liver reports select BLCA; the liver sample uses liver host
   context in decomposition without changing the report label or therapy scope.
 - Local sarcoma reports select SARC or SARC_OS as appropriate; biomarker and
   therapy sections remain sarcoma-scoped. Alvin reports SARC via fused evidence
   with EGFR KDD carried as orthogonal eligibility context.
-- NUTM fusion-supported reports select NUTM; ambiguous NUTM-marker-only reports
-  keep NUTM1 as a rare-marker prompt without forcing NUTM therapy scope.
+- NUTM fusion-supported reports select NUTM; strong NUTM1 RNA-surrogate reports
+  can select NUTM when squamous/epithelial context is compatible and carry
+  NUTM-targeted therapy caveats that require orthogonal confirmation.
 - HCC1395 Kallisto/StringTie both report BRCA after lineage-panel rescue,
   although the StringTie input still carries a T_ALL bulk-ranker artifact in
   the alternatives/decomposition context.

@@ -167,6 +167,58 @@ def test_nutm_rna_surrogate_promotes_in_squamous_context():
     assert therapy["status"] == "downstream_consumer_not_selector"
 
 
+def test_nutm_rare_marker_outranks_generic_squamous_marker_program(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(classifier, "classify_expression", lambda _sample, top_k=5: [])
+    monkeypatch.setattr(classifier, "classify_expression_hierarchy", lambda _sample, top_k=5: [])
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_supports_for_hypotheses",
+        lambda hypotheses, cen=None: {code: 1.0 for code in hypotheses},
+    )
+
+    original_marker_coherence = evidence._marker_coherence
+
+    def fake_marker_coherence(code, sample):
+        if code == "ESCA":
+            return {
+                "code": "ESCA",
+                "status": "consistent",
+                "detected": 4,
+                "total": 5,
+                "required_for_consistent": 3,
+                "detected_fraction": 0.8,
+                "unexpected_low_detected": 1,
+                "unexpected_low_genes": ["PTPRC"],
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", fake_marker_coherence)
+    finding = {
+        "cancer_type": "NUTM",
+        "rule_id": "nutm_nutm1",
+        "surrogate": "NUTM1",
+        "surrogate_tpm": 73.0,
+        "threshold_tpm": 1.0,
+        "support_genes": [],
+        "support_pass": True,
+        "context_support_fraction_of_top": 1.0,
+        "context_match_reason": "top_context",
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"NUTM1": 73.0, "KRT5": 100.0, "TP63": 80.0, "PTPRC": 25.0}),
+        _analysis(("ESCA", 1.0), ("HNSC", 0.93)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "NUTM"
+    assert result["selected"]["selected_by"] == "rare_marker"
+
+
 def test_registry_molecular_children_are_orthogonal_axes():
     from trufflepig.cancer_type_evidence import (
         _lineage_path_for_code,
@@ -284,6 +336,47 @@ def test_blocked_learned_selector_does_not_admit_fused_evidence():
 
     assert can_select is False
     assert any("lacks a non-ranker admission path" in reason for reason in blockers)
+
+
+def test_rare_marker_channel_contributes_when_learned_selector_admits_candidate():
+    """Rare-marker evidence remains a channel even if another selector first admitted the label."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fused_component_scores,
+        _fused_evidence_eligible,
+    )
+
+    hypothesis = CancerTypeEvidence(
+        cancer_type="NUTM",
+        learned_expression_support=0.98,
+        rna_marker_support=1.0,
+    )
+    hypothesis.add_source("learned_expression_classifier")
+    hypothesis.add_source("rare_marker")
+    hypothesis.selected_by = "learned_expression_classifier"
+    hypothesis.can_select_report_label = True
+    hypothesis.details.update(
+        {
+            "learned_expression_hierarchical_context_support": 0.80,
+            "learned_expression_entity_support": 0.98,
+            "learned_expression_entity_label": "NUTM",
+            "learned_expression_margin": 0.65,
+            "rare_marker_can_select": True,
+        }
+    )
+
+    components = _fused_component_scores(hypothesis, centroid_support=0.35)
+    can_select, blockers = _fused_evidence_eligible(
+        hypothesis,
+        score=sum(components.values()),
+        centroid_support=0.35,
+        components=components,
+    )
+
+    assert components["rare_marker"] == 2.0
+    assert components["marker_program"] == 0.6
+    assert can_select is True
+    assert blockers == []
 
 
 def test_hierarchy_candidate_votes_are_preserved_in_trace_channels():
@@ -626,6 +719,77 @@ def test_composition_reference_cannot_escape_crc_family_without_specific_hits():
     assert any("CRC family" in reason for reason in stad["blocking_reasons"])
 
 
+def test_composition_reference_cannot_escape_close_crc_family_with_weak_marker_program(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_marker_coherence",
+        lambda code, sample: {
+            "code": "STAD",
+            "status": "partial",
+            "detected": 2,
+            "total": 6,
+            "required_for_consistent": 3,
+            "unexpected_low_detected": 4,
+            "unexpected_low_genes": ["DES", "PTPRC", "MS4A1", "CD3D"],
+        }
+        if code == "STAD"
+        else {},
+    )
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[
+            ("urinary_bladder_nTPM", 0.82),
+            ("appendix_nTPM", 0.82),
+            ("gallbladder_nTPM", 0.82),
+        ],
+        top_tcga_cohorts=[
+            ("STAD_TPM", 0.86),
+            ("PAAD_TPM", 0.84),
+            ("ESCA_TPM", 0.83),
+        ],
+        type_specific_cohort="STAD_TPM",
+        type_specific_hits=[
+            ("REG4", 160.0),
+            ("MUC5AC", 143.0),
+            ("TFF1", 92.0),
+            ("FOXA2", 64.0),
+            ("ERN2", 34.0),
+            ("ANXA10", 28.0),
+            ("CLDN18", 12.0),
+        ],
+    )
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        {
+            "cancer_type": "MCL",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "MCL", "support_fraction_of_top": 1.0, "signature_score": 0.48},
+                {"code": "SARC", "support_fraction_of_top": 0.98, "signature_score": 0.81},
+                {
+                    "code": "READ",
+                    "support_fraction_of_top": 0.883,
+                    "signature_score": 0.49,
+                    "family_label": "CRC",
+                    "family_score": 0.38,
+                },
+                {"code": "STAD", "support_fraction_of_top": 0.847, "signature_score": 0.63},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["can_select_report_label"] is False
+    assert stad["coarse_reference_crc_family_lock"]["crc_candidates"][0]["code"] == "READ"
+    assert any("coherent marker program" in reason for reason in stad["blocking_reasons"])
+
+
 def test_composition_reference_can_use_primary_normal_tissue_support():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -824,6 +988,224 @@ def test_background_like_top_label_can_yield_to_supported_tumor_label():
     assert result["selected"]["label_decision"]["status"] == "selected"
     assert result["selected"]["metrics"]["family_marker_support"] == 1.0
     assert result["selected"]["competing_background_code"] == "SARC"
+
+
+def test_hematolymphoid_top_label_can_yield_to_supported_crc_candidate():
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _candidate_analysis(
+            [
+                {"code": "MCL", "support_fraction_of_top": 1.0, "signature_score": 0.48},
+                {
+                    "code": "SARC",
+                    "support_fraction_of_top": 0.98,
+                    "signature_score": 0.81,
+                    "family_label": "MESENCHYMAL",
+                },
+                {
+                    "code": "READ",
+                    "support_fraction_of_top": 0.88,
+                    "signature_score": 0.49,
+                    "family_label": "CRC",
+                    "family_score": 0.38,
+                },
+                {
+                    "code": "STAD",
+                    "support_fraction_of_top": 0.85,
+                    "signature_score": 0.63,
+                    "family_label": "GASTRIC",
+                    "family_score": 0.32,
+                },
+            ]
+        ),
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    assert result["selected"]["selected_by"] == "tumor_label_refinement"
+    assert result["selected"]["tumor_label_crc_family_context"]["crc_candidate"]["code"] == "READ"
+
+
+def test_weak_non_crc_fused_gi_call_blocked_by_close_crc_candidate(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [
+            ("STAD", 0.31),
+            ("SARC_KS", 0.09),
+            ("ESCA", 0.08),
+            ("PAAD", 0.07),
+            ("COAD_MSS", 0.05),
+        ],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "compartment",
+                    "label_space": "learned_compartment",
+                    "label": "epithelial",
+                    "probability": 0.13,
+                    "margin": 0.02,
+                    "top_predictions": [{"label": "epithelial", "probability": 0.13}],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "family",
+                    "label_space": "learned_family",
+                    "label": "carcinoma-gi",
+                    "probability": 0.83,
+                    "margin": 0.78,
+                    "top_predictions": [{"label": "carcinoma-gi", "probability": 0.83}],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label_space": "learned_entity",
+                    "label": "STAD",
+                    "probability": 0.31,
+                    "margin": 0.23,
+                    "top_predictions": [{"label": "STAD", "probability": 0.31}],
+                }
+            ),
+        ],
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_supports_for_hypotheses",
+        lambda hypotheses, cen=None: {code: (1.0 if code == "STAD" else 0.80) for code in hypotheses},
+    )
+
+    original_marker_coherence = evidence._marker_coherence
+
+    def fake_marker_coherence(code, sample):
+        if code == "STAD":
+            return {
+                "code": "STAD",
+                "status": "mixed",
+                "detected": 3,
+                "total": 6,
+                "required_for_consistent": 3,
+                "unexpected_low_detected": 4,
+                "unexpected_low_genes": ["DES", "PTPRC", "MS4A1", "CD3D"],
+                "detected_fraction": 0.5,
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", fake_marker_coherence)
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"EPCAM": 120.0, "KRT20": 80.0, "DES": 40.0}),
+        _candidate_analysis(
+            [
+                {"code": "MCL", "support_fraction_of_top": 1.0, "signature_score": 0.48},
+                {
+                    "code": "SARC",
+                    "support_fraction_of_top": 0.98,
+                    "signature_score": 0.81,
+                    "family_label": "MESENCHYMAL",
+                },
+                {
+                    "code": "READ",
+                    "support_fraction_of_top": 0.88,
+                    "signature_score": 0.49,
+                    "family_label": "CRC",
+                    "family_score": 0.38,
+                },
+                {
+                    "code": "STAD",
+                    "support_fraction_of_top": 0.85,
+                    "signature_score": 0.63,
+                    "family_label": "GASTRIC",
+                    "family_score": 0.32,
+                },
+            ]
+        ),
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["fused_evidence_can_select"] is False
+    assert stad["fused_evidence_crc_family_conflict"]["crc_candidate"]["code"] == "READ"
+    assert any("CRC-family RNA support" in reason for reason in stad["fused_evidence_blockers"])
+
+
+def test_complete_marker_program_tolerates_single_immune_expected_low():
+    from trufflepig.cancer_type_evidence import _pan_signature_marker_program_selectable
+
+    complete_with_immune_context = {
+        "status": "consistent",
+        "detected": 6,
+        "total": 6,
+        "required_for_consistent": 3,
+        "detected_fraction": 1.0,
+        "unexpected_low_detected": 1,
+        "unexpected_low_genes": ["PTPRC"],
+    }
+    mixed_with_alternate_lineage = {
+        **complete_with_immune_context,
+        "unexpected_low_detected": 2,
+        "unexpected_low_genes": ["PTPRC", "DES"],
+    }
+
+    assert _pan_signature_marker_program_selectable(complete_with_immune_context)
+    assert not _pan_signature_marker_program_selectable(mixed_with_alternate_lineage)
+
+
+def test_complete_blca_marker_program_can_rescue_liver_context(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(classifier, "classify_expression", lambda _sample, top_k=5: [])
+    monkeypatch.setattr(classifier, "classify_expression_hierarchy", lambda _sample, top_k=5: [])
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_supports_for_hypotheses",
+        lambda hypotheses, cen=None: {code: (0.98 if code == "BLCA" else 0.60) for code in hypotheses},
+    )
+
+    original_marker_coherence = evidence._marker_coherence
+
+    def fake_marker_coherence(code, sample):
+        if code == "BLCA":
+            return {
+                "code": "BLCA",
+                "status": "consistent",
+                "detected": 6,
+                "total": 6,
+                "required_for_consistent": 3,
+                "detected_fraction": 1.0,
+                "unexpected_low_detected": 1,
+                "unexpected_low_genes": ["PTPRC"],
+                "detected_genes": ["UPK2", "UPK1A", "GATA3", "PPARG", "KRT20", "UPK3A"],
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", fake_marker_coherence)
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"UPK2": 80.0, "UPK1A": 70.0, "GATA3": 100.0, "PPARG": 50.0, "KRT20": 40.0, "UPK3A": 35.0, "PTPRC": 25.0}),
+        _candidate_analysis(
+            [
+                {"code": "HEPB", "support_fraction_of_top": 1.0, "signature_score": 0.67},
+                {"code": "BLCA", "support_fraction_of_top": 0.96, "signature_score": 0.75},
+            ]
+        ),
+    )
+
+    assert result["selected"]["cancer_type"] == "BLCA"
+    assert result["selected"]["selected_by"] == "fused_evidence"
+    assert result["selected"]["pan_cancer_signature_marker_selectable"] is True
 
 
 def test_background_like_top_label_does_not_yield_to_weak_tumor_label():
@@ -3114,6 +3496,52 @@ def test_adcc_marker_axis_requires_complete_support_without_strong_local_referen
     adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
     assert adcc["can_select_report_label"] is False
     assert any("complete MYB-axis" in reason for reason in adcc["blocking_reasons"])
+
+
+def test_adcc_rare_marker_mixed_program_cannot_override_brca(monkeypatch):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    original_marker_coherence = evidence._marker_coherence
+
+    def fake_marker_coherence(code, sample):
+        if code == "ADCC":
+            return {
+                "code": "ADCC",
+                "status": "mixed",
+                "detected": 7,
+                "total": 7,
+                "required_for_consistent": 4,
+                "detected_fraction": 1.0,
+                "unexpected_low_detected": 3,
+                "unexpected_low_genes": ["KRT8", "KRT18", "EPCAM"],
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", fake_marker_coherence)
+    finding = {
+        "cancer_type": "ADCC",
+        "rule_id": "adcc_myb",
+        "surrogate": "MYB",
+        "surrogate_tpm": 30.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["KRT7", "SOX10", "KIT"],
+        "support_pass": True,
+        "support_gene_count": 3,
+        "min_support_genes": 1,
+        "required_support_gene_count": 3,
+    }
+
+    result = select_report_scope_from_evidence(
+        _empty_expression_frame(),
+        _analysis(("BRCA", 1.0), ("HNSC", 0.86), ("LUAD", 0.82)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert adcc["can_select_report_label"] is False
+    assert any("requires a clean marker program" in reason for reason in adcc["blocking_reasons"])
 
 
 def test_low_myb_adcc_exact_reference_can_override_brca_context(monkeypatch):
