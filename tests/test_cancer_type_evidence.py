@@ -99,6 +99,17 @@ def _candidate_analysis(rows):
     }
 
 
+def _fused_context_analysis(code, support=1.0):
+    return _candidate_analysis(
+        [
+            {
+                "code": code,
+                "support_fraction_of_top": support,
+            }
+        ]
+    )
+
+
 def _empty_expression_frame():
     return pd.DataFrame(columns=["ensembl_gene_id", "canonical_gene_name", "TPM"])
 
@@ -329,6 +340,7 @@ def test_blocked_learned_selector_does_not_admit_fused_evidence():
     components = _fused_component_scores(hypothesis, centroid_support=0.0)
     can_select, blockers = _fused_evidence_eligible(
         hypothesis,
+        _fused_context_analysis("SARC_ASPS"),
         score=sum(components.values()),
         centroid_support=0.0,
         components=components,
@@ -368,6 +380,7 @@ def test_rare_marker_channel_contributes_when_learned_selector_admits_candidate(
     components = _fused_component_scores(hypothesis, centroid_support=0.35)
     can_select, blockers = _fused_evidence_eligible(
         hypothesis,
+        _fused_context_analysis("NUTM"),
         score=sum(components.values()),
         centroid_support=0.35,
         components=components,
@@ -431,6 +444,7 @@ def test_candidate_wide_hierarchy_support_scores_fused_evidence():
     components = _fused_component_scores(hypothesis, centroid_support=0.35)
     can_select, blockers = _fused_evidence_eligible(
         hypothesis,
+        _fused_context_analysis("SARC"),
         score=sum(components.values()),
         centroid_support=0.35,
         components=components,

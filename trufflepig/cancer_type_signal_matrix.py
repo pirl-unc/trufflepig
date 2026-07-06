@@ -379,7 +379,7 @@ def build_cancer_type_signal_matrix(
                 signal_label="Pan-cancer signature ranker",
                 stage="coarse_type",
                 role="ranked_candidate",
-                status="ranked_candidate",
+                status="candidate_generation",
                 predicted_code=code,
                 support=_safe_float(candidate.get("support_fraction_of_top")),
                 confidence=_safe_float(candidate.get("support_geomean")),
