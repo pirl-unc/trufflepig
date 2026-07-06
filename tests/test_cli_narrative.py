@@ -261,10 +261,7 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     bullets = _integrated_evidence_bullets(analysis)
     text = "\n".join(bullets)
     assert "**RNA classifier line**" in text
-    assert (
-        "SARC (Sarcoma) is the leading pan-cancer signature-ranker candidate"
-        in text
-    )
+    assert "pan-cancer signature ranker does not independently set the report label" in text
     assert "integrated evidence selected COAD (Colon Adenocarcinoma)" in text
     assert "SARC (Sarcoma) is the leading label" not in text
 

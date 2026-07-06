@@ -466,7 +466,7 @@ def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
         disease_state="",
     )
 
-    assert "**RNA alternatives:** ordered RNA candidates PRAD (rank 1)" in md
+    assert "**Retained RNA differential:** ordered RNA candidates PRAD (rank 1)" in md
     assert "BLCA (rank 2, 0.80x top support)" in md
     assert "COAD (rank 3, 0.50x top support)" in md
     assert "raw-signature top BLCA" in md
@@ -524,7 +524,7 @@ def test_summary_does_not_list_rna_alternatives_for_supplied_label():
     )
 
     assert "expression-reference context is concordant with supplied PRAD" in md
-    assert "**RNA alternatives:**" not in md
+    assert "**Retained RNA differential:**" not in md
 
 
 def test_low_confidence_call_punctuation_is_clean():

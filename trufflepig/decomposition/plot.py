@@ -491,12 +491,11 @@ def plot_decomposition_summary(
     if call_summary:
         lines = []
         if call_summary.get("label_options"):
-            if len(call_summary["label_options"]) == 2:
+            lines.append(f"Report label: {call_summary['label_options'][0]}")
+            if len(call_summary["label_options"]) >= 2:
                 lines.append(
-                    f"Possible labels: {call_summary['label_options'][0]} or {call_summary['label_options'][1]}"
+                    "Retained alternatives: see differential section"
                 )
-            else:
-                lines.append(f"Resolved label: {call_summary['label_options'][0]}")
         if call_summary.get("site_indeterminate"):
             lines.append("Site/template: indeterminate")
         elif call_summary.get("reported_site"):

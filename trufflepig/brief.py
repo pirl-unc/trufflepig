@@ -1842,9 +1842,9 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     if sig_top and sig_top != str(cancer_code or "").strip():
         sig_clause = f"; raw-signature top {sig_top}"
     return (
-        f"**RNA alternatives:** ordered RNA candidates {', '.join(chunks)}"
-        f"{sig_clause}. Treat these as hypotheses until pathology/clinical "
-        "context resolves them."
+        f"**Retained RNA differential:** ordered RNA candidates {', '.join(chunks)}"
+        f"{sig_clause}. Active report label remains {cancer_code}; treat the "
+        "listed rows as hypotheses until pathology/clinical context resolves them."
     )
 
 

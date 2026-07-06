@@ -4734,10 +4734,10 @@ def plot_sample_summary(
         lines = []
         if fit_label:
             lines.append(f"Fit: {fit_label}")
-        if len(label_options) == 2:
-            lines.append(f"Possible labels: {label_options[0]} or {label_options[1]}")
-        elif len(label_options) == 1:
+        if label_options:
             lines.append(f"Lead label: {label_options[0]}")
+            if len(label_options) >= 2:
+                lines.append("Retained alternatives: see differential section")
         fusion_note = _fusion_plot_note(analysis)
         if fusion_note:
             lines.append(fusion_note)

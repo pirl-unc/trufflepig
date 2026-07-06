@@ -2913,7 +2913,7 @@ def _analyze_body(run: AnalyzeRun):
             )
         if call_summary.get("site_indeterminate"):
             print(
-                f"[analysis] Possible labels: {call_summary['label_display']}; "
+                f"[analysis] Retained label differential: {call_summary['label_display']}; "
                 f"site/template indeterminate"
             )
         else:
@@ -2946,12 +2946,8 @@ def _analyze_body(run: AnalyzeRun):
         # do not emit it by default from ``analyze``.
         # Standalone presentation-ready plots for the best hypothesis
         label_options = call_summary.get("label_options") or []
-        if len(label_options) == 1:
+        if label_options:
             decomp_title_prefix = _cancer_label(label_options[0])
-        elif len(label_options) >= 2:
-            decomp_title_prefix = " / ".join(
-                _cancer_label(code) for code in label_options[:2]
-            )
         else:
             decomp_title_prefix = call_summary.get("label_display") or _cancer_label(
                 best_decomp.cancer_type
@@ -4562,6 +4558,7 @@ def _selected_report_scope_basis_label(analysis):
         "pan_cancer_signature_subtype": "pan-cancer signature-ranker subtype context",
         "lineage_panel": "lineage-panel evidence",
         "tumor_label_refinement": "tumor-label refinement evidence",
+        "coarse_composition_reference": "coarse composition-reference evidence",
         "pan_cancer_signature_ranker": "pan-cancer signature-ranker context",
         "primary_expression_match": "legacy leading RNA expression-reference context",
     }.get(selected_by, "integrated classifier evidence")
@@ -5818,6 +5815,316 @@ def _cancer_type_context_line(cancer_type_context):
     return line
 
 
+def _candidate_trace_rank_and_row(candidate_trace, code):
+    target = str(code or "").strip()
+    if not target:
+        return None, None
+    for rank, row in enumerate(candidate_trace or [], start=1):
+        if str(row.get("code") or "").strip() == target:
+            return rank, row
+    return None, None
+
+
+def _report_label_code(analysis, call_summary=None):
+    call_summary = call_summary or {}
+    labels = call_summary.get("label_options") or []
+    if labels:
+        return str(labels[0] or "").strip()
+    selected = (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+    if isinstance(selected, dict):
+        code = str(selected.get("cancer_type") or selected.get("code") or "").strip()
+        if code:
+            return code
+    scope = _selected_report_scope_label(analysis)
+    if scope:
+        return scope
+    return str(analysis.get("cancer_type") or "").strip()
+
+
+def _score_text(value, *, digits=3):
+    if isinstance(value, (int, float)):
+        return f"{float(value):.{digits}f}"
+    return "—"
+
+
+_CHANNEL_DISPLAY_LABELS = {
+    "pan_cancer_signature_ranker": "Pan-cancer signature ranker",
+    "fused_evidence": "Fused evidence model",
+    "lineage_panel": "Lineage marker panel",
+    "learned_expression_classifier": "Learned expression classifier",
+    "composition_reference": "Coarse composition reference",
+    "exact_expression_reference": "Exact expression reference",
+    "deconvolved_tumor_reference": "Deconvolved tumor reference",
+    "marker_program": "Marker-program coherence",
+    "purity_attribution": "Purity/background attribution",
+    "rare_fusion_anchor": "Rare marker/fusion anchor",
+    "contrast_discriminator": "Local contrast discriminator",
+}
+
+
+def _channel_display_label(channel):
+    return _CHANNEL_DISPLAY_LABELS.get(
+        str(channel or "").strip(),
+        str(channel or "evidence").replace("_", " ").title(),
+    )
+
+
+def _channel_role_label(role):
+    return str(role or "").replace("_", " ")
+
+
+def _cancer_type_vote_summary_markdown(analysis, call_summary=None, *, max_rows=8):
+    evidence = analysis.get("cancer_type_evidence") or {}
+    selected = evidence.get("selected") if isinstance(evidence, dict) else {}
+    if not isinstance(selected, dict):
+        selected = {}
+    selected_code = _report_label_code(analysis, call_summary)
+    if not selected_code:
+        return ""
+
+    selected_by = str(selected.get("selected_by") or "").strip()
+    basis_label = _selected_report_scope_basis_label(analysis)
+    lines = ["### Cancer-Type Evidence Votes\n"]
+    if selected_by:
+        lines.append(
+            f"- **Selection driver**: {basis_label} (`{selected_by}`). This is "
+            "provenance for the strongest selecting path, not the complete evidence model."
+        )
+    else:
+        lines.append(
+            "- **Selection driver**: no single selecting channel was recorded; "
+            "the table below summarizes available support for the active report label."
+        )
+
+    candidate_trace = analysis.get("candidate_trace") or []
+    rank, trace_row = _candidate_trace_rank_and_row(candidate_trace, selected_code)
+    if trace_row:
+        rank_clause = f"rank {rank}" if rank else "rank unavailable"
+        lines.append(
+            f"- **Pan-cancer ranker position for report label**: {rank_clause}; "
+            f"normalized support {_score_text(trace_row.get('support_fraction_of_top'))}, "
+            f"signature {_score_text(trace_row.get('signature_score'))}, "
+            f"lineage concordance {_score_text(trace_row.get('lineage_concordance'))}."
+        )
+
+    rows_by_key = {}
+    for row in selected.get("evidence_channels") or []:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or "").strip()
+        channel = str(row.get("channel") or "").strip()
+        if not channel:
+            continue
+        channel_code = str(row.get("code") or row.get("candidate_code") or "").strip()
+        if role.startswith("hierarchical_") and channel_code != selected_code:
+            continue
+        try:
+            support_value = float(row.get("support"))
+        except (TypeError, ValueError):
+            continue
+        if support_value <= 0:
+            continue
+        key = (channel, role)
+        previous = rows_by_key.get(key)
+        if previous is None or support_value > float(previous.get("support") or 0.0):
+            rows_by_key[key] = row
+
+    rows = sorted(
+        rows_by_key.values(),
+        key=lambda row: (
+            not bool(row.get("selects_report_label")),
+            -float(row.get("support") or 0.0),
+            str(row.get("channel") or ""),
+            str(row.get("role") or ""),
+        ),
+    )
+    if rows:
+        lines.append("")
+        lines.append("| Signal | Role for active label | Status | Score | Details |")
+        lines.append("|---|---|---|---:|---|")
+        for row in rows[:max_rows]:
+            status = str(row.get("status") or "").replace("_", " ")
+            if row.get("selects_report_label"):
+                status = "selected report-label vote"
+            details = _decision_channel_detail_summary(row.get("details") or {})
+            lines.append(
+                f"| {_channel_display_label(row.get('channel'))} | "
+                f"{_channel_role_label(row.get('role'))} | "
+                f"{status or 'supporting/context'} | "
+                f"{_score_text(row.get('support'))} | {details or '—'} |"
+            )
+    lines.append("")
+    lines.append(
+        "Retained alternatives are isolated in the differential section below; "
+        "subsequent interpretation uses the active report label unless explicitly noted."
+    )
+    return "\n".join(lines)
+
+
+def _format_candidate_trace_alternatives(candidate_trace, selected_code, *, limit=3):
+    selected_code = str(selected_code or "").strip()
+    if not candidate_trace:
+        return ""
+    ranked = sorted(
+        candidate_trace,
+        key=lambda row: (
+            float(row.get("support_fraction_of_top") or 0.0),
+            float(row.get("support_geomean") or 0.0),
+        ),
+        reverse=True,
+    )
+    top_support = float(ranked[0].get("support_fraction_of_top") or 0.0)
+    chunks = []
+    for rank, row in enumerate(ranked, start=1):
+        code = str(row.get("code") or "").strip()
+        if not code or code == selected_code:
+            continue
+        norm = row.get("support_fraction_of_top")
+        if isinstance(norm, (int, float)) and float(norm) < 0.75 and len(chunks) >= 1:
+            continue
+        ratio_clause = ""
+        if isinstance(norm, (int, float)) and top_support > 0:
+            ratio_clause = f", {float(norm) / top_support:.2f}x top support"
+        signature = row.get("signature_score")
+        signature_clause = (
+            f", signature {float(signature):.2f}"
+            if isinstance(signature, (int, float))
+            else ""
+        )
+        chunks.append(
+            f"{_cancer_label(code)} (rank {rank}{ratio_clause}{signature_clause})"
+        )
+        if len(chunks) >= limit:
+            break
+    return "; ".join(chunks)
+
+
+def _format_decomposition_alternatives(decomp_results, selected_code, *, limit=3):
+    if not decomp_results:
+        return ""
+    selected_code = str(selected_code or "").strip()
+    best = decomp_results[0]
+    chunks = []
+    for row in decomp_results[1 : limit + 1]:
+        same_hypothesis = (
+            str(getattr(row, "cancer_type", "") or "").strip()
+            == str(getattr(best, "cancer_type", "") or "").strip()
+            and str(getattr(row, "template", "") or "").strip()
+            == str(getattr(best, "template", "") or "").strip()
+        )
+        if same_hypothesis:
+            continue
+        label = _hypothesis_display_label(
+            row,
+            primary_code=selected_code,
+            analysis={"cancer_type": selected_code},
+        )
+        score = getattr(row, "score", None)
+        score_clause = (
+            f", fit score {float(score):.3f}" if isinstance(score, (int, float)) else ""
+        )
+        chunks.append(
+            f"{_hypothesis_label(label, primary_code=selected_code)}{score_clause}"
+        )
+        if len(chunks) >= limit:
+            break
+    return "; ".join(chunks)
+
+
+def _retained_cancer_type_differential_markdown(
+    analysis,
+    call_summary=None,
+    decomp_results=None,
+):
+    call_summary = call_summary or {}
+    decomp_results = decomp_results or []
+    selected_code = _report_label_code(analysis, call_summary)
+    if not selected_code:
+        return ""
+
+    label_options = [
+        str(label or "").strip()
+        for label in (call_summary.get("label_options") or [])
+        if str(label or "").strip()
+    ]
+    retained_labels = [label for label in label_options[1:] if label != selected_code]
+    candidate_trace = analysis.get("candidate_trace") or []
+    candidate_alts = _format_candidate_trace_alternatives(
+        candidate_trace,
+        selected_code,
+    )
+    decomp_alts = _format_decomposition_alternatives(
+        decomp_results,
+        selected_code,
+    )
+    rare_marker_hypotheses = [
+        finding
+        for finding in (analysis.get("rare_marker_hypotheses") or [])
+        if str(finding.get("cancer_type") or "").strip() != selected_code
+    ]
+    if not (retained_labels or candidate_alts or decomp_alts or rare_marker_hypotheses):
+        return ""
+
+    lines = ["### Cancer-Type Differential / Retained Alternatives\n"]
+    lines.append(
+        f"The active report label is **{_cancer_label(selected_code)}**. "
+        "The entries below are retained for audit and differential diagnosis; "
+        "they do not control downstream expression references, decomposition, "
+        "biomarker panels, or therapy curation unless a later section explicitly "
+        "promotes them."
+    )
+    if retained_labels:
+        lines.append(
+            "- **Retained report-label differential**: "
+            + "; ".join(_cancer_label(label) for label in retained_labels)
+            + "."
+        )
+    if candidate_alts:
+        rank, selected_row = _candidate_trace_rank_and_row(
+            candidate_trace,
+            selected_code,
+        )
+        selected_clause = ""
+        if selected_row and rank:
+            selected_clause = (
+                f" Active label rank {rank}, normalized support "
+                f"{_score_text(selected_row.get('support_fraction_of_top'))}."
+            )
+        lines.append(
+            f"- **Pan-cancer ranker differential**: {candidate_alts}."
+            + selected_clause
+        )
+    if decomp_alts:
+        best_label = (
+            _hypothesis_display_label(
+                decomp_results[0],
+                primary_code=selected_code,
+                analysis=analysis,
+            )
+            if decomp_results
+            else _cancer_label(selected_code)
+        )
+        lines.append(
+            "- **Decomposition differential**: selected report-compatible fit is "
+            f"{_hypothesis_label(best_label, primary_code=selected_code, analysis=analysis)}; "
+            f"retained raw/nearby fits include {decomp_alts}."
+        )
+    if rare_marker_hypotheses:
+        chunks = []
+        for finding in rare_marker_hypotheses[:3]:
+            label = _cancer_label(str(finding.get("cancer_type") or "rare cancer"))
+            surrogate = str(finding.get("surrogate") or "marker").strip()
+            tpm = finding.get("surrogate_tpm")
+            tpm_clause = f" {tpm:g} TPM" if isinstance(tpm, (int, float)) else ""
+            chunks.append(f"{label} ({surrogate}{tpm_clause})")
+        lines.append(
+            "- **Rare-marker differential prompts**: "
+            + "; ".join(chunks)
+            + "."
+        )
+    return "\n".join(lines)
+
+
 def _tumor_type_sanity_markdown(analysis, *, max_rows: int = 6) -> str:
     sanity = analysis.get("tumor_type_sanity") or {}
     if not sanity:
@@ -6111,9 +6418,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         )
         if evidence_selected_discordant:
             sentence = (
-                f"- **RNA classifier line**: {_cancer_label(best['code'])} is the "
-                "leading pan-cancer signature-ranker candidate, but integrated evidence selected "
-                f"{_cancer_label(cancer_code)} as the report label"
+                "- **RNA classifier line**: the pan-cancer signature ranker "
+                "does not independently set the report label; integrated evidence selected "
+                f"{_cancer_label(cancer_code)} as the active report label"
             )
         elif distinct_reference_used and best_code == str(reference_cancer_code).strip():
             sentence = (
@@ -6172,9 +6479,8 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             ):
                 if runner_norm > 0:
                     sentence += (
-                        f"; selected report label is RNA rank 2 "
-                        f"({_cancer_label(cancer_code)} support "
-                        f"{runner_norm:.2f}x of top {_cancer_label(best['code'])})"
+                        f"; active report label is RNA rank 2 "
+                        f"({runner_norm:.2f}x of top ranker support)"
                     )
                 else:
                     sentence += "; selected report label is the next RNA candidate"
@@ -6250,7 +6556,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             f"{_hypothesis_display_label(best_decomp, primary_code=cancer_code, analysis=analysis)}"
         )
         if best_decomp.cancer_type == cancer_code:
-            sentence += ", consistent with the classifier"
+            sentence += ", consistent with the active report label"
         elif (
             cancer_type_context.uses_distinct_reference
             and best_decomp.cancer_type == reference_cancer_code
@@ -6268,53 +6574,26 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         if comp_bits:
             sentence += "; dominant non-tumor components are " + ", ".join(comp_bits)
         if getattr(best_decomp, "warnings", None):
-            sentence += (
-                f"; key warning: {_strip_terminal_punctuation(best_decomp.warnings[0])}"
+            warning = next(
+                (
+                    str(item)
+                    for item in best_decomp.warnings
+                    if "raw best fit" not in str(item).lower()
+                ),
+                "",
             )
+            if warning:
+                sentence += f"; key warning: {_strip_terminal_punctuation(warning)}"
+            elif any(
+                "raw best fit" in str(item).lower()
+                for item in best_decomp.warnings
+            ):
+                sentence += (
+                    "; retained raw decomposition alternatives are summarized "
+                    "in the cancer-type differential"
+                )
         sentence += "."
         bullets.append(sentence)
-
-    parallel = []
-    label_options = call_summary.get("label_options", [])
-    if len(label_options) >= 2:
-        parallel.append(
-            "cancer-type labels "
-            + " vs ".join(_cancer_label(label) for label in label_options[:2])
-        )
-    hypothesis_display = call_summary.get("hypothesis_display", [])
-    if len(hypothesis_display) >= 2:
-        parallel.append(
-            "template/site hypotheses "
-            + " vs ".join(
-                _hypothesis_label(label, primary_code=cancer_code, analysis=analysis)
-                for label in hypothesis_display[:2]
-            )
-        )
-    rare_marker_hypotheses = [
-        finding
-        for finding in (analysis.get("rare_marker_hypotheses") or [])
-        if str(finding.get("cancer_type") or "").strip() != str(cancer_code).strip()
-    ]
-    if rare_marker_hypotheses:
-        labels = []
-        for finding in rare_marker_hypotheses[:3]:
-            label = _cancer_label(str(finding.get("cancer_type") or "rare cancer"))
-            surrogate = str(finding.get("surrogate") or "marker").strip()
-            tpm = finding.get("surrogate_tpm")
-            tpm_clause = f" {tpm:g} TPM" if isinstance(tpm, (int, float)) else ""
-            support = ", ".join(finding.get("support_genes") or [])
-            missing = ", ".join(finding.get("missing_support_genes") or [])
-            evidence_bits = [f"{surrogate}{tpm_clause}"]
-            if support:
-                evidence_bits.append(f"support {support}")
-            if missing:
-                evidence_bits.append(f"missing/low co-markers {missing}")
-            labels.append(f"{label} ({'; '.join(evidence_bits)})")
-        parallel.append("rare-marker testing prompts " + " vs ".join(labels))
-    if parallel:
-        bullets.append(
-            "- **Parallel hypotheses still alive**: " + "; ".join(parallel) + "."
-        )
 
     active_biology = []
     for finding in (analysis.get("pathway_activity_inferences") or [])[:3]:
@@ -6763,8 +7042,8 @@ def _cancer_type_decision_trace_markdown(analysis):
             )
         else:
             lines.append(
-                f"Selected report label: **{_cancer_label(selected_code)}** via "
-                f"`{selected_by}`. Rows below include selected, blocked, and "
+                f"Selected report label: **{_cancer_label(selected_code)}**. "
+                f"Selection driver: `{selected_by}`. Rows below include selected, blocked, and "
                 "context-only signals used by the cancer-type decision process.\n"
             )
     elif graph_selected:
@@ -6780,8 +7059,8 @@ def _cancer_type_decision_trace_markdown(analysis):
             )
         else:
             lines.append(
-                f"Selected report label: **{_cancer_label(selected_code)}** via "
-                f"`{selected_by}`. Rows below include selected, blocked, and "
+                f"Selected report label: **{_cancer_label(selected_code)}**. "
+                f"Selection driver: `{selected_by}`. Rows below include selected, blocked, and "
                 "context-only signals used by the cancer-type decision process.\n"
             )
     lines.append("| Stage | Candidate | Channel | Role | Status | Support | Details |")
@@ -6993,17 +7272,14 @@ def _generate_text_reports(
     if rescue_line:
         lines.append("- " + rescue_line)
     if call_summary.get("label_options"):
+        active_label = call_summary["label_options"][0]
         if len(call_summary["label_options"]) == 1:
-            lines.append(
-                f"- **Working cancer call**: {_cancer_label(call_summary['label_options'][0])}."
-            )
+            lines.append(f"- **Working cancer call**: {_cancer_label(active_label)}.")
         else:
             lines.append(
-                "- **Working cancer call**: provisional between "
-                + " and ".join(
-                    _cancer_label(label) for label in call_summary["label_options"][:2]
-                )
-                + "."
+                f"- **Working cancer call**: {_cancer_label(active_label)} "
+                "(provisional; retained alternatives are summarized under "
+                "Cancer-Type Differential)."
             )
     context_line = _cancer_type_context_line(cancer_type_context)
     if context_line:
@@ -7338,19 +7614,15 @@ def _generate_text_reports(
     if fit_quality.get("message"):
         lines.append(f"- **Fit note**: {fit_quality['message']}")
     if call_summary.get("label_options"):
-        if len(call_summary["label_options"]) == 1:
+        active_label = call_summary["label_options"][0]
+        lines.append(f"- **Report label**: {_cancer_label(active_label)}")
+        scope_caveat = _selected_report_scope_caveat(analysis)
+        if scope_caveat:
+            lines.append(f"- **Report-label caveat**: {scope_caveat}")
+        if len(call_summary["label_options"]) >= 2:
             lines.append(
-                f"- **Report label**: {_cancer_label(call_summary['label_options'][0])}"
-            )
-            scope_caveat = _selected_report_scope_caveat(analysis)
-            if scope_caveat:
-                lines.append(f"- **Report-label caveat**: {scope_caveat}")
-        else:
-            lines.append(
-                "- **Possible report labels**: "
-                + " or ".join(
-                    _cancer_label(label) for label in call_summary["label_options"][:2]
-                )
+                "- **Retained alternatives**: see Cancer-Type Differential below; "
+                "these are not active downstream report labels."
             )
     if family_display:
         lines.append(f"- **Broad family context**: {family_display}")
@@ -7414,14 +7686,7 @@ def _generate_text_reports(
         if candidate_trace
         else []
     )
-    if candidate_trace:
-        lines.append("- **Top candidates** (geomean · normalized):")
-        for row in ranked_candidates[:5]:
-            lines.append(
-                f"  - **{_cancer_label(row['code'])}**: "
-                f"{row.get('support_geomean', 0.0):.2f} · {row.get('support_fraction_of_top', 0.0):.2f}"
-            )
-    else:
+    if not candidate_trace:
         top_cancers = analysis.get(
             "top_cancers", [(cancer_code, analysis["cancer_score"])]
         )
@@ -7434,12 +7699,29 @@ def _generate_text_reports(
     lines.append("")
 
     if candidate_trace:
+        vote_summary = _cancer_type_vote_summary_markdown(
+            analysis,
+            call_summary=call_summary,
+        )
+        if vote_summary:
+            lines.append("")
+            lines.append(vote_summary)
+        differential = _retained_cancer_type_differential_markdown(
+            analysis,
+            call_summary=call_summary,
+            decomp_results=decomp_results or [],
+        )
+        if differential:
+            lines.append("")
+            lines.append(differential)
+        lines.append("")
         lines.append("### Cancer Type Inference — Candidate Ranking\n")
         lines.append(
             "Each row is a top-level cancer-code hypothesis considered by the classifier. "
             "Most of these labels are broad reference cohorts, but later steps can also "
             "use finer subtype and decomposition references from non-TCGA sources. Three scores summarize the "
-            "match; the top row is the working call.\n\n"
+            "match; the top row is the pan-cancer signature-ranker leader, which may differ from the "
+            "active report label when stronger orthogonal evidence selects another row.\n\n"
             "- **Signature** (0–1): raw match quality between the sample's expression and "
             "this candidate's broad reference signature, computed from z-scored expression "
             "of cancer-type-enriched genes. Interpretable on its own — higher means the "
@@ -7864,19 +8146,19 @@ def _generate_text_reports(
             lines.append(call_summary["site_note"] + "\n")
         if len(call_summary.get("hypothesis_display", [])) == 2:
             lines.append(
-                "Top broad possibilities: **"
+                "Raw decomposition audit: active report-compatible fit is **"
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][0],
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "** or **"
+                + "**; retained raw/nearby fit is **"
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][1],
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "**.\n"
+                + "**. This is decomposition context, not a second report label.\n"
             )
         if decomp_results:
             lines.append("| Hypothesis | Score | Fraction | Tissue | Warnings |")
@@ -8755,15 +9037,12 @@ def _build_target_report(
 
     lines.append("## Tumor context for interpretation\n")
     if call_summary.get("label_options"):
-        if len(call_summary["label_options"]) == 2:
+        active_label = call_summary["label_options"][0]
+        lines.append(f"- **Working label**: **{_cancer_label(active_label)}**.")
+        if len(call_summary["label_options"]) >= 2:
             lines.append(
-                f"- **Working label**: provisional between "
-                f"**{_cancer_label(call_summary['label_options'][0])}** and "
-                f"**{_cancer_label(call_summary['label_options'][1])}**."
-            )
-        else:
-            lines.append(
-                f"- **Working label**: **{_cancer_label(call_summary['label_options'][0])}**."
+                "- **Retained alternatives**: documented in Cancer-Type Differential; "
+                "downstream target and biomarker interpretation below uses the working label."
             )
     else:
         lines.append(f"- **Working label**: **{_cancer_label(cancer_code)}**.")
