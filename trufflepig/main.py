@@ -120,6 +120,7 @@ from .sample_context import (
 from .sample_quality import assess_sample_quality
 from .rna_qc import collect_rna_quant_qc, rna_quant_qc_markdown
 from .therapy_response import infer_mapk_activity_sources, score_therapy_signatures
+from .cancer_type_signal_matrix import write_cancer_type_signal_artifacts
 from .format import (
     render_fold,
     render_fraction_no_decimal,
@@ -3067,6 +3068,29 @@ def _analyze_body(run: AnalyzeRun):
                 sep="\t",
                 index=False,
             )
+
+    try:
+        signal_tsv, signal_md, signal_matrix = write_cancer_type_signal_artifacts(
+            prefix,
+            analysis,
+            sample_id=sample_display_id or None,
+            decomp_results=decomp_results,
+        )
+        analysis["cancer_type_signal_matrix"] = {
+            "path": signal_tsv,
+            "summary_path": signal_md,
+            "rows": int(len(signal_matrix)),
+        }
+        run.note_step(
+            "cancer_type_signal_matrix",
+            outputs={
+                "path": signal_tsv,
+                "summary_path": signal_md,
+                "rows": int(len(signal_matrix)),
+            },
+        )
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"[warn] Cancer-type signal matrix failed: {exc}")
 
     purity_png = "%s-purity.png" % prefix if prefix else "purity.png"
     if plot_ctx.enabled:
@@ -8822,14 +8846,6 @@ def _build_target_report(
                 if canon and canon.lower() != "nan"
             }
             if len(targets_df):
-                lines.append(
-                    "| Target | Agent | Class | Phase | Indication | "
-                    "Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Attribution | Interpretation |"
-                )
-                lines.append(
-                    "|--------|-------|-------|-------|------------|"
-                    "----------|-------------------------------|---------------------|-------------|----------------|"
-                )
                 # Approved first, then phase_3, phase_2, phase_1,
                 # preclinical. Within phase, agent name for stability.
                 phase_order = {
@@ -8871,51 +8887,118 @@ def _build_target_report(
                         return "—"
                     return s
 
-                for _, trow in targets_sorted.iterrows():
+                def _target_display_record(trow):
                     sym = canonical_target_symbol(_cell(trow.get("symbol")))
                     agent = _cell(trow.get("agent"))
                     agent_class = _cell(trow.get("agent_class"))
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
-                    # Agent-only rows (no gene target — e.g. doxorubicin,
-                    # trabectedin for sarcoma) carry a blank symbol; skip the
-                    # expression lookup so we don't render a "nan" row with
-                    # false tumor TPM claims.
+                    expr = None if sym == "—" else sym_to_row.get(sym)
+                    reliability = "provisional"
                     if sym == "—":
                         obs_cell = "*not measured*"
                         tumor_source_cell = "—"
                         context_cell = "—"
                         attr_cell = "—"
                         interpretation_cell = "agent-only / no direct gene target"
+                    elif expr is None:
+                        obs_state = target_observation_state(sym, ranges_df)
+                        obs_cell = format_missing_observation_cell(obs_state)
+                        tumor_source_cell = "—"
+                        context_cell = "—"
+                        attr_cell = "—"
+                        interpretation_cell = format_missing_observation_interp(
+                            obs_state
+                        )
+                        reliability = (
+                            "provisional"
+                            if expression_independent_indication(trow)
+                            else "unsupported"
+                        )
                     else:
-                        expr = sym_to_row.get(sym)
-                        if expr is None:
-                            obs_state = target_observation_state(sym, ranges_df)
-                            obs_cell = format_missing_observation_cell(obs_state)
-                            tumor_source_cell = "—"
-                            context_cell = "—"
-                            attr_cell = "—"
-                            interpretation_cell = format_missing_observation_interp(
-                                obs_state
-                            )
-                        else:
-                            obs_cell = f"{float(expr.get('observed_tpm') or 0.0):.1f}"
-                            tumor_source_cell = tumor_band_cell(expr)
-                            context_cell = context_expression_band_cell(expr)
-                            attr_cell = _format_attribution_cell(expr)
-                            interpretation_cell = _target_interpretation_cell(
-                                trow,
-                                expr,
-                                target_panel=targets_df,
-                            )
-                    bold = "**" if phase == "approved" and sym != "—" else ""
-                    lines.append(
-                        f"| {bold}{sym}{bold} | {agent} | {agent_class} | "
-                        f"{phase} | {indication} | {obs_cell} | "
-                        f"{tumor_source_cell} | {context_cell} | {attr_cell} | "
-                        f"{interpretation_cell} |"
+                        obs_cell = f"{float(expr.get('observed_tpm') or 0.0):.1f}"
+                        tumor_source_cell = tumor_band_cell(expr)
+                        context_cell = context_expression_band_cell(expr)
+                        attr_cell = _format_attribution_cell(expr)
+                        interpretation_cell = _target_interpretation_cell(
+                            trow,
+                            expr,
+                            target_panel=targets_df,
+                        )
+                        reliability = target_reliability_status(
+                            expr,
+                            target_row=trow,
+                        )
+                    audit_only = (
+                        reliability == "unsupported"
+                        and not expression_independent_indication(trow)
                     )
-                lines.append("")
+                    if audit_only:
+                        interpretation_cell = (
+                            "audit-only negative/background evidence; "
+                            + interpretation_cell
+                        )
+                    return {
+                        "sym": sym,
+                        "agent": agent,
+                        "agent_class": agent_class,
+                        "phase": phase,
+                        "indication": indication,
+                        "obs_cell": obs_cell,
+                        "tumor_source_cell": tumor_source_cell,
+                        "context_cell": context_cell,
+                        "attr_cell": attr_cell,
+                        "interpretation_cell": interpretation_cell,
+                        "audit_only": audit_only,
+                    }
+
+                target_records = [
+                    _target_display_record(trow)
+                    for _, trow in targets_sorted.iterrows()
+                ]
+                active_records = [row for row in target_records if not row["audit_only"]]
+                audit_records = [row for row in target_records if row["audit_only"]]
+
+                def _render_target_records(records):
+                    lines.append(
+                        "| Target | Agent | Class | Phase | Indication | "
+                        "Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Attribution | Interpretation |"
+                    )
+                    lines.append(
+                        "|--------|-------|-------|-------|------------|"
+                        "----------|-------------------------------|---------------------|-------------|----------------|"
+                    )
+                    for rec in records:
+                        bold = (
+                            "**"
+                            if rec["phase"] == "approved" and rec["sym"] != "—"
+                            else ""
+                        )
+                        lines.append(
+                            f"| {bold}{rec['sym']}{bold} | {rec['agent']} | {rec['agent_class']} | "
+                            f"{rec['phase']} | {rec['indication']} | {rec['obs_cell']} | "
+                            f"{rec['tumor_source_cell']} | {rec['context_cell']} | {rec['attr_cell']} | "
+                            f"{rec['interpretation_cell']} |"
+                        )
+                    lines.append("")
+
+                if audit_records:
+                    lines.append("### Sample-supported / clinically reviewable rows\n")
+                    if active_records:
+                        _render_target_records(active_records)
+                    else:
+                        lines.append(
+                            "*No curated therapy row had tumor-supported or clinically reviewable RNA evidence in this sample.*\n"
+                        )
+                    lines.append("### Audit-only rows: not tumor-supported in this sample\n")
+                    lines.append(
+                        "These rows remain visible as disease-curation provenance or negative evidence. "
+                        "They should not be read as expression-supported therapeutic opportunities unless "
+                        "orthogonal molecular evidence supplies eligibility.\n"
+                    )
+                    _render_target_records(audit_records)
+                else:
+                    _render_target_records(active_records)
                 lines.extend(_prad_steap_contrast_md(sym_to_row, targets_df))
                 lines.extend(_low_purity_cap_audit_md(panel_target_symbols))
             else:

@@ -37,6 +37,13 @@ import sys
 import time
 from pathlib import Path
 
+import pandas as pd
+
+from trufflepig.cancer_type_signal_matrix import (
+    build_signal_sample_summary,
+    build_signal_matrix_summary_markdown,
+)
+
 DEFAULT_MANIFEST = Path(
     "/Users/iskander/code/pirlygenes/local_reports/rnaseq-20260504-130527/manifest.json"
 )
@@ -292,6 +299,48 @@ def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
     return int(rc), elapsed
 
 
+def _collect_signal_matrix_artifacts(root: Path, manifest: dict) -> dict:
+    """Concatenate per-run cancer-type signal matrices into root-level artifacts."""
+    frames = []
+    for run in manifest.get("runs", []):
+        if run.get("status") != "ok" or not run.get("workspace"):
+            continue
+        workspace = Path(run["workspace"])
+        for matrix_path in sorted(workspace.glob("**/*-cancer-type-signal-matrix.tsv")):
+            try:
+                df = pd.read_csv(matrix_path, sep="\t")
+            except (OSError, pd.errors.ParserError):
+                continue
+            if df.empty:
+                continue
+            df.insert(0, "run_name", run.get("name", ""))
+            df.insert(1, "source_matrix", str(matrix_path))
+            frames.append(df)
+    if not frames:
+        return {}
+    matrix = pd.concat(frames, ignore_index=True)
+    matrix_path = root / "cancer_type_signal_matrix.tsv"
+    sample_summary_path = root / "cancer_type_signal_sample_summary.tsv"
+    summary_path = root / "cancer_type_signal_summary.md"
+    matrix.to_csv(matrix_path, sep="\t", index=False)
+    sample_summary = build_signal_sample_summary(matrix)
+    sample_summary.to_csv(sample_summary_path, sep="\t", index=False)
+    summary_path.write_text(
+        build_signal_matrix_summary_markdown(
+            matrix,
+            title="Local Report Cancer-Type Signal Matrix Summary",
+        )
+    )
+    return {
+        "path": str(matrix_path),
+        "sample_summary_path": str(sample_summary_path),
+        "summary_path": str(summary_path),
+        "rows": int(len(matrix)),
+        "sample_summary_rows": int(len(sample_summary)),
+        "samples": int(matrix["sample"].nunique()) if "sample" in matrix.columns else 0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -439,6 +488,10 @@ def main():
                 "elapsed_seconds": elapsed,
             })
 
+    signal_matrix_artifact = _collect_signal_matrix_artifacts(root, manifest)
+    if signal_matrix_artifact:
+        manifest["cancer_type_signal_matrix"] = signal_matrix_artifact
+
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     summary = ["# trufflepig local-report regeneration", "",
@@ -450,6 +503,16 @@ def main():
     for c in manifest["comparisons"]:
         summary.append(f"| {c['name']} (compare) | {c.get('status', '?')} | "
                        f"{c.get('elapsed_seconds', '-')} |")
+    if signal_matrix_artifact:
+        summary.extend([
+            "",
+            "## Cancer-Type Signal Matrix",
+            "",
+            f"- Matrix: `{signal_matrix_artifact['path']}`",
+            f"- Sample summary: `{signal_matrix_artifact['sample_summary_path']}`",
+            f"- Summary: `{signal_matrix_artifact['summary_path']}`",
+            f"- Rows: {signal_matrix_artifact['rows']}",
+        ])
     (root / "README.md").write_text("\n".join(summary) + "\n")
 
     failed = [r for r in manifest["runs"] + manifest["comparisons"]

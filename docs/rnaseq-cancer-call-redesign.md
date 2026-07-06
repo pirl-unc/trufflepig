@@ -594,6 +594,21 @@ beside centroid, marker, decomposition, local-reference, fusion, tumor-up, and
 normal-background evidence so a reviewer can reason over the whole decision
 rather than seeing only the winning selector.
 
+The report now also emits machine-readable signal artifacts:
+
+- `*-cancer-type-signal-matrix.tsv`: one row per `sample × signal/source ×
+  predicted layer`, including candidate/ranker rows, staged evidence-graph
+  channels, learned hierarchy votes, retained context-only rows, and post-label
+  decomposition/met-site background context.
+- `*-cancer-type-signal-summary.md`: a compact reader-facing summary of the
+  same rows.
+
+Batch runners concatenate the per-sample TSVs into the same schema for local
+report sweeps and, when requested, the 565 representative-sample harness. The
+selector is therefore no longer the only visible provenance field; every row
+records `role`, `status`, `support`, `selects_report_label`, and agreement with
+the final entity/lineage.
+
 ### Current PR implementation status
 
 This PR implements the first usable slice of the learned-evidence redesign
@@ -864,6 +879,10 @@ Acceptance:
 - no behavior changes,
 - no duplicate centroid/decomposition/purity recomputation in hot paths,
 - 565 harness records per-sample feature terms and stage decisions,
+- local and 565 validation runs can emit:
+  `cancer_type_signal_matrix.tsv` for the rich one-row-per-signal trace,
+  `cancer_type_signal_sample_summary.tsv` or `--signal-summary-out` for the
+  compact one-row-per-sample validation view, and a compact markdown summary,
 - evidence markdown includes a complete trace of learned and non-learned
   co-signals for selected and blocked hypotheses.
 

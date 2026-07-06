@@ -106,6 +106,8 @@ _CRC_REGISTRY_ROOT = "CRC"
 _CRC_FAMILY_COMPETITOR_MIN_SUPPORT = 0.80
 _CRC_FAMILY_COMPETITOR_MIN_FAMILY_SUPPORT = 0.60
 _CRC_FAMILY_COMPETITOR_MAX_RANK = 6
+_PRIMARY_CONTEXT_DOMINANCE_MIN_SUPPORT = 0.85
+_PRIMARY_CONTEXT_DOMINANCE_MIN_RATIO = 0.95
 _TUMOR_LABEL_MIN_SUPPORT = 0.70
 _TUMOR_LABEL_MIN_SIGNATURE_RATIO = 0.85
 _TUMOR_LABEL_MIN_FAMILY_SUPPORT = 0.65
@@ -141,6 +143,18 @@ _FUSED_EVIDENCE_CENTROID_ANCHORED_REFERENCE_MIN_BURDEN = 0.10
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_LEARNED = 0.95
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_CENTROID = 0.95
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_SIGNATURE = 0.75
+_REPORT_LABEL_BLOCKING_ORTHOGONAL_AXES = frozenset(
+    {
+        "amplification_status",
+        "copy_number_p53",
+        "driver_mutation",
+        "hematologic_risk_status",
+        "mismatch_repair",
+        "molecular_status",
+        "polymerase_epsilon",
+        "viral_status",
+    }
+)
 _PAN_SIGNATURE_MARKER_PROGRAM_MIN_SUPPORT = 0.45
 _LOCAL_REFERENCE_TOP_MARKERS = 24
 _LOCAL_REFERENCE_MIN_TPM = 5.0
@@ -847,7 +861,23 @@ def _hypothesis_evidence_channels(
         status="selected_report_label"
         if _channel_selects(hypothesis, "fused_evidence")
         else "informative",
-        details=hypothesis.details.get("fused_evidence_components") or {},
+        details={
+            **(hypothesis.details.get("fused_evidence_components") or {}),
+            **(
+                {"blockers": hypothesis.details.get("fused_evidence_blockers")}
+                if hypothesis.details.get("fused_evidence_blockers")
+                else {}
+            ),
+            **(
+                {
+                    "primary_context_conflict": hypothesis.details.get(
+                        "fused_evidence_primary_context_conflict"
+                    )
+                }
+                if hypothesis.details.get("fused_evidence_primary_context_conflict")
+                else {}
+            ),
+        },
     )
     add(
         channel="lineage_panel",
@@ -7059,6 +7089,117 @@ def _weak_non_crc_fused_call_conflicts_with_crc_family(
     }
 
 
+def _primary_context_root_for_code(code: str) -> str:
+    """Return the diagnosis root used to compare primary-context hypotheses."""
+
+    code_text = _clean(code)
+    if not code_text:
+        return ""
+    chain = _registry_parent_chain(code_text)
+    return chain[-1] if chain else code_text
+
+
+def _ranker_context_row_is_primary_like(
+    row: Mapping[str, Any],
+    *,
+    candidate_code: str,
+) -> bool:
+    code = _clean(row.get("code"))
+    if not code:
+        return False
+    if _is_background_like_candidate(row):
+        return False
+    row_lineage = _code_lineage_token(code)
+    candidate_lineage = _code_lineage_token(candidate_code)
+    # Heme/immune top rows often reflect sample composition. Do not let them
+    # block solid-tumor candidates unless the candidate is also heme-lineage.
+    if (
+        row_lineage == "hematolymphoid"
+        and candidate_lineage
+        and candidate_lineage != row_lineage
+    ):
+        return False
+    return True
+
+
+def _dominant_primary_context_competitor(
+    hypothesis: CancerTypeEvidence,
+    analysis: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a stronger ranker primary context that conflicts with a fused call."""
+
+    candidate_code = hypothesis.cancer_type
+    candidate_context = _primary_context_root_for_code(candidate_code)
+    if not candidate_context:
+        return {}
+    candidate_support = _safe_float(hypothesis.broad_rna_support)
+    context_support = candidate_support
+    for rank, row in enumerate(_candidate_rows(analysis), start=1):
+        code = _clean(row.get("code"))
+        if not code:
+            continue
+        if _primary_context_root_for_code(code) != candidate_context:
+            continue
+        support = _safe_float(row.get("support_fraction_of_top"))
+        if support <= 0 and rank == 1:
+            support = 1.0
+        context_support = max(context_support, support)
+    best: dict[str, Any] = {}
+    best_priority = 0.0
+    for rank, row in enumerate(_candidate_rows(analysis), start=1):
+        code = _clean(row.get("code"))
+        if not code or not _ranker_context_row_is_primary_like(
+            row,
+            candidate_code=candidate_code,
+        ):
+            continue
+        support = _safe_float(row.get("support_fraction_of_top"))
+        if support <= 0 and rank == 1:
+            support = 1.0
+        if support < _PRIMARY_CONTEXT_DOMINANCE_MIN_SUPPORT:
+            continue
+        context = _primary_context_root_for_code(code)
+        if not context or context == candidate_context:
+            continue
+        if (
+            context_support > 0
+            and context_support
+            >= _PRIMARY_CONTEXT_DOMINANCE_MIN_RATIO * support
+        ):
+            continue
+        priority = support - 0.01 * rank
+        if not best or priority > best_priority:
+            best = {
+                "code": code,
+                "context": context,
+                "rank": rank,
+                "support_fraction_of_top": round(float(support), 4),
+                "candidate_code": candidate_code,
+                "candidate_context": candidate_context,
+                "candidate_support_fraction_of_top": round(
+                    float(candidate_support),
+                    4,
+                ),
+                "candidate_context_support_fraction_of_top": round(
+                    float(context_support),
+                    4,
+                ),
+                "min_support": _PRIMARY_CONTEXT_DOMINANCE_MIN_SUPPORT,
+                "min_ratio": _PRIMARY_CONTEXT_DOMINANCE_MIN_RATIO,
+            }
+            best_priority = float(priority)
+    return best
+
+
+def _orthogonal_axes_that_block_report_label(code: str) -> list[dict[str, Any]]:
+    axes = _orthogonal_axes_for_code(code)
+    return [
+        axis
+        for axis in axes
+        if _clean(axis.get("axis")) in _REPORT_LABEL_BLOCKING_ORTHOGONAL_AXES
+    ]
+
+
 def _rare_marker_channel_admitted(hypothesis: CancerTypeEvidence) -> bool:
     """Whether rare-marker evidence can contribute as an admitted evidence channel."""
 
@@ -7247,6 +7388,7 @@ def _fused_component_scores(
 
 def _fused_evidence_eligible(
     hypothesis: CancerTypeEvidence,
+    analysis: Mapping[str, Any],
     *,
     score: float,
     centroid_support: float,
@@ -7323,6 +7465,7 @@ def _fused_evidence_eligible(
             )
         )
     )
+    rare_marker_admitted = _rare_marker_channel_admitted(hypothesis)
     crc_family_conflict = _weak_non_crc_fused_call_conflicts_with_crc_family(
         hypothesis,
         features,
@@ -7352,6 +7495,23 @@ def _fused_evidence_eligible(
         )
         hypothesis.details["fused_evidence_crc_family_conflict"] = (
             crc_family_conflict
+        )
+    orthogonal_blocking_axes = _orthogonal_axes_that_block_report_label(
+        hypothesis.cancer_type
+    )
+    if orthogonal_blocking_axes and not (
+        hypothesis.direct_fusion_support > 0 or rare_marker_admitted
+    ):
+        axes = ", ".join(
+            sorted({_clean(axis.get("axis")) for axis in orthogonal_blocking_axes})
+        )
+        blockers.append(
+            f"{hypothesis.cancer_type} encodes orthogonal molecular/status "
+            f"state ({axes}); keep it as an annotation on the parent diagnosis "
+            "unless definitive molecular evidence makes the state itself the label"
+        )
+        hypothesis.details["fused_evidence_orthogonal_status_axes"] = (
+            orthogonal_blocking_axes
         )
     if hypothesis.details.get("local_reference_explicit_negative_fusion"):
         details = (
@@ -7419,6 +7579,10 @@ def _fused_evidence_eligible(
         and _safe_float(components.get("pan_cancer_signature_marker_program"))
         >= _PAN_SIGNATURE_MARKER_PROGRAM_MIN_SUPPORT
     )
+    primary_context_conflict = _dominant_primary_context_competitor(
+        hypothesis,
+        analysis,
+    )
     learned_component = _safe_float(components.get("learned_expression_classifier"))
     context_free_learned_triplet = bool(
         learned >= _FUSED_EVIDENCE_CONTEXT_FREE_LEARNED_PROBABILITY
@@ -7444,7 +7608,34 @@ def _fused_evidence_eligible(
             "local expression reference; require coherent marker fraction and "
             "burden before overriding the pan-cancer signature context"
         )
-    rare_marker_admitted = _rare_marker_channel_admitted(hypothesis)
+    primary_context_override = bool(
+        strong_independent_learned_call
+        or exact_reference_admitted
+        or lineage_panel_admitted
+        or rare_marker_admitted
+        or contrast_admitted
+        or refinement_admitted
+        or composition_admitted
+        or signature_anchor_can_escape_expected_low
+        or centroid_anchored_expression_reference
+        or pan_signature_marker_program
+        or hypothesis.direct_fusion_support > 0
+    )
+    if primary_context_conflict and not primary_context_override:
+        blockers.append(
+            "integrated evidence conflicts with a stronger pan-cancer "
+            "primary-context ranker hypothesis "
+            f"({primary_context_conflict['code']} -> "
+            f"{primary_context_conflict['context']}, rank "
+            f"{primary_context_conflict['rank']}, "
+            f"{_safe_float(primary_context_conflict['support_fraction_of_top']):.2f}x top); "
+            "require admitted exact/reference, marker, lineage-panel, fusion, "
+            "contrast, composition/refinement, or strong learned evidence before "
+            f"selecting {hypothesis.cancer_type}"
+        )
+        hypothesis.details["fused_evidence_primary_context_conflict"] = (
+            primary_context_conflict
+        )
     independent_channels = sum(
         1
         for key, threshold in (
@@ -7599,6 +7790,7 @@ def _add_fused_evidence_features(
         score = round(float(sum(components.values())), 4)
         can_select, blockers = _fused_evidence_eligible(
             hypothesis,
+            analysis,
             score=score,
             centroid_support=centroid_support,
             components=components,

@@ -950,6 +950,90 @@ def test_target_report_falls_back_to_mixed_source_surface_targets(tmp_path):
     assert "mixed-source rather than tumor-supported" in recs_block
 
 
+def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
+    """Issue #105: host-attributed disease-relevant genes should not read as active opportunities."""
+
+    purity = {
+        "overall_estimate": 0.64,
+        "overall_lower": 0.55,
+        "overall_upper": 0.72,
+    }
+    analysis = {
+        "sample_mode": "solid",
+        "cancer_type": "BLCA",
+        "cancer_name": "Bladder Urothelial Carcinoma",
+        "mhc1": {"HLA-A": 100, "HLA-B": 200, "HLA-C": 80, "B2M": 300},
+        "call_summary": {
+            "label_options": ["BLCA"],
+            "label_display": "BLCA (Bladder Urothelial Carcinoma)",
+            "reported_site": "liver-associated host context",
+        },
+    }
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "FGFR3",
+                "gene_id": "ENSG00000068078",
+                "category": "therapy_target",
+                "observed_tpm": 10.6,
+                "median_est": 11.0,
+                "est_1": 0.0,
+                "est_9": 11.0,
+                "pct_cancer_median": 1.0,
+                "tcga_percentile": 0.5,
+                "is_surface": True,
+                "is_cta": False,
+                "tme_explainable": True,
+                "tme_dominant": True,
+                "low_confidence_tumor": True,
+                "excluded_from_ranking": False,
+                "therapies": "",
+                "max_healthy_tpm": 16.0,
+                "tme_fold_lo": 0.1,
+                "tme_fold_med": 0.2,
+                "tme_fold_hi": 0.3,
+                "cohort_prior_tpm": 0.0,
+                "tme_only_tpm": 1.2,
+                "matched_normal_tpm": 0.0,
+                "matched_normal_tissue": "",
+                "matched_normal_fraction": 0.0,
+                "estimation_path": "clamped",
+                "attr_tumor_tpm": 0.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm_high": 0.0,
+                "attr_tumor_fraction": 0.0,
+                "attr_tumor_fraction_low": 0.0,
+                "attr_tumor_fraction_high": 0.0,
+                "attr_support_fraction": 0.0,
+                "attr_top_compartment": "hepatocyte",
+                "attr_top_compartment_tpm": 1.2,
+                "matched_normal_over_predicted": False,
+                "broadly_expressed": True,
+                "n_healthy_tissues_expressed": 20,
+                **{f"est_{i + 1}": 0.0 for i in range(9)},
+            }
+        ]
+    )
+
+    prefix = str(tmp_path / "pfo017-liver")
+    _write_target_report(
+        ranges_df,
+        analysis,
+        prefix,
+        cancer_type="BLCA",
+        purity_result=purity,
+    )
+    targets = (tmp_path / "pfo017-liver-targets.md").read_text()
+
+    assert "### Audit-only rows: not tumor-supported in this sample" in targets
+    active_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[0]
+    audit_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[1]
+    assert "erdafitinib" not in active_block
+    assert "FGFR3" in audit_block
+    assert "erdafitinib" in audit_block
+    assert "audit-only negative/background evidence" in audit_block
+
+
 def test_ci_confidence_tier_buckets():
     from trufflepig.main import _ci_confidence_tier
 

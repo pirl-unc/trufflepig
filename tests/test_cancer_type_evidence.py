@@ -1174,6 +1174,26 @@ def test_weak_non_crc_fused_gi_call_blocked_by_close_crc_candidate(monkeypatch):
     assert any("CRC-family RNA support" in reason for reason in stad["fused_evidence_blockers"])
 
 
+def test_primary_context_blocker_inherits_parent_context_support():
+    import trufflepig.cancer_type_evidence as evidence
+
+    crc = evidence.CancerTypeEvidence(cancer_type="CRC")
+    stad = evidence.CancerTypeEvidence(cancer_type="STAD")
+    stad.broad_rna_support = 0.80
+    analysis = _candidate_analysis(
+        [
+            {"code": "READ", "support_fraction_of_top": 1.0, "family_label": "CRC"},
+            {"code": "LUSC", "support_fraction_of_top": 0.90},
+            {"code": "STAD", "support_fraction_of_top": 0.80},
+        ]
+    )
+
+    assert evidence._dominant_primary_context_competitor(crc, analysis) == {}
+    conflict = evidence._dominant_primary_context_competitor(stad, analysis)
+    assert conflict["code"] == "READ"
+    assert conflict["context"] == "CRC"
+
+
 def test_complete_marker_program_tolerates_single_immune_expected_low():
     from trufflepig.cancer_type_evidence import _pan_signature_marker_program_selectable
 
