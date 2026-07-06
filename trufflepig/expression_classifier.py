@@ -20,7 +20,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Mapping
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -249,19 +248,14 @@ def _fit_lr_model(X, y):
 
     pipe = make_pipeline(
         StandardScaler(),
-        LogisticRegression(max_iter=2000, C=1.0, class_weight="balanced"),
+        LogisticRegression(
+            solver="newton-cg",
+            max_iter=2000,
+            C=1.0,
+            class_weight="balanced",
+        ),
     )
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=(
-                r"scipy\.optimize: The `disp` and `iprint` options of the "
-                r"L-BFGS-B solver are deprecated.*"
-            ),
-            category=DeprecationWarning,
-            module=r"sklearn\.linear_model\._logistic",
-        )
-        pipe.fit(X, y)
+    pipe.fit(X, y)
     return pipe
 
 

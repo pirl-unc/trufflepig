@@ -17,11 +17,8 @@ import argparse
 import collections
 import json
 import sys
-import warnings
 from dataclasses import dataclass
 from typing import Iterable
-
-warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
@@ -30,12 +27,10 @@ from pirlygenes.expression.accessors import (
     available_representative_cohorts,
     representative_cohort_samples,
 )
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from eval_per_sample_confusion import match_level
 from trufflepig.expression_classifier import (
+    _fit_lr_model,
     _learned_compartment_for_code,
     _learned_entity_for_code,
     _learned_family_for_code,
@@ -129,12 +124,7 @@ def _fit_model(
         neginf=0.0,
     )
     y_train = np.asarray([labels[col] for col in train_cols])
-    model = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(max_iter=2000, C=1.0, class_weight="balanced"),
-    )
-    model.fit(x_train, y_train)
-    return model, genes
+    return _fit_lr_model(x_train, y_train), genes
 
 
 def _fit_stage_model(
@@ -157,12 +147,7 @@ def _fit_stage_model(
         posinf=0.0,
         neginf=0.0,
     )
-    model = make_pipeline(
-        StandardScaler(),
-        LogisticRegression(max_iter=2000, C=1.0, class_weight="balanced"),
-    )
-    model.fit(x_train, np.asarray(kept_labels))
-    return model
+    return _fit_lr_model(x_train, np.asarray(kept_labels))
 
 
 def _fit_stage_models(
