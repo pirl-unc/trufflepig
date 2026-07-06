@@ -121,3 +121,42 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     assert row["lineage_panel_top"] == ""
     assert row["background_site"] == "liver"
     assert row["decomposition_top"] == "BLCA"
+
+
+def test_ranker_candidate_trace_does_not_infer_report_selection():
+    analysis = {
+        "sample_id": "case-ranker",
+        "cancer_type": "READ",
+        "candidate_trace": [
+            {"code": "READ", "support_fraction_of_top": 1.0},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "READ",
+                "selected_by": "pan_cancer_signature_ranker",
+                "reference_cancer_type": "READ",
+            },
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": "READ",
+                        "code": "READ",
+                        "channel": "pan_cancer_signature_ranker",
+                        "stage": "coarse_type",
+                        "role": "top_ranked_candidate",
+                        "status": "candidate_generation",
+                        "support": 1.0,
+                        "selects_report_label": False,
+                    }
+                ]
+            },
+        },
+    }
+
+    matrix = build_cancer_type_signal_matrix(analysis)
+
+    ranker_rows = matrix[
+        (matrix["signal_source"] == "pan_cancer_signature_ranker")
+        & (matrix["predicted_code"] == "READ")
+    ]
+    assert not ranker_rows["selects_report_label"].any()

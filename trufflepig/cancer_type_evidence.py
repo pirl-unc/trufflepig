@@ -7388,7 +7388,7 @@ def _fused_component_scores(
 
 def _fused_evidence_eligible(
     hypothesis: CancerTypeEvidence,
-    analysis: Mapping[str, Any],
+    analysis: Mapping[str, Any] | None = None,
     *,
     score: float,
     centroid_support: float,
@@ -7581,7 +7581,7 @@ def _fused_evidence_eligible(
     )
     primary_context_conflict = _dominant_primary_context_competitor(
         hypothesis,
-        analysis,
+        analysis or {},
     )
     learned_component = _safe_float(components.get("learned_expression_classifier"))
     context_free_learned_triplet = bool(

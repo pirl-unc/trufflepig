@@ -385,7 +385,7 @@ def build_cancer_type_signal_matrix(
                 confidence=_safe_float(candidate.get("support_geomean")),
                 rank=rank,
                 support_metric="support_fraction_of_top",
-                selects_report_label=bool(code == final_call and selected_by == "pan_cancer_signature_ranker"),
+                selects_report_label=False,
                 details=details,
             )
         )
