@@ -1339,15 +1339,16 @@ def _draw_priority_group_headers(ax, group_headers):
     for y, label in group_headers:
         ax.axhline(y + 0.18, color="#e4e4e4", linewidth=0.8, zorder=0)
         ax.text(
-            xmin,
+            -0.02,
             y,
             label,
-            ha="left",
+            ha="right",
             va="center",
             fontsize=9,
             fontweight="bold",
             color="#555555",
             clip_on=False,
+            transform=ax.get_yaxis_transform(),
         )
     ax.set_xlim(xmin, xmax)
 
@@ -1426,7 +1427,13 @@ def plot_priority_targets(
     ax.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
     ax.set_axisbelow(True)
     ax.set_xlabel("Integrated priority score")
-    ax.set_title(f"Priority Ranking — {cancer_code}", fontsize=13, fontweight="bold")
+    ax.set_title(
+        f"Target Priority Ranking — {cancer_code}",
+        fontsize=13,
+        fontweight="bold",
+    )
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     ax.legend(loc="lower right", fontsize=8, frameon=False)
     fig.tight_layout(rect=[0.0, 0.03, 1.0, 0.97])
 
@@ -1517,18 +1524,25 @@ def plot_priority_target_context(
     _draw_priority_group_headers(ax_range, group_headers)
     raw_ticks = [0, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000]
     raw_ticks = [tick for tick in raw_ticks if tick <= max_raw * 1.2]
-    if raw_ticks[-1] < max_raw:
+    if raw_ticks[-1] < max_raw and max_raw > raw_ticks[-1] * 1.25:
         raw_ticks.append(float(np.ceil(max_raw)))
     ax_range.set_xticks([_log_tpm(tick) for tick in raw_ticks])
     ax_range.set_xticklabels([f"{tick:g}" for tick in raw_ticks])
     ax_range.set_xlim(left=0.0, right=_log_tpm(max_raw) + 0.35)
     ax_range.set_ylim(max(y_pos) + 0.7, -1.15)
     ax_range.set_xlabel(
-        "Purity-adjusted tumor TPM, log10(TPM+1); black tick = bulk TPM; number = priority score"
+        "Expression, log10(TPM+1): range/diamond = tumor-attributed TPM; "
+        "black tick = bulk sample TPM; right number = priority score"
     )
-    ax_range.set_title("Tumor Range And Priority Context", fontsize=12, fontweight="bold")
+    ax_range.set_title(
+        "Tumor-attributed range vs bulk expression",
+        fontsize=12,
+        fontweight="bold",
+    )
     ax_range.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
     ax_range.set_axisbelow(True)
+    ax_range.spines["top"].set_visible(False)
+    ax_range.spines["right"].set_visible(False)
     if df_gene_expr is not None:
         try:
             from .common import build_sample_tpm_by_symbol
@@ -1588,6 +1602,18 @@ def plot_priority_target_context(
         )
         for label, marker in _PRIORITY_SOURCE_MARKERS.items()
     ]
+    source_handles.append(
+        Line2D(
+            [0],
+            [0],
+            marker="|",
+            color="black",
+            markeredgewidth=1.8,
+            linestyle="none",
+            markersize=12,
+            label="bulk sample TPM",
+        )
+    )
     normal_legend = fig.legend(
         handles=normal_handles,
         loc="lower center",
@@ -1603,22 +1629,26 @@ def plot_priority_target_context(
         loc="lower center",
         bbox_to_anchor=(0.76, 0.015),
         fontsize=8,
-        title="Tumor-source support",
+        title="Marker / tick meaning",
         frameon=False,
         ncol=2,
     )
 
-    fig.suptitle(f"Priority Target Context — {cancer_code}", fontsize=13, y=0.985)
+    fig.suptitle(
+        f"Target Expression and Priority Score — {cancer_code}",
+        fontsize=13,
+        y=0.985,
+    )
     fig.text(
         0.5,
         0.955,
-        "Rows are split by approval/readiness tier; colors show healthy-tissue context, markers show tumor-source support, and scores include HLA/alteration/current-therapy fit plus curated benefit/toxicity when available.",
+        "Rows are split by approval/readiness tier; colors show healthy-tissue context, marker shapes show tumor-source support, and scores include HLA/alteration/current-therapy fit plus curated benefit/toxicity when available.",
         ha="center",
         va="top",
         fontsize=9,
         color="#555555",
     )
-    fig.tight_layout(rect=[0.0, 0.13, 1.0, 0.89])
+    fig.tight_layout(rect=[0.06, 0.13, 1.0, 0.89])
 
     if save_to_filename:
         fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")

@@ -1551,6 +1551,43 @@ _AXIS_STATE_COLOR = {
 }
 
 
+_FOLD_BANDS = [
+    ("strong depletion", 0.0, 0.5, "#ea580c"),
+    ("mild depletion", 0.5, 0.8, "#fdba74"),
+    ("near cohort median", 0.8, 1.25, "#9ca3af"),
+    ("mild enrichment", 1.25, 2.0, "#86efac"),
+    ("strong enrichment", 2.0, float("inf"), "#16a34a"),
+]
+
+
+def _fold_band(fold: float | None) -> tuple[str, tuple[int | float, int | float], str]:
+    """Return display bucket for a cohort-normalized pathway fold."""
+
+    if fold is None or fold <= 0:
+        return "not measured", (0, 0), "#9ca3af"
+    for label, lo, hi, color in _FOLD_BANDS:
+        if lo <= fold < hi:
+            return label, (lo, hi), color
+    return _FOLD_BANDS[-1][0], (_FOLD_BANDS[-1][1], _FOLD_BANDS[-1][2]), _FOLD_BANDS[-1][3]
+
+
+def _axis_state_tag(row: dict) -> str:
+    """Display state without collapsing mild movement into 'near baseline'."""
+
+    state = row.get("state")
+    if state == "up":
+        return "active"
+    if state == "down":
+        return "suppressed"
+    if state == "mixed":
+        return "mixed"
+    fold = row.get("up_fold")
+    if fold is None:
+        fold = row.get("down_fold")
+    label, _span, _color = _fold_band(fold)
+    return label
+
+
 def _format_axis_label(therapy_class: str) -> str:
     """Human labels for the therapy-response axis names — the raw
     ``therapy_class`` strings (e.g. ``AR_signaling``) read fine in a
@@ -1601,6 +1638,8 @@ def plot_therapy_pathway_state(
         Write PNG here (and print the saved-path line for the CLI
         progress log).
     """
+    from matplotlib.lines import Line2D
+
     # Materialize and order axes: active / suppressed axes first (more
     # informative), baseline-ish axes last. Within each bucket keep the
     # input order so cancer-type-specific ordering (AR first for PRAD,
@@ -1690,11 +1729,10 @@ def plot_therapy_pathway_state(
     y_positions = np.arange(n_rows)
     legend_seen = set()
     for i, row in enumerate(plot_rows):
-        color = _AXIS_STATE_COLOR.get(row["state"], "#555555")
-
         fold = row["fold"]
         if fold is None or fold <= 0:
             continue
+        band_label, _band_span, color = _fold_band(fold)
         # Anchor each panel to baseline. Do not connect up- and down-panel
         # folds: for suppressed pathways they move in opposite directions and
         # connecting them implies a single continuum that is not biological.
@@ -1703,7 +1741,7 @@ def plot_therapy_pathway_state(
             [i, i],
             color=color,
             linewidth=3,
-            alpha=0.24,
+            alpha=0.35 if band_label.startswith("mild") else 0.50,
             solid_capstyle="round",
             zorder=2,
         )
@@ -1740,6 +1778,8 @@ def plot_therapy_pathway_state(
             ax.axhline(i + 0.5, color="#eeeeee", linewidth=0.8, zorder=0)
 
     ax.axvline(1.0, color="#888888", linestyle="--", linewidth=1.0, alpha=0.7, zorder=1)
+    ax.axvline(0.5, color="#ea580c", linestyle=":", linewidth=1.0, alpha=0.55, zorder=1)
+    ax.axvline(2.0, color="#16a34a", linestyle=":", linewidth=1.0, alpha=0.55, zorder=1)
     ax.set_xscale("log")
     x_vals = []
     for r in plot_rows:
@@ -1751,19 +1791,15 @@ def plot_therapy_pathway_state(
         hi = max(10.0, max(x_vals) * 1.4)
         ax.set_xlim(lo, hi)
     ax.set_xlabel(
-        "Fold vs TCGA cohort median  (log scale; 1.0 = baseline)", fontsize=10
+        "Fold vs selected cancer-cohort median TPM (log scale; 1.0 = cohort median)",
+        fontsize=10,
     )
 
     # Y-axis: label + state tag (color-coded)
     ax.set_yticks(y_positions)
     labels = []
     for row in plot_rows:
-        state_tag = {
-            "up": "active",
-            "down": "suppressed",
-            "mixed": "mixed",
-            "indeterminate": "near baseline",
-        }.get(row["state"], row["state"])
+        state_tag = _axis_state_tag(row)
         n_info = f" ({row['n']})" if row["n"] else ""
         panel_text = f"{row['panel_label']}{n_info}"
         if row["axis_first_row"]:
@@ -1775,12 +1811,54 @@ def plot_therapy_pathway_state(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
-    title = "Therapy-pathway state"
+    title = "Therapy-response pathway RNA"
     if cancer_code:
         title += f" \u2014 {cancer_code}"
     ax.set_title(title, fontsize=12, fontweight="bold", loc="left")
+    ax.text(
+        0.0,
+        1.03,
+        "Background: per-gene median TPM in the selected cancer cohort; dotted lines mark reporting thresholds at 0.5x and 2.0x.",
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8.5,
+        color="#555555",
+    )
+    band_handles = [
+        Line2D([0], [0], color=color, linewidth=5, label=label)
+        for label, _lo, _hi, color in _FOLD_BANDS
+    ]
+    shape_handles = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="#475569",
+            markerfacecolor="#475569",
+            linestyle="",
+            markersize=8,
+            label="expected-up panel",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="s",
+            color="#475569",
+            markerfacecolor="#475569",
+            linestyle="",
+            markersize=7,
+            label="expected-down panel",
+        ),
+    ]
     ax.legend(
-        loc="lower right", fontsize=8, frameon=False, markerscale=0.9, handletextpad=0.4
+        handles=band_handles + shape_handles,
+        loc="lower right",
+        fontsize=7.5,
+        frameon=False,
+        markerscale=0.9,
+        handletextpad=0.5,
+        ncol=2,
     )
 
     # --- Caption ---

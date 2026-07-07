@@ -14,11 +14,16 @@ Honest caveats it does NOT fix: (1) STRUCTURED contamination (liver->LIHC, immun
 misleads any linear model; (2) rare types with ≤5 (or zero) training samples can't get a reliable
 boundary — class_weight='balanced' helps but does not invent data; (3) it is not interpretable. Use
 it as a co-signal, never as the sole call.
+
+The module also exposes orthogonal learned molecular-state votes when the
+representative labels support them. The MSI-vs-MSS classifier is reported as
+mismatch-repair RNA context, not as clinical MSI/MMR status.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Mapping
 
 import numpy as np
@@ -27,6 +32,11 @@ import pandas as pd
 # Informative-gene subset size (top cross-sample variance) — matches the validation harness.
 _N_GENES = 2000
 _MIN_SHARED_GENES = 200
+_MMR_RELEASE_MODEL = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "mismatch-repair-expression-ensemble.csv"
+)
 _EXPECTED_OPTIONAL_MODEL_ERRORS = (
     ImportError,
     OSError,
@@ -48,6 +58,9 @@ class LearnedExpressionVote:
     holdout_medoid_top1_accuracy: float | None = None
     oof_precision_at_threshold: float | None = None
     oof_top3_recovery: float | None = None
+    training_sample_count: int | None = None
+    training_cohorts: tuple[str, ...] = ()
+    details: dict[str, Any] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -80,6 +93,9 @@ class LearnedExpressionVote:
             "holdout_medoid_top1_accuracy": self.holdout_medoid_top1_accuracy,
             "oof_precision_at_threshold": self.oof_precision_at_threshold,
             "oof_top3_recovery": self.oof_top3_recovery,
+            "training_sample_count": self.training_sample_count,
+            "training_cohorts": list(self.training_cohorts),
+            "details": self.details,
         }
 
 
@@ -200,6 +216,45 @@ def _learned_subtype_axis_for_code(code: str) -> str:
     return parent if subtype_key and parent else ""
 
 
+def _mismatch_repair_state_for_code(code: str) -> str:
+    """Map registry subtype codes to the binary mismatch-repair state label."""
+
+    parts = [part for part in _clean(code).upper().split("_") if part]
+    if not parts:
+        return ""
+    suffix = parts[-1]
+    if suffix in {"MSI", "MSIH", "DMMR", "MMRD"}:
+        return "MSI"
+    if suffix in {"MSS", "PMMR", "MMRP", "CNL", "CNH"}:
+        return "MSS"
+    return ""
+
+
+def _mismatch_repair_base_code(code: str) -> str:
+    parts = [part for part in _clean(code).upper().split("_") if part]
+    if not parts:
+        return ""
+    if _mismatch_repair_state_for_code("_".join(parts)):
+        parts = parts[:-1]
+    return "_".join(parts)
+
+
+def mismatch_repair_context_group(cancer_type: str) -> str:
+    """Return the supported tissue/entity context for the release MMR model."""
+
+    code = _mismatch_repair_base_code(cancer_type)
+    if not code:
+        return ""
+    family = _learned_family_for_code(code)
+    if family == "CRC" or code in {"CRC", "COAD", "READ"}:
+        return "CRC"
+    if code == "UCEC" or code.startswith("UCEC_"):
+        return "UCEC"
+    if code == "STAD" or code.startswith("STAD_"):
+        return "STAD"
+    return ""
+
+
 def _collapse_predictions(
     predictions: list[tuple[str, float]] | tuple[tuple[str, float], ...],
     mapper,
@@ -258,6 +313,72 @@ def _training_matrix():
         return None
 
 
+@lru_cache(maxsize=1)
+def _mismatch_repair_training_matrix():
+    """Binary MSI/MSS matrix from all packaged representative subtype samples."""
+
+    try:
+        from oncoref.normalization import clean_tpm
+        from pirlygenes.expression.accessors import (
+            available_representative_cohorts,
+            representative_cohort_samples,
+        )
+    except ImportError:
+        return None
+
+    try:
+        frames, labels, cohort_labels, base = [], [], [], None
+        cohorts_by_state: dict[str, list[str]] = {"MSI": [], "MSS": []}
+        for code in sorted(available_representative_cohorts()):
+            state = _mismatch_repair_state_for_code(code)
+            if state not in cohorts_by_state:
+                continue
+            d = (
+                representative_cohort_samples(code)
+                .drop_duplicates("Ensembl_Gene_ID")
+                .set_index("Ensembl_Gene_ID")
+            )
+            cols = [c for c in d.columns if c != "Symbol"]
+            if not cols:
+                continue
+            if base is None:
+                base = d[["Symbol"]].copy()
+            frames.append(d[cols])
+            labels += [state] * len(cols)
+            cohort_labels += [code] * len(cols)
+            cohorts_by_state[state].append(code)
+        if not frames or len(set(labels)) < 2 or base is None:
+            return None
+        expr = pd.concat(frames, axis=1).dropna(how="any")
+        if expr.empty:
+            return None
+        gt = pd.DataFrame(
+            {
+                "Ensembl_Gene_ID": expr.index,
+                "Symbol": base["Symbol"].reindex(expr.index).values,
+            }
+        )
+        clean = clean_tpm(expr.astype(float), gene_table=gt)
+        clean.index = base["Symbol"].reindex(expr.index).values
+        clean = clean[~clean.index.duplicated(keep="first")]
+        logc = np.log1p(clean.clip(lower=0))
+        var = logc.var(axis=1)
+        genes = list(var.sort_values(ascending=False).index[:_N_GENES])
+        X = np.nan_to_num(
+            logc.loc[genes].T.to_numpy(),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        y = np.asarray(labels)
+        cohorts = tuple(
+            sorted({code for codes in cohorts_by_state.values() for code in codes})
+        )
+        return X, y, genes, cohorts, tuple(cohort_labels)
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
+        return None
+
+
 def _fit_lr_model(X, y):
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
@@ -274,6 +395,28 @@ def _fit_lr_model(X, y):
     )
     pipe.fit(X, y)
     return pipe
+
+
+def _leave_one_out_top1_accuracy(X, y) -> float | None:
+    try:
+        from sklearn.model_selection import LeaveOneOut
+    except ImportError:
+        return None
+
+    try:
+        correct = 0
+        evaluated = 0
+        for train_idx, test_idx in LeaveOneOut().split(X):
+            y_train = y[train_idx]
+            if len(set(y_train)) < 2:
+                continue
+            pipe = _fit_lr_model(X[train_idx], y_train)
+            pred = str(pipe.predict(X[test_idx])[0])
+            correct += int(pred == str(y[test_idx][0]))
+            evaluated += 1
+        return (correct / evaluated) if evaluated else None
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
+        return None
 
 
 @lru_cache(maxsize=1)
@@ -317,6 +460,206 @@ def _trained_hierarchy_models():
         return genes, models
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
+
+
+@lru_cache(maxsize=1)
+def _trained_mismatch_repair_model():
+    """``(pipeline, genes, classes, metrics)`` for the binary MSI/MSS vote."""
+
+    try:
+        training = _mismatch_repair_training_matrix()
+        if training is None:
+            return None
+        X, y, genes, cohorts, cohort_labels = training
+        if len(set(y)) < 2:
+            return None
+        pipe = _fit_lr_model(X, y)
+        metrics = {
+            "training_sample_count": int(len(y)),
+            "training_cohorts": cohorts,
+            "training_cohort_sample_count": {
+                str(code): int(sum(1 for item in cohort_labels if item == code))
+                for code in cohorts
+            },
+            "holdout_top1_accuracy": _leave_one_out_top1_accuracy(X, y),
+        }
+        return pipe, genes, list(pipe.classes_), metrics
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _release_mismatch_repair_ensemble():
+    """Load the packaged CRC/UCEC/STAD MMR expression ensemble."""
+
+    try:
+        df = pd.read_csv(_MMR_RELEASE_MODEL)
+    except _EXPECTED_OPTIONAL_MODEL_ERRORS:
+        return None
+    if df.empty:
+        return None
+    try:
+        members = []
+        for member_index, group in df.groupby("member_index", sort=True):
+            ordered = group.sort_values("feature_index").copy()
+            members.append(
+                {
+                    "member_index": int(member_index),
+                    "member": _clean(ordered["member"].iloc[0]),
+                    "feature_space": _clean(ordered["feature_space"].iloc[0]),
+                    "feature_selection": _clean(ordered["feature_selection"].iloc[0]),
+                    "n_genes": int(ordered["n_genes"].iloc[0]),
+                    "decision_threshold": float(
+                        ordered["decision_threshold"].iloc[0]
+                    ),
+                    "feature_type": tuple(str(item) for item in ordered["feature_type"]),
+                    "feature_id": tuple(str(item) for item in ordered["feature_id"]),
+                    "symbol": tuple(_clean(item) for item in ordered["symbol"]),
+                    "tissue_category": tuple(
+                        _clean(item) for item in ordered["tissue_category"]
+                    ),
+                    "scaler_mean": ordered["scaler_mean"].astype(float).to_numpy(),
+                    "scaler_scale": ordered["scaler_scale"].astype(float).to_numpy(),
+                    "coef_msi": ordered["coef_msi"].astype(float).to_numpy(),
+                    "intercept_msi": float(ordered["intercept_msi"].iloc[0]),
+                }
+            )
+        if not members:
+            return None
+        threshold = float(members[0]["decision_threshold"])
+        return {
+            "members": tuple(members),
+            "decision_threshold": threshold,
+            "training_sample_count": 1386,
+            "training_cohorts": ("CRC", "STAD", "UCEC"),
+            "validation": {
+                "pooled_5fold_accuracy": 0.9632,
+                "leave_tissue_out_accuracy": 0.9343,
+                "within_tissue_accuracy": 0.9524,
+                "leave_tissue_out_crc_accuracy": 0.9570,
+                "leave_tissue_out_stad_accuracy": 0.9566,
+                "leave_tissue_out_ucec_accuracy": 0.8886,
+            },
+        }
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _sigmoid(value: float) -> float:
+    if value >= 0:
+        z = np.exp(-value)
+        return float(1.0 / (1.0 + z))
+    z = np.exp(value)
+    return float(z / (1.0 + z))
+
+
+def _release_member_msi_probability(
+    sample_tpm_by_symbol: Mapping[str, float],
+    context_group: str,
+    member: Mapping[str, Any],
+) -> float | None:
+    feature_type = tuple(member.get("feature_type") or ())
+    feature_id = tuple(member.get("feature_id") or ())
+    gene_symbols = [
+        feature_id[i]
+        for i, kind in enumerate(feature_type)
+        if kind == "sample_gene_z"
+    ]
+    if not gene_symbols:
+        return None
+    present = sum(1 for gene in gene_symbols if gene in sample_tpm_by_symbol)
+    min_present = min(_MIN_SHARED_GENES, max(50, int(0.8 * len(gene_symbols))))
+    if present < min_present:
+        return None
+    log_values = np.log1p(
+        np.asarray(
+            [
+                max(0.0, float(sample_tpm_by_symbol.get(gene, 0.0) or 0.0))
+                for gene in gene_symbols
+            ],
+            dtype=float,
+        )
+    )
+    gene_features = (log_values - log_values.mean()) / (log_values.std() + 1e-8)
+    features: list[float] = []
+    gene_i = 0
+    for i, kind in enumerate(feature_type):
+        if kind == "sample_gene_z":
+            features.append(float(gene_features[gene_i]))
+            gene_i += 1
+        elif kind == "tissue_onehot":
+            category = _clean((member.get("tissue_category") or ("",))[i])
+            features.append(1.0 if category == context_group else 0.0)
+        else:
+            return None
+    arr = np.asarray(features, dtype=float)
+    scale = np.asarray(member.get("scaler_scale"), dtype=float)
+    scale = np.where(scale == 0.0, 1.0, scale)
+    scaled = (arr - np.asarray(member.get("scaler_mean"), dtype=float)) / scale
+    logit = float(member.get("intercept_msi", 0.0)) + float(
+        np.dot(scaled, np.asarray(member.get("coef_msi"), dtype=float))
+    )
+    return _sigmoid(logit)
+
+
+def _classify_release_mismatch_repair_expression(
+    sample_tpm_by_symbol: Mapping[str, float],
+    cancer_type: str,
+    *,
+    top_k: int = 2,
+) -> LearnedExpressionVote | None:
+    context_group = mismatch_repair_context_group(cancer_type)
+    if not context_group:
+        return None
+    ensemble = _release_mismatch_repair_ensemble()
+    if ensemble is None:
+        return None
+    member_probs: list[dict[str, Any]] = []
+    for member in ensemble["members"]:
+        probability = _release_member_msi_probability(
+            sample_tpm_by_symbol,
+            context_group,
+            member,
+        )
+        if probability is None:
+            return None
+        member_probs.append(
+            {
+                "member": member.get("member"),
+                "msi_probability": round(float(probability), 6),
+            }
+        )
+    if not member_probs:
+        return None
+    p_msi = float(np.mean([row["msi_probability"] for row in member_probs]))
+    predictions = (("MSI", p_msi), ("MSS", 1.0 - p_msi))
+    if p_msi < ensemble["decision_threshold"]:
+        predictions = (("MSS", 1.0 - p_msi), ("MSI", p_msi))
+    return LearnedExpressionVote(
+        stage="mismatch_repair",
+        label_space="learned_mismatch_repair_release_ensemble",
+        predictions=tuple(predictions[:top_k]),
+        training_split_policy=(
+            "cbioportal_crc_ucec_stad_sample_gene_z_three_member_ensemble"
+        ),
+        holdout_top1_accuracy=ensemble["validation"].get(
+            "leave_tissue_out_accuracy"
+        ),
+        training_sample_count=ensemble.get("training_sample_count"),
+        training_cohorts=tuple(ensemble.get("training_cohorts") or ()),
+        details={
+            "context_group": context_group,
+            "cancer_type_context": _clean(cancer_type),
+            "msi_probability": round(p_msi, 6),
+            "decision_threshold": ensemble["decision_threshold"],
+            "member_probabilities": member_probs,
+            "validation": ensemble.get("validation") or {},
+            "interpretation": (
+                "RNA expression context only; confirm MSI/MMR status with "
+                "MSI-PCR, MMR IHC, or validated DNA/RNA clinical testing."
+            ),
+        },
+    )
 
 
 def _sample_vector(
@@ -370,6 +713,164 @@ def classify_expression(sample_tpm_by_symbol, top_k=5):
     return list(_predict_with_model(pipe, classes, vec, top_k))
 
 
+def classify_mismatch_repair_expression(
+    sample_tpm_by_symbol: Mapping[str, float],
+    cancer_type: str | None = None,
+    *,
+    top_k: int = 2,
+) -> LearnedExpressionVote | None:
+    """Binary learned RNA vote for MSI-like vs MSS-like expression state.
+
+    This is an orthogonal molecular-state co-signal, not clinical MSI/MMR
+    testing. When ``cancer_type`` is a supported context (CRC/COAD/READ, UCEC,
+    or STAD), use the packaged cBioPortal TCGA ensemble. Without a supported
+    context, fall back to the older representative-cohort vote so direct callers
+    can still inspect available paired ``_MSI``/``_MSS`` representative data.
+    """
+
+    if not sample_tpm_by_symbol or len(sample_tpm_by_symbol) < _MIN_SHARED_GENES:
+        return None
+    if cancer_type is not None:
+        context_group = mismatch_repair_context_group(cancer_type)
+        if not context_group:
+            return None
+        release_vote = _classify_release_mismatch_repair_expression(
+            sample_tpm_by_symbol,
+            cancer_type,
+            top_k=top_k,
+        )
+        if release_vote is not None:
+            return release_vote
+    trained = _trained_mismatch_repair_model()
+    if trained is None:
+        return None
+    pipe, genes, classes, metrics = trained
+    vec = _sample_vector(sample_tpm_by_symbol, genes)
+    if vec is None:
+        return None
+    predictions = _predict_with_model(pipe, classes, vec, top_k)
+    if not predictions:
+        return None
+    return LearnedExpressionVote(
+        stage="mismatch_repair",
+        label_space="learned_mismatch_repair_binary",
+        predictions=predictions,
+        training_split_policy="leave_one_out_representative_msi_mss_samples",
+        holdout_top1_accuracy=metrics.get("holdout_top1_accuracy"),
+        training_sample_count=metrics.get("training_sample_count"),
+        training_cohorts=tuple(metrics.get("training_cohorts") or ()),
+    )
+
+
+def _mismatch_repair_codes_for_context(
+    cancer_type: str,
+    classes: list[str],
+) -> tuple[tuple[str, ...], str]:
+    code = _clean(cancer_type)
+    if not code:
+        return (), ""
+    target_base = _mismatch_repair_base_code(code)
+    target_family = _learned_family_for_code(code)
+
+    def with_both_states(candidates: list[str]) -> tuple[str, ...]:
+        states = {
+            _mismatch_repair_state_for_code(candidate) for candidate in candidates
+        }
+        states.discard("")
+        return tuple(candidates) if {"MSI", "MSS"} <= states else ()
+
+    entity_matches = with_both_states(
+        [
+            candidate
+            for candidate in classes
+            if _mismatch_repair_state_for_code(candidate)
+            and _mismatch_repair_base_code(candidate) == target_base
+        ]
+    )
+    if entity_matches:
+        return entity_matches, "entity"
+
+    family_matches = with_both_states(
+        [
+            candidate
+            for candidate in classes
+            if _mismatch_repair_state_for_code(candidate)
+            and target_family
+            and _learned_family_for_code(candidate) == target_family
+        ]
+    )
+    if family_matches:
+        return family_matches, "family"
+    return (), ""
+
+
+def classify_mismatch_repair_sibling_expression(
+    sample_tpm_by_symbol: Mapping[str, float],
+    cancer_type: str,
+    *,
+    top_k: int = 2,
+) -> LearnedExpressionVote | None:
+    """MMR-state vote from fine-grained ``_MSI``/``_MSS`` sibling classes.
+
+    Unlike :func:`classify_mismatch_repair_expression`, this does not train a
+    new binary model. It reads the flat learned cancer-type probabilities,
+    keeps only paired MSI/MSS siblings for the supplied entity, and falls back
+    to the cancer family only when the entity lacks both states.
+    """
+
+    if not sample_tpm_by_symbol or len(sample_tpm_by_symbol) < _MIN_SHARED_GENES:
+        return None
+    trained = _trained_model()
+    if trained is None:
+        return None
+    _pipe, _genes, classes = trained
+    flat = classify_expression(sample_tpm_by_symbol, top_k=max(len(classes), top_k))
+    if not flat:
+        return None
+    return mismatch_repair_sibling_vote_from_predictions(
+        flat,
+        cancer_type,
+        top_k=top_k,
+    )
+
+
+def mismatch_repair_sibling_vote_from_predictions(
+    flat_predictions: list[tuple[str, float]] | tuple[tuple[str, float], ...],
+    cancer_type: str,
+    *,
+    top_k: int = 2,
+) -> LearnedExpressionVote | None:
+    """Contextual MMR vote from an already-computed flat prediction vector."""
+
+    classes = [str(code) for code, _probability in flat_predictions]
+    sibling_codes, scope = _mismatch_repair_codes_for_context(cancer_type, classes)
+    if not sibling_codes:
+        return None
+    sibling_set = set(sibling_codes)
+    scores = {"MSI": 0.0, "MSS": 0.0}
+    for code, probability in flat_predictions:
+        if code not in sibling_set:
+            continue
+        state = _mismatch_repair_state_for_code(code)
+        if state in scores:
+            scores[state] += float(probability)
+    total = sum(scores.values())
+    if total <= 0:
+        return None
+    predictions = tuple(
+        sorted(
+            ((state, value / total) for state, value in scores.items()),
+            key=lambda item: (-item[1], item[0]),
+        )[:top_k]
+    )
+    return LearnedExpressionVote(
+        stage="mismatch_repair",
+        label_space=f"learned_mismatch_repair_sibling_{scope}",
+        predictions=predictions,
+        training_split_policy="flat_classifier_sibling_probability_renormalization",
+    )
+
+
 def classify_expression_hierarchy(
     sample_tpm_by_symbol: Mapping[str, float],
     *,
@@ -377,11 +878,11 @@ def classify_expression_hierarchy(
 ) -> list[LearnedExpressionVote]:
     """Return stage-scoped learned expression votes.
 
-    Compartment, family, and entity votes are trained as separate logistic
-    models over the same feature space. The subtype-axis vote is derived from
-    the flat classifier because those axes are sparse and parent-scoped. These
-    votes are evidence rows for candidate admission/corroboration; they are not
-    a separate cancer-call oracle.
+    Compartment, family, entity, and binary mismatch-repair votes are trained
+    as separate logistic models over the same feature space. The subtype-axis
+    vote is derived from the flat classifier because those axes are sparse and
+    parent-scoped. These votes are evidence rows for candidate admission or
+    corroboration; they are not a separate cancer-call oracle.
     """
 
     trained = _trained_hierarchy_models()
@@ -444,6 +945,12 @@ def classify_expression_hierarchy(
                 predictions=subtype_predictions,
             )
         )
+    mismatch_repair_vote = classify_mismatch_repair_expression(
+        sample_tpm_by_symbol,
+        top_k=2,
+    )
+    if mismatch_repair_vote is not None:
+        votes.append(mismatch_repair_vote)
     return votes
 
 
@@ -451,4 +958,8 @@ __all__ = [
     "LearnedExpressionVote",
     "classify_expression",
     "classify_expression_hierarchy",
+    "classify_mismatch_repair_expression",
+    "classify_mismatch_repair_sibling_expression",
+    "mismatch_repair_sibling_vote_from_predictions",
+    "mismatch_repair_context_group",
 ]

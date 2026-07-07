@@ -930,6 +930,8 @@ def test_plot_decomposition_candidates_surfaces_fit_and_markers(tmp_path):
     assert any("fit err" in t and "markers" in t for t in texts), (
         f"missing fit/markers annotation; texts: {texts}"
     )
+    assert any("ADOPTED" in t for t in texts), texts
+    assert any("audit only" in t for t in texts), texts
 
 
 def test_plot_decomposition_candidates_handles_missing_reconstruction_error(tmp_path):

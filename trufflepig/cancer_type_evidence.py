@@ -928,6 +928,7 @@ def _hypothesis_evidence_channels(
         "family": "family",
         "entity": "coarse_type",
         "subtype_axis": "exact_subtype",
+        "mismatch_repair": "orthogonal_state",
     }
     hierarchy_votes = (
         hypothesis.details.get("learned_expression_hierarchical_votes")
@@ -961,6 +962,9 @@ def _hypothesis_evidence_channels(
                     "oof_precision_at_threshold"
                 ),
                 "oof_top3_recovery": vote.get("oof_top3_recovery"),
+                "training_sample_count": vote.get("training_sample_count"),
+                "training_cohorts": vote.get("training_cohorts") or [],
+                "mismatch_repair": vote.get("details") or {},
             },
         )
     add(
@@ -4308,30 +4312,59 @@ def _add_learned_hierarchy_candidate_features(
         "entity",
     )
     flat_predictions: list[tuple[str, float]] = []
+    build_mismatch_repair_sibling_vote = None
+    build_mismatch_repair_release_vote = None
+    mismatch_repair_context_group = None
     try:
         from .expression_classifier import classify_expression
+        from .expression_classifier import (
+            classify_mismatch_repair_expression as _build_release_mmr_vote,
+        )
+        from .expression_classifier import (
+            mismatch_repair_context_group as _mmr_context_group,
+        )
+        from .expression_classifier import (
+            mismatch_repair_sibling_vote_from_predictions as _build_mmr_vote,
+        )
     except ImportError:
         flat_predictions = []
     else:
-        flat_predictions = classify_expression(sample_tpm_by_symbol, top_k=50)
+        flat_predictions = classify_expression(sample_tpm_by_symbol, top_k=1000)
+        build_mismatch_repair_sibling_vote = _build_mmr_vote
+        build_mismatch_repair_release_vote = _build_release_mmr_vote
+        mismatch_repair_context_group = _mmr_context_group
     flat_top_predictions = [
         {"code": _clean(code), "probability": round(_safe_float(prob), 4)}
         for code, prob in flat_predictions[:10]
     ]
-    public_votes = [
-        {
+    def public_vote_dict(vote: Mapping[str, Any]) -> dict[str, Any]:
+        return {
             "stage": _clean(vote.get("stage")),
+            "label_space": _clean(vote.get("label_space")),
             "label": _clean(vote.get("label")),
             "probability": round(_safe_float(vote.get("probability")), 4),
+            "margin": round(_safe_float(vote.get("margin")), 4),
             "top_predictions": vote.get("top_predictions") or [],
+            "training_split_policy": vote.get("training_split_policy"),
             "holdout_top1_accuracy": vote.get("holdout_top1_accuracy"),
             "holdout_medoid_top1_accuracy": vote.get(
                 "holdout_medoid_top1_accuracy"
             ),
+            "oof_precision_at_threshold": vote.get(
+                "oof_precision_at_threshold"
+            ),
             "oof_top3_recovery": vote.get("oof_top3_recovery"),
+            "training_sample_count": vote.get("training_sample_count"),
+            "training_cohorts": vote.get("training_cohorts") or [],
+            "details": vote.get("details") or {},
         }
+
+    public_votes = [
+        public_vote_dict(vote)
         for vote in hierarchical_votes
+        if _clean(vote.get("stage")) != "mismatch_repair"
     ]
+
     for hypothesis in hypotheses.values():
         code = hypothesis.cancer_type
         entity_support, entity_label = _learned_entity_context_support(
@@ -4355,9 +4388,32 @@ def _add_learned_hierarchy_candidate_features(
         hierarchy_support = max(entity_support, family_support, compartment_support)
         if hierarchy_support <= 0:
             continue
+        hypothesis_public_votes = list(public_votes)
+        if (
+            build_mismatch_repair_release_vote is not None
+            and mismatch_repair_context_group is not None
+            and mismatch_repair_context_group(code)
+        ):
+            release_vote = build_mismatch_repair_release_vote(
+                sample_tpm_by_symbol,
+                code,
+            )
+            if release_vote is not None:
+                hypothesis_public_votes.append(
+                    public_vote_dict(release_vote.public_dict())
+                )
+        if build_mismatch_repair_sibling_vote is not None and flat_predictions:
+            sibling_vote = build_mismatch_repair_sibling_vote(
+                tuple(flat_predictions),
+                code,
+            )
+            if sibling_vote is not None:
+                hypothesis_public_votes.append(
+                    public_vote_dict(sibling_vote.public_dict())
+                )
         hypothesis.details.update(
             {
-                "learned_expression_hierarchy_votes": public_votes,
+                "learned_expression_hierarchy_votes": hypothesis_public_votes,
                 "learned_expression_flat_top_predictions": flat_top_predictions,
                 "learned_expression_flat_lineage_support": round(
                     float(flat_neighborhood_support),

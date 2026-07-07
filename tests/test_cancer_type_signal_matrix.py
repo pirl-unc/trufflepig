@@ -1,11 +1,16 @@
 from types import SimpleNamespace
 
+import pandas as pd
+
 from trufflepig.cancer_type_signal_matrix import (
     SIGNAL_MATRIX_COLUMNS,
     SIGNAL_SAMPLE_SUMMARY_COLUMNS,
     build_cancer_type_signal_matrix,
     build_signal_matrix_summary_markdown,
     build_signal_sample_summary,
+    compact_signal_plot_rows,
+    status_parent_code,
+    subtype_parent_code,
 )
 
 
@@ -173,3 +178,77 @@ def test_ranker_candidate_trace_does_not_infer_report_selection():
         & (matrix["predicted_code"] == "READ")
     ]
     assert not ranker_rows["selects_report_label"].any()
+
+
+def test_compact_signal_plot_collapses_orthogonal_status_variants():
+    def row(
+        *,
+        source,
+        code,
+        support,
+        role="",
+        status="",
+        rank=None,
+        selected=False,
+    ):
+        out = {column: "" for column in SIGNAL_MATRIX_COLUMNS}
+        out.update(
+            {
+                "sample": "case-msi",
+                "final_call": "READ",
+                "final_lineage": "solid",
+                "signal_source": source,
+                "signal_label": source,
+                "predicted_code": code,
+                "role": role,
+                "status": status,
+                "support": support,
+                "confidence": support,
+                "rank": rank,
+                "selects_report_label": selected,
+                "entity_agrees_final": code.startswith("READ"),
+                "lineage_agrees_final": True,
+                "is_blocked": False,
+                "is_context_only": False,
+                "details": "{}",
+            }
+        )
+        return out
+
+    matrix = pd.DataFrame(
+        [
+            row(source="fused_evidence", code="READ", support=2.4, selected=True),
+            row(source="fused_evidence", code="READ_MSS", support=1.0),
+            row(source="fused_evidence", code="COAD_MSS", support=1.7),
+            row(source="fused_evidence", code="COAD", support=1.2),
+            row(source="pan_cancer_signature_ranker", code="COAD_MSI", support=1.0, rank=1),
+            row(source="pan_cancer_signature_ranker", code="COAD", support=0.8, rank=2),
+            row(source="exact_expression_reference", code="READ_MSS", support=0.93),
+            row(source="exact_expression_reference", code="READ", support=0.94),
+            row(source="exact_expression_reference", code="HNSC_HPV_pos", support=0.82),
+            row(source="pan_cancer_signature_ranker", code="SARC_ASPS", support=0.91),
+            row(source="pan_cancer_signature_ranker", code="SARC_DSRCT", support=0.90),
+            row(source="rare_fusion_anchor", code="SARC_ASPS", support=0.89),
+            row(source="rare_fusion_anchor", code="SARC_DSRCT", support=0.88),
+        ]
+    )
+
+    compact = compact_signal_plot_rows(matrix, max_rows=20)
+    labels = compact["display_label"].tolist()
+
+    assert status_parent_code("COAD_MSI") == "COAD"
+    assert status_parent_code("HNSC_HPV_pos") == "HNSC"
+    assert subtype_parent_code("SARC_ASPS") == "SARC"
+    assert labels.count("Fused evidence: READ") == 1
+    assert not any(label == "Fused evidence: READ_MSS" for label in labels)
+    assert "Fused evidence: COAD (status row COAD_MSS)" in labels
+    assert "Fused evidence: COAD" not in labels
+    assert "Pan-cancer signature ranker rank 1: COAD (status row COAD_MSI)" in labels
+    assert "Exact expression reference: READ" in labels
+    assert not any(
+        label == "Exact expression reference: READ (status row READ_MSS)"
+        for label in labels
+    )
+    assert "Pan-cancer signature ranker: SARC (subtype row SARC_ASPS)" in labels
+    assert not any("SARC_DSRCT" in label for label in labels)
+    assert "Rare fusion subtype anchor: SARC (subtype row SARC_ASPS)" in labels

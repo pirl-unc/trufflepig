@@ -31,7 +31,6 @@ import datetime as dt
 import gc
 import json
 import logging
-import os
 import subprocess
 import sys
 import time
@@ -77,6 +76,7 @@ def _translate_command(
     *,
     blind: bool = False,
     use_manifest_cancer_type: bool = False,
+    with_figures: bool = False,
 ) -> list[str]:
     """Translate a manifest ``command`` array into a trufflepig invocation.
 
@@ -138,6 +138,9 @@ def _translate_command(
             # scope is driven entirely by the RNA-inferred top candidate.
             i += 2
             continue
+        if tok == "--no-figures" and with_figures:
+            i += 1
+            continue
         if tok in _FLAGS_NO_VALUE:
             args_after.append(tok)
             i += 1
@@ -174,7 +177,11 @@ def _translate_command(
     # Bulk sweeps for the cancer-type / target / markdown-consistency review need
     # only markdown + TSV; figure rendering is ~62% of analyze runtime (matplotlib
     # text layout), so skip it unless the manifest explicitly requested figures.
-    if "--no-figures" not in out and "--deprecated-figures" not in out:
+    if (
+        not with_figures
+        and "--no-figures" not in out
+        and "--deprecated-figures" not in out
+    ):
         out.append("--no-figures")
     return out
 
@@ -394,6 +401,14 @@ def main():
             "heavy reference caches are reused across local reports."
         ),
     )
+    parser.add_argument(
+        "--with-figures",
+        action="store_true",
+        help=(
+            "Generate full figure/PDF artifacts instead of forcing --no-figures. "
+            "Use for report/plot QA; the default remains faster markdown+TSV replay."
+        ),
+    )
     args = parser.parse_args()
     if args.blind and args.use_manifest_cancer_type:
         parser.error("--blind and --use-manifest-cancer-type are mutually exclusive")
@@ -456,6 +471,7 @@ def main():
             ws,
             blind=args.blind,
             use_manifest_cancer_type=args.use_manifest_cancer_type,
+            with_figures=args.with_figures,
         )
         log_path = logs / f"{name}.log"
         rc, elapsed = runner(name, cmd, log_path)

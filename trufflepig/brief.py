@@ -1895,6 +1895,12 @@ def _subtype_status_line(
     original_winning_subtype: Optional[str],
     analysis: dict,
 ) -> str:
+    mmr_line = mismatch_repair_summary_line(
+        analysis,
+        winning_subtype=winning_subtype,
+    )
+    if mmr_line and _mismatch_repair_state_from_code(winning_subtype):
+        return mmr_line
     if degenerate_status in ("corrected", "degenerate"):
         subtype_note = _render_subtype_note(
             degenerate_resolution or {},
@@ -1913,11 +1919,99 @@ def _subtype_status_line(
             return f"**Subtype status:** {subtype_note}"
     if winning_subtype:
         label = _display_subtype_code(winning_subtype)
+        if mmr_line:
+            return mmr_line
         return (
             f"**Subtype status:** RNA subtype signal is {label}-consistent; "
             "use as expression context unless clinically confirmed."
         )
+    if mmr_line:
+        return mmr_line
     return ""
+
+
+def _mismatch_repair_state_from_code(code: Optional[str]) -> str:
+    text = str(code or "").strip().upper()
+    if text.endswith(("_MSI", "_MSIH", "_DMMR", "_MMRD")):
+        return "MSI"
+    if text.endswith(("_MSS", "_PMMR", "_CNL", "_CNH")):
+        return "MSS"
+    return ""
+
+
+def mismatch_repair_summary_context(analysis: dict) -> dict:
+    """Return the release MMR RNA-state vote for the active report label."""
+
+    graph = ((analysis.get("cancer_type_evidence") or {}).get("staged_evidence_graph") or {})
+    final_code = str(analysis.get("cancer_type") or "").strip()
+    best: tuple[int, dict] | None = None
+    for channel in graph.get("channels") or []:
+        if not isinstance(channel, dict):
+            continue
+        if channel.get("role") != "hierarchical_mismatch_repair_vote":
+            continue
+        details = channel.get("details") or {}
+        if not isinstance(details, dict):
+            continue
+        mmr = details.get("mismatch_repair") or {}
+        if not isinstance(mmr, dict) or not mmr:
+            continue
+        p_msi = mmr.get("msi_probability")
+        if not isinstance(p_msi, (int, float)):
+            continue
+        label_space = str(details.get("label_space") or "")
+        candidate_code = str(channel.get("candidate_code") or "").strip()
+        priority = 0
+        if label_space == "learned_mismatch_repair_release_ensemble":
+            priority += 4
+        if candidate_code == final_code:
+            priority += 2
+        if channel.get("status") in {"admission_context", "informative"}:
+            priority += 1
+        if best is None or priority > best[0]:
+            best = (priority, channel)
+    return dict(best[1]) if best else {}
+
+
+def mismatch_repair_summary_line(
+    analysis: dict,
+    *,
+    winning_subtype: Optional[str] = None,
+) -> str:
+    """Render calibrated MMR RNA context without overstating clinical MSI/MMR."""
+
+    channel = mismatch_repair_summary_context(analysis)
+    if not channel:
+        return ""
+    details = channel.get("details") or {}
+    mmr = details.get("mismatch_repair") or {}
+    p_msi = mmr.get("msi_probability")
+    if not isinstance(p_msi, (int, float)):
+        return ""
+    threshold = mmr.get("decision_threshold")
+    if not isinstance(threshold, (int, float)):
+        threshold = 0.5
+    state = "MSI" if p_msi >= threshold else "MSS"
+    state_label = "MSI-like" if state == "MSI" else "MSS-like"
+    context = str(mmr.get("context_group") or "").strip()
+    context_clause = f"{context} " if context else ""
+    subtype_state = _mismatch_repair_state_from_code(winning_subtype)
+    subtype_clause = ""
+    if subtype_state and subtype_state != state:
+        subtype_clause = (
+            f" This conflicts with the candidate-trace subtype "
+            f"{winning_subtype}; treat MSI/MSS as unresolved RNA context."
+        )
+    elif subtype_state:
+        subtype_clause = (
+            f" This agrees with the candidate-trace subtype {winning_subtype}."
+        )
+    return (
+        f"**Mismatch-repair RNA context:** {context_clause}MMR ensemble favors "
+        f"{state_label} expression state (MSI-like probability {p_msi:.2f})."
+        f"{subtype_clause} Confirm MSI/MMR status with MSI-PCR, MMR IHC, or "
+        "validated clinical sequencing before using it for immunotherapy eligibility."
+    )
 
 
 def _clinical_context_caveats(analysis) -> List[str]:

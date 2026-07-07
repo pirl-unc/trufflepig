@@ -89,6 +89,31 @@ SIGNAL_SAMPLE_SUMMARY_COLUMNS = [
 ]
 
 
+ORTHOGONAL_STATUS_SUFFIXES = (
+    "_MSI",
+    "_MSS",
+    "_CIN",
+    "_CNL",
+    "_CNH",
+    "_HPV_pos",
+    "_HPV_neg",
+    "_HPVpos",
+    "_HPVneg",
+    "_EGFR",
+    "_ALK",
+    "_KRAS",
+    "_BRAF",
+    "_ERBB2",
+    "_HER2",
+    "_ROS1",
+    "_RET",
+    "_MET",
+    "_NTRK",
+    "_IDHmut",
+    "_IDHwt",
+)
+
+
 def _clean(value: Any) -> str:
     if value is None:
         return ""
@@ -145,6 +170,38 @@ def _parent(code: str) -> str:
         return registry_parent_code(code)
     except (KeyError, ValueError):
         return ""
+
+
+def status_parent_code(code: str) -> str:
+    """Return the parent cancer code for orthogonal molecular/status labels.
+
+    The compact signal plot should not make labels such as COAD_MSI,
+    READ_MSS, or HNSC_HPV_pos look like separate cancer-type calls.
+    They remain fully serialized in the TSV, but the display layer rolls
+    them up to the cancer entity and names the status row explicitly.
+    """
+
+    code = _clean(code)
+    if not code:
+        return ""
+    for suffix in ORTHOGONAL_STATUS_SUFFIXES:
+        if code.endswith(suffix):
+            return code[: -len(suffix)]
+    return ""
+
+
+def subtype_parent_code(code: str) -> str:
+    """Return a display parent for true subtype labels in compact plots."""
+
+    code = _clean(code)
+    if "_" not in code:
+        return ""
+    parent = _parent(code)
+    if parent and parent != code:
+        return parent
+    if code.startswith("SARC_"):
+        return "SARC"
+    return ""
 
 
 def _ancestor_chain(code: str) -> list[str]:
@@ -769,6 +826,174 @@ def build_signal_matrix_summary_markdown(
         )
     lines.append("")
     return "\n".join(lines) + "\n"
+
+
+def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.DataFrame:
+    """Return rows used by the compact cancer-type signal plot.
+
+    This is intentionally smaller than the TSV: repeated learned MMR
+    votes and orthogonal MSI/MSS/HPV/mutation-status labels are collapsed
+    into one displayed row per interpreted signal so the plot supports
+    the report text instead of replaying every trace row.
+    """
+
+    if matrix is None or len(matrix) == 0:
+        return pd.DataFrame()
+
+    df = matrix.copy()
+    df["_support"] = df["support"].fillna(0.0).astype(float)
+    df["_selected"] = df["selects_report_label"].fillna(False).astype(bool)
+    df["_details_map"] = df["details"].map(_parse_details)
+    df["_label_space"] = df["_details_map"].map(
+        lambda details: _clean(details.get("label_space"))
+    )
+    df["_mmr"] = (
+        df["role"].fillna("").astype(str).str.contains("mismatch_repair", case=False)
+        | df["signal_source"].fillna("").astype(str).str.contains("mismatch", case=False)
+    )
+    release_mmr = (
+        df["_mmr"]
+        & df["_label_space"].astype(str).str.contains("release_ensemble", na=False)
+    )
+    if release_mmr.any():
+        df = df[
+            (~df["_mmr"])
+            | df["_label_space"].astype(str).str.contains("release_ensemble", na=False)
+        ].copy()
+
+    def display_code(row: pd.Series) -> tuple[str, str, str]:
+        pred = _clean(row.get("predicted_code"))
+        status_parent = status_parent_code(pred)
+        if status_parent and status_parent != pred:
+            return status_parent, pred, "status"
+        subtype_parent = subtype_parent_code(pred)
+        if subtype_parent and subtype_parent != pred:
+            return subtype_parent, pred, "subtype"
+        return pred, "", ""
+
+    def display_bucket(row: pd.Series) -> str:
+        source = _clean(row.get("signal_source"))
+        role = _clean(row.get("role"))
+        pred = _clean(row.get("predicted_code"))
+        context = _clean(row.get("context_code"))
+        label_space = _clean(row.get("_label_space"))
+        code, variant, _variant_kind = display_code(row)
+        if row.get("_mmr"):
+            if "release_ensemble" in label_space:
+                return f"mmr:{label_space}:{pred}"
+            return f"mmr:{label_space}:{context or code or pred}"
+        if source in {"exact_expression_reference", "fused_evidence"}:
+            return f"{source}:{code or pred}"
+        if source == "learned_expression_classifier" and role.startswith("hierarchical_"):
+            return f"{source}:{role}:{pred}"
+        if source == "pan_cancer_signature_ranker":
+            return f"{source}:{code or pred}"
+        if source == "expression_decomposition":
+            return f"{source}:{code or pred}:{context}:{row.get('status')}"
+        if variant:
+            return f"{source}:{role}:{code}:{context}:{row.get('status')}"
+        return f"{source}:{role}:{pred}:{context}:{row.get('status')}"
+
+    def display_label(row: pd.Series) -> str:
+        source = _clean(row.get("signal_source"))
+        role = _clean(row.get("role"))
+        pred = _clean(row.get("predicted_code"))
+        context = _clean(row.get("context_code"))
+        code, variant, variant_kind = display_code(row)
+        variant_note = f" ({variant_kind} row {variant})" if variant else ""
+        if row.get("_mmr"):
+            return f"MMR release ensemble: {pred}-like"
+        if source == "learned_expression_classifier":
+            role_labels = {
+                "hierarchical_compartment_vote": "Learned compartment",
+                "hierarchical_family_vote": "Learned family",
+                "hierarchical_entity_vote": "Learned entity",
+                "hierarchical_subtype_axis_vote": "Learned subtype axis",
+            }
+            label = role_labels.get(role, "Learned expression")
+            return f"{label}: {pred or context}"
+        if source == "fused_evidence":
+            return f"Fused evidence: {code or pred or role}{variant_note}"
+        if source == "pan_cancer_signature_ranker":
+            rank = _safe_float(row.get("rank"))
+            rank_text = f" rank {int(rank)}" if rank is not None else ""
+            return f"Pan-cancer signature ranker{rank_text}: {code or pred}{variant_note}"
+        if source == "expression_decomposition":
+            context_text = f" / {context}" if context else ""
+            return f"Decomposition fit: {code or pred}{context_text}"
+        if source == "background_site_context":
+            return f"Background/site context: {pred or context}"
+        if source == "exact_expression_reference":
+            return f"Exact expression reference: {code or pred}{variant_note}"
+        if source == "rare_fusion_anchor":
+            return f"Rare fusion subtype anchor: {code or pred}{variant_note}"
+        readable = source.replace("_", " ")
+        return f"{readable}: {code or pred or role}{variant_note}"
+
+    def display_color(row: pd.Series) -> str:
+        if row.get("_mmr"):
+            return "#7c3aed"
+        if row.get("selects_report_label") is True:
+            return "#059669"
+        if row.get("is_blocked") is True:
+            return "#dc2626"
+        if row.get("is_context_only") is True:
+            return "#6b7280"
+        if row.get("entity_agrees_final") is True or row.get("lineage_agrees_final") is True:
+            return "#2563eb"
+        return "#f59e0b"
+
+    df["_display_bucket"] = df.apply(display_bucket, axis=1)
+    ranked = (
+        df.sort_values(["_selected", "_mmr", "_support"], ascending=[False, False, False])
+        .drop_duplicates("_display_bucket", keep="first")
+        .head(max_rows)
+        .copy()
+    )
+    if ranked.empty:
+        return ranked
+    ranked["display_label"] = ranked.apply(display_label, axis=1)
+    ranked["display_color"] = ranked.apply(display_color, axis=1)
+    return ranked
+
+
+def plot_cancer_type_signal_matrix(
+    matrix: pd.DataFrame,
+    out_path: str | Path,
+    *,
+    max_rows: int = 18,
+    dpi: int = 180,
+) -> str | None:
+    """Plot the highest-support cancer-type evidence rows for one sample."""
+
+    if matrix is None or len(matrix) == 0:
+        return None
+    import matplotlib.pyplot as plt
+
+    ranked = compact_signal_plot_rows(matrix, max_rows=max_rows)
+    if ranked.empty:
+        return None
+
+    labels = ranked["display_label"].tolist()
+    colors = ranked["display_color"].tolist()
+    fig_h = max(4.8, 0.36 * len(ranked) + 1.6)
+    fig, ax = plt.subplots(figsize=(10.5, fig_h))
+    y = list(range(len(ranked)))[::-1]
+    ax.barh(y, ranked["_support"].tolist(), color=colors, alpha=0.86)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlim(0, max(1.0, float(ranked["_support"].max()) * 1.08))
+    ax.set_xlabel("Evidence support / probability")
+    final_call = _clean(ranked["final_call"].dropna().astype(str).iloc[0])
+    ax.set_title(f"Cancer-type decision evidence - final call {final_call}")
+    ax.grid(axis="x", alpha=0.25)
+    for spine in ("top", "right", "left"):
+        ax.spines[spine].set_visible(False)
+    fig.tight_layout()
+    out = Path(out_path)
+    fig.savefig(out, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return str(out)
 
 
 def write_cancer_type_signal_artifacts(

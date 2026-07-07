@@ -315,6 +315,7 @@ That selector accumulates hypotheses from multiple channels:
 - lineage panels,
 - contrast discriminators,
 - learned full-profile expression classifier,
+- learned mismatch-repair RNA state context,
 - rare RNA marker rules,
 - direct fusions.
 
@@ -602,6 +603,10 @@ The report now also emits machine-readable signal artifacts:
   decomposition/met-site background context.
 - `*-cancer-type-signal-summary.md`: a compact reader-facing summary of the
   same rows.
+- `*-cancer-type-signal-matrix.png`: the decision-aligned plot version of the
+  same evidence frame. This is the main cancer-call plot; raw MDS/neighborhood
+  reference maps are audit/context-only because they bypass the fused evidence
+  graph.
 
 Batch runners concatenate the per-sample TSVs into the same schema for local
 report sweeps and, when requested, the 565 representative-sample harness. The
@@ -621,9 +626,20 @@ without replacing the primary ranker.
   - `learned_compartment`: a separate compartment model,
   - `learned_family`: a separate coarse-family model,
   - `learned_entity`: a separate parent/entity model,
-  - `learned_subtype_axis`: a sparse parent-scoped rollup from the flat model.
+  - `learned_subtype_axis`: a sparse parent-scoped rollup from the flat model,
+  - `learned_mismatch_repair_binary`: an orthogonal RNA-state vote; production
+    report use now comes from the release ensemble below when the accepted
+    cancer context is one where MMR/MSI is clinically meaningful.
+- `expression_classifier.classify_mismatch_repair_sibling_expression` is the
+  parent-aware companion to the pooled binary model. Given a working entity
+  such as `READ` or `COAD`, it reads the flat learned classifier probabilities,
+  keeps only paired `_MSI`/`_MSS` siblings for that entity, and falls back to the
+  cancer family only if the entity lacks both states. The resulting
+  `learned_mismatch_repair_sibling_entity` or
+  `learned_mismatch_repair_sibling_family` vote is reported as orthogonal
+  mismatch-repair context.
 - `cancer_type_evidence` preserves those votes in every learned hypothesis as
-  `learned_expression_hierarchical_votes` and renders them as
+  `learned_expression_hierarchy_votes` and renders them as
   `learned_expression_classifier` channels in the staged evidence graph.
 - The learned selector still prefers broad-ranker context. A context-free
   learned rescue is only selectable when the flat probability is at least
@@ -650,6 +666,84 @@ without replacing the primary ranker.
   `holdout_medoid_top1_accuracy`, and `oof_top3_recovery`). These values are
   rendered for interpretation only; the selector thresholds use the live
   probability/margin/context fields.
+- The MMR RNA-state votes are intentionally not primary report-label selectors
+  and do not establish immunotherapy eligibility by themselves. The live report
+  path is context-gated through `mismatch_repair_context_group`: CRC-family,
+  UCEC, and STAD contexts can receive an MMR/MSI expression vote; unrelated
+  contexts such as GBM or PRAD do not emit an MSI/MSS statement. The release
+  model is saved as explicit CSV coefficients in
+  `trufflepig/data/mismatch-repair-expression-ensemble.csv` with companion
+  metadata in `trufflepig/data/mismatch-repair-expression-ensemble-metadata.csv`;
+  no pickle/runtime training artifact is required for release use.
+- `scripts/eval_mismatch_repair_classifier.py` starts the broader-sample
+  expansion path. It can build a labeled experimental matrix from cached
+  Treehouse TCGA per-sample TPMs or full cBioPortal TCGA RSEM matrices for
+  CRC, UCEC, and STAD. The current cBioPortal RSEM run yields `1,386` labeled
+  samples: CRC `78` MSI / `504` MSS, STAD `73` MSI / `273` MSS, and UCEC
+  `148` MSI / `310` pMMR-like MSS. `UCEC_CNL` and `UCEC_CNH` are treated as
+  MSS-like pMMR negatives; `UCEC_POLE`, `STAD_POLE`, and `STAD_EBV` are
+  excluded/confounder rows, not binary labels.
+- The evaluator now builds features inside each train/test fold so supervised
+  gene selection and tissue-residual medians do not see held-out labels or
+  held-out expression. A 500-gene variance baseline in
+  `rank_plus_tissue_residual` space is `0.915` 5-fold pooled CV, `0.933`
+  within-tissue CV, and `0.742` leave-tissue-out. Narrowing to genes with
+  within-training-tissue MSI/MSS effect and low tissue eta-squared is a clear
+  improvement: 500 genes gives `0.956` pooled, `0.960` within-tissue, and
+  `0.885` leave-tissue-out.
+- The best compact tissue-independent core so far is a 250-gene panel with
+  tissue one-hot calibration: `0.952` pooled, `0.951` within-tissue, and
+  `0.898` leave-tissue-out, with held-out UCEC at `0.819`. Tissue-by-expression
+  interactions improve known-tissue pooled CV to `0.961` and overall
+  leave-tissue-out to `0.908`, but weaken UCEC transfer relative to the
+  one-hot-only core. Production use should therefore be a compact pooled
+  tissue-independent MMRd-vs-pMMR core plus explicit tissue/entity calibration
+  heads, with interaction heads reported separately from the transferable core.
+- A more interpretable selector, `consistent_cross_tissue_mmr`, now scores each
+  gene by same-direction MSI/MSS contrast, contrast stability across tissues,
+  and stability of the MSI/MSS midpoint across tissues. At 250 genes with
+  tissue one-hot it is close but not better overall (`0.948` pooled, `0.951`
+  within-tissue, `0.895` leave-tissue-out; held-out UCEC `0.823`). At 500 genes
+  with tissue one-hot it matches pooled/within-tissue performance and improves
+  transfer (`0.956` pooled, `0.960` within-tissue, `0.905` leave-tissue-out;
+  held-out UCEC `0.812`). As before, tissue-by-expression interactions raise
+  pooled CV (`0.963`) but weaken UCEC transfer (`0.731`), so interactions remain
+  a known-tissue calibration head rather than the transferable core.
+- A fixed-selector feature-space check used `consistent_cross_tissue_mmr`, 500
+  genes, tissue one-hot, and cBioPortal RSEM. `sample_gene_z` gives the best
+  transfer (`0.912` leave-tissue-out; held-out UCEC `0.847`) despite slightly
+  lower pooled CV (`0.955`). `tissue_residual` gives the best pooled CV
+  (`0.961`) but weaker transfer (`0.904`; UCEC `0.814`). `raw_log`,
+  `within_sample_rank`, and `rank_plus_tissue_residual` are similar but do not
+  beat sample-level z-score on leave-tissue-out. This argues for treating
+  sample-level z-score as the leading transferable MMR feature space and
+  tissue-residual/log spaces as known-tissue corroboration candidates.
+- A gene-count/procedure grid with `sample_gene_z` and tissue one-hot compared
+  `50..500` genes in steps of `50` across `variance`, `mmr_effect`,
+  `residual_mmr_effect`, `tissue_independent_mmr`, and
+  `consistent_cross_tissue_mmr`. Variance selection is clearly unsuitable
+  (`0.716` leave-tissue-out at 500 genes). Best overall leave-tissue-out is
+  `mmr_effect` at 150 genes (`0.916`) and `tissue_independent_mmr` at 250 genes
+  (`0.916`). They trade sensitivity and specificity: `mmr_effect` catches more
+  MSI samples but makes more MSS false positives, while `tissue_independent_mmr`
+  is more conservative. `consistent_cross_tissue_mmr` at 500 genes remains a
+  strong interpretable specificity-oriented candidate (`0.912` leave-tissue-out;
+  UCEC `83/148` MSI and `305/310` MSS correct).
+- The selected release model is a mean-probability ensemble of the three
+  practical candidates: `mmr_effect@150`, `tissue_independent_mmr@250`, and
+  `consistent_cross_tissue_mmr@500`, all in `sample_gene_z` space with tissue
+  one-hot calibration. At decision threshold `0.50`, the ensemble scores
+  `0.963` pooled five-fold CV, `0.952` within-tissue CV, and `0.934`
+  leave-tissue-out. Leave-tissue-out by context is CRC `0.957` (`70/78` MSI and
+  `487/504` MSS correct), STAD `0.957` (`59/73` MSI and `272/273` MSS correct),
+  and UCEC `0.889` (`109/148` MSI and `298/310` MSS correct). A `0.40`
+  threshold is available in the evaluation output as a more sensitive screening
+  point, but the release artifact uses `0.50` to limit false-positive MSS calls.
+- Reports surface the release MMR vote in the integrated evidence bullets, the
+  staged evidence graph, the signal matrix TSV/markdown, and the
+  `cancer-type-signal-matrix.png` plot. The text explicitly says this is RNA
+  context only and requires MSI-PCR, MMR IHC, or validated clinical sequencing
+  before immunotherapy eligibility is inferred.
 
 The 3-training/2-testing holdout harness now evaluates both flat and staged
 learned models. Across five random seeds, the staged compartment model is the

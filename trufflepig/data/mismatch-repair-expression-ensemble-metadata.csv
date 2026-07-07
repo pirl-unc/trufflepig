@@ -1,0 +1,11 @@
+key,value
+artifact_version,1
+model,mean_probability_ensemble
+members,"mmr_effect@150,tissue_independent_mmr@250,consistent_cross_tissue_mmr@500"
+feature_space,sample_gene_z
+decision_threshold,0.50
+training_samples,1386
+training_msi,299
+training_mss,1087
+training_tissues,"CRC,STAD,UCEC"
+training_source,"cBioPortal TCGA PanCancer Atlas RSEM; CRC MSIsensor, UCEC/STAD molecular subtype labels"

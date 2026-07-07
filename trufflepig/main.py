@@ -2610,28 +2610,20 @@ def _analyze_body(run: AnalyzeRun):
             tag = "[therapy-state]"
             print(f"{tag} {cls}: {score.state} — {score.message}")
 
-    # Individual summary panels (replaces the crowded 4-panel composite, #97)
+    # Individual summary panels (replaces the crowded 4-panel composite, #97).
+    # Figure-path names are defined here (the PDF manifest below references
+    # them), but the RENDER is deferred until after purity is finalized —
+    # see the render block further down, just before the purity figures.
+    # Rendering the sample-summary panel here would capture the
+    # pre-decomposition *candidate* purity and contradict every other figure
+    # and the markdown (the 78%-vs-10% headline-purity bug): purity is not
+    # adopted from decomposition / lineage-panel / interval-cap until the
+    # `if decomp_results:` block below.
     summary_png = "%s-sample-summary.png" % prefix if prefix else "sample-summary.png"
     # Keep the composite for backward compatibility but also emit standalone PNGs
     hypotheses_png = "%s-cancer-hypotheses.png" % prefix
     tissues_png = "%s-background-tissues.png" % prefix
     mhc_png = "%s-mhc-expression.png" % prefix
-    if plot_ctx.enabled:
-        plot_sample_summary(
-            df_expr,
-            cancer_type=reference_cancer_code,
-            sample_mode=analysis["sample_mode"],
-            save_to_filename=summary_png,
-            save_dpi=output_dpi,
-            analysis=analysis,
-        )
-        plot_cancer_type_hypotheses(
-            analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
-        )
-        plot_background_tissues(
-            analysis, save_to_filename=tissues_png, save_dpi=output_dpi
-        )
-        plot_mhc_expression(analysis, save_to_filename=mhc_png, save_dpi=output_dpi)
 
     # #136: one-figure therapy-pathway state readout. Renders the
     # disease-state narrative visually — dumbbells for each AR / NE /
@@ -3069,6 +3061,11 @@ def _analyze_body(run: AnalyzeRun):
                 index=False,
             )
 
+    signal_png = (
+        "%s-cancer-type-signal-matrix.png" % prefix
+        if prefix
+        else "cancer-type-signal-matrix.png"
+    )
     try:
         signal_tsv, signal_md, signal_matrix = write_cancer_type_signal_artifacts(
             prefix,
@@ -3089,8 +3086,39 @@ def _analyze_body(run: AnalyzeRun):
                 "rows": int(len(signal_matrix)),
             },
         )
+        if plot_ctx.enabled:
+            from .cancer_type_signal_matrix import plot_cancer_type_signal_matrix
+
+            plot_cancer_type_signal_matrix(
+                signal_matrix,
+                signal_png,
+                dpi=output_dpi,
+            )
     except (OSError, ValueError, TypeError) as exc:
         print(f"[warn] Cancer-type signal matrix failed: {exc}")
+
+    # #97 sample-summary panels, rendered HERE — after purity finalization
+    # (decomposition adoption + lineage-panel override + interval cap above) and
+    # after the `if decomp_results:` block, so the composition/purity panel reads
+    # the SAME adopted purity as purity-methods and the markdown. This ordering is
+    # the fix for the 78%-vs-10% headline-purity contradiction; do not move the
+    # render back above the purity-finalization block.
+    if plot_ctx.enabled:
+        plot_sample_summary(
+            df_expr,
+            cancer_type=reference_cancer_code,
+            sample_mode=analysis["sample_mode"],
+            save_to_filename=summary_png,
+            save_dpi=output_dpi,
+            analysis=analysis,
+        )
+        plot_cancer_type_hypotheses(
+            analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
+        )
+        plot_background_tissues(
+            analysis, save_to_filename=tissues_png, save_dpi=output_dpi
+        )
+        plot_mhc_expression(analysis, save_to_filename=mhc_png, save_dpi=output_dpi)
 
     purity_png = "%s-purity.png" % prefix if prefix else "purity.png"
     if plot_ctx.enabled:
@@ -3231,8 +3259,10 @@ def _analyze_body(run: AnalyzeRun):
     # remain in ``pirlygenes.plot_embedding`` for Python-API consumers.
 
     # Sample-among-reference context: emit a global normal-inclusive MDS plus
-    # a ranked nearest-reference distance plot. The MDS gives spatial context;
-    # the ranked plot preserves the actual sample-to-reference distances.
+    # a ranked nearest-reference distance plot. These are audit/context views:
+    # they intentionally bypass the fused evidence graph, so they are kept out
+    # of the main figure packet and grouped in figure-audit instead.
+    audit_only_pngs = []
     mds_png = "%s-reference-mds.png" % prefix
     neighborhood_png = "%s-reference-neighborhood.png" % prefix
     embedding_pngs = [mds_png, neighborhood_png]
@@ -3384,7 +3414,6 @@ def _analyze_body(run: AnalyzeRun):
     print("[analysis] Generating tumor expression range analysis...")
     purity_dict = effective_purity
     adj_pngs = []
-    audit_only_pngs = []
     ranges_df = None
     expression_reference_cancer_code = (
         cancer_type_context.code_for("expression") or effective_cancer_type
@@ -3797,6 +3826,7 @@ def _analyze_body(run: AnalyzeRun):
         # 4-panel composite. Without being listed here they never made
         # it into the PDF or the figures/ move step.
         hypotheses_png,
+        signal_png,
         tissues_png,
         mhc_png,
         # Purity-method comparison (#124) and sample-provenance (#106)
@@ -3809,7 +3839,8 @@ def _analyze_body(run: AnalyzeRun):
         # #136: therapy-pathway-state dumbbell figure.
         pathway_state_png,
         "%s-treatments.png" % prefix if prefix else "treatments.png",
-    ] + embedding_pngs
+    ]
+    audit_only_pngs.extend(embedding_pngs)
     if ct_png:
         png_files.append(ct_png)
     # Deep-dive plots
@@ -4005,9 +4036,10 @@ def _analyze_body(run: AnalyzeRun):
                 },
                 {
                     "title": "Cancer-Type / Reference Context",
-                    "note": "Reference-space plots for cancer label, nearby cohorts, subtype references, and normal tissues.",
+                    "note": "Decision-aligned cancer-call plots first; raw reference-space maps are context-only audit views.",
                     "files": _existing_figure_paths(
                         "cancer-hypotheses.png",
+                        "cancer-type-signal-matrix.png",
                         "reference-mds.png",
                         "reference-neighborhood.png",
                         "background-tissues.png",
@@ -4066,9 +4098,10 @@ def _analyze_body(run: AnalyzeRun):
                 },
                 {
                     "title": "Cancer-Call Cluster",
-                    "note": "These all support the cancer label from different angles; good candidates for consolidation when the call is already clear.",
+                    "note": "The signal matrix and hypotheses plot are decision-aligned. MDS/neighborhood plots are raw reference context and should not be read as selectors.",
                     "files": _existing_figure_paths(
                         "cancer-hypotheses.png",
+                        "cancer-type-signal-matrix.png",
                         "reference-mds.png",
                         "reference-neighborhood.png",
                         "subtype-signature.png",
@@ -4106,8 +4139,10 @@ def _analyze_body(run: AnalyzeRun):
             [
                 {
                     "title": "Low-Value in the Default Packet",
-                    "note": "These currently add the least unique decision support relative to the rest of the packet, or are mainly provenance/debug views.",
+                    "note": "These add the least unique decision support relative to the rest of the packet, or are mainly provenance/debug/context views.",
                     "files": _existing_figure_paths(
+                        "reference-mds.png",
+                        "reference-neighborhood.png",
                         "background-tissues.png",
                         "subtype-attribution-targets.png",
                         "subtype-attribution-ctas.png",
@@ -4127,6 +4162,7 @@ def _analyze_body(run: AnalyzeRun):
                     "files": _existing_figure_paths(
                         "sample-summary.png",
                         "cancer-hypotheses.png",
+                        "cancer-type-signal-matrix.png",
                         "purity-methods.png",
                         "actionable-targets.png",
                         "priority-targets.png",
@@ -4145,7 +4181,7 @@ def _analyze_body(run: AnalyzeRun):
             _make_audit_text_page(
                 "Figure Audit",
                 [
-                    "This PDF groups emitted figures by likely redundancy, low-value defaults, and distinctive keepers.",
+                    "This PDF groups emitted figures by report theme, decision support, and audit/context role.",
                     "It also groups the same artifacts by report theme so pathway/state plots are easier to find.",
                     "PNG pages are reproduced directly after each group cover page; PDF-only figures are listed on the cover page but not rasterized here.",
                     f"Source directory: {figures_dir}",
@@ -4246,8 +4282,8 @@ available for QC and provenance.
 | `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
 | `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
 | `*-analysis-parameters.json` | Free model parameters plus selected sample mode and embedding methods |
-| `*-all-figures.pdf` | All figures combined into a single PDF |
-| `*-figure-audit.pdf` | Figure packet grouped into redundant / low-value / distinctive sections |
+| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
+| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
 | `*-cancer-candidates.tsv` | Candidate cancer-type support trace |
 | `*-decomposition-hypotheses.tsv` | Ranked decomposition hypotheses |
 | `*-decomposition-components.tsv` | Component-level fit for best decomposition |
@@ -4265,6 +4301,7 @@ Prefer the standalone decomposition figures for review and sharing. They replace
 | `*-decomposition-composition.png` | Standalone composition bar (tumor + TME) for the best hypothesis |
 | `*-decomposition-components.png` | Standalone TME cell-type breakdown for the best hypothesis |
 | `*-decomposition-candidates.png` | Standalone per-candidate composition bars (tumor / template-specific / shared host) across top decomposition candidates |
+| `*-cancer-type-signal-matrix.png` | Decision-aligned cancer-type evidence trace; shows the final call, learned votes, MMR context where relevant, ranker/reference/decomposition signals, blockers, and confidence |
 | `*-purity.png` | Tumor purity estimation detail |
 | `*-treatments.png` | Therapy target expression by modality |
 | `*-actionable-targets.png` | Canonical actionable-target screen: observed expression, tumor-source estimate, normal-tissue context, and readiness caveats |
@@ -4273,8 +4310,8 @@ Prefer the standalone decomposition figures for review and sharing. They replace
 | `*-target-tissues.pdf` | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
 | `*-purity-ctas.png` | Tumor-expression ranges for CTAs |
 | `*-purity-surface.png` | Tumor-expression ranges for surface proteins |
-| `*-reference-mds.png` | MDS: sample among TCGA cancer medians, subtype references, and normal tissues |
-| `*-reference-neighborhood.png` | Nearest cancer/subtype/normal reference distance ranking; preserves input feature distance |
+| `*-reference-mds.png` | Audit-only raw reference map: sample among TCGA cancer medians, subtype references, and normal tissues; does not represent fused evidence selection |
+| `*-reference-neighborhood.png` | Audit-only nearest cancer/subtype/normal reference distance ranking; preserves input feature distance but does not represent fused evidence selection |
 
 Optional deprecated comparison figures are only emitted with
 `--deprecated-figures` and are written under `figures/deprecated/`. They are
@@ -6426,6 +6463,43 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             + str(call_rescue.get("interpretation") or "")
         )
 
+    mmr_channels = [
+        channel
+        for channel in (
+            ((analysis.get("cancer_type_evidence") or {}).get("staged_evidence_graph") or {}).get(
+                "channels"
+            )
+            or []
+        )
+        if isinstance(channel, dict)
+        and channel.get("role") == "hierarchical_mismatch_repair_vote"
+    ]
+    selected_mmr = next(
+        (
+            channel
+            for channel in mmr_channels
+            if str(channel.get("candidate_code") or "") == str(cancer_code or "")
+        ),
+        mmr_channels[0] if mmr_channels else None,
+    )
+    if selected_mmr:
+        details = selected_mmr.get("details") or {}
+        mmr = details.get("mismatch_repair") or {}
+        if isinstance(mmr, dict) and mmr:
+            p_msi = mmr.get("msi_probability")
+            top_state = selected_mmr.get("code") or ""
+            context = mmr.get("context_group") or ""
+            if isinstance(p_msi, (int, float)):
+                bullets.append(
+                    "- **Mismatch-repair RNA context**: "
+                    f"{context + ' ' if context else ''}MMR ensemble favors "
+                    f"{top_state or 'an MMR state'} with MSI-like probability "
+                    f"{p_msi:.2f}. This is expression context only; confirm "
+                    "MSI/MMR status with MSI-PCR, MMR IHC, or validated "
+                    "clinical sequencing before using it for immunotherapy "
+                    "eligibility."
+                )
+
     if candidate_trace:
         best = candidate_trace[0]
         best_code = str(best.get("code") or "").strip()
@@ -6990,6 +7064,29 @@ def _decision_channel_detail_summary(details):
     if not isinstance(details, dict) or not details:
         return ""
     parts = []
+    mmr = details.get("mismatch_repair") or {}
+    if isinstance(mmr, dict) and mmr:
+        p_msi = mmr.get("msi_probability")
+        if isinstance(p_msi, (int, float)):
+            parts.append(f"MSI RNA probability={p_msi:.3f}")
+        context = mmr.get("context_group")
+        if context:
+            parts.append(f"context {context}")
+        members = []
+        for row in mmr.get("member_probabilities") or []:
+            if not isinstance(row, dict):
+                continue
+            probability = row.get("msi_probability")
+            member = row.get("member")
+            if member and isinstance(probability, (int, float)):
+                members.append(f"{member} {probability:.2f}")
+        if members:
+            parts.append("members " + ", ".join(members[:3]))
+        validation = mmr.get("validation") or {}
+        if isinstance(validation, dict):
+            lto = validation.get("leave_tissue_out_accuracy")
+            if isinstance(lto, (int, float)):
+                parts.append(f"LTO accuracy={lto:.3f}")
     if details.get("learned_stage"):
         parts.append(f"learned stage {details.get('learned_stage')}")
     if details.get("label_space"):
@@ -8185,13 +8282,19 @@ def _generate_text_reports(
                 + "**. This is decomposition context, not a second report label.\n"
             )
         if decomp_results:
-            lines.append("| Hypothesis | Score | Fraction | Tissue | Warnings |")
-            lines.append("|------------|-------|--------|--------|----------|")
+            lines.append("| Hypothesis | Use | Score | Tumor fraction | Tissue score | Warnings |")
+            lines.append("|------------|-----|-------|----------------|--------------|----------|")
             for row in decomp_results[:6]:
                 warnings = "; ".join(row.warnings) if row.warnings else ""
+                use = (
+                    "adopted for target/background attribution"
+                    if row is best_decomp
+                    else "audit only"
+                )
                 lines.append(
-                    f"| {_hypothesis_display_label(row, primary_code=cancer_code, analysis=analysis)} | {row.score:.3f} | "
-                    f"{row.purity:.3f} | {row.template_tissue_score:.3f} | {warnings} |"
+                    f"| {_hypothesis_display_label(row, primary_code=cancer_code, analysis=analysis)} | "
+                    f"{use} | {row.score:.3f} | {row.purity:.3f} | "
+                    f"{row.template_tissue_score:.3f} | {warnings} |"
                 )
             lines.append("")
 
