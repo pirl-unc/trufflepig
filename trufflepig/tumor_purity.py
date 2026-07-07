@@ -4652,6 +4652,31 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     }
 
 
+def _finalized_purity_headline(analysis):
+    """Return the ``(overall, lower, upper)`` purity a report should DISPLAY.
+
+    Prefer the frozen ``ReportView`` snapshot (captured at purity finalization) over the live,
+    still-mutable ``analysis["purity"]`` dict, so a headline artifact can never draw a stale
+    pre-decomposition *candidate* purity even if it is rendered before finalization has updated the
+    live dict — the 78%-vs-10% belief-consistency bug. Falls back to the live dict field-by-field
+    when the snapshot is absent (e.g. a standalone ``plot_sample_summary`` call that never built one)
+    or carries no value for a field. Post-finalization the two agree, so this only removes the
+    misorder failure mode; it never changes a correctly-ordered render.
+    """
+    purity = analysis.get("purity") or {}
+    view = analysis.get("report_view")
+
+    def _pick(view_attr, live_key):
+        val = getattr(view, view_attr, None) if view is not None else None
+        return val if val is not None else purity.get(live_key)
+
+    return (
+        _pick("purity", "overall_estimate"),
+        _pick("purity_lo", "overall_lower"),
+        _pick("purity_hi", "overall_upper"),
+    )
+
+
 def plot_sample_summary(
     df_gene_expr,
     cancer_type=None,
@@ -4754,7 +4779,10 @@ def plot_sample_summary(
 
     # ---- Panel 2: Purity and microenvironment ----
     ax2 = fig.add_subplot(gs[0, 1])
-    overall = purity["overall_estimate"]
+    # Headline purity (overall + CI) is read from the FROZEN ReportView snapshot when present, so
+    # this patient-facing panel can never draw a stale candidate purity; the composition-detail
+    # components below still come from the live purity dict. See _finalized_purity_headline.
+    overall, purity_lo, purity_hi = _finalized_purity_headline(analysis)
     stromal_enr = purity["components"]["stromal"]["enrichment"]
     immune_enr = purity["components"]["immune"]["enrichment"]
 
@@ -4816,9 +4844,9 @@ def plot_sample_summary(
     ax2.set_xlabel(comp_xlabel, fontsize=10)
     ax2.legend(loc="upper right", fontsize=9, framealpha=0.9)
 
-    # Add text annotations below
-    lo = purity["overall_lower"]
-    hi = purity["overall_upper"]
+    # Add text annotations below (headline CI from the frozen snapshot, same source as `overall`)
+    lo = purity_lo
+    hi = purity_hi
     details = [
         f"{detail_prefix}: {overall:.0%}"
         + (f" [{lo:.0%}–{hi:.0%}]" if lo is not None else "")
