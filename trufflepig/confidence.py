@@ -190,6 +190,26 @@ def compute_purity_confidence(
     return ConfidenceTier(tier=tier, reasons=reasons)
 
 
+def purity_confidence_for_analysis(analysis) -> ConfidenceTier:
+    """Purity confidence tier from a full analysis dict.
+
+    Single source for the ``compute_purity_confidence`` call: derives the
+    degradation severity from ``analysis['sample_context']`` and applies it.
+    Both the markdown (``_generate_text_reports``) and the ReportView snapshot
+    call this so a report can never show one purity tier in a figure and a
+    different one in text.
+    """
+    purity = analysis.get("purity") or {}
+    deg = getattr(
+        analysis.get("sample_context"), "degradation_severity", "none"
+    )
+    return compute_purity_confidence(
+        purity,
+        sample_context=analysis.get("sample_context"),
+        degradation_severity=deg,
+    )
+
+
 def compute_call_confidence(analysis) -> ConfidenceTier:
     """Tier the cancer-type call itself based on orthogonal-signal contradictions.
 

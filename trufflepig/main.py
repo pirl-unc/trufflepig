@@ -3097,6 +3097,24 @@ def _analyze_body(run: AnalyzeRun):
     except (OSError, ValueError, TypeError) as exc:
         print(f"[warn] Cancer-type signal matrix failed: {exc}")
 
+    # Build the frozen ReportView snapshot now that purity is finalized
+    # (decomposition adoption + lineage-panel override + interval cap above) and
+    # the decomposition results are attached. Phase 1 instrumentation: renderers
+    # are migrated onto this single read surface incrementally, so building it
+    # here is behavior-neutral. See
+    # docs/report-belief-consistency-and-friendliness-plan.md (Tier 1).
+    from .report_view import build_report_view
+
+    try:
+        analysis["report_view"] = build_report_view(
+            analysis, sample_id=sample_display_id or None
+        )
+    except Exception:  # noqa: BLE001 - instrumentation must never abort a run
+        _LOGGER.warning(
+            "build_report_view failed; report_view unavailable", exc_info=True
+        )
+        analysis["report_view"] = None
+
     # #97 sample-summary panels, rendered HERE — after purity finalization
     # (decomposition adoption + lineage-panel override + interval cap above) and
     # after the `if decomp_results:` block, so the composition/purity panel reads
@@ -8049,19 +8067,12 @@ def _generate_text_reports(
     # inline so readers see a 19–100% CI render visibly different from a
     # 58–70% CI (#79). The tier consumes purity CI width, point estimate,
     # degradation severity, and sample-context flags.
-    from .confidence import compute_purity_confidence
+    from .confidence import purity_confidence_for_analysis
 
-    sample_ctx_for_tier = analysis.get("sample_context")
-    deg_for_tier = (
-        getattr(sample_ctx_for_tier, "degradation_severity", "none")
-        if sample_ctx_for_tier
-        else "none"
-    )
-    purity_tier = compute_purity_confidence(
-        purity,
-        sample_context=sample_ctx_for_tier,
-        degradation_severity=deg_for_tier,
-    )
+    # Single source shared with the ReportView snapshot (report_view.py) so a
+    # report can never show one purity tier in a figure and a different one in
+    # text.
+    purity_tier = purity_confidence_for_analysis(analysis)
     analysis["purity_confidence"] = purity_tier
     tier_note = str(getattr(purity_tier, "inline_note", "") or "")
     tier_note = tier_note.replace("purity CI", "purity range")
