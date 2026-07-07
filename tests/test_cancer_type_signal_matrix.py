@@ -5,6 +5,8 @@ import pandas as pd
 from trufflepig.cancer_type_signal_matrix import (
     SIGNAL_MATRIX_COLUMNS,
     SIGNAL_SAMPLE_SUMMARY_COLUMNS,
+    _md_cell,
+    _ontology_layer,
     build_cancer_type_signal_matrix,
     build_signal_matrix_summary_markdown,
     build_signal_sample_summary,
@@ -252,3 +254,65 @@ def test_compact_signal_plot_collapses_orthogonal_status_variants():
     assert "Pan-cancer signature ranker: SARC (subtype row SARC_ASPS)" in labels
     assert not any("SARC_DSRCT" in label for label in labels)
     assert "Rare fusion subtype anchor: SARC (subtype row SARC_ASPS)" in labels
+
+
+def test_ontology_layer_keeps_base_entity_winner_an_entity():
+    """A fused_evidence / learned_* selection reports the ``exact_subtype`` decision stage even
+    when it wins a base entity. The layer of a base-entity code (no ``_`` suffix) must stay
+    ``entity`` — only a real subtype/status code sits at the ``subtype`` layer."""
+    # Fused headline COAD: exact_subtype STAGE, but COAD is a base entity → entity layer.
+    assert _ontology_layer("exact_subtype", "fused_evidence", "COAD") == "entity"
+    # A true fine subtype keeps the subtype layer.
+    assert _ontology_layer("exact_subtype", "fused_evidence", "READ_MSI") == "subtype"
+    # An orthogonal-status code also stays subtype.
+    assert _ontology_layer("orthogonal_state", "fused_evidence", "COAD_MSI") == "subtype"
+    # Role-based hierarchical entity stays entity regardless of stage.
+    assert _ontology_layer("exact_subtype", "hierarchical_entity", "LUAD") == "entity"
+    # Coarse-type stage is always an entity.
+    assert _ontology_layer("coarse_type", "", "BRCA") == "entity"
+
+
+def test_md_cell_escapes_pipe_and_flattens_newlines():
+    """A channel rationale carrying a literal ``|`` or newline must not split or break the
+    markdown table it is interpolated into."""
+    assert _md_cell("STAD | READ conflict") == "STAD \\| READ conflict"
+    assert _md_cell("line one\nline two") == "line one line two"
+    assert _md_cell("carriage\r\nreturn") == "carriage return"
+    assert _md_cell(None) == ""
+    assert _md_cell("") == ""
+
+
+def test_summary_markdown_is_not_broken_by_pipe_in_rationale():
+    """End-to-end: a details rationale with a pipe must not inject a stray table column."""
+    import json
+
+    matrix = pd.DataFrame(
+        [
+            {
+                "sample": "case-x",
+                "final_call": "COAD",
+                "selected_by": "fused_evidence",
+                "reference_call": "COAD",
+                "signal_label": "Learned classifier",
+                "signal_source": "learned_expression_classifier",
+                "predicted_code": "STAD",
+                "ontology_layer": "entity",
+                "status": "blocked",
+                "support": 0.42,
+                "entity_agrees_final": False,
+                "lineage_agrees_final": False,
+                "selects_report_label": False,
+                "is_context_only": False,
+                "is_blocked": True,
+                "details": json.dumps({"rationale": "conflicts with READ | CRC context"}),
+            }
+        ]
+    )
+    md = build_signal_matrix_summary_markdown(matrix)
+    row_lines = [ln for ln in md.splitlines() if ln.startswith("| Learned classifier")]
+    assert len(row_lines) == 1
+    # After stripping the escaped ``\|`` the row has exactly 8 structural delimiters
+    # (7 columns) — the rationale's pipe did not inject a stray column.
+    structural = row_lines[0].replace("\\|", "")
+    assert structural.count("|") == 8
+    assert "READ \\| CRC context" in row_lines[0]

@@ -291,7 +291,9 @@ def _details_summary(details: Mapping[str, Any]) -> str:
             parts.append("top " + ", ".join(formatted))
     rationale = _clean(details.get("rationale"))
     if rationale:
-        parts.append(rationale[:120])
+        if len(rationale) > 120:
+            rationale = rationale[:117].rstrip() + "…"
+        parts.append(rationale)
     return "; ".join(parts)
 
 
@@ -304,11 +306,18 @@ def _ontology_layer(stage: str, role: str, code: str) -> str:
         return "family"
     if role.startswith("hierarchical_entity"):
         return "entity"
+    # exact_subtype / orthogonal_state is the SELECTOR's decision stage, not a claim about the code:
+    # fused_evidence / learned_* / fine_reference all report "exact_subtype" even when they win a
+    # base entity (COAD). Only a code that actually carries a subtype/status suffix ("_" present)
+    # sits at the subtype layer — a base entity winner (incl. the fused headline) stays an entity.
     if stage in {"exact_subtype", "orthogonal_state"}:
-        return "subtype"
+        return "subtype" if "_" in code else "entity"
     if stage == "coarse_type":
         return "entity"
-    if _parent(code):
+    # A base entity that merely rolls up to a group parent (COAD -> CRC) is still an entity winner —
+    # `_parent(code)` is truthy for it, so gating on the "_" subtype marker keeps entity headlines
+    # from being mislabeled "subtype".
+    if "_" in code and _parent(code):
         return "subtype"
     return "context"
 
@@ -590,6 +599,7 @@ def _top_supported_row(
     sub = sub.sort_values(
         ["selects_report_label", "_support_sort", "_rank_sort"],
         ascending=[False, False, True],
+        kind="stable",  # deterministic tie order for the 565-sweep TSV (quicksort is not stable)
     )
     return sub.iloc[0]
 
@@ -602,7 +612,7 @@ def _learned_summary_for_stage(df: pd.DataFrame, stage: str) -> tuple[str, float
     if rows.empty:
         return "", None, None
     rows["_support_sort"] = pd.to_numeric(rows["support"], errors="coerce").fillna(-1)
-    row = rows.sort_values("_support_sort", ascending=False).iloc[0]
+    row = rows.sort_values("_support_sort", ascending=False, kind="stable").iloc[0]
     details = _parse_details(row.get("details"))
     label = _clean(row.get("predicted_code"))
     support = _safe_float(row.get("support"))
@@ -648,6 +658,7 @@ def build_signal_sample_summary(matrix: pd.DataFrame) -> pd.DataFrame:
         ranker_rows = ranker_rows.sort_values(
             ["_rank_sort", "_support_sort"],
             ascending=[True, False],
+            kind="stable",  # stable so drop_duplicates keeps a deterministic row on ties
         ).drop_duplicates("predicted_code")
         ranker_top = ranker_rows.iloc[0] if len(ranker_rows) else None
         ranker_runner_up = ranker_rows.iloc[1] if len(ranker_rows) > 1 else None
@@ -754,6 +765,26 @@ def build_signal_sample_summary(matrix: pd.DataFrame) -> pd.DataFrame:
     return out[SIGNAL_SAMPLE_SUMMARY_COLUMNS]
 
 
+def _md_cell(value: Any) -> str:
+    """Escape a value for safe interpolation into a single markdown table cell.
+
+    A free-text ``rationale`` can carry a literal ``|`` (splits the row into a
+    stray extra column) or a newline (breaks the table entirely). Escape pipes
+    and flatten any newline/CR run to a single space so one channel's prose can
+    never corrupt the table structure.
+    """
+    text = _clean(value)
+    if not text:
+        return ""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def build_signal_matrix_summary_markdown(
     matrix: pd.DataFrame,
     *,
@@ -781,8 +812,8 @@ def build_signal_matrix_summary_markdown(
                 & (sub["is_blocked"] != True)  # noqa: E712
             ]
             lines.append(
-                f"| {sample} | {final_call or '—'} | `{selected_by or '—'}` | "
-                f"{len(sub)} | {len(strong)} |"
+                f"| {_md_cell(sample) or '—'} | {_md_cell(final_call) or '—'} | "
+                f"`{_md_cell(selected_by) or '—'}` | {len(sub)} | {len(strong)} |"
             )
         lines.append("")
         return "\n".join(lines) + "\n"
@@ -800,7 +831,7 @@ def build_signal_matrix_summary_markdown(
     lines.append("|---|---|---|---|---:|---|---|")
     ranked = (
         df.assign(_support=df["support"].fillna(-1).astype(float))
-        .sort_values(["selects_report_label", "_support"], ascending=[False, False])
+        .sort_values(["selects_report_label", "_support"], ascending=[False, False], kind="stable")
         .head(max_rows)
     )
     for _, row in ranked.iterrows():
@@ -818,11 +849,12 @@ def build_signal_matrix_summary_markdown(
             details = {}
         if isinstance(details, Mapping):
             detail_text = _details_summary(details)
+        signal_name = _md_cell(row.get("signal_label") or row.get("signal_source"))
         lines.append(
-            f"| {row.get('signal_label') or row.get('signal_source') or '—'} | "
-            f"{row.get('predicted_code') or '—'} | {row.get('ontology_layer') or '—'} | "
-            f"{row.get('status') or '—'} | {support_text} | {agree} | "
-            f"{detail_text or '—'} |"
+            f"| {signal_name or '—'} | "
+            f"{_md_cell(row.get('predicted_code')) or '—'} | {_md_cell(row.get('ontology_layer')) or '—'} | "
+            f"{_md_cell(row.get('status')) or '—'} | {support_text} | {agree} | "
+            f"{_md_cell(detail_text) or '—'} |"
         )
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -945,7 +977,7 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
 
     df["_display_bucket"] = df.apply(display_bucket, axis=1)
     ranked = (
-        df.sort_values(["_selected", "_mmr", "_support"], ascending=[False, False, False])
+        df.sort_values(["_selected", "_mmr", "_support"], ascending=[False, False, False], kind="stable")
         .drop_duplicates("_display_bucket", keep="first")
         .head(max_rows)
         .copy()

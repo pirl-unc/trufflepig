@@ -147,6 +147,22 @@ _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT = 0.25
 _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_MARGIN = 0.10
 _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SIGNATURE = 0.85
 _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MAX_RANK = 3
+# The learned-family-anchored context COMPONENT is base + support·fam + signature·broad.
+# Named here so the admission/channel gates key off the component's guaranteed minimum (when the
+# feature flag fires: fam≥MIN_SUPPORT, broad≥MIN_SIGNATURE) instead of a rounder bar the component
+# can never reach — otherwise a legitimately family-anchored candidate lands in a dead zone where
+# the flag is set yet it is blocked as "lacks a non-ranker admission path".
+_FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_BASE = 0.45
+_FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SUPPORT_WEIGHT = 0.30
+_FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SIGNATURE_WEIGHT = 0.25
+_FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT = round(
+    _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_BASE
+    + _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SUPPORT_WEIGHT
+    * _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT
+    + _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SIGNATURE_WEIGHT
+    * _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SIGNATURE,
+    4,
+)
 _FUSED_EVIDENCE_LEARNED_FAMILY_CONFLICT_MIN_TOP_SUPPORT = (
     _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT
 )
@@ -7544,13 +7560,14 @@ def _fused_component_scores(
             else 0.0
         ),
         "learned_family_anchored_pan_cancer_context": (
-            0.45
-            + 0.30
+            _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_BASE
+            + _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SUPPORT_WEIGHT
             * min(
                 1.0,
                 _safe_float(features.get("learned_expression_family_support")),
             )
-            + 0.25 * min(1.0, hypothesis.broad_rna_support)
+            + _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_SIGNATURE_WEIGHT
+            * min(1.0, hypothesis.broad_rna_support)
             if features.get("learned_family_anchored_pan_cancer_context")
             else 0.0
         ),
@@ -7832,7 +7849,7 @@ def _fused_evidence_eligible(
         _safe_float(
             components.get("learned_family_anchored_pan_cancer_context")
         )
-        >= 0.75
+        >= _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT
     )
     pan_signature_marker_program = bool(
         features.get("pan_cancer_signature_marker_selectable")
@@ -7909,7 +7926,7 @@ def _fused_evidence_eligible(
             ("learned_expression_classifier", 0.55),
             ("learned_hierarchy", 0.20),
             ("learned_compartment_anchored_pan_cancer_context", 0.75),
-            ("learned_family_anchored_pan_cancer_context", 0.75),
+            ("learned_family_anchored_pan_cancer_context", _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT),
             ("exact_expression_reference", 0.20),
             ("signature_anchored_exact_reference", 0.50),
             ("marker_coherent_expression_reference", 0.35),
@@ -7934,7 +7951,7 @@ def _fused_evidence_eligible(
             ("learned_expression_classifier", 0.55),
             ("learned_hierarchy", 0.20),
             ("learned_compartment_anchored_pan_cancer_context", 0.75),
-            ("learned_family_anchored_pan_cancer_context", 0.75),
+            ("learned_family_anchored_pan_cancer_context", _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT),
             ("exact_expression_reference", 0.20),
             ("signature_anchored_exact_reference", 0.50),
             ("marker_coherent_expression_reference", 0.35),
@@ -8092,6 +8109,24 @@ def _add_fused_evidence_features(
                 for reason in blockers
             )
         ):
+            hypothesis.can_select_report_label = False
+            hypothesis.label_status = "blocked"
+            hypothesis.label_basis = hypothesis.selected_by
+            hypothesis.blocking_reasons = tuple(blockers)
+            hypothesis.selection_priority = (0, 0.0, 0)
+        if (
+            hypothesis.can_select_report_label
+            and hypothesis.selected_by == "learned_expression_classifier"
+            and blockers
+        ):
+            # A learned-classifier self-admission is a weak, subordinate channel, and every fused
+            # blocker that can survive to here for it is a genuine withhold-directive: the
+            # strong-learned escape hatches (strong_independent_learned_call → primary_context_override
+            # and has_admission_path) suppress the primary-context / CRC-family / admission-path
+            # blockers BEFORE they are appended, so a surviving blocker means the learned call is weak
+            # AND conflicts with a dominant pan-cancer context. Enforce it — otherwise _pick_selected
+            # would still choose the label the fused layer just said "must not be selected" (e.g. a
+            # weak STAD learned call self-selecting over a dominant READ/CRC primary context).
             hypothesis.can_select_report_label = False
             hypothesis.label_status = "blocked"
             hypothesis.label_basis = hypothesis.selected_by

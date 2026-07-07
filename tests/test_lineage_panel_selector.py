@@ -16,6 +16,7 @@ contract:
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from trufflepig import cancer_type_evidence as cte
 
@@ -34,21 +35,23 @@ def test_selector_no_op_on_empty_sample():
 
 
 def test_selector_does_not_fire_below_score_threshold():
-    """A sample with no relevant lineage markers should not produce a
-    lineage_panel hypothesis even if some weak signals are present."""
+    """A sample with no relevant lineage markers must not produce a
+    lineage_panel hypothesis that can select the report label."""
     hyps: dict = {}
     # Sample with mostly housekeeping-level expression; no panel will
     # have its obligate cleared.
     sample = {"ACTB": 100.0, "GAPDH": 100.0, "B2M": 100.0}
     cte._add_lineage_panel_features(hyps, sample, _empty_analysis())
-    # The selector may register no hypotheses or only weak ones —
-    # crucially no entry should be ``can_select_report_label``.
-    for h in hyps.values():
-        for evidence_record in (h.public_dict() or {}).get("sources", []):
-            if evidence_record == "lineage_panel":
-                # If it shows up, it must not have been can-selected.
-                # Score must have been below threshold (no obligate match).
-                pass
+    # The selector may register no hypotheses or only weak ones — crucially no
+    # lineage_panel entry may be ``can_select_report_label`` below threshold.
+    for code, h in hyps.items():
+        public = h.public_dict() or {}
+        if "lineage_panel" not in set(public.get("evidence_sources", [])):
+            continue
+        assert public.get("can_select_report_label") is not True, (
+            f"lineage_panel selected report label {code!r} on a "
+            f"housekeeping-only sample that clears no panel obligate"
+        )
 
 
 def test_selector_proposes_parent_cohort_not_panel_name():
@@ -377,10 +380,10 @@ def test_gate_blocks_cross_code_when_broad_confident_skcm_brca():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     if not hyps:
-        return  # selector early-returned (no panel cleared score thresholds)
+        pytest.skip("panel framework unavailable — no panel cleared thresholds")
     brca = hyps.get("BRCA")
     if brca is None:
-        return  # no BRCA hypothesis recorded
+        pytest.skip("BRCA panel did not fire — cannot exercise the gate")
     public = brca.public_dict() or {}
     assert public.get("can_select_report_label") is False, (
         "Cross-code panel promotion survived when broad top-1 was "
@@ -455,10 +458,10 @@ def test_gate_blocks_cross_code_same_family_when_broad_confident():
     cte._add_lineage_panel_features(hyps, sample, analysis)
     paad = hyps.get("PAAD")
     if paad is None:
-        return  # PAAD panel didn't fire above threshold; fine
+        pytest.skip("PAAD panel did not fire — cannot exercise the gate")
     public = paad.public_dict() or {}
     if "lineage_panel" not in set(public.get("evidence_sources", [])):
-        return
+        pytest.skip("PAAD has no lineage_panel evidence — gate not exercised")
     assert public.get("can_select_report_label") is False, (
         "Cross-cancer-within-family panel promotion survived when "
         "broad was confident — STAD → PAAD regression is back."
@@ -662,7 +665,7 @@ def test_id_path_and_symbol_path_produce_equivalent_scores():
             sample_by_id[gid] = float(tpm)
 
     if not sample_by_id:
-        return  # pirlygenes unavailable; nothing to compare
+        pytest.skip("pirlygenes unavailable; nothing to compare")
 
     direct = evaluate_panels(LINEAGE_PANELS, sample_by_id, sample_hk_median=200.0)
 
@@ -783,7 +786,7 @@ def test_unresolvable_low_marker_counts_as_violation_not_pass_through():
 
     sym_to_id = panel_symbols_to_gene_ids(["KRT14", "ESR1"])
     if not sym_to_id:
-        return  # pirlygenes unavailable; nothing to test
+        pytest.skip("pirlygenes unavailable; nothing to test")
     sample_by_id = {gid: 100.0 if sym == "KRT14" else 0.5 for sym, gid in sym_to_id.items()}
 
     ev = score_panel(bogus_panel, sample_by_id, sample_hk_median=100.0)

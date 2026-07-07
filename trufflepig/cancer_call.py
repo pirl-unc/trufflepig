@@ -11,6 +11,7 @@ subtype resolution, and reporting can describe the same evidence.
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
@@ -140,10 +141,19 @@ def _reference_gene_tpm(code: str, symbol: str) -> float:
     col = f"{code}_TPM"
     if col not in by_symbol.columns or symbol not in by_symbol.index:
         return 0.0
-    return float(by_symbol.loc[symbol, col] or 0.0)
+    # A missing reference cell reads back as NaN, and `float(nan or 0.0)` is NaN
+    # (bool(nan) is True), which would then pass the distinctiveness fold-change
+    # guards as a fake "distinctive tumor marker". Map any non-finite cell to 0.0.
+    try:
+        value = float(by_symbol.loc[symbol, col])
+    except (TypeError, ValueError):
+        return 0.0
+    return value if math.isfinite(value) else 0.0
 
 
 def _max_reference_gene_tpm(code: str, symbol: str) -> float:
+    # Each _reference_gene_tpm is finite (NaN mapped to 0.0 above), so a plain
+    # max is safe here — no NaN-ordering hazard.
     values = [_reference_gene_tpm(candidate, symbol) for candidate in _candidate_reference_codes(code)]
     return max(values, default=0.0)
 

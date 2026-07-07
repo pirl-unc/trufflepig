@@ -3094,7 +3094,11 @@ def _analyze_body(run: AnalyzeRun):
                 signal_png,
                 dpi=output_dpi,
             )
-    except (OSError, ValueError, TypeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - a diagnostic artifact must never abort a finished run
+        # This is a warn-and-continue diagnostic sidecar: the whole analysis is
+        # already done. A narrower catch (OSError/ValueError/TypeError) let a
+        # KeyError/AttributeError from a shape drift abort the entire run just to
+        # skip an optional artifact, so catch broadly and keep the report.
         print(f"[warn] Cancer-type signal matrix failed: {exc}")
 
     # Build the frozen ReportView snapshot now that purity is finalized
@@ -5291,12 +5295,21 @@ def _veto_local_reference_lineage_flip(
 
     The deconvolved local-reference channel mis-rescues epithelial samples to sarcoma (the
     epithelial→sarcoma attractor was the original failure mode, but the same contract applies to
-    any cross-lineage local-reference flip. Targeted, low-regression: only the
+    most cross-lineage local-reference flips). Targeted, low-regression: only the
     ``local_expression_reference`` channel is vetoed (a fusion / marker / literature rescue is
     trusted), and only when the refined lineage disagrees with BOTH the bulk classifier's call AND
     the compartment_call top — two independent signals agreeing on the lineage outweigh a single
-    deconvolved-reference flip. Returns the (possibly reverted) ``report_scope_cancer_type`` and
-    records the veto on ``analysis``.
+    deconvolved-reference flip.
+
+    Carve-out: a flip INTO the **embryonal** lineage is exempt. Embryonal tumors
+    (hepatoblastoma, neuroblastoma) systematically transcribe their solid tissue-of-origin program,
+    so the bulk classifier AND compartment_call *both* (wrongly) agree on "solid" while the
+    deconvolved local reference — which carries an actual embryonal reference profile — is the one
+    signal that is right. Vetoing that flip would revert a correct rescue (HEPB→LIHC, NBL→PCPG) to a
+    worse call, so embryonal targets are never vetoed.
+
+    Returns the (possibly reverted) ``report_scope_cancer_type`` and records the veto on
+    ``analysis``.
     """
     if not report_scope_cancer_type or report_scope_cancer_type == rna_inferred_cancer_type:
         return report_scope_cancer_type
@@ -5322,7 +5335,18 @@ def _veto_local_reference_lineage_flip(
         refined = _group_to_mode(cancer_lineage_group(report_scope_cancer_type) or "")
         pre = (_group_to_mode(cancer_lineage_group(rna_inferred_cancer_type) or "")
                if rna_inferred_cancer_type else None)
-        if comp and refined and pre and refined != comp and pre == comp:
+        # refined != "embryonal": a flip into the embryonal lineage is a legitimate rescue, not the
+        # spurious sarcoma attractor this veto targets (see the carve-out in the docstring). Both the
+        # bulk classifier and compartment_call systematically mis-read embryonal tumors as their
+        # solid tissue-of-origin, so their "agreement" here is not two independent signals.
+        if (
+            comp
+            and refined
+            and pre
+            and refined != comp
+            and pre == comp
+            and refined != "embryonal"
+        ):
             veto_reason = (
                 f"local_expression_reference cross-lineage flip ({pre} -> {refined}) "
                 f"conflicts with the bulk classifier ({pre}) and compartment_call ({comp})"

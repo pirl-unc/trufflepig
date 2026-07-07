@@ -459,19 +459,25 @@ _PARENT_SCOPE_THERAPY_PATTERNS = {
 }
 
 
-def _row_indication_text(target_row) -> str:
-    return " ".join(
-        _clean_display_value(target_row.get(key))
-        for key in ("indication", "rationale", "eligibility_note")
-        if hasattr(target_row, "get")
-    )
+def _row_scope_text(target_row) -> str:
+    """The row's SCOPE-declaring field only (``indication``).
+
+    Parent-scope detection must key off the field that DECLARES the row's cancer scope, not the
+    supporting prose (``rationale`` / ``eligibility_note``). A subtype-specific row whose rationale
+    merely *mentions* "soft-tissue sarcoma" (e.g. "...unlike other soft-tissue sarcomas, GIST...")
+    must stay suppressed for a broad SARC call — matching that prose would un-suppress it as if it
+    were pan-SARC and imply subtype-specific eligibility for the broad diagnosis.
+    """
+    if not hasattr(target_row, "get"):
+        return ""
+    return _clean_display_value(target_row.get("indication"))
 
 
 def _subtype_tagged_row_is_parent_scope(target_row, active_code: str) -> bool:
     patterns = _PARENT_SCOPE_THERAPY_PATTERNS.get(active_code)
     if not patterns:
         return False
-    text = _row_indication_text(target_row)
+    text = _row_scope_text(target_row)
     return any(pattern.search(text) for pattern in patterns)
 
 

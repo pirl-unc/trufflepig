@@ -179,3 +179,38 @@ def test_veto_fires_on_non_sarcoma_cross_lineage_flip(monkeypatch):
 
     assert result is None
     assert analysis["cancer_type_evidence_vetoed"]["kept_call"] == "BRCA"
+
+
+def test_veto_preserves_flip_into_embryonal_lineage(monkeypatch):
+    """Carve-out: a flip INTO the embryonal lineage is a legitimate rescue, not the spurious
+    sarcoma attractor the veto targets. A hepatoblastoma (HEPB) sample is systematically read as
+    its solid tissue-of-origin (LIHC) by BOTH the bulk classifier and the confident solid
+    compartment, so their agreement is not two independent signals. The local-reference flip to the
+    embryonal call must survive — vetoing it back to LIHC would revert a correct rescue."""
+    import trufflepig.cancer_ontology as tp_onto
+    import trufflepig.cancer_type_centroid as ctc
+    import trufflepig.tumor_purity as tp_purity
+
+    monkeypatch.setattr(tp_purity, "_build_sample_tpm_by_symbol", lambda df: {})
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda *a, **k: {"compartment": "Epithelial", "confident": True},  # → solid
+    )
+    monkeypatch.setattr(
+        tp_onto,
+        "cancer_lineage_group",
+        lambda code: {"LIHC": "Epithelial", "HEPB": "Embryonal"}.get(str(code), ""),
+    )
+
+    analysis = {"cancer_type_evidence": {"selected": {"code": "HEPB"}}}
+    result = tp_main._veto_local_reference_lineage_flip(
+        analysis,
+        pd.DataFrame({"gene_id": ["X"], "tpm": [1.0]}),
+        report_scope_cancer_type="HEPB",
+        rna_inferred_cancer_type="LIHC",
+        selected_scope={"selected_by": "local_expression_reference"},
+    )
+
+    assert result == "HEPB"  # NOT reverted — the embryonal rescue is preserved
+    assert "cancer_type_evidence_vetoed" not in analysis
