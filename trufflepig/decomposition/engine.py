@@ -410,7 +410,13 @@ def _resolve_templates(
 
 @dataclass
 class DecompositionResult:
-    """Result of decomposing a sample into broad components."""
+    """Result of decomposing a sample into broad components (one template-NNLS hypothesis).
+
+    Attribute-accessed (``r.template``, ``r.reconstruction_error``, ``r.purity_result``). This is a
+    distinct type from the lineage-routed ``expression_decomposition.RoutedDecompositionResult``
+    TypedDict (key-accessed: ``result["modes"]``, ``result["purity"]``); the two previously shared
+    the name ``DecompositionResult``.
+    """
 
     template: str
     cancer_type: str
