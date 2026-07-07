@@ -4652,29 +4652,8 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     }
 
 
-def _finalized_purity_headline(analysis):
-    """Return the ``(overall, lower, upper)`` purity a report should DISPLAY.
-
-    Prefer the frozen ``ReportView`` snapshot (captured at purity finalization) over the live,
-    still-mutable ``analysis["purity"]`` dict, so a headline artifact can never draw a stale
-    pre-decomposition *candidate* purity even if it is rendered before finalization has updated the
-    live dict — the 78%-vs-10% belief-consistency bug. Falls back to the live dict field-by-field
-    when the snapshot is absent (e.g. a standalone ``plot_sample_summary`` call that never built one)
-    or carries no value for a field. Post-finalization the two agree, so this only removes the
-    misorder failure mode; it never changes a correctly-ordered render.
-    """
-    purity = analysis.get("purity") or {}
-    view = analysis.get("report_view")
-
-    def _pick(view_attr, live_key):
-        val = getattr(view, view_attr, None) if view is not None else None
-        return val if val is not None else purity.get(live_key)
-
-    return (
-        _pick("purity", "overall_estimate"),
-        _pick("purity_lo", "overall_lower"),
-        _pick("purity_hi", "overall_upper"),
-    )
+# Shared with brief.py's summary markdown so figure and text route through one read surface.
+from .report_view import finalized_purity_headline as _finalized_purity_headline
 
 
 def plot_sample_summary(

@@ -69,6 +69,32 @@ class ReportView:
     sample_id: Optional[str] = None
 
 
+def finalized_purity_headline(analysis):
+    """Return the ``(overall, lower, upper)`` purity a report should DISPLAY.
+
+    Prefer the frozen ``ReportView`` snapshot (captured at purity finalization) over the live,
+    still-mutable ``analysis["purity"]`` dict, so a headline artifact — the sample-summary figure,
+    the summary markdown — can never show a stale pre-decomposition *candidate* purity even if it is
+    built before finalization has updated the live dict (the 78%-vs-10% belief-consistency bug).
+    Falls back to the live dict field-by-field when the snapshot is absent (e.g. a standalone
+    ``plot_sample_summary`` call that never built one) or carries no value for a field. This is the
+    single read surface every purity headline should route through, so figure and text cannot
+    diverge by construction.
+    """
+    purity = (analysis or {}).get("purity") or {}
+    view = (analysis or {}).get("report_view")
+
+    def _pick(view_attr, live_key):
+        val = getattr(view, view_attr, None) if view is not None else None
+        return val if val is not None else purity.get(live_key)
+
+    return (
+        _pick("purity", "overall_estimate"),
+        _pick("purity_lo", "overall_lower"),
+        _pick("purity_hi", "overall_upper"),
+    )
+
+
 def _purity_method(purity: dict) -> Optional[str]:
     source = purity.get("purity_source")
     if source:

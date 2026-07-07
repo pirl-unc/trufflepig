@@ -2558,10 +2558,11 @@ def build_summary(
     if subtype_line:
         lines.append(subtype_line)
 
-    # Purity
-    overall = purity.get("overall_estimate")
-    lower = purity.get("overall_lower")
-    upper = purity.get("overall_upper")
+    # Purity — headline read through the shared ReportView surface so the summary text and the
+    # sample-summary figure cannot disagree (both call finalized_purity_headline).
+    from .report_view import finalized_purity_headline
+
+    overall, lower, upper = finalized_purity_headline(analysis)
     if overall is not None and lower is not None and upper is not None:
         tier_label = (
             getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"

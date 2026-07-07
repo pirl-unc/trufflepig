@@ -159,6 +159,34 @@ def _make_ranges_df():
     )
 
 
+def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
+    """Cross-artifact invariant (text side): the summary markdown renders the FINALIZED purity from
+    the frozen ReportView snapshot, so it can never disagree with the sample-summary figure — both
+    route through finalized_purity_headline. Here the live dict still holds a stale 78% candidate
+    purity while the snapshot captured the finalized 10%."""
+    from trufflepig.report_view import build_report_view
+
+    analysis = _make_analysis(purity_point=0.78, ci_low=0.70, ci_high=0.85)
+    analysis["report_view"] = build_report_view(
+        {
+            "purity": {
+                "overall_estimate": 0.10,
+                "overall_lower": 0.06,
+                "overall_upper": 0.16,
+            }
+        }
+    )
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "**Purity:** 10% (model interval 6%–16%" in md
+    assert "78%" not in md  # the stale candidate purity never reaches the report
+
+
 def test_brief_is_compact():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
