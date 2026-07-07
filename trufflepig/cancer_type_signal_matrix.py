@@ -113,8 +113,19 @@ def _lineage_mode(code: str) -> str:
     if not code:
         return ""
     lowered = code.lower()
-    if lowered in {"solid", "mesenchymal", "heme", "embryonal"}:
-        return lowered
+    learned_lineage_map = {
+        "carcinoma": "solid",
+        "epithelial": "solid",
+        "solid": "solid",
+        "sarcoma": "mesenchymal",
+        "mesenchymal": "mesenchymal",
+        "hematolymphoid": "heme",
+        "heme": "heme",
+        "cns": "embryonal",
+        "embryonal": "embryonal",
+    }
+    if lowered in learned_lineage_map:
+        return learned_lineage_map[lowered]
     try:
         group = cancer_lineage_group(code)
     except (KeyError, ValueError):

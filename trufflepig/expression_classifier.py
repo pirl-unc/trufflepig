@@ -115,16 +115,33 @@ def _learned_family_for_code(code: str) -> str:
     code = _clean(code)
     if not code:
         return ""
+    rollup_roots = {
+        "CRC",
+        "BRCA",
+        "LUAD",
+        "HNSC",
+        "SCLC",
+        "NBL",
+        "MBL",
+        "LAML",
+        "SARC_RMS",
+    }
     try:
         from pirlygenes.gene_sets_cancer import cancer_type_registry
 
-        row = cancer_type_registry().set_index("code").to_dict("index").get(code, {})
+        registry = cancer_type_registry().set_index("code").to_dict("index")
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
-        row = {}
+        registry = {}
+    row = registry.get(code, {})
     family = _clean(row.get("family"))
     parent = _clean(row.get("parent_code"))
-    if parent in {"CRC", "BRCA", "LUAD", "HNSC", "SCLC", "NBL", "MBL", "LAML", "SARC_RMS"}:
-        return parent
+    current = code
+    seen: set[str] = set()
+    while current and current not in seen:
+        seen.add(current)
+        if current in rollup_roots:
+            return current
+        current = _clean(registry.get(current, {}).get("parent_code"))
     if code.startswith("SARC_LPS") or code in {
         "SARC_DDLPS",
         "SARC_WDLPS",

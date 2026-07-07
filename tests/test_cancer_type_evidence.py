@@ -646,6 +646,117 @@ def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call
     assert selected["coarse_reference_type_specific_hit_count"] == 3
 
 
+def test_structural_sarcoma_composition_yields_to_learned_crc_family(monkeypatch):
+    """Smooth-muscle/background composition cannot by itself turn close CRC RNA into SARC."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+    import trufflepig.expression_classifier as classifier
+
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series({"SARC": 0.86, "READ": 0.92, "COAD": 0.90}), True),
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [
+            ("READ_MSS", 0.12),
+            ("SARC_PEC", 0.11),
+            ("SARC", 0.10),
+            ("COAD_MSS", 0.09),
+        ],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "compartment",
+                    "label_space": "learned_compartment",
+                    "label": "mesenchymal",
+                    "probability": 0.97,
+                    "margin": 0.80,
+                    "top_predictions": [
+                        {"label": "mesenchymal", "probability": 0.97}
+                    ],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "family",
+                    "label_space": "learned_family",
+                    "label": "CRC",
+                    "probability": 0.62,
+                    "margin": 0.25,
+                    "top_predictions": [{"label": "CRC", "probability": 0.62}],
+                }
+            ),
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label_space": "learned_entity",
+                    "label": "READ",
+                    "probability": 0.12,
+                    "margin": 0.02,
+                    "top_predictions": [{"label": "READ", "probability": 0.12}],
+                }
+            ),
+        ],
+    )
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_normal_tissues=[("smooth muscle_nTPM", 0.85)],
+        top_tcga_cohorts=[
+            ("SARC_TPM", 0.808),
+            ("READ_TPM", 0.804),
+            ("COAD_TPM", 0.790),
+        ],
+        type_specific_cohort="SARC_TPM",
+        type_specific_hits=[],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"EPCAM": 120.0, "KRT20": 80.0, "ACTA2": 90.0}),
+        {
+            "cancer_type": "SARC",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {
+                    "code": "SARC",
+                    "support_fraction_of_top": 1.0,
+                    "family_label": "MESENCHYMAL",
+                    "signature_score": 0.59,
+                },
+                {
+                    "code": "READ",
+                    "support_fraction_of_top": 0.93,
+                    "family_label": "CARCINOMA-GI",
+                    "signature_score": 0.54,
+                },
+                {
+                    "code": "COAD",
+                    "support_fraction_of_top": 0.73,
+                    "family_label": "CARCINOMA-GI",
+                    "signature_score": 0.54,
+                },
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    assert result["selected"]["selected_by"] == "fused_evidence"
+    read = next(row for row in result["evidence"] if row["cancer_type"] == "READ")
+    assert read["decision_features"]["learned_family_anchored_pan_cancer_context"] is True
+    sarc = next(row for row in result["evidence"] if row["cancer_type"] == "SARC")
+    assert sarc["can_select_report_label"] is False
+    assert sarc["coarse_reference_structural_tissue_only_ambiguity"] is True
+    assert sarc["decision_features"]["learned_compartment_family_contradicted"] is True
+
+
 def test_composition_reference_uses_primary_tissue_to_resolve_close_cohort_tie():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

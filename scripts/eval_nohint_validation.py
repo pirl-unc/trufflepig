@@ -32,6 +32,8 @@ D = "/Users/iskander/data"
 # accepts COAD/READ/CRC-compatible calls.
 REPORTS = [
     {"name": "alvin-sarcoma", "path": f"{D}/alvin/RNA/2025-10-31_salmon/quant.gene_tpm.csv", "expected_codes": ["SARC"]},
+    {"name": "asy-salmon-old", "path": f"{D}/asy/salmon-output-asy/quant.gene_tpm.csv", "gene_id_col": "gene_id", "gene_name_col": "gene", "expected_codes": ["CRC", "COAD", "READ"]},
+    {"name": "asy-caris-salmon", "path": f"{D}/asy/caris/salmon-output-caris/quant.gene_tpm.csv", "gene_id_col": "gene_id", "gene_name_col": "gene", "expected_codes": ["CRC", "COAD", "READ"]},
     {"name": "hcc1395-kallisto", "path": f"{D}/hcc1395/rnaseq/kallisto_expression/gene_abundance.tsv", "expected_codes": ["BRCA"]},
     {"name": "hcc1395-stringtie", "path": f"{D}/hcc1395/rnaseq/stringtie_expression/stringtie_gene_expression.tsv", "expected_codes": ["BRCA"]},
     {"name": "pfo002-personalis", "path": f"{D}/pathfinder/pfo002/Personalis-PSNLDx20240402135/Processed/RNA_Pipeline/Expression_Reports/tsv/RNA_PSNLDx20240402135_tumor_rna_gene_expression_report.tsv", "expected_codes": ["CRC", "COAD", "READ"]},

@@ -8,7 +8,11 @@ lives in scripts/zscore_classifier_ab.py).
 import pandas as pd
 import pytest
 
-from trufflepig.expression_classifier import classify_expression, classify_expression_hierarchy
+from trufflepig.expression_classifier import (
+    _learned_family_for_code,
+    classify_expression,
+    classify_expression_hierarchy,
+)
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import _build_sample_tpm_by_symbol
 
@@ -46,6 +50,12 @@ def test_family_is_recovered_for_subtype_dense_type():
     top = classify_expression(_bulk_sample("COAD"), top_k=3)
     assert top
     assert any(c.startswith(("COAD", "READ", "CRC")) for c, _ in top), top
+
+
+def test_learned_family_walks_registry_ancestors_for_crc_subtypes():
+    assert _learned_family_for_code("READ") == "CRC"
+    assert _learned_family_for_code("READ_MSS") == "CRC"
+    assert _learned_family_for_code("COAD_MSI") == "CRC"
 
 
 def test_hierarchical_votes_are_stage_scoped():

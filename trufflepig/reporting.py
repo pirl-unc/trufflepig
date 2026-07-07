@@ -427,6 +427,11 @@ def indication_biomarker(target_row) -> str:
     agent_class = _agent_class_text(target_row)
     agent = _clean_text(target_row.get("agent") if hasattr(target_row, "get") else "")
     agent_low = agent.lower()
+    symbol = canonical_target_symbol(
+        target_row.get("symbol") if hasattr(target_row, "get") else ""
+    )
+    if not symbol and agent:
+        return "histology_only"
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
         return "mutation"
     if cancer_code == "ADCC" and "lenvatinib" in agent_low:

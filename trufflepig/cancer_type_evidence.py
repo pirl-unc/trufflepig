@@ -143,6 +143,14 @@ _FUSED_EVIDENCE_CENTROID_ANCHORED_REFERENCE_MIN_BURDEN = 0.10
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_LEARNED = 0.95
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_CENTROID = 0.95
 _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_SIGNATURE = 0.75
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT = 0.25
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_MARGIN = 0.10
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SIGNATURE = 0.85
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MAX_RANK = 3
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONFLICT_MIN_TOP_SUPPORT = (
+    _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT
+)
+_FUSED_EVIDENCE_LEARNED_FAMILY_CONFLICT_MAX_CANDIDATE_SUPPORT = 0.25
 _REPORT_LABEL_BLOCKING_ORTHOGONAL_AXES = frozenset(
     {
         "amplification_status",
@@ -1131,6 +1139,40 @@ def _primary_tissue_key_for_code(code: str) -> str:
     return _clean(tissue).lower().replace(" ", "_")
 
 
+_STRUCTURAL_MESENCHYMAL_PRIMARY_TISSUES = frozenset(
+    {
+        "adipose",
+        "adipose_tissue",
+        "muscle",
+        "nerve",
+        "nerve_sheath",
+        "peripheral_nerve",
+        "skeletal_muscle",
+        "smooth_muscle",
+        "soft_tissue",
+    }
+)
+
+
+def _structural_mesenchymal_tissue_only_ambiguity(
+    *,
+    top_code: str,
+    resolved: Mapping[str, Any],
+    margin: float,
+    type_specific_count: int,
+    primary_tissue_score: float,
+) -> bool:
+    return bool(
+        _code_lineage_token(top_code) == "mesenchymal"
+        and _clean(resolved.get("primary_tissue")).lower().replace(" ", "_")
+        in _STRUCTURAL_MESENCHYMAL_PRIMARY_TISSUES
+        and margin < _COARSE_REFERENCE_MIN_MARGIN
+        and type_specific_count < _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
+        and primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
+        and not bool(resolved.get("tissue_tiebreak_applied"))
+    )
+
+
 def _resolved_coarse_reference(analysis: Mapping[str, Any]) -> dict[str, Any]:
     pairs = _coarse_reference_pairs(analysis)
     if not pairs:
@@ -1381,6 +1423,16 @@ def _hypothesis_decision_features(
         details.get("learned_expression_flat_lineage_support")
     )
     learned_entity_label = _clean(details.get("learned_expression_entity_label"))
+    learned_family_label = _clean(details.get("learned_expression_family_label"))
+    learned_top_family_label = _clean(
+        details.get("learned_expression_top_family_label")
+    )
+    learned_top_family_support = _safe_float(
+        details.get("learned_expression_top_family_support")
+    )
+    learned_top_family_margin = _safe_float(
+        details.get("learned_expression_top_family_margin")
+    )
     learned_strong_entity_call = bool(
         hypothesis.learned_expression_support
         >= _FUSED_EVIDENCE_STRONG_LEARNED_ENTITY_PROBABILITY
@@ -1392,12 +1444,36 @@ def _hypothesis_decision_features(
         >= _FUSED_EVIDENCE_STRONG_LEARNED_LINEAGE_SUPPORT
         and learned_entity_label == hypothesis.cancer_type
     )
+    learned_family_contradicted = bool(
+        learned_top_family_label
+        and learned_family_label
+        and learned_top_family_label != learned_family_label
+        and learned_top_family_support
+        >= _FUSED_EVIDENCE_LEARNED_FAMILY_CONFLICT_MIN_TOP_SUPPORT
+        and learned_top_family_margin
+        >= _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_MARGIN
+        and learned_family_support
+        <= _FUSED_EVIDENCE_LEARNED_FAMILY_CONFLICT_MAX_CANDIDATE_SUPPORT
+    )
     learned_compartment_anchored_context = bool(
-        learned_compartment_support
+        not learned_family_contradicted
+        and learned_compartment_support
         >= _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_LEARNED
         and centroid >= _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_CENTROID
         and hypothesis.broad_rna_support
         >= _FUSED_EVIDENCE_LEARNED_COMPARTMENT_CONTEXT_MIN_SIGNATURE
+    )
+    learned_family_anchored_context = bool(
+        learned_family_support >= _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SUPPORT
+        and learned_top_family_label == learned_family_label
+        and learned_top_family_margin
+        >= _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_MARGIN
+        and hypothesis.broad_rna_support
+        >= _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MIN_SIGNATURE
+        and hypothesis.broad_rna_rank is not None
+        and hypothesis.broad_rna_rank
+        <= _FUSED_EVIDENCE_LEARNED_FAMILY_CONTEXT_MAX_RANK
+        and not _orthogonal_axes_that_block_report_label(hypothesis.cancer_type)
     )
     return {
         "pan_cancer_signature_support": round(
@@ -1432,8 +1508,15 @@ def _hypothesis_decision_features(
             float(learned_family_support),
             4,
         ),
-        "learned_expression_family_label": _clean(
-            details.get("learned_expression_family_label")
+        "learned_expression_family_label": learned_family_label,
+        "learned_expression_top_family_label": learned_top_family_label,
+        "learned_expression_top_family_support": round(
+            learned_top_family_support,
+            4,
+        ),
+        "learned_expression_top_family_margin": round(
+            learned_top_family_margin,
+            4,
         ),
         "learned_expression_entity_support": round(
             float(learned_entity_support),
@@ -1456,6 +1539,10 @@ def _hypothesis_decision_features(
         "learned_compartment_anchored_pan_cancer_context": (
             learned_compartment_anchored_context
         ),
+        "learned_family_anchored_pan_cancer_context": (
+            learned_family_anchored_context
+        ),
+        "learned_compartment_family_contradicted": learned_family_contradicted,
         "learned_strong_entity_call": learned_strong_entity_call,
         "learned_expression_support": round(
             float(hypothesis.learned_expression_support),
@@ -1960,11 +2047,22 @@ def _strong_conflicting_coarse_reference(
         and primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
         and same_tissue_close_codes
     )
+    structural_tissue_only_ambiguity = (
+        _structural_mesenchymal_tissue_only_ambiguity(
+            top_code=top_code,
+            resolved=resolved,
+            margin=margin,
+            type_specific_count=type_specific_count,
+            primary_tissue_score=primary_tissue_score,
+        )
+    )
     if (
         tissue_only_same_tissue_ambiguity
         and _primary_tissue_key_for_code(code)
         == _primary_tissue_key_for_code(top_code)
     ):
+        return {}
+    if structural_tissue_only_ambiguity:
         return {}
     if (
         margin < _COARSE_REFERENCE_MIN_MARGIN
@@ -4159,6 +4257,31 @@ def _learned_family_context_support(
     return _safe_float(supports_by_stage.get("family", {}).get(label)), label
 
 
+def _top_learned_stage_support(
+    supports_by_stage: Mapping[str, Mapping[str, float]],
+    stage: str,
+) -> tuple[str, float]:
+    supports = supports_by_stage.get(stage, {})
+    best_label = ""
+    best_support = 0.0
+    for label, support in supports.items():
+        value = _safe_float(support)
+        if value > best_support:
+            best_label = _clean(label)
+            best_support = value
+    return best_label, best_support
+
+
+def _top_learned_stage_margin(
+    votes: list[Mapping[str, Any]],
+    stage: str,
+) -> float:
+    for vote in votes:
+        if _clean(vote.get("stage")) == stage:
+            return _safe_float(vote.get("margin"))
+    return 0.0
+
+
 def _add_learned_hierarchy_candidate_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
@@ -4171,6 +4294,19 @@ def _add_learned_hierarchy_candidate_features(
     if not hierarchical_votes:
         return
     supports_by_stage = _learned_vote_supports_by_stage(hierarchical_votes)
+    top_compartment_label, top_compartment_support = _top_learned_stage_support(
+        supports_by_stage,
+        "compartment",
+    )
+    top_family_label, top_family_support = _top_learned_stage_support(
+        supports_by_stage,
+        "family",
+    )
+    top_family_margin = _top_learned_stage_margin(hierarchical_votes, "family")
+    top_entity_label, top_entity_support = _top_learned_stage_support(
+        supports_by_stage,
+        "entity",
+    )
     flat_predictions: list[tuple[str, float]] = []
     try:
         from .expression_classifier import classify_expression
@@ -4232,16 +4368,35 @@ def _add_learned_hierarchy_candidate_features(
                     4,
                 ),
                 "learned_expression_entity_label": entity_label,
+                "learned_expression_top_entity_label": top_entity_label,
+                "learned_expression_top_entity_support": round(
+                    float(top_entity_support),
+                    4,
+                ),
                 "learned_expression_family_support": round(
                     float(family_support),
                     4,
                 ),
                 "learned_expression_family_label": family_label,
+                "learned_expression_top_family_label": top_family_label,
+                "learned_expression_top_family_support": round(
+                    float(top_family_support),
+                    4,
+                ),
+                "learned_expression_top_family_margin": round(
+                    float(top_family_margin),
+                    4,
+                ),
                 "learned_expression_compartment_support": round(
                     float(compartment_support),
                     4,
                 ),
                 "learned_expression_compartment_label": compartment_label,
+                "learned_expression_top_compartment_label": top_compartment_label,
+                "learned_expression_top_compartment_support": round(
+                    float(top_compartment_support),
+                    4,
+                ),
                 "learned_expression_hierarchy_support": round(
                     float(hierarchy_support),
                     4,
@@ -4321,6 +4476,17 @@ def _add_learned_expression_classifier_features(
             f"({marker_coherence.get('detected')}/"
             f"{marker_coherence.get('total')} expected high markers; "
             f"{marker_coherence.get('required_for_consistent')} required)"
+        )
+
+    orthogonal_blocking_axes = _orthogonal_axes_that_block_report_label(code)
+    if orthogonal_blocking_axes:
+        axes = ", ".join(
+            sorted({_clean(axis.get("axis")) for axis in orthogonal_blocking_axes})
+        )
+        blockers.append(
+            f"{code} encodes orthogonal molecular/status state ({axes}); "
+            "the learned classifier may annotate this state but cannot make it "
+            "the report-scope cancer label without definitive molecular evidence"
         )
 
     background_compartment = _background_top_compartment_conflict(top_row)
@@ -4533,6 +4699,15 @@ def _add_coarse_composition_reference_features(
         and primary_tissue_score >= _COARSE_REFERENCE_MIN_PRIMARY_TISSUE_SUPPORT
         and same_tissue_close_codes
     )
+    structural_tissue_only_ambiguity = (
+        _structural_mesenchymal_tissue_only_ambiguity(
+            top_code=top_code,
+            resolved=resolved,
+            margin=margin,
+            type_specific_count=type_specific_count,
+            primary_tissue_score=primary_tissue_score,
+        )
+    )
 
     fit_quality = analysis.get("fit_quality") or {}
     fit_label = ""
@@ -4581,6 +4756,15 @@ def _add_coarse_composition_reference_features(
             f"{', '.join(same_tissue_close_codes)}; exact report-label "
             "selection requires cancer-reference separation, type-specific "
             "tumor-up evidence, or an exact-reference selector"
+        )
+    if structural_tissue_only_ambiguity:
+        blockers.append(
+            "primary normal-tissue composition supports structural "
+            f"{resolved.get('primary_tissue') or 'mesenchymal'} context, but "
+            f"does not distinguish {top_code} tumor from host/background "
+            "mesenchymal signal; sarcoma selection requires cancer-reference "
+            "separation, type-specific tumor-up hits, an exact reference, "
+            "marker panel, fusion, or learned family/entity support"
         )
     if (
         broad_top_is_close_coarse_match
@@ -4660,6 +4844,9 @@ def _add_coarse_composition_reference_features(
                 4,
             ),
             "coarse_reference_same_tissue_close_codes": same_tissue_close_codes,
+            "coarse_reference_structural_tissue_only_ambiguity": (
+                structural_tissue_only_ambiguity
+            ),
             "coarse_reference_tissue_tiebreak_applied": bool(
                 resolved.get("tissue_tiebreak_applied")
             ),
@@ -7300,6 +7487,17 @@ def _fused_component_scores(
             if features.get("learned_compartment_anchored_pan_cancer_context")
             else 0.0
         ),
+        "learned_family_anchored_pan_cancer_context": (
+            0.45
+            + 0.30
+            * min(
+                1.0,
+                _safe_float(features.get("learned_expression_family_support")),
+            )
+            + 0.25 * min(1.0, hypothesis.broad_rna_support)
+            if features.get("learned_family_anchored_pan_cancer_context")
+            else 0.0
+        ),
         "learned_expression_classifier": (
             _FUSED_EVIDENCE_LEARNED_WEIGHT * hypothesis.learned_expression_support
         ),
@@ -7574,6 +7772,12 @@ def _fused_evidence_eligible(
         )
         >= 0.75
     )
+    learned_family_anchored_context = bool(
+        _safe_float(
+            components.get("learned_family_anchored_pan_cancer_context")
+        )
+        >= 0.75
+    )
     pan_signature_marker_program = bool(
         features.get("pan_cancer_signature_marker_selectable")
         and _safe_float(components.get("pan_cancer_signature_marker_program"))
@@ -7618,6 +7822,7 @@ def _fused_evidence_eligible(
         or composition_admitted
         or signature_anchor_can_escape_expected_low
         or centroid_anchored_expression_reference
+        or learned_family_anchored_context
         or pan_signature_marker_program
         or hypothesis.direct_fusion_support > 0
     )
@@ -7648,6 +7853,7 @@ def _fused_evidence_eligible(
             ("learned_expression_classifier", 0.55),
             ("learned_hierarchy", 0.20),
             ("learned_compartment_anchored_pan_cancer_context", 0.75),
+            ("learned_family_anchored_pan_cancer_context", 0.75),
             ("exact_expression_reference", 0.20),
             ("signature_anchored_exact_reference", 0.50),
             ("marker_coherent_expression_reference", 0.35),
@@ -7672,6 +7878,7 @@ def _fused_evidence_eligible(
             ("learned_expression_classifier", 0.55),
             ("learned_hierarchy", 0.20),
             ("learned_compartment_anchored_pan_cancer_context", 0.75),
+            ("learned_family_anchored_pan_cancer_context", 0.75),
             ("exact_expression_reference", 0.20),
             ("signature_anchored_exact_reference", 0.50),
             ("marker_coherent_expression_reference", 0.35),
@@ -7737,6 +7944,7 @@ def _fused_evidence_eligible(
         )
         or centroid_anchored_expression_reference
         or learned_compartment_anchored_context
+        or learned_family_anchored_context
         or pan_signature_marker_program
         or (
             lineage_panel >= _LINEAGE_PANEL_MIN_SCORE
@@ -7764,7 +7972,7 @@ def _fused_evidence_eligible(
             "integrated evidence lacks a non-ranker admission path: no strong "
             "learned/hierarchical context, centroid-backed exact reference, "
             "centroid-anchored expression reference, learned-compartment "
-            "anchored pan-cancer context, ranker marker program, "
+            "or learned-family anchored pan-cancer context, ranker marker program, "
             "lineage panel, rare marker, contrast discriminator, or "
             "multi-channel corroboration beyond the pan-cancer signature ranker"
         )

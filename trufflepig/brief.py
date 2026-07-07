@@ -30,6 +30,7 @@ parseable?".)
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -446,6 +447,34 @@ def _top_candidate_signature_score(analysis) -> float | None:
     return None
 
 
+_PARENT_SCOPE_THERAPY_PATTERNS = {
+    # Pirlygenes currently stores several broadly applicable soft-tissue
+    # sarcoma rows under example subtypes. Keep those rows available for an
+    # unresolved parent SARC call, while still blocking true subtype-only rows
+    # such as GIST, Ewing, synovial-specific, or LMS-only indications.
+    "SARC": (
+        re.compile(r"\bSTS\b", re.IGNORECASE),
+        re.compile(r"\bsoft[- ]tissue sarcomas?\b", re.IGNORECASE),
+    ),
+}
+
+
+def _row_indication_text(target_row) -> str:
+    return " ".join(
+        _clean_display_value(target_row.get(key))
+        for key in ("indication", "rationale", "eligibility_note")
+        if hasattr(target_row, "get")
+    )
+
+
+def _subtype_tagged_row_is_parent_scope(target_row, active_code: str) -> bool:
+    patterns = _PARENT_SCOPE_THERAPY_PATTERNS.get(active_code)
+    if not patterns:
+        return False
+    text = _row_indication_text(target_row)
+    return any(pattern.search(text) for pattern in patterns)
+
+
 def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
     """Suppress subtype-specific SARC rows when SARC is unresolved.
 
@@ -464,6 +493,8 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
         return False
     active_panel_subtype = str(analysis.get("_target_panel_subtype") or "").strip()
     if active_panel_subtype and target_subtype == active_panel_subtype:
+        return False
+    if _subtype_tagged_row_is_parent_scope(target_row, active_code):
         return False
     return not bool(supplied_alteration_supports_target_row(target_row, analysis))
 
@@ -584,7 +615,7 @@ def _format_therapy_bullet(
     ranges_df=None,
 ) -> str:
     """One standardized therapy bullet for the brief."""
-    sym = str(target_row.get("symbol") or "")
+    sym = canonical_target_symbol(target_row.get("symbol"))
     agent = _therapy_agent_label(target_row)
     phase = _phase_label(_clean_display_value(target_row.get("phase")))
     indication = _clean_display_value(target_row.get("indication"))
@@ -605,6 +636,15 @@ def _format_therapy_bullet(
         f" Current-therapy check: {state_caution}." if state_caution else ""
     )
     maturity = clinical_maturity_summary(target_row, target_panel=target_panel)
+    label = sym or agent or "therapy"
+    treatment = (
+        agent
+        if sym and agent and agent.lower() != label.lower()
+        else ("agent-only therapy" if not sym else agent)
+    )
+
+    def _header() -> str:
+        return f"- **{label}** — {treatment} ({phase}{indication_clause}). "
 
     def _eligibility_evidence_gap() -> str:
         return _expression_independent_evidence_gap(target_row, analysis)
@@ -625,8 +665,8 @@ def _format_therapy_bullet(
             if path_context:
                 parts.append(path_context)
             return (
-                f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-                f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+                f"{_header()}{_sentence(parts, maturity=maturity)}"
+                f"{caution_suffix}"
             )
         state = target_observation_state(sym, ranges_df)
         if state == "below_detection":
@@ -639,8 +679,7 @@ def _format_therapy_bullet(
         else:
             missing_phrase = "Target **not measured** in this sample"
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{path_prefix}{missing_phrase}.{caution_suffix}"
+            f"{_header()}{path_prefix}{missing_phrase}.{caution_suffix}"
         )
     observed = float(expression_row.get("observed_tpm") or 0.0)
     if observed < 1.0:
@@ -653,12 +692,11 @@ def _format_therapy_bullet(
             if path_context:
                 parts.append(path_context)
             return (
-                f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-                f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+                f"{_header()}{_sentence(parts, maturity=maturity)}"
+                f"{caution_suffix}"
             )
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{path_prefix}Bulk target RNA {observed:.1f} TPM — "
+            f"{_header()}{path_prefix}Bulk target RNA {observed:.1f} TPM — "
             f"**target absent** in this sample.{caution_suffix}"
         )
     if not tumor_band_available(expression_row):
@@ -669,8 +707,8 @@ def _format_therapy_bullet(
         if path_context:
             parts.append(path_context)
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+            f"{_header()}{_sentence(parts, maturity=maturity)}"
+            f"{caution_suffix}"
         )
     source = tumor_attribution_context(expression_row)
     normal = normal_expression_context(expression_row)
@@ -693,8 +731,7 @@ def _format_therapy_bullet(
     interpretation = "; ".join(part for part in interpretation_parts if part)
     maturity_sentence = f" Clinical maturity: {maturity}." if maturity else ""
     return (
-        f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-        f"{interpretation}.{maturity_sentence}{caution_suffix}"
+        f"{_header()}{interpretation}.{maturity_sentence}{caution_suffix}"
     )
 
 
@@ -725,7 +762,7 @@ def _top_therapies(
     # as a fallback for legacy ranges_df frames without gene_id.
     target_records = targets_df.to_dict("records")
     sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
+        canonical_target_symbol(t.get("symbol")) for t in target_records
     )
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)
@@ -741,7 +778,7 @@ def _top_therapies(
 
     scored = []
     for t in target_records:
-        sym = str(t.get("symbol") or "")
+        sym = canonical_target_symbol(t.get("symbol"))
         gene_id = sym_to_id.get(sym.strip())
         expr = id_to_row.get(gene_id) if gene_id else None
         if expr is None:
@@ -763,6 +800,7 @@ def _top_therapies(
                 continue
             if expr_independent:
                 phase = str(t.get("phase") or "")
+                label = sym or _therapy_agent_label(t)
                 scored.append(
                     (
                         (
@@ -776,7 +814,7 @@ def _top_therapies(
                             1,
                             1,
                             0.0,
-                            sym,
+                            label,
                         ),
                         t,
                         None,
@@ -850,10 +888,11 @@ def _top_therapies(
     deduped = []
     seen_symbols = set()
     for sort_key, t, expr in scored:
-        sym = str(t.get("symbol") or "")
-        if sym in seen_symbols:
+        sym = canonical_target_symbol(t.get("symbol"))
+        dedupe_key = sym or _therapy_agent_label(t)
+        if dedupe_key in seen_symbols:
             continue
-        seen_symbols.add(sym)
+        seen_symbols.add(dedupe_key)
         deduped.append((t, expr))
         if len(deduped) >= limit:
             break
@@ -1031,7 +1070,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     """Trace source attribution for non-clean clinical target decisions."""
     if targets_df is None or ranges_df is None or not top_rows:
         return ""
-    top_symbols = {str(t.get("symbol") or "") for t, _ in top_rows}
+    top_symbols = {canonical_target_symbol(t.get("symbol")) for t, _ in top_rows}
     from .common import (
         ranges_by_gene_id,
         ranges_by_symbol,
@@ -1039,15 +1078,15 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     )
     target_records = targets_df.to_dict("records")
     sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
+        canonical_target_symbol(t.get("symbol")) for t in target_records
     )
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)  # fallback for ID-less frames
     omitted = []
     seen = set()
     for target in target_records:
-        sym = str(target.get("symbol") or "").strip()
-        if not sym or sym.lower() == "nan" or sym in top_symbols or sym in seen:
+        sym = canonical_target_symbol(target.get("symbol"))
+        if not sym or sym in top_symbols or sym in seen:
             continue
         seen.add(sym)
         gene_id = sym_to_id.get(sym)
@@ -2160,9 +2199,13 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     n_in_input_low = 0
     n_in_input_present = 0
     n_not_in_input = 0
+    n_agent_only = 0
     for t in target_records:
-        sym = str(t.get("symbol") or "")
-        if not sym or sym == "—":
+        sym = canonical_target_symbol(t.get("symbol"))
+        if not sym:
+            if expression_independent_indication(t):
+                n_total += 1
+                n_agent_only += 1
             continue
         n_total += 1
         gene_id = sym_to_id.get(sym.strip())
@@ -2203,6 +2246,11 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
         parts.append(
             f"{n_not_in_input} not present in input file (coverage gap, "
             "investigate symbol mapping)"
+        )
+    if n_agent_only:
+        parts.append(
+            f"{n_agent_only} agent-only / histology-indication rows without "
+            "a direct RNA target"
         )
     body = "; ".join(parts) if parts else "no qualifying rows"
     return (
@@ -2247,6 +2295,8 @@ def build_summary(
         banner = hvt.brief_banner(
             purity=purity.get("overall_estimate") if purity else None,
             signature_score=_top_candidate_signature_score(analysis),
+            active_cancer_code=cancer_code,
+            active_cancer_label=cancer_name,
         )
         if banner:
             lines.append(banner)
@@ -2520,7 +2570,7 @@ def build_summary(
             # on-label / in-trial distinction explicit rather than only inline.
             from .plot_target_deep_dive import _PRIORITY_STATUS_LABELS
 
-            approved_bullets, clinical_bullets = [], []
+            supplied_evidence_bullets, approved_bullets, clinical_bullets = [], [], []
             for target_row, expression_row in top:
                 bullet = _format_therapy_bullet(
                     target_row,
@@ -2531,10 +2581,16 @@ def build_summary(
                     ranges_df=ranges_df,
                 )
                 phase = str(target_row.get("phase") or "").strip().lower()
-                if phase == "approved":
+                if supplied_alteration_supports_target_row(target_row, therapy_analysis):
+                    supplied_evidence_bullets.append(bullet)
+                elif phase == "approved":
                     approved_bullets.append(bullet)
                 else:
                     clinical_bullets.append(bullet)
+            if supplied_evidence_bullets:
+                lines.append("### Supplied eligibility evidence matched\n")
+                lines.extend(supplied_evidence_bullets)
+                lines.append("")
             if approved_bullets:
                 lines.append(
                     f"### {_PRIORITY_STATUS_LABELS['approved_disease_matched']}\n"
@@ -2747,6 +2803,8 @@ def build_actionable(
         banner = hvt.brief_banner(
             purity=purity.get("overall_estimate") if purity else None,
             signature_score=_top_candidate_signature_score(analysis),
+            active_cancer_code=cancer_code,
+            active_cancer_label=cancer_code_display_name(cancer_code, cancer_code),
         )
         if banner:
             lines.append(f"\n{banner}")

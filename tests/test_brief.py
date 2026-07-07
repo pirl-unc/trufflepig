@@ -10,6 +10,7 @@ from trufflepig.brief import (
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
+    _top_therapies,
 )
 from trufflepig.confidence import ConfidenceTier
 
@@ -761,6 +762,52 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
     assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
+
+
+def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "SARC"
+    analysis["cancer_name"] = "Sarcoma"
+    targets_df = pd.DataFrame(
+        [
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "trabectedin",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "advanced LMS",
+            },
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "doxorubicin",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "first-line STS",
+            },
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "pazopanib",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "advanced non-adipocytic STS",
+            },
+        ]
+    )
+    ranges_df = pd.DataFrame(columns=["symbol", "observed_tpm"])
+
+    top = _top_therapies(targets_df, ranges_df, analysis=analysis)
+
+    assert [row["agent"] for row, _expr in top] == ["doxorubicin", "pazopanib"]
+    line = _format_therapy_bullet(top[0][0], top[0][1], analysis=analysis)
+    assert line.startswith("- **doxorubicin** — agent-only therapy")
+    assert "target expression is not the eligibility criterion" in line
+    assert "nan" not in line.lower()
 
 
 def test_therapy_bullet_uses_agent_class_when_agent_is_missing():

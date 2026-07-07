@@ -69,6 +69,16 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
                             ],
                         },
                     },
+                    {
+                        "candidate_code": "BLCA",
+                        "code": "epithelial",
+                        "channel": "learned_expression_classifier",
+                        "stage": "family",
+                        "role": "hierarchical_compartment_vote",
+                        "status": "admission_context",
+                        "support": 0.90,
+                        "details": {"learned_stage": "compartment"},
+                    },
                 ]
             },
         },
@@ -105,6 +115,9 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     site = matrix[matrix["signal_source"] == "background_site_context"].iloc[0]
     assert site["ontology_layer"] == "context"
     assert bool(site["is_context_only"]) is True
+    epithelial = matrix[matrix["predicted_code"] == "epithelial"].iloc[0]
+    assert epithelial["predicted_lineage"] == "solid"
+    assert bool(epithelial["lineage_agrees_final"]) is True
 
     summary = build_signal_matrix_summary_markdown(matrix)
     assert "Final call" in summary
