@@ -13,6 +13,7 @@ from collections import Counter
 from functools import lru_cache
 import re
 
+from .cancer_ontology import cancer_codes_context_compatible
 from .hla import (
     extract_hla_types_from_text,
     hla_types_compatibility_status,
@@ -182,6 +183,76 @@ def cancer_code_display_name(code, fallback=None):
     if fallback_text:
         return fallback_text
     return text.replace("_", " ").strip()
+
+
+def mismatch_repair_channel_matches_report(channel, active_code) -> bool:
+    """Whether an MMR evidence channel belongs to the active report scope.
+
+    MMR votes are orthogonal molecular-state context, not cancer-type calls.
+    A retained CRC/UCEC/STAD alternative must not leak an MSI/MMR statement into
+    a report for an unrelated final diagnosis. Sibling entities are only allowed
+    when the channel itself declares that broader context, e.g. CRC for COAD/READ.
+    """
+
+    if not isinstance(channel, dict):
+        return False
+    active = _clean_text(active_code)
+    candidate = _clean_text(channel.get("candidate_code"))
+    if not active or not candidate:
+        return False
+    details = channel.get("details") or {}
+    if not isinstance(details, dict):
+        details = {}
+    mmr = details.get("mismatch_repair") or {}
+    if not isinstance(mmr, dict):
+        mmr = {}
+    context_group = _clean_text(mmr.get("context_group"))
+    return cancer_codes_context_compatible(
+        active,
+        candidate,
+        context_code=context_group,
+    )
+
+
+def _mismatch_repair_channel_priority(channel, active_code) -> int | None:
+    if not isinstance(channel, dict):
+        return None
+    if channel.get("role") != "hierarchical_mismatch_repair_vote":
+        return None
+    details = channel.get("details") or {}
+    if not isinstance(details, dict):
+        return None
+    mmr = details.get("mismatch_repair") or {}
+    if not isinstance(mmr, dict):
+        return None
+    p_msi = mmr.get("msi_probability")
+    if not isinstance(p_msi, (int, float)):
+        return None
+    if not mismatch_repair_channel_matches_report(channel, active_code):
+        return None
+
+    active = _clean_text(active_code)
+    candidate = _clean_text(channel.get("candidate_code"))
+    label_space = _clean_text(details.get("label_space"))
+    priority = 8 if candidate == active else 2
+    if label_space == "learned_mismatch_repair_release_ensemble":
+        priority += 4
+    if channel.get("status") in {"admission_context", "informative"}:
+        priority += 1
+    return priority
+
+
+def select_mismatch_repair_channel_for_report(channels, active_code) -> dict:
+    """Pick the MMR channel that belongs to the active report scope."""
+
+    best: tuple[int, dict] | None = None
+    for channel in channels or []:
+        priority = _mismatch_repair_channel_priority(channel, active_code)
+        if priority is None:
+            continue
+        if best is None or priority > best[0]:
+            best = (priority, channel)
+    return dict(best[1]) if best else {}
 
 
 def subtype_curation_scope_note(

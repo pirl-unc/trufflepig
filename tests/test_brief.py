@@ -557,6 +557,96 @@ def test_summary_mmr_release_vote_overrides_conflicting_mss_subtype_text():
     assert "RNA subtype signal is" not in md
 
 
+def test_summary_mmr_vote_ignores_unrelated_retained_candidate():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "GBM",
+            "cancer_name": "Glioblastoma",
+            "analysis_constraints": {},
+            "cancer_type_source": "auto-detected",
+            "candidate_trace": [{"code": "GBM", "support_fraction_of_top": 1.0}],
+            "cancer_type_evidence": {
+                "staged_evidence_graph": {
+                    "channels": [
+                        {
+                            "candidate_code": "COAD",
+                            "role": "hierarchical_mismatch_repair_vote",
+                            "code": "MSI",
+                            "status": "admission_context",
+                            "details": {
+                                "label_space": (
+                                    "learned_mismatch_repair_release_ensemble"
+                                ),
+                                "mismatch_repair": {
+                                    "context_group": "CRC",
+                                    "decision_threshold": 0.5,
+                                    "msi_probability": 0.92,
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="GBM",
+        disease_state="",
+    )
+
+    assert "Mismatch-repair RNA context" not in md
+    assert "CRC MMR ensemble" not in md
+
+
+def test_summary_mmr_vote_can_use_explicit_crc_context_for_read_call():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "READ",
+            "cancer_name": "Rectum Adenocarcinoma",
+            "analysis_constraints": {},
+            "cancer_type_source": "auto-detected",
+            "candidate_trace": [{"code": "READ", "support_fraction_of_top": 1.0}],
+            "cancer_type_evidence": {
+                "staged_evidence_graph": {
+                    "channels": [
+                        {
+                            "candidate_code": "COAD",
+                            "role": "hierarchical_mismatch_repair_vote",
+                            "code": "MSI",
+                            "status": "admission_context",
+                            "details": {
+                                "label_space": (
+                                    "learned_mismatch_repair_release_ensemble"
+                                ),
+                                "mismatch_repair": {
+                                    "context_group": "CRC",
+                                    "decision_threshold": 0.5,
+                                    "msi_probability": 0.71,
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="READ",
+        disease_state="",
+    )
+
+    assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
+    assert "MSI-like probability 0.71" in md
+
+
 def test_summary_rna_alternatives_use_post_gate_support_fraction():
     analysis = _make_analysis()
     analysis["analysis_constraints"] = {}

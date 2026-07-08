@@ -59,6 +59,7 @@ from .reporting import (
     report_disease_state_text,
     target_observation_state,
     same_lineage_material_target_candidate,
+    select_mismatch_repair_channel_for_report,
     supplied_alteration_context_for_target_row,
     supplied_alteration_supports_target_row,
     subtype_curation_scope_note,
@@ -1957,33 +1958,7 @@ def mismatch_repair_summary_context(analysis: dict) -> dict:
 
     graph = ((analysis.get("cancer_type_evidence") or {}).get("staged_evidence_graph") or {})
     final_code = str(analysis.get("cancer_type") or "").strip()
-    best: tuple[int, dict] | None = None
-    for channel in graph.get("channels") or []:
-        if not isinstance(channel, dict):
-            continue
-        if channel.get("role") != "hierarchical_mismatch_repair_vote":
-            continue
-        details = channel.get("details") or {}
-        if not isinstance(details, dict):
-            continue
-        mmr = details.get("mismatch_repair") or {}
-        if not isinstance(mmr, dict) or not mmr:
-            continue
-        p_msi = mmr.get("msi_probability")
-        if not isinstance(p_msi, (int, float)):
-            continue
-        label_space = str(details.get("label_space") or "")
-        candidate_code = str(channel.get("candidate_code") or "").strip()
-        priority = 0
-        if label_space == "learned_mismatch_repair_release_ensemble":
-            priority += 4
-        if candidate_code == final_code:
-            priority += 2
-        if channel.get("status") in {"admission_context", "informative"}:
-            priority += 1
-        if best is None or priority > best[0]:
-            best = (priority, channel)
-    return dict(best[1]) if best else {}
+    return select_mismatch_repair_channel_for_report(graph.get("channels") or [], final_code)
 
 
 def mismatch_repair_summary_line(

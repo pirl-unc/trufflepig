@@ -14,7 +14,13 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
-from .cancer_ontology import cancer_family, cancer_lineage_group, registry_parent_code
+from .cancer_ontology import (
+    cancer_family,
+    cancer_lineage_group,
+    molecular_status_parent_code as status_parent_code,
+    registry_parent_code,
+    subtype_display_parent_code as subtype_parent_code,
+)
 from .expression_decomposition import _group_to_mode
 from .reporting import cancer_code_display_name
 
@@ -89,31 +95,6 @@ SIGNAL_SAMPLE_SUMMARY_COLUMNS = [
 ]
 
 
-ORTHOGONAL_STATUS_SUFFIXES = (
-    "_MSI",
-    "_MSS",
-    "_CIN",
-    "_CNL",
-    "_CNH",
-    "_HPV_pos",
-    "_HPV_neg",
-    "_HPVpos",
-    "_HPVneg",
-    "_EGFR",
-    "_ALK",
-    "_KRAS",
-    "_BRAF",
-    "_ERBB2",
-    "_HER2",
-    "_ROS1",
-    "_RET",
-    "_MET",
-    "_NTRK",
-    "_IDHmut",
-    "_IDHwt",
-)
-
-
 def _clean(value: Any) -> str:
     if value is None:
         return ""
@@ -170,38 +151,6 @@ def _parent(code: str) -> str:
         return registry_parent_code(code)
     except (KeyError, ValueError):
         return ""
-
-
-def status_parent_code(code: str) -> str:
-    """Return the parent cancer code for orthogonal molecular/status labels.
-
-    The compact signal plot should not make labels such as COAD_MSI,
-    READ_MSS, or HNSC_HPV_pos look like separate cancer-type calls.
-    They remain fully serialized in the TSV, but the display layer rolls
-    them up to the cancer entity and names the status row explicitly.
-    """
-
-    code = _clean(code)
-    if not code:
-        return ""
-    for suffix in ORTHOGONAL_STATUS_SUFFIXES:
-        if code.endswith(suffix):
-            return code[: -len(suffix)]
-    return ""
-
-
-def subtype_parent_code(code: str) -> str:
-    """Return a display parent for true subtype labels in compact plots."""
-
-    code = _clean(code)
-    if "_" not in code:
-        return ""
-    parent = _parent(code)
-    if parent and parent != code:
-        return parent
-    if code.startswith("SARC_"):
-        return "SARC"
-    return ""
 
 
 def _ancestor_chain(code: str) -> list[str]:

@@ -142,6 +142,7 @@ from .reporting import (
     normal_expression_context,
     report_disease_state_text,
     resolved_subtype_code_for_analysis,
+    select_mismatch_repair_channel_for_report,
     subtype_curation_scope_note,
     target_observation_state,
     therapy_path_context,
@@ -6631,13 +6632,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         if isinstance(channel, dict)
         and channel.get("role") == "hierarchical_mismatch_repair_vote"
     ]
-    selected_mmr = next(
-        (
-            channel
-            for channel in mmr_channels
-            if str(channel.get("candidate_code") or "") == str(cancer_code or "")
-        ),
-        mmr_channels[0] if mmr_channels else None,
+    selected_mmr = select_mismatch_repair_channel_for_report(
+        mmr_channels,
+        cancer_code,
     )
     if selected_mmr:
         details = selected_mmr.get("details") or {}

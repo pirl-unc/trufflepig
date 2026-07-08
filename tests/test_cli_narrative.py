@@ -306,6 +306,39 @@ def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference
     assert "used for cohort-normalized downstream analyses" not in text
 
 
+def test_integrated_evidence_mmr_skips_unrelated_retained_candidate():
+    analysis = _base_analysis(
+        cancer_type="GBM",
+        cancer_name="Glioblastoma",
+        candidate_trace=[{"code": "GBM", "support_fraction_of_top": 1.0}],
+        cancer_type_evidence={
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": "COAD",
+                        "role": "hierarchical_mismatch_repair_vote",
+                        "code": "MSI",
+                        "status": "admission_context",
+                        "details": {
+                            "label_space": "learned_mismatch_repair_release_ensemble",
+                            "mismatch_repair": {
+                                "context_group": "CRC",
+                                "decision_threshold": 0.5,
+                                "msi_probability": 0.94,
+                            },
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis))
+
+    assert "Mismatch-repair RNA context" not in text
+    assert "CRC MMR ensemble" not in text
+
+
 def test_candidate_label_empty_trace():
     analysis = {"candidate_trace": [], "fit_quality": {}}
     assert _candidate_label_options(analysis) == []
