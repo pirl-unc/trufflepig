@@ -8146,7 +8146,11 @@ def _generate_text_reports(
                 f"*Per-candidate evidence tables unavailable: {type(exc).__name__}*"
             )
 
-    # Embedding features
+    # Embedding features. The per-cancer-type / per-normal-tissue reference gene
+    # lists are STATIC reference-panel documentation (identical for every sample),
+    # so they are collected into an appendix flushed at the end of the report rather
+    # than interrupting ~100 lines of sample-specific decision content mid-document.
+    embedding_gene_appendix: list[str] = []
     lines.append("## Embedding Features\n")
     lines.append(f"- **Method**: {embedding_meta.get('method', 'unknown')}")
     feature_kind = embedding_meta.get("feature_kind")
@@ -8197,21 +8201,25 @@ def _generate_text_reports(
             "orientation, not as the cancer-call classifier."
         )
         lines.append("")
-        lines.append("### Genes per cancer type\n")
-        lines.append("| Cancer | Genes |")
-        lines.append("|--------|-------|")
+        lines.append(
+            "Per-cancer-type and per-normal-tissue reference gene lists are tabulated "
+            "in the **Reference-panel gene sets** appendix at the end of this report."
+        )
+        embedding_gene_appendix.append("### Genes per cancer type\n")
+        embedding_gene_appendix.append("| Cancer | Genes |")
+        embedding_gene_appendix.append("|--------|-------|")
         for ct in sorted(embedding_meta["per_type"]):
             genes = embedding_meta["per_type"][ct]
             if genes:
-                lines.append(f"| {ct} | {', '.join(genes)} |")
-        lines.append("")
-        lines.append("### Genes per normal tissue\n")
-        lines.append("| Tissue | Genes |")
-        lines.append("|--------|-------|")
+                embedding_gene_appendix.append(f"| {ct} | {', '.join(genes)} |")
+        embedding_gene_appendix.append("")
+        embedding_gene_appendix.append("### Genes per normal tissue\n")
+        embedding_gene_appendix.append("| Tissue | Genes |")
+        embedding_gene_appendix.append("|--------|-------|")
         for tissue in sorted(embedding_meta.get("per_normal", {})):
             genes = embedding_meta["per_normal"][tissue]
             if genes:
-                lines.append(f"| {tissue} | {', '.join(genes)} |")
+                embedding_gene_appendix.append(f"| {tissue} | {', '.join(genes)} |")
     else:
         lines.append(f"- **Total genes**: {embedding_meta['n_genes']}")
         lines.append(f"- **Cancer types represented**: {embedding_meta['n_types']}/33")
@@ -8225,13 +8233,17 @@ def _generate_text_reports(
                 f"- **Curated CTAs added**: {', '.join(embedding_meta['cta_added'])}"
             )
         lines.append("")
-        lines.append("### Genes per cancer type\n")
-        lines.append("| Cancer | Genes |")
-        lines.append("|--------|-------|")
+        lines.append(
+            "Per-cancer-type reference gene lists are tabulated in the "
+            "**Reference-panel gene sets** appendix at the end of this report."
+        )
+        embedding_gene_appendix.append("### Genes per cancer type\n")
+        embedding_gene_appendix.append("| Cancer | Genes |")
+        embedding_gene_appendix.append("|--------|-------|")
         for ct in sorted(embedding_meta["per_type"]):
             genes = embedding_meta["per_type"][ct]
             if genes:
-                lines.append(f"| {ct} | {', '.join(genes)} |")
+                embedding_gene_appendix.append(f"| {ct} | {', '.join(genes)} |")
     lines.append("")
 
     # Purity / composition
@@ -8544,6 +8556,19 @@ def _generate_text_reports(
         lines.append(
             "*Stepwise deductions and the full target tables live in `*-evidence.md`.*"
         )
+
+    # Flush the static reference-panel gene tables as an appendix at the very end,
+    # after all sample-specific decision content (see the Embedding Features note).
+    if embedding_gene_appendix:
+        lines.append("")
+        lines.append("## Appendix: reference-panel gene sets\n")
+        lines.append(
+            "*Static embedding reference-map gene selection — the discriminating "
+            "genes chosen for TCGA cancer medians and HPA normal tissues. Identical "
+            "for every sample; included for provenance, not sample-specific "
+            "interpretation.*\n"
+        )
+        lines.extend(embedding_gene_appendix)
 
     analysis_path = "%s-analysis.md" % prefix if prefix else "analysis.md"
     with open(analysis_path, "w") as f:
