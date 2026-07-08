@@ -149,6 +149,49 @@ def test_decision_trace_uses_veto_over_stale_graph_selection():
     assert "Selected report label: **SARC_DDLPS" not in body
 
 
+def test_decision_trace_escapes_pipe_and_newline_in_detail_cell():
+    """A free-text rationale containing a literal ``|`` or newline must not corrupt
+    the markdown table (extra columns / broken rows)."""
+
+    body = tp_main._cancer_type_decision_trace_markdown(
+        {
+            "cancer_type_evidence": {
+                "selected": {"code": "BRCA", "selected_by": "expression_context"},
+                "staged_evidence_graph": {
+                    "selected": {"code": "BRCA", "selects_report_label": True},
+                    "channels": [
+                        {
+                            "candidate_code": "BRCA",
+                            "channel": "signature_panel",
+                            "role": "context",
+                            "stage": "broad",
+                            "status": "context_only",
+                            "support": 0.42,
+                            "details": {
+                                "rationale": "score a|b split\nover two lines"
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    # The pipe is escaped and the newline flattened, so every table row still has
+    # exactly the 7 declared columns (8 pipes: leading, 6 separators, trailing).
+    data_rows = [
+        ln
+        for ln in body.splitlines()
+        if ln.startswith("|") and "signature_panel" in ln
+    ]
+    assert len(data_rows) == 1
+    row = data_rows[0]
+    assert "\\|" in row  # pipe escaped
+    # Escaped `\|` is not a column separator; only the 8 structural pipes remain.
+    assert row.replace("\\|", "").count("|") == 8
+    assert "score a" in row and "over two lines" in row  # newline flattened, text kept
+
+
 def test_veto_fires_on_non_sarcoma_cross_lineage_flip(monkeypatch):
     """Generalized guard: the local-reference channel cannot flip a BRCA-like bulk call to heme
     when the confident compartment also supports epithelial/solid lineage."""

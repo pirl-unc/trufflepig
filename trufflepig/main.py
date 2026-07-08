@@ -3161,9 +3161,27 @@ def _analyze_body(run: AnalyzeRun):
             _best = best_purity_estimate(_final_purity, decomposition=_decomp_arg)
             if _best is not None:
                 _final_purity["pre_fusion_estimate"] = _final_purity.get("overall_estimate")
-                _final_purity["overall_estimate"] = _best["overall_estimate"]
-                _final_purity["overall_lower"] = _best["overall_lower"]
-                _final_purity["overall_upper"] = _best["overall_upper"]
+                # Preserve the physical decomposition cap. When the adopted decomposition
+                # models non-tumor mass, _constrain_purity_interval_with_decomposition may
+                # have already capped overall_upper below 1.0 (purity cannot exceed
+                # 1 − modeled non-tumor mass). The random-effects fusion is unaware of that
+                # structural bound, so on method disagreement its pooled upper can widen back
+                # above the cap (e.g. 0.84 → 0.97), re-reporting an impossible near-100%
+                # interval. Clamp the fused interval so it never exceeds that cap.
+                _decomp_cap = (
+                    (_final_purity.get("components") or {})
+                    .get("decomposition_interval_cap")
+                    or {}
+                ).get("constrained_upper")
+                _est, _lo, _up = _clamp_interval_to_cap(
+                    _best["overall_estimate"],
+                    _best["overall_lower"],
+                    _best["overall_upper"],
+                    _decomp_cap,
+                )
+                _final_purity["overall_estimate"] = _est
+                _final_purity["overall_lower"] = _lo
+                _final_purity["overall_upper"] = _up
                 _final_purity["best_integration"] = {
                     "i2": _best["i2"],
                     "method_agreement": _best["method_agreement"],
@@ -5129,6 +5147,29 @@ def _prioritize_report_compatible_decomposition(
     if isinstance(warnings, list) and warning not in warnings:
         warnings.append(warning)
     return [selected] + [row for row in decomp_results if row is not selected]
+
+
+def _clamp_interval_to_cap(estimate, lower, upper, cap):
+    """Clamp a (point, lower, upper) purity interval so ``upper`` never exceeds ``cap``.
+
+    ``cap`` is the physical decomposition ceiling written by
+    ``_constrain_purity_interval_with_decomposition`` (purity cannot exceed
+    ``1 − modeled non-tumor mass``). The random-effects fusion is unaware of it,
+    so its pooled upper can widen back above the cap on method disagreement.
+    A no-op when ``cap`` is absent/non-numeric. The point stays the best estimate
+    but is pulled down to the ceiling if it (or the lower bound) somehow exceeds it,
+    keeping ``lower ≤ estimate ≤ upper`` coherent.
+    """
+    estimate = float(estimate)
+    lower = float(lower)
+    upper = float(upper)
+    if isinstance(cap, (int, float)):
+        upper = min(upper, float(cap))
+    if estimate > upper:
+        estimate = upper
+    if lower > upper:
+        lower = upper
+    return estimate, lower, upper
 
 
 def _constrain_purity_interval_with_decomposition(purity, decomp_result):
@@ -7311,13 +7352,18 @@ def _cancer_type_decision_trace_markdown(analysis):
             str(row.get("role") or ""),
         ),
     )
+    # A channel detail carries free-text rationale that can contain a literal
+    # `|` (splits the row into a stray column) or a newline (breaks the table).
+    # Escape it exactly like the signal-matrix summary before interpolation.
+    from .cancer_type_signal_matrix import _md_cell
+
     for row in ordered[:80]:
         support = row.get("support")
         support_text = (
             f"{float(support):.3f}" if isinstance(support, (int, float)) else ""
         )
         candidate = row.get("candidate_code") or row.get("code") or ""
-        detail = _decision_channel_detail_summary(row.get("details") or {})
+        detail = _md_cell(_decision_channel_detail_summary(row.get("details") or {}))
         lines.append(
             f"| {row.get('stage') or ''} | {_cancer_label(candidate)} | "
             f"`{row.get('channel') or ''}` | {row.get('role') or ''} | "

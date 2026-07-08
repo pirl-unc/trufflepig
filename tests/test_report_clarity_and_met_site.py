@@ -7,6 +7,7 @@ import pytest
 
 from trufflepig.main import (
     _build_target_report,
+    _clamp_interval_to_cap,
     _constrain_purity_interval_with_decomposition,
     _effective_met_site_for_background,
     _infer_likely_met_site_context,
@@ -299,6 +300,33 @@ def test_decomposition_interval_cap_ignores_tiny_non_tumor_assignments():
 
     assert changed is False
     assert purity["overall_upper"] == pytest.approx(1.0)
+
+
+def test_fused_upper_never_exceeds_decomposition_cap():
+    """The random-effects fusion pass must not widen the upper bound back above
+    the physical decomposition cap. Reviewer scenario: a cap ~0.84 must survive a
+    discordant fused upper ~0.97."""
+    cap = 0.8425
+    est, lo, up = _clamp_interval_to_cap(0.60, 0.31, 0.97, cap)
+    assert up == pytest.approx(cap)
+    # A point/lower already below the cap are left untouched.
+    assert est == pytest.approx(0.60)
+    assert lo == pytest.approx(0.31)
+
+
+def test_clamp_interval_to_cap_pulls_point_and_lower_below_ceiling():
+    """If the whole fused interval sits above the cap, the point and lower are
+    pulled down so lower <= estimate <= upper stays coherent."""
+    est, lo, up = _clamp_interval_to_cap(0.95, 0.90, 0.99, 0.84)
+    assert up == pytest.approx(0.84)
+    assert est == pytest.approx(0.84)
+    assert lo == pytest.approx(0.84)
+
+
+def test_clamp_interval_to_cap_is_noop_without_cap():
+    """No decomposition cap (None / non-numeric) leaves the fused interval intact."""
+    assert _clamp_interval_to_cap(0.7, 0.5, 0.9, None) == (0.7, 0.5, 0.9)
+    assert _clamp_interval_to_cap(0.7, 0.5, 0.9, "n/a") == (0.7, 0.5, 0.9)
 
 
 def test_summary_md_structure_for_report_clarity(tmp_path):
