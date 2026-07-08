@@ -3124,75 +3124,10 @@ def _analyze_body(run: AnalyzeRun):
         # skip an optional artifact, so catch broadly and keep the report.
         print(f"[warn] Cancer-type signal matrix failed: {exc}")
 
-    # Final purity pass: honest random-effects interval + anti-saturation guard.
-    # After every adoption/override above has settled ``analysis["purity"]``, fuse the
-    # per-method estimates (signature / lineage / ESTIMATE / decomposition) with the
-    # random-effects model so the reported interval widens automatically when the
-    # methods disagree, and guard against a saturated near-100% read that no reliable
-    # signal corroborates — the failure mode that made a rare tissue type (e.g. NUT
-    # carcinoma) report a spurious 100% purity when its lineage-identity genes and the
-    # ESTIMATE surrogate co-saturated to 1.0 while the physical decomposition residual
-    # said ~55%. The empirically-best combiner point is preserved except on that guarded
-    # case. Grounded in the HCC1395×HPA in-silico mixture benchmark; see
-    # trufflepig.purity_integration.best_purity_estimate. Runs BEFORE the ReportView
-    # freeze so every headline read (figure, brief, markdown) sees the same finalized
-    # number by construction.
-    try:
-        from .purity_integration import best_purity_estimate
-
-        _final_purity = analysis.get("purity")
-        if isinstance(_final_purity, dict):
-            _stability = (analysis.get("decomposition") or {}).get("purity_stability")
-            # Decomposition's contribution to the fusion is its RESIDUAL FRACTION — the mass fraction
-            # of the tumor-specific residual after background subtraction (CLAUDE.md: "the PRIMARY
-            # purity signal"). This is the independent PHYSICAL tumor-vs-background reading, and it is
-            # what discriminates a genuinely-pure sample from a lineage-identity artifact: for a rare
-            # tissue type (NUT carcinoma) whose lineage-identity genes and ESTIMATE both saturate to
-            # 100%, the residual fraction stays ~0.55, exposing the saturation. (The purity_stability
-            # hypothesis range mirrors the already-adopted overall estimate, so it would echo the
-            # saturated 100% and defeat the guard — do NOT use it as the decomposition point.)
-            _decomp_comp = (_final_purity.get("components") or {}).get("decomposition") or {}
-            _resid = _decomp_comp.get("residual_fraction")
-            _decomp_arg = None
-            if isinstance(_resid, (int, float)):
-                _decomp_arg = {
-                    "overall_estimate": float(_resid),
-                    "fragile": bool((_stability or {}).get("fragile")),
-                }
-            _best = best_purity_estimate(_final_purity, decomposition=_decomp_arg)
-            if _best is not None:
-                _final_purity["pre_fusion_estimate"] = _final_purity.get("overall_estimate")
-                # Preserve the physical decomposition cap. When the adopted decomposition
-                # models non-tumor mass, _constrain_purity_interval_with_decomposition may
-                # have already capped overall_upper below 1.0 (purity cannot exceed
-                # 1 − modeled non-tumor mass). The random-effects fusion is unaware of that
-                # structural bound, so on method disagreement its pooled upper can widen back
-                # above the cap (e.g. 0.84 → 0.97), re-reporting an impossible near-100%
-                # interval. Clamp the fused interval so it never exceeds that cap.
-                _decomp_cap = (
-                    (_final_purity.get("components") or {})
-                    .get("decomposition_interval_cap")
-                    or {}
-                ).get("constrained_upper")
-                _est, _lo, _up = _clamp_interval_to_cap(
-                    _best["overall_estimate"],
-                    _best["overall_lower"],
-                    _best["overall_upper"],
-                    _decomp_cap,
-                )
-                _final_purity["overall_estimate"] = _est
-                _final_purity["overall_lower"] = _lo
-                _final_purity["overall_upper"] = _up
-                _final_purity["best_integration"] = {
-                    "i2": _best["i2"],
-                    "method_agreement": _best["method_agreement"],
-                    "n_methods": _best["n_methods"],
-                    "point_source": _best["point_source"],
-                }
-    except Exception:  # noqa: BLE001 - purity honesty pass must never abort a finished run
-        _LOGGER.warning(
-            "best_purity_estimate failed; keeping pre-fusion purity", exc_info=True
-        )
+    # Final purity pass: honest random-effects interval + anti-saturation guard, run
+    # BEFORE the ReportView freeze so every headline read (figure, brief, markdown) sees
+    # the same finalized number by construction. See ``_finalize_fused_purity``.
+    _finalize_fused_purity(analysis)
 
     # Build the frozen ReportView snapshot now that purity is finalized
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -5148,6 +5083,81 @@ def _prioritize_report_compatible_decomposition(
     if isinstance(warnings, list) and warning not in warnings:
         warnings.append(warning)
     return [selected] + [row for row in decomp_results if row is not selected]
+
+
+def _finalize_fused_purity(analysis):
+    """Final purity pass: honest random-effects interval + anti-saturation guard.
+
+    After every adoption/override/cap above has settled ``analysis["purity"]``, fuse
+    the per-method estimates (signature / lineage / ESTIMATE / decomposition) with the
+    random-effects model so the reported interval widens automatically when the methods
+    disagree, and guard against a saturated near-100% read that no reliable signal
+    corroborates — the failure mode that made a rare tissue type (e.g. NUT carcinoma)
+    report a spurious 100% purity when its lineage-identity genes and the ESTIMATE
+    surrogate co-saturated to 1.0 while the physical decomposition residual said ~55%.
+    The empirically-best combiner point is preserved except on that guarded case.
+    Grounded in the HCC1395×HPA in-silico mixture benchmark; see
+    ``trufflepig.purity_integration.best_purity_estimate``. Callers run this BEFORE the
+    ReportView freeze so every headline read (figure, brief, markdown) sees the same
+    finalized number by construction. Mutates ``analysis["purity"]`` in place; any
+    failure is swallowed (keep the pre-fusion purity) so it never aborts a finished run.
+    """
+    try:
+        from .purity_integration import best_purity_estimate
+
+        final_purity = analysis.get("purity")
+        if not isinstance(final_purity, dict):
+            return
+        stability = (analysis.get("decomposition") or {}).get("purity_stability")
+        # Decomposition's contribution to the fusion is its RESIDUAL FRACTION — the mass
+        # fraction of the tumor-specific residual after background subtraction (CLAUDE.md:
+        # "the PRIMARY purity signal"). This is the independent PHYSICAL tumor-vs-background
+        # reading, and it is what discriminates a genuinely-pure sample from a lineage-identity
+        # artifact: for a rare tissue type (NUT carcinoma) whose lineage-identity genes and
+        # ESTIMATE both saturate to 100%, the residual fraction stays ~0.55, exposing the
+        # saturation. (The purity_stability hypothesis range mirrors the already-adopted overall
+        # estimate, so it would echo the saturated 100% and defeat the guard — do NOT use it as
+        # the decomposition point.)
+        decomp_comp = (final_purity.get("components") or {}).get("decomposition") or {}
+        resid = decomp_comp.get("residual_fraction")
+        decomp_arg = None
+        if isinstance(resid, (int, float)):
+            decomp_arg = {
+                "overall_estimate": float(resid),
+                "fragile": bool((stability or {}).get("fragile")),
+            }
+        best = best_purity_estimate(final_purity, decomposition=decomp_arg)
+        if best is None:
+            return
+        final_purity["pre_fusion_estimate"] = final_purity.get("overall_estimate")
+        # Preserve the physical decomposition cap. When the adopted decomposition models
+        # non-tumor mass, _constrain_purity_interval_with_decomposition may have already
+        # capped overall_upper below 1.0 (purity cannot exceed 1 − modeled non-tumor mass).
+        # The random-effects fusion is unaware of that structural bound, so on method
+        # disagreement its pooled upper can widen back above the cap (e.g. 0.84 → 0.97),
+        # re-reporting an impossible near-100% interval. Clamp the fused interval to the cap.
+        decomp_cap = (
+            (final_purity.get("components") or {}).get("decomposition_interval_cap") or {}
+        ).get("constrained_upper")
+        est, lo, up = _clamp_interval_to_cap(
+            best["overall_estimate"],
+            best["overall_lower"],
+            best["overall_upper"],
+            decomp_cap,
+        )
+        final_purity["overall_estimate"] = est
+        final_purity["overall_lower"] = lo
+        final_purity["overall_upper"] = up
+        final_purity["best_integration"] = {
+            "i2": best["i2"],
+            "method_agreement": best["method_agreement"],
+            "n_methods": best["n_methods"],
+            "point_source": best["point_source"],
+        }
+    except Exception:  # noqa: BLE001 - purity honesty pass must never abort a finished run
+        _LOGGER.warning(
+            "best_purity_estimate failed; keeping pre-fusion purity", exc_info=True
+        )
 
 
 def _clamp_interval_to_cap(estimate, lower, upper, cap):

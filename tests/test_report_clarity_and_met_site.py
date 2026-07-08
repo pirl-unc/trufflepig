@@ -10,6 +10,7 @@ from trufflepig.main import (
     _clamp_interval_to_cap,
     _constrain_purity_interval_with_decomposition,
     _effective_met_site_for_background,
+    _finalize_fused_purity,
     _infer_likely_met_site_context,
     _next_best_support_gap,
 )
@@ -327,6 +328,53 @@ def test_clamp_interval_to_cap_is_noop_without_cap():
     """No decomposition cap (None / non-numeric) leaves the fused interval intact."""
     assert _clamp_interval_to_cap(0.7, 0.5, 0.9, None) == (0.7, 0.5, 0.9)
     assert _clamp_interval_to_cap(0.7, 0.5, 0.9, "n/a") == (0.7, 0.5, 0.9)
+
+
+def _saturated_nut_like_analysis():
+    """A ceiling-pinned (~100%) purity whose only physical signal (decomposition
+    residual) says ~55% and whose signature is uncorroborating — the NUT-carcinoma
+    saturation the anti-saturation guard exists to catch."""
+    return {
+        "purity": {
+            "overall_estimate": 1.0,
+            "overall_lower": 0.9,
+            "overall_upper": 1.0,
+            "components": {
+                "signature": {"purity": 0.5, "stability": 0.8},
+                "lineage": {"purity": 1.0},  # saturated -> dropped from the fusion
+                "estimate_purity": 0.9,
+                "decomposition": {"residual_fraction": 0.55},
+            },
+        },
+        "decomposition": {"purity_stability": {"fragile": False}},
+    }
+
+
+def test_finalize_fused_purity_desaturates_ceiling_pinned_read():
+    analysis = _saturated_nut_like_analysis()
+    _finalize_fused_purity(analysis)
+    p = analysis["purity"]
+    assert p["pre_fusion_estimate"] == 1.0
+    assert p["best_integration"]["point_source"] == "desaturated_fusion"
+    assert p["overall_estimate"] < 0.85  # pulled off the spurious 100%
+    assert p["overall_upper"] <= 1.0
+
+
+def test_finalize_fused_purity_respects_decomposition_cap():
+    analysis = _saturated_nut_like_analysis()
+    analysis["purity"]["components"]["decomposition_interval_cap"] = {
+        "constrained_upper": 0.60,
+    }
+    _finalize_fused_purity(analysis)
+    p = analysis["purity"]
+    assert p["overall_upper"] <= 0.60  # fused interval never re-widens above the cap
+    assert p["overall_estimate"] <= 0.60
+
+
+def test_finalize_fused_purity_is_safe_without_purity():
+    analysis = {"decomposition": {}}
+    _finalize_fused_purity(analysis)  # must not raise
+    assert "purity" not in analysis
 
 
 def test_summary_md_structure_for_report_clarity(tmp_path):
