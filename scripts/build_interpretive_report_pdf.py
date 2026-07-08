@@ -29,16 +29,82 @@ SOFT_AMBER = (255, 251, 235)
 SOFT_GREEN = (240, 253, 244)
 SOFT_RED = (254, 242, 242)
 
+# Reader-facing figure manifest. Each entry is (filename-suffix, title,
+# interpretation sentence). The interpretation is what the figure *means* for the
+# decision — it replaces the old practice of captioning a figure with its PNG
+# filename. Figures are gated on existence at build time (``_find_figure`` returns
+# None when the underlying analysis didn't emit the plot), so a belief that never
+# fired never ships a figure. Ordering is decision-first: the call and its evidence,
+# then composition/purity, then what to do (therapy), then sample context.
+#
+# Therapy figures are emitted under whichever name the run produced
+# (``treatments`` for the ranked-therapy view, ``priority-targets`` for the
+# score-decomposition view); both are listed and the missing one is skipped. The
+# near-duplicate log-TPM dumbbell plots (``priority-target-context``,
+# ``actionable-targets``) are intentionally NOT in the reader PDF — they live in
+# the audit PDF (see module docstring); they restate the same ~18 genes the
+# therapy figures already cover.
 FIGURE_SPECS = [
-    ("sample-summary.png", "Integrated sample summary"),
-    ("cancer-type-signal-matrix.png", "Decision-aligned cancer-type evidence"),
-    ("decomposition-composition.png", "Tumor/background composition"),
-    ("decomposition-candidates.png", "Top decomposition hypotheses"),
-    ("purity-methods.png", "Purity method agreement"),
-    ("priority-targets.png", "Prioritized actionable targets"),
-    ("priority-target-context.png", "Target evidence context"),
-    ("therapy-pathway-state.png", "Therapy pathway state"),
-    ("actionable-targets.png", "Actionable target screen"),
+    (
+        "sample-summary.png",
+        "Integrated sample summary",
+        "One-page synthesis: the cancer-type call, tumor-vs-background composition, "
+        "and purity for this sample.",
+    ),
+    (
+        "cancer-type-signal-matrix.png",
+        "Cancer-type evidence",
+        "Which independent signals (expression signature, cohort centroid, "
+        "decomposition, mismatch-repair) supported the reported cancer type, and how "
+        "strongly each voted.",
+    ),
+    (
+        "decomposition-composition.png",
+        "Tumor / background composition",
+        "Estimated fraction of the sample that is tumor versus each normal, immune, "
+        "and stromal background component.",
+    ),
+    (
+        "decomposition-candidates.png",
+        "Decomposition hypotheses",
+        "Competing tumor/background decomposition fits ranked by residual; the "
+        "top-ranked hypothesis is the one adopted for purity and attribution.",
+    ),
+    (
+        "purity-methods.png",
+        "Purity method agreement",
+        "Independent purity estimates (signature, lineage, ESTIMATE, decomposition "
+        "residual) and their agreement — the reported purity is their fused consensus, "
+        "widened when the methods disagree.",
+    ),
+    (
+        "purity.png",
+        "Purity estimate",
+        "Reported tumor-purity point estimate with its uncertainty interval.",
+    ),
+    (
+        "treatments.png",
+        "Candidate therapies",
+        "Therapies ranked for this call, each shown with the eligibility gate (the "
+        "assay that actually confirms it) — RNA expression alone is not the criterion.",
+    ),
+    (
+        "priority-targets.png",
+        "Prioritized targets",
+        "Why each actionable target ranks where it does: the score decomposition "
+        "behind the therapy shortlist.",
+    ),
+    (
+        "therapy-pathway-state.png",
+        "Therapy pathway state",
+        "Expression state of therapy-relevant pathways (antigen presentation, "
+        "interferon, and others) that modulate the candidate treatments above.",
+    ),
+    (
+        "sample-context.png",
+        "Sample in cohort context",
+        "Where this sample sits relative to the reference cohort in expression space.",
+    ),
 ]
 
 
@@ -544,24 +610,34 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
     return img
 
 
-def _figure_page(path: Path, caption: str) -> Image.Image:
+def _figure_page(path: Path, title: str, interpretation: str = "") -> Image.Image:
+    """One figure per page: a bold title and its *interpretation sentence* — what the
+    figure means for the decision — instead of the raw PNG filename."""
     page = Image.new("RGB", (PAGE_W, PAGE_H), "white")
     draw = ImageDraw.Draw(page)
-    caption_font = _font(38, bold=True)
-    small_font = _font(23)
-    draw.text((MARGIN, MARGIN), caption, fill=TEXT_COLOR, font=caption_font)
-    draw.text((MARGIN, MARGIN + 55), path.name, fill=MUTED, font=small_font)
-    draw.rectangle((MARGIN, MARGIN + 95, PAGE_W - MARGIN, MARGIN + 98), fill=RULE)
+    title_font = _font(38, bold=True)
+    caption_font = _font(26)
+    draw.text((MARGIN, MARGIN), title, fill=TEXT_COLOR, font=title_font)
 
+    # Wrap the interpretation sentence to the page width beneath the title.
+    caption_lines = textwrap.wrap(interpretation, width=118) if interpretation else []
+    y_caption = MARGIN + 58
+    for line in caption_lines:
+        draw.text((MARGIN, y_caption), line, fill=MUTED, font=caption_font)
+        y_caption += 36
+    rule_y = max(MARGIN + 95, y_caption + 10)
+    draw.rectangle((MARGIN, rule_y, PAGE_W - MARGIN, rule_y + 3), fill=RULE)
+
+    fig_top = rule_y + 50
     with Image.open(path) as src:
         fig = src.convert("RGB")
     box_w = PAGE_W - 2 * MARGIN
-    box_h = PAGE_H - MARGIN - (MARGIN + 145)
+    box_h = PAGE_H - MARGIN - fig_top
     scale = min(box_w / fig.width, box_h / fig.height)
     new_size = (max(1, int(fig.width * scale)), max(1, int(fig.height * scale)))
     fig = fig.resize(new_size, Image.Resampling.LANCZOS)
     x = MARGIN + (box_w - fig.width) // 2
-    y = MARGIN + 145 + (box_h - fig.height) // 2
+    y = fig_top + (box_h - fig.height) // 2
     page.paste(fig, (x, y))
     return page
 
@@ -575,10 +651,10 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
 
     highlights = _highlight_lines(summary_path, analysis_path)
     pages = [_title_page(prefix, highlights, analyze_dir)]
-    for suffix, caption in FIGURE_SPECS:
+    for suffix, title, interpretation in FIGURE_SPECS:
         figure = _find_figure(analyze_dir, prefix, suffix)
         if figure is not None:
-            pages.append(_figure_page(figure, caption))
+            pages.append(_figure_page(figure, title, interpretation))
     pages[0].save(output, save_all=True, append_images=pages[1:])
     return output
 
