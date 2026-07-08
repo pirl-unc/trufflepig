@@ -170,9 +170,10 @@ def test_best_purity_decomposition_rescues_a_pure_sample_with_broken_signature()
     assert out["overall_estimate"] >= 0.85
 
 
-def test_best_purity_preserves_the_point_for_a_normal_agreeing_sample():
-    """A middling sample where methods roughly agree: point is preserved and the interval is never
-    narrower than the incoming one."""
+def test_best_purity_preserves_the_point_and_gives_a_tight_interval_when_methods_agree():
+    """A middling sample where methods roughly agree: point is preserved and the fused interval is
+    tight (high agreement → low heterogeneity → narrow band), reflecting the fusion's own uncertainty
+    rather than any legacy pre-fusion interval."""
     purity = {
         "overall_estimate": 0.42,
         "overall_lower": 0.34,
@@ -186,8 +187,9 @@ def test_best_purity_preserves_the_point_for_a_normal_agreeing_sample():
     out = best_purity_estimate(purity, decomposition=None)
     assert out["point_source"] == "combiner"
     assert out["overall_estimate"] == pytest.approx(0.42, abs=1e-6)
-    assert out["overall_lower"] <= 0.34 + 1e-9  # never narrower than incoming
-    assert out["overall_upper"] >= 0.52 - 1e-9
+    assert out["method_agreement"] > 0.8  # methods concur
+    assert out["overall_lower"] <= 0.42 <= out["overall_upper"]  # interval contains the point
+    assert (out["overall_upper"] - out["overall_lower"]) < 0.35  # agreeing → not blown wide open
 
 
 def test_best_purity_ceiling_pinned_drops_to_the_decomposition_residual():

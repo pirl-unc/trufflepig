@@ -37,7 +37,12 @@ _Z95 = 1.959963984540054
 _EPS = 1e-4
 # Fallback logit-space SD for an estimate that supplies a point but no interval, scaled by how
 # reliable the method is (weight ∈ (0, 1]); a lower weight ⇒ larger SD ⇒ less pull on the pool.
-_DEFAULT_LOGIT_SD = 1.0
+# Fallback logit-space SD for a method that reports a point but no interval (ESTIMATE, the
+# decomposition residual fraction). These are directionally-informative-but-uncalibrated, so the band
+# should be wide enough to stay honest yet tight enough to be actionable: 0.7 puts a single such
+# method's 95% band at roughly ±25 pp around a mid-range point (e.g. 0.55 → ~[0.28, 0.79]). Genuine
+# BETWEEN-method disagreement still widens the pool automatically on top of this via τ².
+_DEFAULT_LOGIT_SD = 0.7
 
 
 def _logit(p: float) -> float:
@@ -80,9 +85,13 @@ def measurement_from_interval(
     """Convert a method's (point, 95%-interval) purity to a logit-space measurement.
 
     The interval half-width sets the logit SD via the normal approximation
-    (``sd = (logit(upper) − logit(lower)) / (2·z₉₅)``). When no usable interval is supplied the SD
-    falls back to ``_DEFAULT_LOGIT_SD / sqrt(weight)`` so a less-reliable method (smaller ``weight``)
-    pulls the pool less. Returns ``None`` for a missing/degenerate point so callers can filter.
+    (``sd = (logit(upper) − logit(lower)) / (2·z₉₅)``); when no usable interval is supplied the SD
+    falls back to ``_DEFAULT_LOGIT_SD``. In BOTH cases ``weight`` (a reliability multiplier on
+    precision) inflates the SD by ``1/sqrt(weight)`` — so a less-reliable method both pulls the pool
+    less AND contributes less heterogeneity. This matters for a confidently-wrong measurement: a
+    broken signature with a tight native interval far from the other methods would otherwise force the
+    random-effects τ² up and balloon the pooled interval; discounting it (small ``weight``) widens its
+    variance so it stops dominating. Returns ``None`` for a missing/degenerate point so callers filter.
     """
     if point is None:
         return None
@@ -93,8 +102,6 @@ def measurement_from_interval(
     if not math.isfinite(p) or p <= 0.0 or p >= 1.0:
         # A saturated 0/1 point carries no usable information for a logit fusion; drop it (the
         # fragility guard elsewhere already treats a saturated signature as untrustworthy).
-        if p <= 0.0 or p >= 1.0:
-            return None
         return None
     y = _logit(p)
 
@@ -107,8 +114,9 @@ def measurement_from_interval(
         if lo is not None and hi is not None and math.isfinite(lo) and math.isfinite(hi) and hi > lo:
             sd = (_logit(hi) - _logit(lo)) / (2.0 * _Z95)
     if sd is None or sd <= 0.0:
-        w = weight if (isinstance(weight, (int, float)) and weight > 0) else 1.0
-        sd = _DEFAULT_LOGIT_SD / math.sqrt(w)
+        sd = _DEFAULT_LOGIT_SD
+    w = weight if (isinstance(weight, (int, float)) and weight > 0) else 1.0
+    sd = sd / math.sqrt(w)  # reliability inflates variance whether the SD came from an interval or not
     return PurityMeasurement(name=name, y=y, var=sd * sd, point=p)
 
 
@@ -272,9 +280,17 @@ def best_purity_estimate(
     lin_p = lin.get("purity")
     lineage_usable = isinstance(lin_p, (int, float)) and float(lin_p) < _LINEAGE_SATURATED
 
+    # The signature's own stability IS its reliability: a broken/unstable signature (e.g. on a cell
+    # line or a rare type whose panel fits poorly) reads a confidently-wrong value that would otherwise
+    # force the pooled interval wide open. Discount it by its stability (floored so it never zeroes,
+    # neutral 1.0 when stability is absent) so a shaky signature stops dominating the fusion.
+    sig_stability = sig.get("stability")
+    sig_weight = _METHOD_RELIABILITY["signature"]
+    if isinstance(sig_stability, (int, float)):
+        sig_weight *= max(float(sig_stability), 0.15)
     ms = [
         measurement_from_interval("signature", sig.get("purity"), sig.get("lower"), sig.get("upper"),
-                                  weight=_METHOD_RELIABILITY["signature"]),
+                                  weight=sig_weight),
         measurement_from_interval("estimate", comp.get("estimate_purity"),
                                   weight=_METHOD_RELIABILITY["estimate"]),
     ]
@@ -296,8 +312,6 @@ def best_purity_estimate(
         return None
 
     incoming = purity.get("overall_estimate")
-    lo = purity.get("overall_lower")
-    hi = purity.get("overall_upper")
 
     # Does any RELIABLE method independently corroborate a high purity?
     sig_p = sig.get("purity")
@@ -318,12 +332,12 @@ def best_purity_estimate(
             point = fused["overall_estimate"]  # desaturate: fused point blends in the physical signals
             point_source = "desaturated_fusion"
 
-    # Interval: the fused (disagreement-aware) interval, never narrower than the incoming one.
+    # Interval: the random-effects fused interval — the honest uncertainty of the fusion itself. It
+    # is NOT unioned with the legacy pre-fusion interval, so a poorly-formed legacy bound (e.g. a 0%
+    # lower carried by the old combiner) cannot poison it; the fused interval already incorporates
+    # every method's own interval and their between-method disagreement (τ²). Only widened to contain
+    # the reported point.
     fl, fh = fused["overall_lower"], fused["overall_upper"]
-    if isinstance(lo, (int, float)):
-        fl = min(fl, float(lo))
-    if isinstance(hi, (int, float)):
-        fh = min(1.0, max(fh, float(hi))) if point_source == "combiner" else fh
     fl = min(fl, point)
     fh = max(fh, point)
     return {
