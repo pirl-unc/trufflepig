@@ -896,6 +896,13 @@ def _subtype_tumor_tpm_lookup(subtype_code):
         matched = sub_df[sub_df["cancer_code"] == code]
         if not matched.empty:
             break
+    if matched.empty and "subtype" in sub_df.columns:
+        # The data carries subtype references under TWO conventions: the SARC-family subtypes are
+        # stored with the subtype code AS the ``cancer_code`` (matched above), while the PAM50-style
+        # subtypes (BRCA_Basal, BRCA_Her2, BRCA_LumA/B, …) keep the parent in ``cancer_code`` and put
+        # the subtype in the ``subtype`` column. Without this fallback every PAM50 subtype reference is
+        # silently unreachable, so the mixture-cohort lineage path has no denominator for them.
+        matched = sub_df[sub_df["subtype"].astype(str) == str(subtype_code)]
     if matched.empty:
         return {}
     return dict(zip(matched["symbol"], matched["tumor_tpm_median"].astype(float)))
@@ -1073,6 +1080,30 @@ def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
         return scores
     except Exception:  # noqa: BLE001 — pick refinement; fall back to the HK ranking
         return {}
+
+
+def _cohort_has_refinable_subtypes(parent_code) -> bool:
+    """True when a NON-mixture cohort still has ≥1 subtype carrying BOTH a curated lineage panel and a
+    reachable subtype reference — so the mixture-cohort lineage evaluation can refine its purity.
+
+    Not cached: ``_lineage_genes_map()`` honors a test monkeypatch (the ``LINEAGE_GENES`` override), and
+    the underlying ``_subtype_tumor_tpm_lookup`` is already ``lru_cache``d, so the per-call cost is a
+    handful of dict lookups.
+
+    This lets a cohort whose parent lineage panel is subtype-biased benefit from a subtype panel
+    WITHOUT registering it as an oncoref mixture cohort (which would change classification). The
+    canonical case is breast: the parent BRCA panel is luminal-only (ESR1/GATA3/FOXA1), so a basal/
+    triple-negative sample gets a null/poor lineage purity; a curated ``BRCA_Basal`` panel evaluated
+    against the ``BRCA_Basal`` tumor reference recovers it. Safe by construction — the evaluation only
+    REPLACES the parent result when a subtype panel genuinely fits better (more anchoring genes or
+    higher concordance; see ``_mixture_cohort_lineage_summary``), so a luminal sample (where the basal
+    panel scores poorly) is unchanged.
+    """
+    lineage_map = _lineage_genes_map()
+    for subtype_code in cancer_type_subtypes_of(parent_code) or []:
+        if lineage_map.get(subtype_code) and _subtype_tumor_tpm_lookup(subtype_code):
+            return True
+    return False
 
 
 def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
@@ -2073,7 +2104,9 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     # gene-count and scores better concordance.
     winning_subtype = None
     mixture_subtype_details = None
-    if is_mixture_cohort(reference_cancer_code):
+    if is_mixture_cohort(reference_cancer_code) or _cohort_has_refinable_subtypes(
+        reference_cancer_code
+    ):
         mixture = _mixture_cohort_lineage_summary(
             reference_cancer_code, sample_tpm, hk_syms
         )
