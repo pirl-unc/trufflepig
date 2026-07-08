@@ -39,6 +39,7 @@ from .analyze import (
     build_analysis_parameters,
     build_analyze_paths,
     cancer_type_context_from_analysis,
+    decomposition_purity_stability,
     discover_output_artifacts,
     resolve_analyze_inputs,
     should_adopt_decomposition_purity,
@@ -2807,6 +2808,10 @@ def _analyze_body(run: AnalyzeRun):
                 {"template": d.template, "cancer_type": d.cancer_type, "score": d.score}
                 for d in decomp_results[:5]
             ],
+            # Instrumentation only (nothing consumes this yet): how fragile the adopted
+            # decomposition purity is across the plausible template hypotheses. See
+            # analyze.flow.decomposition_purity_stability.
+            "purity_stability": decomposition_purity_stability(decomp_results, best_decomp),
         }
         # The classifier's top call (``cancer_code``) is the authoritative
         # cancer-type identification across every downstream report; the

@@ -150,6 +150,62 @@ def should_adopt_decomposition_purity(classifier_code: str, decomp_result) -> bo
     return bool(getattr(decomp_result, "purity_result", None))
 
 
+# Fragility thresholds for the observed decomposition purity (instrumentation, not yet a gate).
+_DECOMP_PURITY_FRAGILE_SPREAD = 0.35
+_TME_OVEREXPLAINED_MARKER = "overexplained by the tme background"
+
+
+def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
+    """Observe how fragile the adopted decomposition purity is — INSTRUMENTATION, no behavior change.
+
+    A decomposition tumor fraction is only trustworthy when it is stable across the plausible
+    template hypotheses AND the background did not over-absorb tumor signal. Across the local cohort,
+    most samples fail one of those: the top hypotheses disagree on tumor fraction by tens of points,
+    and the low-purity calls carry a "many genes overexplained by the TME background" warning
+    (over-subtraction → deflated purity — the READ 10%-vs-78% failure mode). This records the signals
+    so reports can encode that uncertainty and a later gate can consume them; it changes nothing.
+
+    Returns, for the adopted hypothesis:
+      - ``hypothesis_purity_spread``: max−min tumor fraction among the same-cancer-type hypotheses
+        (template-choice sensitivity of the purity).
+      - ``tme_overexplained``: the adopted fit flagged TME over-subtraction.
+      - ``top_hypotheses``: (template, cancer_type, purity, reconstruction_error) for the top few.
+      - ``fragile``: wide spread OR over-subtraction — read the point purity as a range, not a number.
+    """
+    results = list(decomp_results or [])
+    if not results:
+        return {}
+    if adopted is None:
+        adopted = results[0]
+    adopted_type = getattr(adopted, "cancer_type", None)
+    # Template-choice sensitivity: compare purities only across the SAME-cancer-type hypotheses —
+    # a different-cancer template's tumor fraction is not a comparable measurement of this call.
+    same_type = [r for r in results if getattr(r, "cancer_type", None) == adopted_type]
+    purities = [
+        float(getattr(r, "purity", 0.0))
+        for r in (same_type or results)[:6]
+        if getattr(r, "purity", None) is not None
+    ]
+    spread = round(max(purities) - min(purities), 4) if len(purities) >= 2 else 0.0
+    warns = " ".join(getattr(adopted, "warnings", None) or []).lower()
+    tme_overexplained = _TME_OVEREXPLAINED_MARKER in warns
+    top = [
+        {
+            "template": getattr(r, "template", None),
+            "cancer_type": getattr(r, "cancer_type", None),
+            "purity": round(float(getattr(r, "purity", 0.0) or 0.0), 4),
+            "reconstruction_error": round(float(getattr(r, "reconstruction_error", 0.0) or 0.0), 4),
+        }
+        for r in results[:4]
+    ]
+    return {
+        "hypothesis_purity_spread": spread,
+        "tme_overexplained": tme_overexplained,
+        "fragile": bool(spread >= _DECOMP_PURITY_FRAGILE_SPREAD or tme_overexplained),
+        "top_hypotheses": top,
+    }
+
+
 def build_analysis_parameters(
     *,
     config: AnalyzeConfig,

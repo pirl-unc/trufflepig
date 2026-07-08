@@ -676,6 +676,49 @@ def test_should_adopt_decomposition_purity_contract():
     assert not should_adopt_decomposition_purity("COAD", missing)
 
 
+def _decomp_hyp(cancer_type, purity, recon, template, warnings=()):
+    return SimpleNamespace(
+        cancer_type=cancer_type,
+        purity=purity,
+        reconstruction_error=recon,
+        template=template,
+        warnings=list(warnings),
+    )
+
+
+def test_decomposition_purity_stability_flags_fragile_and_stable():
+    from trufflepig.analyze import decomposition_purity_stability
+
+    # READ-like: top-by-score hypothesis is a low-purity over-subtracted fit while the same-cancer
+    # templates span 5%–78% — the adopted point purity is one pick in a wide range.
+    fragile = [
+        _decomp_hyp("READ", 0.10, 16.75, "solid_primary",
+                    ["Many genes are overexplained by the TME background"]),
+        _decomp_hyp("READ", 0.78, 2.68, "met_liver"),
+        _decomp_hyp("READ", 0.40, 3.0, "met_bone"),
+        _decomp_hyp("READ", 0.05, 4.0, "met_skin"),
+    ]
+    out = decomposition_purity_stability(fragile)
+    assert out["fragile"] is True
+    assert out["tme_overexplained"] is True
+    assert out["hypothesis_purity_spread"] == pytest.approx(0.73)
+    assert len(out["top_hypotheses"]) == 4
+
+    # Osteosarcoma-like: every same-cancer template agrees at ~99% purity → stable, no over-subtraction.
+    stable = [
+        _decomp_hyp("SARC", 0.994, 5.2, "solid_primary"),
+        _decomp_hyp("SARC", 0.994, 2.6, "met_bone"),
+        _decomp_hyp("SARC", 0.994, 4.7, "met_liver"),
+    ]
+    out2 = decomposition_purity_stability(stable)
+    assert out2["fragile"] is False
+    assert out2["tme_overexplained"] is False
+    assert out2["hypothesis_purity_spread"] == pytest.approx(0.0)
+
+    # Defensive: empty input → empty dict, no raise.
+    assert decomposition_purity_stability([]) == {}
+
+
 def test_wilms_deconvolved_reference_uses_expression_source_code_alias():
     import pandas as pd
 
