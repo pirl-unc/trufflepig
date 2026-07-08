@@ -195,6 +195,51 @@ def test_adcc_lenvatinib_is_not_fgf2_expression_gated():
     assert expression_independent_indication(row) is True
 
 
+def test_agent_only_rows_preserve_biomarker_gates():
+    pdl1_row = {
+        "cancer_code": "COAD",
+        "symbol": "",
+        "agent": "pembrolizumab",
+        "agent_class": "immune_checkpoint",
+        "indication": "pMMR colorectal cancer with PD-L1 expression",
+        "rationale": "",
+    }
+    assert indication_biomarker(pdl1_row) == "target_expression"
+    assert expression_independent_indication(pdl1_row) is False
+
+    msi_row = {
+        "cancer_code": "COAD",
+        "symbol": "",
+        "agent": "pembrolizumab",
+        "agent_class": "immune_checkpoint",
+        "indication": "MSI-H / dMMR metastatic colorectal cancer",
+        "rationale": "",
+    }
+    assert indication_biomarker(msi_row) == "msi_high"
+    assert expression_independent_indication(msi_row) is True
+
+    fusion_row = {
+        "cancer_code": "PANCAN",
+        "symbol": "",
+        "agent": "larotrectinib",
+        "agent_class": "small_molecule",
+        "indication": "solid tumor with NTRK fusion",
+        "rationale": "",
+    }
+    assert indication_biomarker(fusion_row) == "mutation"
+    assert expression_independent_indication(fusion_row) is True
+
+    histology_row = {
+        "cancer_code": "COAD",
+        "symbol": "",
+        "agent": "pembrolizumab",
+        "agent_class": "immune_checkpoint",
+        "indication": "metastatic colorectal cancer",
+        "rationale": "",
+    }
+    assert indication_biomarker(histology_row) == "histology_only"
+
+
 def test_reports_prefer_explicit_treatment_path_tier_over_rationale_text():
     later_line_row = {
         "symbol": "TEST1",

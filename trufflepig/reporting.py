@@ -501,8 +501,6 @@ def indication_biomarker(target_row) -> str:
     symbol = canonical_target_symbol(
         target_row.get("symbol") if hasattr(target_row, "get") else ""
     )
-    if not symbol and agent:
-        return "histology_only"
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
         return "mutation"
     if cancer_code == "ADCC" and "lenvatinib" in agent_low:
@@ -513,6 +511,8 @@ def indication_biomarker(target_row) -> str:
         return "tmb_high"
     if _MUTATION_INDICATION.search(text):
         return "mutation"
+    if _TARGET_EXPRESSION_INDICATION.search(text):
+        return "target_expression"
     if _HISTOLOGY_ONLY_THERAPY_CONTEXT.search(
         low
     ) and not _TARGET_EXPRESSION_INDICATION.search(low):
@@ -521,6 +521,8 @@ def indication_biomarker(target_row) -> str:
     if _IMMUNE_CHECKPOINT_AGENTS.search(
         agent
     ) and not _TARGET_EXPRESSION_INDICATION.search(text):
+        return "histology_only"
+    if not symbol and agent:
         return "histology_only"
 
     return "target_expression"
