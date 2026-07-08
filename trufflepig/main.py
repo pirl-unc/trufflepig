@@ -2834,99 +2834,18 @@ def _analyze_body(run: AnalyzeRun):
         # whose best-fit decomposition template was BRCA / solid_primary
         # with "No non-tumor components in template"; fraction=100%
         # propagated as the headline purity.
-        if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
-            decomp_purity = best_decomp.purity_result
-            if isinstance(decomp_purity, dict):
-                # Reconcile a FRAGILE decomposition purity against the independent classifier
-                # signals before adoption (policy chosen 2026-07-07): a fragile fit that disagrees
-                # with every independent signal is rejected (keep the classifier purity); otherwise a
-                # fragile fit is adopted with its interval widened to span the plausible template
-                # range. A non-fragile fit is adopted unchanged (prior behavior). On "reject",
-                # effective_purity stays the classifier purity (set at effective_purity = purity
-                # above), so the lineage-panel override below never promotes the rejected fit.
-                classifier_purity = analysis.get("purity")
-                stability = (analysis.get("decomposition") or {}).get("purity_stability")
-                action, reconciled = reconcile_decomposition_purity(
-                    classifier_purity, decomp_purity, stability
-                )
-                if isinstance(analysis.get("decomposition"), dict):
-                    analysis["decomposition"]["purity_reconciliation"] = action
-                if action != "reject":
-                    # Single source of truth: analysis['purity'] and the winner's candidate_trace row
-                    # become the same object, so the in-place lineage-panel override below stays in sync.
-                    effective_purity = reconciled
-                    _set_analysis_purity(analysis, effective_purity)
-                    purity = analysis["purity"]
-
-        # Propagate a lineage-panel purity override back into
-        # ``analysis["purity"]`` so every downstream report is
-        # consistent (bug 2026-04-14: user saw 23% in the headline
-        # and 64% in the decomposition-hypotheses table). When the
-        # decomposition's best hypothesis used a non-signature purity
-        # source we promote it, preserve the original estimate as
-        # ``signature_based_estimate``, and reset the CI widening
-        # and the downstream pct_cancer_median math to use the new
-        # anchor.
-        purity_source_best = (
-            effective_purity.get("purity_source")
-            if isinstance(effective_purity, dict)
-            else None
+        # Post-decomposition purity reconciliation (adopt decomposition purity ->
+        # lineage-panel override -> interval cap), run once for the winner. Mutates
+        # analysis["purity"] in place; refresh the local `purity`, which later
+        # rendering still reads. See _reconcile_purity_after_decomposition.
+        effective_purity = _reconcile_purity_after_decomposition(
+            analysis,
+            best_decomp,
+            reference_cancer_code=reference_cancer_code,
+            effective_purity=effective_purity,
+            run=run,
         )
-        if (
-            purity_source_best in ("lineage_panel",)
-            and isinstance(effective_purity, dict)
-            and "overall_estimate" in effective_purity
-        ):
-            orig_purity = dict(analysis["purity"])
-            analysis["purity"]["signature_based_estimate"] = orig_purity.get(
-                "overall_estimate"
-            )
-            analysis["purity"]["signature_based_lower"] = orig_purity.get(
-                "overall_lower"
-            )
-            analysis["purity"]["signature_based_upper"] = orig_purity.get(
-                "overall_upper"
-            )
-            analysis["purity"]["overall_estimate"] = effective_purity[
-                "overall_estimate"
-            ]
-            analysis["purity"]["overall_lower"] = effective_purity.get(
-                "overall_lower", effective_purity["overall_estimate"]
-            )
-            analysis["purity"]["overall_upper"] = effective_purity.get(
-                "overall_upper", effective_purity["overall_estimate"]
-            )
-            analysis["purity"]["purity_source"] = purity_source_best
-            analysis["purity"]["lineage_tumor_fraction"] = effective_purity.get(
-                "lineage_tumor_fraction"
-            )
-            # Refresh locals that were captured above the override.
-            purity = analysis["purity"]
-            print(
-                f"[analysis] Adopted lineage-panel purity "
-                f"{analysis['purity']['overall_estimate']:.0%} "
-                f"(signature-based estimate was "
-                f"{orig_purity.get('overall_estimate', 0):.0%})"
-            )
-        if _constrain_purity_interval_with_decomposition(purity, best_decomp):
-            interval_cap = (
-                purity.get("components", {}).get("decomposition_interval_cap", {})
-            )
-            effective_purity = purity
-            print(
-                "[analysis] Purity upper bound constrained by decomposition: "
-                f"{interval_cap.get('original_upper', 0):.0%} -> "
-                f"{interval_cap.get('constrained_upper', 0):.0%}"
-            )
-            run.note_step(
-                "purity_interval_refinement",
-                outputs={
-                    "overall_estimate": purity.get("overall_estimate"),
-                    "overall_lower": purity.get("overall_lower"),
-                    "overall_upper": purity.get("overall_upper"),
-                    "decomposition_interval_cap": interval_cap,
-                },
-            )
+        purity = analysis["purity"]
         if call_summary.get("site_indeterminate"):
             print(
                 f"[analysis] Retained label differential: {call_summary['label_display']}; "
@@ -5083,6 +5002,109 @@ def _prioritize_report_compatible_decomposition(
     if isinstance(warnings, list) and warning not in warnings:
         warnings.append(warning)
     return [selected] + [row for row in decomp_results if row is not selected]
+
+
+def _reconcile_purity_after_decomposition(
+    analysis, best_decomp, *, reference_cancer_code, effective_purity, run
+):
+    """Post-decomposition purity reconciliation, run once for the winning decomposition
+    BEFORE ``_finalize_fused_purity``: adopt a valid decomposition purity, promote a
+    lineage-panel override, then cap the interval by the modeled non-tumor mass.
+
+    The decomposition's purity is only safe to adopt when its cancer_type matches the
+    classifier AND its template has non-tumor compartments
+    (``should_adopt_decomposition_purity``): a template with no TME compartments trivially
+    returns fraction=1.0 (everything maps to tumor by construction), which is not a purity
+    measurement — the canonical failure case is a CRC sample the classifier scored at 36%
+    (COAD) whose best-fit template was BRCA/solid_primary with "No non-tumor components",
+    propagating fraction=100% as the headline purity.
+
+    Mutates ``analysis["purity"]`` (and the winner's candidate_trace row, via
+    ``_set_analysis_purity``) in place, and returns the possibly-updated
+    ``effective_purity`` the caller threads onward.
+    """
+    if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
+        decomp_purity = best_decomp.purity_result
+        if isinstance(decomp_purity, dict):
+            # Reconcile a FRAGILE decomposition purity against the independent classifier
+            # signals before adoption (policy chosen 2026-07-07): a fragile fit that disagrees
+            # with every independent signal is rejected (keep the classifier purity); otherwise a
+            # fragile fit is adopted with its interval widened to span the plausible template
+            # range. A non-fragile fit is adopted unchanged (prior behavior). On "reject",
+            # effective_purity stays the classifier purity (set by the caller), so the
+            # lineage-panel override below never promotes the rejected fit.
+            classifier_purity = analysis.get("purity")
+            stability = (analysis.get("decomposition") or {}).get("purity_stability")
+            action, reconciled = reconcile_decomposition_purity(
+                classifier_purity, decomp_purity, stability
+            )
+            if isinstance(analysis.get("decomposition"), dict):
+                analysis["decomposition"]["purity_reconciliation"] = action
+            if action != "reject":
+                # Single source of truth: analysis['purity'] and the winner's candidate_trace row
+                # become the same object, so the in-place lineage-panel override below stays in sync.
+                effective_purity = reconciled
+                _set_analysis_purity(analysis, effective_purity)
+
+    # Propagate a lineage-panel purity override back into ``analysis["purity"]`` so every
+    # downstream report is consistent (bug 2026-04-14: user saw 23% in the headline and 64%
+    # in the decomposition-hypotheses table). When the decomposition's best hypothesis used a
+    # non-signature purity source we promote it, preserve the original estimate as
+    # ``signature_based_estimate``, and reset the CI widening and downstream pct_cancer_median
+    # math to use the new anchor.
+    purity_source_best = (
+        effective_purity.get("purity_source")
+        if isinstance(effective_purity, dict)
+        else None
+    )
+    if (
+        purity_source_best in ("lineage_panel",)
+        and isinstance(effective_purity, dict)
+        and "overall_estimate" in effective_purity
+    ):
+        orig_purity = dict(analysis["purity"])
+        analysis["purity"]["signature_based_estimate"] = orig_purity.get(
+            "overall_estimate"
+        )
+        analysis["purity"]["signature_based_lower"] = orig_purity.get("overall_lower")
+        analysis["purity"]["signature_based_upper"] = orig_purity.get("overall_upper")
+        analysis["purity"]["overall_estimate"] = effective_purity["overall_estimate"]
+        analysis["purity"]["overall_lower"] = effective_purity.get(
+            "overall_lower", effective_purity["overall_estimate"]
+        )
+        analysis["purity"]["overall_upper"] = effective_purity.get(
+            "overall_upper", effective_purity["overall_estimate"]
+        )
+        analysis["purity"]["purity_source"] = purity_source_best
+        analysis["purity"]["lineage_tumor_fraction"] = effective_purity.get(
+            "lineage_tumor_fraction"
+        )
+        print(
+            f"[analysis] Adopted lineage-panel purity "
+            f"{analysis['purity']['overall_estimate']:.0%} "
+            f"(signature-based estimate was "
+            f"{orig_purity.get('overall_estimate', 0):.0%})"
+        )
+
+    purity = analysis["purity"]
+    if _constrain_purity_interval_with_decomposition(purity, best_decomp):
+        interval_cap = purity.get("components", {}).get("decomposition_interval_cap", {})
+        effective_purity = purity
+        print(
+            "[analysis] Purity upper bound constrained by decomposition: "
+            f"{interval_cap.get('original_upper', 0):.0%} -> "
+            f"{interval_cap.get('constrained_upper', 0):.0%}"
+        )
+        run.note_step(
+            "purity_interval_refinement",
+            outputs={
+                "overall_estimate": purity.get("overall_estimate"),
+                "overall_lower": purity.get("overall_lower"),
+                "overall_upper": purity.get("overall_upper"),
+                "decomposition_interval_cap": interval_cap,
+            },
+        )
+    return effective_purity
 
 
 def _finalize_fused_purity(analysis):
