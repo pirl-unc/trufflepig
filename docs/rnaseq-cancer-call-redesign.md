@@ -300,6 +300,30 @@ host components, and reports:
 The residual fraction is reported, but it is not currently used as a general
 pre-label cancer-type ranking term.
 
+**Honest purity fusion + anti-saturation guard** (`purity_integration.best_purity_estimate`,
+wired as the final purity pass in `analyze_sample` before the ReportView freeze).
+After every adoption/override has settled `analysis["purity"]`, the per-method
+estimates — signature, lineage, ESTIMATE, and the decomposition **residual
+fraction** — are fused with a random-effects (DerSimonian–Laird) model in logit
+space. Two evidence-backed effects, grounded in an HCC1395×HPA in-silico mixture
+benchmark (signature can be flat/broken on atypical inputs; ESTIMATE is monotone
+but biased high and saturating; lineage is tissue identity, not purity):
+
+- *Honest interval.* The pooled interval widens automatically when methods
+  disagree (τ² between-method heterogeneity), and `method_agreement` = 1 − I²
+  drives the confidence tier. Conflicting methods can no longer report a narrow,
+  overconfident CI.
+- *Anti-saturation guard.* A read pinned at the 1.0 ceiling is never a real
+  measurement (a biopsy is ~never 100% tumor); it is replaced by the physical
+  fused consensus — chiefly the residual fraction. Below the ceiling but still
+  high, the point is replaced only when no reliable method corroborates it. The
+  combiner point is otherwise preserved (it is the most accurate single point in
+  the benchmark). This is what pulls a rare type like NUT carcinoma — whose
+  lineage-identity genes (`KRT5`/`KRT6A`/`NUTM1`) and ESTIMATE both saturate to
+  100% while the residual fraction says ~55% — off a spurious 100% (validated:
+  nutm1 samples 100%→53–57%, low confidence; genuinely-corroborated high-purity
+  samples such as an 84%-pure cell line and an 88% bladder tumor are preserved).
+
 ### 7. Evidence selector and final report scope
 
 After `analyze_sample` makes a working RNA call, `main._apply_cancer_type_evidence`

@@ -1315,6 +1315,13 @@ def _caveats_from_purity_tier(
                 "whole-transcriptome — relative expression estimates "
                 "should be interpreted within the panel only."
             )
+        elif "single-method purity reading uncorroborated" in r:
+            out.append(
+                "One purity method read much higher than the others "
+                "with no independent support, so the reported purity "
+                "reflects the agreement of the remaining methods rather "
+                "than that single high reading."
+            )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", None)

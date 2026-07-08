@@ -211,6 +211,133 @@ def _z_for_ci(ci: float) -> float:
         ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
 
 
+# Reliability multipliers on each method's PRECISION when fusing the INTERVAL (not the point). These
+# only widen/narrow the fused interval; they never override the point estimate, so they are low-risk
+# and not over-fit to any one calibration sample. Grounded in the HCC1395×HPA mixture benchmark + the
+# architecture: the decomposition physically models tumor-vs-background; ESTIMATE is monotone but
+# biased-high (corroborator, not driver); lineage is a tissue-identity floor, not a purity term.
+_METHOD_RELIABILITY = {
+    "decomposition": 1.0,
+    "signature": 1.0,
+    "estimate": 0.5,
+    "lineage": 0.3,
+}
+# A purity read at/above this with no corroborating reliable signal is treated as ESTIMATE-driven
+# saturation (the benchmark: ESTIMATE never drops below ~0.66 and climbs to ~0.97).
+_SATURATION_FLOOR = 0.85
+# A purity read pinned this close to the 1.0 ceiling carries NO information — a tissue biopsy is
+# ~never 100% tumor, and a value at the ceiling is the estimator maxing out, not measuring. Such a
+# read is ALWAYS replaced by the physical fused consensus regardless of corroboration (a lineage-
+# identity + ESTIMATE co-saturation to 100%, as in NUT carcinoma, is the canonical case — the
+# decomposition residual fraction stays ~0.55 and exposes it).
+_CEILING_PINNED = 0.98
+# A method corroborates a high purity only if it independently reads at least this high.
+_CORROBORATION_FLOOR = 0.6
+# Lineage at/above this is saturated (identity signal maxed out) — not usable as a purity point.
+_LINEAGE_SATURATED = 0.95
+
+
+def best_purity_estimate(
+    purity: dict,
+    *,
+    decomposition: Optional[dict] = None,
+) -> Optional[dict]:
+    """Produce the best-available purity: keep the empirically-best point, add an honest interval.
+
+    Evidence (HCC1395×HPA in-silico mixtures): no single method is trustworthy across the purity
+    range — the signature can be flat/broken on atypical inputs, ESTIMATE is monotone but biased high
+    and saturating, lineage is a tissue-identity signal — while the existing combiner's *point* is
+    the most accurate estimator available (mixture MAE ≈ 0.10). So this does two evidence-backed
+    things and nothing speculative:
+
+    1. **Honest interval + agreement.** Fuse the method estimates with the random-effects model and
+       report its interval (which widens automatically when methods disagree) unioned with the
+       incoming interval, plus ``method_agreement`` = 1 − I² (1.0 = methods concur).
+    2. **Anti-saturation guard.** A read pinned at the 1.0 ceiling is never a real measurement (a
+       biopsy is ~never 100% tumor) — it is ALWAYS replaced by the physical fused consensus (chiefly
+       the decomposition residual fraction). Below the ceiling but still high (≥ the saturation
+       floor), the point is replaced only when NO reliable method (signature / non-saturated lineage
+       / non-fragile decomposition) independently corroborates it — the ESTIMATE-driven-saturation
+       case the benchmark exposes. Both paths keep the wide, disagreement-aware interval. This is
+       what pulls a rare type like NUT carcinoma — whose lineage-identity genes and ESTIMATE both
+       saturate to 100% while the residual fraction says ~55% — off a spurious 100%.
+
+    Returns a dict of ``overall_estimate`` / ``overall_lower`` / ``overall_upper`` / ``i2`` /
+    ``method_agreement`` / ``n_methods`` / ``point_source`` (``"combiner"`` or ``"desaturated_fusion"``),
+    or ``None`` if no method is usable (caller keeps its existing purity).
+    """
+    comp = (purity or {}).get("components") or {}
+    sig = comp.get("signature") or {}
+    lin = comp.get("lineage") or {}
+    lin_p = lin.get("purity")
+    lineage_usable = isinstance(lin_p, (int, float)) and float(lin_p) < _LINEAGE_SATURATED
+
+    ms = [
+        measurement_from_interval("signature", sig.get("purity"), sig.get("lower"), sig.get("upper"),
+                                  weight=_METHOD_RELIABILITY["signature"]),
+        measurement_from_interval("estimate", comp.get("estimate_purity"),
+                                  weight=_METHOD_RELIABILITY["estimate"]),
+    ]
+    if lineage_usable:
+        ms.append(measurement_from_interval("lineage", lin_p, lin.get("lower"), lin.get("upper"),
+                                            weight=_METHOD_RELIABILITY["lineage"]))
+    decomp_point = None
+    if decomposition:
+        decomp_point = decomposition.get("overall_estimate")
+        fragile = bool(decomposition.get("fragile"))
+        ms.append(measurement_from_interval(
+            "decomposition", decomp_point,
+            decomposition.get("hypothesis_purity_lo"), decomposition.get("hypothesis_purity_hi"),
+            weight=_METHOD_RELIABILITY["decomposition"] * (0.35 if fragile else 1.0),
+        ))
+    ms = [m for m in ms if m is not None]
+    fused = integrate_purity_estimates(ms)
+    if fused is None:
+        return None
+
+    incoming = purity.get("overall_estimate")
+    lo = purity.get("overall_lower")
+    hi = purity.get("overall_upper")
+
+    # Does any RELIABLE method independently corroborate a high purity?
+    sig_p = sig.get("purity")
+    corroborated_high = any([
+        isinstance(sig_p, (int, float)) and float(sig_p) >= _CORROBORATION_FLOOR,
+        lineage_usable and float(lin_p) >= _CORROBORATION_FLOOR,
+        isinstance(decomp_point, (int, float)) and float(decomp_point) >= _CORROBORATION_FLOOR
+        and decomposition and not decomposition.get("fragile"),
+    ])
+    point_source = "combiner"
+    point = float(incoming) if isinstance(incoming, (int, float)) else fused["overall_estimate"]
+    if isinstance(incoming, (int, float)):
+        inc = float(incoming)
+        # A ceiling-pinned read (≈1.0) is never a real measurement → always take the physical fused
+        # consensus. Below the ceiling but still high, desaturate only when no reliable method
+        # corroborates the high read.
+        if inc >= _CEILING_PINNED or (inc >= _SATURATION_FLOOR and not corroborated_high):
+            point = fused["overall_estimate"]  # desaturate: fused point blends in the physical signals
+            point_source = "desaturated_fusion"
+
+    # Interval: the fused (disagreement-aware) interval, never narrower than the incoming one.
+    fl, fh = fused["overall_lower"], fused["overall_upper"]
+    if isinstance(lo, (int, float)):
+        fl = min(fl, float(lo))
+    if isinstance(hi, (int, float)):
+        fh = min(1.0, max(fh, float(hi))) if point_source == "combiner" else fh
+    fl = min(fl, point)
+    fh = max(fh, point)
+    return {
+        "overall_estimate": round(point, 4),
+        "overall_lower": round(max(0.0, fl), 4),
+        "overall_upper": round(min(1.0, fh), 4),
+        "i2": fused["i2"],
+        "method_agreement": round(1.0 - fused["i2"], 4),
+        "n_methods": fused["n_methods"],
+        "point_source": point_source,
+        "method_weights": fused["weights"],
+    }
+
+
 def integrate_from_components(purity: dict, *, decomposition: Optional[dict] = None) -> Optional[dict]:
     """Convenience wrapper: pull the standard method estimates off a purity dict and fuse them.
 

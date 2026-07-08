@@ -167,6 +167,20 @@ def compute_purity_confidence(
         if overall < 0.08:
             tier = "low"
 
+    # Anti-saturation guard provenance: if the honest-fusion pass replaced a near-100% single-method
+    # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method
+    # consensus because nothing corroborated it, say so and cap the tier — a desaturated estimate is
+    # never "high confidence". See main.py best_purity_estimate wiring.
+    best_integration = None
+    try:
+        best_integration = purity.get("best_integration")
+    except AttributeError:
+        best_integration = None
+    if isinstance(best_integration, dict) and best_integration.get("point_source") == "desaturated_fusion":
+        if tier == "high":
+            tier = "moderate"
+        reasons.append("high single-method purity reading uncorroborated — using method consensus")
+
     sev = (degradation_severity or "none").lower()
     if sev in ("moderate", "severe"):
         # Severe RNA degradation biases long-transcript quantification;
