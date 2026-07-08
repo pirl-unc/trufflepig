@@ -272,6 +272,23 @@ def test_ontology_layer_keeps_base_entity_winner_an_entity():
     assert _ontology_layer("coarse_type", "", "BRCA") == "entity"
 
 
+def test_summary_markdown_survives_all_nan_selector_columns():
+    """Regression: a freshly-regenerated single-sample matrix whose selected_by / final_call /
+    reference_call columns are entirely empty must not crash the summary builder — the old
+    ``.dropna().iloc[0]`` raised IndexError (single positional indexer out-of-bounds)."""
+    single = pd.DataFrame([{c: None for c in SIGNAL_MATRIX_COLUMNS}])
+    single["sample"] = "case-x"
+    single["support"] = 0.0
+    md = build_signal_matrix_summary_markdown(single)
+    assert "Final call" in md  # renders the single-sample layout with em-dash placeholders
+
+    multi = pd.DataFrame([{c: None for c in SIGNAL_MATRIX_COLUMNS} for _ in range(2)])
+    multi["sample"] = ["a", "b"]
+    multi["support"] = [0.0, 0.0]
+    md_multi = build_signal_matrix_summary_markdown(multi)
+    assert "| Sample |" in md_multi  # multi-sample table renders too
+
+
 def test_md_cell_escapes_pipe_and_flattens_newlines():
     """A channel rationale carrying a literal ``|`` or newline must not split or break the
     markdown table it is interpolated into."""

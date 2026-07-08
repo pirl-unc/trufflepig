@@ -785,6 +785,17 @@ def _md_cell(value: Any) -> str:
     )
 
 
+def _first_clean(series) -> str:
+    """First non-null value of a column, cleaned; ``""`` if the column is empty/all-NaN.
+
+    Guards the ``.dropna().iloc[0]`` out-of-bounds crash when a matrix (or a per-sample group) has an
+    all-empty ``selected_by`` / ``final_call`` / ``reference_call`` column — e.g. a single-sample
+    summary built before any selector populated those fields (seen regenerating a fresh report).
+    """
+    non_null = series.dropna().astype(str)
+    return _clean(non_null.iloc[0]) if len(non_null) else ""
+
+
 def build_signal_matrix_summary_markdown(
     matrix: pd.DataFrame,
     *,
@@ -803,8 +814,8 @@ def build_signal_matrix_summary_markdown(
         lines.append("| Sample | Final call | Selected by | Signals | Strong conflicts |")
         lines.append("|---|---|---|---:|---:|")
         for sample, sub in df.groupby("sample", sort=True):
-            final_call = _clean(sub["final_call"].dropna().astype(str).iloc[0]) if len(sub) else ""
-            selected_by = _clean(sub["selected_by"].dropna().astype(str).iloc[0]) if len(sub) else ""
+            final_call = _first_clean(sub["final_call"])
+            selected_by = _first_clean(sub["selected_by"])
             strong = sub[
                 (sub["support"].fillna(0).astype(float) >= 0.5)
                 & (sub["entity_agrees_final"] == False)  # noqa: E712
@@ -818,9 +829,9 @@ def build_signal_matrix_summary_markdown(
         lines.append("")
         return "\n".join(lines) + "\n"
 
-    final_call = _clean(df["final_call"].dropna().astype(str).iloc[0])
-    selected_by = _clean(df["selected_by"].dropna().astype(str).iloc[0])
-    reference = _clean(df["reference_call"].dropna().astype(str).iloc[0])
+    final_call = _first_clean(df["final_call"])
+    selected_by = _first_clean(df["selected_by"])
+    reference = _first_clean(df["reference_call"])
     lines.append(f"- **Final call**: {final_call or '—'}.")
     if reference and reference != final_call:
         lines.append(f"- **Reference call**: {reference}.")
