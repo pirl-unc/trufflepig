@@ -41,6 +41,7 @@ from .analyze import (
     cancer_type_context_from_analysis,
     decomposition_purity_stability,
     discover_output_artifacts,
+    reconcile_decomposition_purity,
     resolve_analyze_inputs,
     should_adopt_decomposition_purity,
     write_json,
@@ -2833,12 +2834,28 @@ def _analyze_body(run: AnalyzeRun):
         # with "No non-tumor components in template"; fraction=100%
         # propagated as the headline purity.
         if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
-            effective_purity = best_decomp.purity_result
-            if isinstance(effective_purity, dict):
-                # Single source of truth: analysis['purity'] and the winner's candidate_trace row
-                # become the same object, so the in-place lineage-panel override below stays in sync.
-                _set_analysis_purity(analysis, effective_purity)
-                purity = analysis["purity"]
+            decomp_purity = best_decomp.purity_result
+            if isinstance(decomp_purity, dict):
+                # Reconcile a FRAGILE decomposition purity against the independent classifier
+                # signals before adoption (policy chosen 2026-07-07): a fragile fit that disagrees
+                # with every independent signal is rejected (keep the classifier purity); otherwise a
+                # fragile fit is adopted with its interval widened to span the plausible template
+                # range. A non-fragile fit is adopted unchanged (prior behavior). On "reject",
+                # effective_purity stays the classifier purity (set at effective_purity = purity
+                # above), so the lineage-panel override below never promotes the rejected fit.
+                classifier_purity = analysis.get("purity")
+                stability = (analysis.get("decomposition") or {}).get("purity_stability")
+                action, reconciled = reconcile_decomposition_purity(
+                    classifier_purity, decomp_purity, stability
+                )
+                if isinstance(analysis.get("decomposition"), dict):
+                    analysis["decomposition"]["purity_reconciliation"] = action
+                if action != "reject":
+                    # Single source of truth: analysis['purity'] and the winner's candidate_trace row
+                    # become the same object, so the in-place lineage-panel override below stays in sync.
+                    effective_purity = reconciled
+                    _set_analysis_purity(analysis, effective_purity)
+                    purity = analysis["purity"]
 
         # Propagate a lineage-panel purity override back into
         # ``analysis["purity"]`` so every downstream report is

@@ -187,6 +187,8 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
         if getattr(r, "purity", None) is not None
     ]
     spread = round(max(purities) - min(purities), 4) if len(purities) >= 2 else 0.0
+    hyp_lo = round(min(purities), 4) if purities else None
+    hyp_hi = round(max(purities), 4) if purities else None
     warns = " ".join(getattr(adopted, "warnings", None) or []).lower()
     tme_overexplained = _TME_OVEREXPLAINED_MARKER in warns
     top = [
@@ -200,10 +202,121 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
     ]
     return {
         "hypothesis_purity_spread": spread,
+        "hypothesis_purity_lo": hyp_lo,
+        "hypothesis_purity_hi": hyp_hi,
         "tme_overexplained": tme_overexplained,
         "fragile": bool(spread >= _DECOMP_PURITY_FRAGILE_SPREAD or tme_overexplained),
         "top_hypotheses": top,
     }
+
+
+# Margin by which a decomposition point purity must differ from an independent signal to count as
+# disagreeing with it. Falling back requires disagreeing with EVERY present independent signal.
+_DECOMP_INDEPENDENT_DISAGREE_MARGIN = 0.15
+
+
+def _independent_purity_signals(classifier_purity) -> list[float]:
+    """The independent (non-decomposition) purity estimates from the classifier purity dict:
+    signature, lineage, and ESTIMATE. Only present, finite, positive values are returned."""
+    comp = (classifier_purity or {}).get("components") or {}
+    raw = [
+        (comp.get("signature") or {}).get("purity"),
+        (comp.get("lineage") or {}).get("purity"),
+        comp.get("estimate_purity"),
+    ]
+    out = []
+    for v in raw:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if f == f and f > 0.0:  # finite and non-degenerate
+            out.append(f)
+    return out
+
+
+def _classifier_purity_trustworthy(classifier_purity) -> bool:
+    """Whether the classifier purity is a safe fall-back target for a rejected decomposition purity.
+
+    The TME-overexplained low-purity samples (the dominant fragile case) have a signature purity that
+    is SATURATED high — pinned near 1.0 because the tumor-signature genes fire even at low purity —
+    which is exactly what the decomposition exists to correct. Falling back to a saturated (or
+    degenerate zero-width interval) signature would revert an honest low estimate to a wrong ~100%.
+    Only treat a non-saturated purity that carries a real interval as a trustworthy fall-back.
+    """
+    point = classifier_purity.get("overall_estimate")
+    lo = classifier_purity.get("overall_lower")
+    hi = classifier_purity.get("overall_upper")
+    if not isinstance(point, (int, float)) or not (0.05 < float(point) < 0.95):
+        return False
+    if not isinstance(lo, (int, float)) or not isinstance(hi, (int, float)):
+        return False
+    return float(hi) - float(lo) > 1e-6
+
+
+def reconcile_decomposition_purity(classifier_purity, decomp_purity, stability):
+    """Reconcile a fragile decomposition purity against the independent classifier signals.
+
+    Policy (chosen 2026-07-07): when the adopted decomposition purity is *fragile* (its plausible
+    template hypotheses disagree widely and/or the TME background over-subtracted):
+
+      * always WIDEN the reported interval to span the plausible hypothesis range and mark the
+        purity as template-sensitive (the point estimate is kept); and
+      * FALL BACK to the classifier's independent purity when the decomposition point disagrees with
+        EVERY independent signal (signature, lineage, ESTIMATE) by more than the margin — a fragile
+        estimate that no other method corroborates is not trustworthy as the headline.
+
+    A non-fragile decomposition purity is returned unchanged. Returns ``(action, purity_dict)`` where
+    ``action`` is ``"adopt"`` (unchanged), ``"widen"`` (adopt point, widened interval + caveat), or
+    ``"reject"`` (do not adopt; use ``classifier_purity``). The returned dict is always safe to adopt.
+    """
+    stability = stability or {}
+    if not isinstance(decomp_purity, dict) or not stability.get("fragile"):
+        return "adopt", decomp_purity
+
+    point = decomp_purity.get("overall_estimate")
+    independents = _independent_purity_signals(classifier_purity)
+    try:
+        point_f = float(point)
+    except (TypeError, ValueError):
+        point_f = None
+
+    # Fall back when the fragile decomposition point disagrees with EVERY independent signal.
+    fully_inconsistent = bool(
+        point_f is not None
+        and independents
+        and all(abs(point_f - s) > _DECOMP_INDEPENDENT_DISAGREE_MARGIN for s in independents)
+    )
+    if fully_inconsistent and isinstance(classifier_purity, dict) and _classifier_purity_trustworthy(
+        classifier_purity
+    ):
+        reverted = dict(classifier_purity)
+        reverted["decomposition_purity_rejected"] = {
+            "decomposition_estimate": round(point_f, 4),
+            "independent_estimates": [round(s, 4) for s in independents],
+            "reason": "fragile decomposition purity disagreed with every independent signal",
+        }
+        return "reject", reverted
+
+    # Otherwise widen the interval to span the plausible hypothesis range (∪ the existing interval).
+    widened = dict(decomp_purity)
+    lo_candidates = [decomp_purity.get("overall_lower"), stability.get("hypothesis_purity_lo")]
+    hi_candidates = [decomp_purity.get("overall_upper"), stability.get("hypothesis_purity_hi")]
+    lo_vals = [float(x) for x in lo_candidates if isinstance(x, (int, float))]
+    hi_vals = [float(x) for x in hi_candidates if isinstance(x, (int, float))]
+    if point_f is not None:
+        lo_vals.append(point_f)
+        hi_vals.append(point_f)
+    if lo_vals:
+        widened["overall_lower"] = round(max(0.0, min(lo_vals)), 4)
+    if hi_vals:
+        widened["overall_upper"] = round(min(1.0, max(hi_vals)), 4)
+    widened["purity_interval_widened_for_fragility"] = {
+        "hypothesis_spread": stability.get("hypothesis_purity_spread"),
+        "tme_overexplained": stability.get("tme_overexplained"),
+        "reason": "decomposition purity is template-sensitive; interval spans the plausible fits",
+    }
+    return "widen", widened
 
 
 def build_analysis_parameters(
