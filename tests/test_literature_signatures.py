@@ -65,15 +65,20 @@ def test_all_codes_without_direct_expression_reference_have_literature_signature
     # the child cohorts, and the ontology walk only stops at the parent to report
     # the tied children as a set. They don't need their own literature signature.
     parent_nodes = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
-    # Nor do aggregate/subtype codes that aren't surrogate-inference targets:
-    # ontology_level == "grouping" unions are scored via their constituent cohorts,
-    # and "molecular_subtype" codes classify as their parent (the molecular axis —
-    # MSI/EBV/HER2/... — is orthogonal to the expression signature). An
-    # "_UNCLASSIFIED" bucket has no defining marker program by definition.
+    # Nor do aggregate/subtype/scope codes that aren't surrogate-inference targets:
+    # ontology_level == "grouping" unions are scored via their constituent cohorts;
+    # "molecular_subtype" codes classify as their parent (the molecular axis —
+    # MSI/EBV/HER2/... — is orthogonal to the expression signature); and
+    # "evidence_scope" buckets (NET_NONPANCREATIC, NEN_EXTRAPULMONARY_HG — oncoref
+    # #326) are literature-pooling scopes with no own marker program, scored via
+    # their members. An "_UNCLASSIFIED" bucket has no defining marker by definition.
+    # Gate on oncoref's semantic ontology_level, not a hand-maintained code list.
     aggregate_or_subtype = (
         set(
             reg.loc[
-                reg["ontology_level"].astype(str).isin(("grouping", "molecular_subtype")),
+                reg["ontology_level"].astype(str).isin(
+                    ("grouping", "molecular_subtype", "evidence_scope")
+                ),
                 "code",
             ].astype(str)
         )
