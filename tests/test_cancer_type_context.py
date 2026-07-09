@@ -117,9 +117,11 @@ def test_context_separates_nutm_report_label_from_fallback_reference():
 
 
 def test_context_uses_documented_fallback_when_fine_expression_is_missing():
-    # ACINIC (acinic cell carcinoma) has no direct cohort of its own, so it
-    # still exercises the salivary-family fallback to HNSC. (ADCC gained its
-    # own cohort in pirlygenes >=5.11 and now resolves directly.)
+    # ACINIC (acinic cell carcinoma) has no direct cohort of its own. Since
+    # oncoref 1.8.95 reparented it under SGC, it now resolves via a two-hop
+    # path: registry parent (SGC) -> salivary family fallback (HNSC). SGC itself
+    # has no direct cohort, so the salivary-family fallback still lands on HNSC.
+    # (ADCC gained its own cohort in pirlygenes >=5.11 and now resolves directly.)
     context = cancer_type_context_from_analysis(
         {
             "cancer_type": "ACINIC",
@@ -132,7 +134,10 @@ def test_context_uses_documented_fallback_when_fine_expression_is_missing():
     assert not context.report_has_expression_ref
     assert context.code_for("expression") == "HNSC"
     assert context.best_expression_source_kind == "deconvolved_tumor_reference"
-    assert context.best_expression_fallback_reason == "salivary family fallback"
+    assert (
+        context.best_expression_fallback_reason
+        == "registry parent; salivary family fallback"
+    )
     assert not context.best_expression_direct
 
 
@@ -294,13 +299,15 @@ def test_expression_reference_options_canonicalize_source_codes():
         # below + SARC_GCTB; the old neuroendocrine-fallback example was retired
         # because the rebuild gave every NE code its own cohort — see NEC_MERKEL.)
         (
+            # Two-hop fallback since oncoref 1.8.95 reparented ACINIC under SGC:
+            # registry parent (SGC, no direct cohort) -> salivary family (HNSC).
             "ACINIC",
             "HNSC",
             "deconvolved_tumor_reference",
             "TCGA",
             "ensembl_symbol",
             False,
-            "salivary family fallback",
+            "registry parent; salivary family fallback",
         ),
         (
             # NEC_MERKEL gained its own Merkel-cell cohort in the reference rebuild,
