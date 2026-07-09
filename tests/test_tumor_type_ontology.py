@@ -58,12 +58,17 @@ def test_every_registry_code_has_ontology_marker_expectations():
     # *coverage* requirement (but they remain valid registry codes, so an ontology
     # entry for one is NOT stale — BRCA/COAD/... are parents that do have entries).
     parent_nodes = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
-    # ontology_level == "grouping" aggregates (e.g. NET_NONPANCREATIC,
-    # NEN_G3_EXTRAPULMONARY) are the same case even when *childless* — a union/
-    # source-scope bucket with no classifiable cohort of its own — so exempt them
-    # from the own-marker requirement too.
+    # Aggregate / scope nodes with no classifiable cohort of their own are the
+    # same case even when *childless* — exempt them from the own-marker
+    # requirement too (their members carry the markers). oncoref #326 marks these
+    # with ontology_level "grouping" (SARC/CRC/NET) and "evidence_scope" (the
+    # literature-pooling buckets NET_NONPANCREATIC, NEN_G3_EXTRAPULMONARY). Gate on
+    # that semantic level, not a hand-maintained code list.
     grouping_nodes = (
-        set(reg.loc[reg["ontology_level"].astype(str) == "grouping", "code"].astype(str))
+        set(reg.loc[
+            reg["ontology_level"].astype(str).isin(("grouping", "evidence_scope")),
+            "code",
+        ].astype(str))
         if "ontology_level" in reg.columns
         else set()
     )
