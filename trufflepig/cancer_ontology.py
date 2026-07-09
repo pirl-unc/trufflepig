@@ -114,16 +114,51 @@ def resolve_cancer_type(*args, **kwargs):
     raise onc_err
 
 
-def cancer_type_subtypes_of(parent_code):
-    """Child subtype codes of a (mixture) parent.
+def _expand_histology_rollup(code):
+    """Expand an intermediate histology-rollup tier into its type leaves.
 
-    Kept on **pirlygenes** deliberately: it's tied to which subtypes carry a curated lineage-gene
-    panel (``lineage-genes.csv``), and oncoref nests RMS subtypes under ``SARC_RMS`` (a *more correct*
-    2-level hierarchy) whereas trufflepig's single-level mixture refinement expects them flat under
-    ``SARC``. Migrating this requires making ``_mixture_cohort_lineage_summary`` recurse first — a
-    separate, validated change — so for a behaviour-neutral ontology switch this stays pirlygenes.
+    oncoref #325 inserted rollup tiers (``SARC_LPS``, ``SARC_ESS``, ``NEC_LUNG`` —
+    ``is_cohort_aggregate`` codes whose children are all ``ontology_level=='type'``)
+    between a broad code and its histologic-type leaves. trufflepig's single-level
+    mixture refinement / fine-subtype resolution expects those leaves *directly*
+    under the parent, so such a tier is replaced by its type children. A leaf, or a
+    molecular-subtype tier (``SARC_RMS`` -> ``SARC_RMS_ARMS``/... at
+    ``ontology_level=='molecular_subtype'``), is returned unchanged — the RMS tile
+    stays a single subtype, preserving prior behaviour.
     """
-    return _pirlygenes().cancer_type_subtypes_of(parent_code)
+    children = [str(c) for c in (_pirlygenes().cancer_type_subtypes_of(code) or [])]
+    records = _records_by_code()
+    if children and all(
+        str(records.get(child, {}).get("ontology_level")) == "type"
+        for child in children
+    ):
+        return children
+    return [str(code)]
+
+
+def cancer_type_subtypes_of(parent_code):
+    """Child subtype codes of a (mixture) parent, with intermediate histology-rollup
+    tiers flattened to their type leaves.
+
+    Kept on **pirlygenes** deliberately for the raw child lookup: it's tied to which
+    subtypes carry a curated lineage-gene panel (``lineage-genes.csv``). oncoref
+    #325 nests liposarcoma/ESS/pulmonary-NEC histologic types under rollup tiers
+    (``SARC_LPS``/``SARC_ESS``/``NEC_LUNG``) — a *more correct* 2-level hierarchy —
+    whereas trufflepig's single-level mixture refinement expects those type leaves
+    flat under the parent. ``_expand_histology_rollup`` performs that flatten here
+    (the "separate, validated change" this docstring long anticipated), so
+    ``cancer_type_subtypes_of('SARC')`` still yields ``SARC_DDLPS``/``SARC_MYXLPS``/
+    ``SARC_LPS_UNSPEC``/... directly. Molecular-subtype tiers (``SARC_RMS``) are
+    left intact.
+    """
+    raw = _pirlygenes().cancer_type_subtypes_of(parent_code) or []
+    out, seen = [], set()
+    for code in raw:
+        for expanded in _expand_histology_rollup(str(code)):
+            if expanded not in seen:
+                seen.add(expanded)
+                out.append(expanded)
+    return out
 
 
 def is_mixture_cohort(code):

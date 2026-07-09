@@ -10,9 +10,12 @@ from pirlygenes.gene_sets_cancer import (
     cancer_type_registry,
     cancer_types_in_family,
     cancer_types_by_tissue,
-    cancer_type_subtypes_of,
 )
 
+# trufflepig's wrapper flattens oncoref#325 histology-rollup tiers (SARC_LPS/…) so
+# the histologic-type leaves (SARC_DDLPS/MYXLPS/…) stay reachable as SARC subtypes —
+# the trufflepig-facing view this suite asserts on.
+from trufflepig.cancer_ontology import cancer_type_subtypes_of
 from trufflepig.reference import subtype_deconvolved_expression
 
 
