@@ -62,7 +62,7 @@ def test_every_registry_code_has_ontology_marker_expectations():
     # same case even when *childless* — exempt them from the own-marker
     # requirement too (their members carry the markers). oncoref #326 marks these
     # with ontology_level "grouping" (SARC/CRC/NET) and "evidence_scope" (the
-    # literature-pooling buckets NET_NONPANCREATIC, NEN_G3_EXTRAPULMONARY). Gate on
+    # literature-pooling buckets NET_NONPANCREATIC, NEN_EXTRAPULMONARY_HG). Gate on
     # that semantic level, not a hand-maintained code list.
     grouping_nodes = (
         set(reg.loc[
