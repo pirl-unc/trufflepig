@@ -6190,6 +6190,8 @@ def _cancer_type_vote_summary_markdown(analysis, call_summary=None, *, max_rows=
         ),
     )
     if rows:
+        from .reporting import md_table_cell
+
         lines.append("")
         lines.append("| Signal | Role for active label | Status | Score | Details |")
         lines.append("|---|---|---|---:|---|")
@@ -6197,7 +6199,9 @@ def _cancer_type_vote_summary_markdown(analysis, call_summary=None, *, max_rows=
             status = str(row.get("status") or "").replace("_", " ")
             if row.get("selects_report_label"):
                 status = "selected report-label vote"
-            details = _decision_channel_detail_summary(row.get("details") or {})
+            # Escape the same way the decision-trace table does: a free-text
+            # channel rationale can carry `|`/newlines that would break the row.
+            details = md_table_cell(_decision_channel_detail_summary(row.get("details") or {}))
             lines.append(
                 f"| {_channel_display_label(row.get('channel'))} | "
                 f"{_channel_role_label(row.get('role'))} | "

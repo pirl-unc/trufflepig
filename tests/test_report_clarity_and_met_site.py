@@ -7,6 +7,7 @@ import pytest
 
 from trufflepig.main import (
     _build_target_report,
+    _cancer_type_vote_summary_markdown,
     _clamp_interval_to_cap,
     _constrain_purity_interval_with_decomposition,
     _effective_met_site_for_background,
@@ -14,6 +15,43 @@ from trufflepig.main import (
     _infer_likely_met_site_context,
     _next_best_support_gap,
 )
+
+
+def test_vote_summary_escapes_pipe_and_newline_in_detail_cells():
+    """A free-text channel rationale carrying `|` or a newline must not break the
+    Cancer-Type Evidence Votes table (same contract as the decision-trace table:
+    both route the detail through reporting.md_table_cell)."""
+    analysis = {
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "COAD",
+                "selected_by": "pan_cancer_signature_ranker",
+                "evidence_channels": [
+                    {
+                        "channel": "local_expression_reference",
+                        "role": "supporting",
+                        "support": 0.9,
+                        "status": "supporting",
+                        "details": {"panel": "lineage|program\nrationale"},
+                        "selects_report_label": False,
+                    }
+                ],
+            }
+        },
+    }
+    md = _cancer_type_vote_summary_markdown(analysis)
+    data_rows = [
+        ln
+        for ln in md.splitlines()
+        if ln.startswith("| ") and "Signal" not in ln and "---" not in ln
+    ]
+    assert data_rows, md
+    row = data_rows[0]
+    # The pipe is escaped (kept as a literal `\|` in the cell) and the newline is
+    # flattened, so the row still has exactly the 5-column / 6-delimiter structure.
+    assert "\n" not in row
+    assert "\\|" in row
+    assert row.replace("\\|", "").count("|") == 6
 
 
 def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
