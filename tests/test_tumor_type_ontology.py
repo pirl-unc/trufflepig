@@ -111,16 +111,17 @@ def test_ontology_records_direct_reference_and_literature_markers_for_adcc():
     assert {"MYB", "MYBL1", "NFIB"} <= set(entry.expected_high_genes)
 
 
-def test_ontology_records_salivary_family_fallback_for_acinic():
-    # ACINIC has no direct cohort of its own and still documents the
-    # salivary-family fallback to HNSC.
+def test_ontology_records_member_cohort_fallback_for_acinic():
+    # ACINIC has no direct cohort of its own; it now documents a fallback to a
+    # reference-backed salivary MEMBER (ADCC) via its registry parent SGC, rather
+    # than the cross-family HNSC squamous cohort it used before member descent.
     entry = tumor_type_ontology_entry("ACINIC")
 
     assert entry is not None
     assert entry.family == "salivary"
-    assert entry.expression_reference_code == "HNSC"
+    assert entry.expression_reference_code == "ADCC"
     assert not entry.expression_reference_direct
-    assert "salivary family fallback" in entry.expression_reference_reason
+    assert "member cohort" in entry.expression_reference_reason
 
 
 def test_ontology_has_subtype_contrast_for_brca_her2():

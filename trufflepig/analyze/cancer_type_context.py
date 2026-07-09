@@ -317,6 +317,37 @@ _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
 }
 
 
+def _reference_backed_member_candidates(code_text: str) -> tuple[tuple[str, str], ...]:
+    """Reference-backed descendants of a grouping/aggregate — a faithful in-lineage
+    representative to fall back to before any cross-family fallback.
+
+    A grouping with no direct reference of its own (NET, BTC, SGC, …) otherwise
+    resolves *sideways* to a family stranger (NET→SCLC, BTC→COAD, SGC→HNSC) even
+    though it has member cohorts that carry a real reference (a NET site atom, CHOL,
+    ADCC). Prefer such a member. Only descendants that already carry a DIRECT
+    expression reference are returned, so the resolver resolves immediately without
+    recursing further. Deterministic (alphabetical) order — the *proper* fix is a
+    pooled member-union reference produced upstream (oncoref#329); this is the
+    defensive interim so a grouping is never characterized against a wrong-lineage
+    cohort in the meantime.
+    """
+    try:
+        from oncoref import cancer_type_descendants
+
+        descendants = cancer_type_descendants(code_text)
+    except Exception:  # noqa: BLE001 — ontology optional; degrade to family fallback
+        return ()
+    direct = _direct_expression_reference_records()
+    members = sorted(
+        {
+            _clean(d)
+            for d in descendants or ()
+            if _clean(d) and direct.get(_clean(d))
+        }
+    )
+    return tuple((member, "member cohort") for member in members)
+
+
 def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
     code_text = _clean(code)
     row = _registry_records().get(code_text, {})
@@ -326,6 +357,12 @@ def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
         candidates.append((parent, "registry parent"))
     for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
         candidates.append((fallback, "curated code fallback"))
+    # A reference-backed member is a faithful in-lineage fallback; try it before the
+    # cross-family fallback below (a grouping should resolve to its own member, not a
+    # family stranger). Placed after the registry parent so parented subtypes keep
+    # their parent reference; groupings (no parent) reach their members here.
+    for member, reason in _reference_backed_member_candidates(code_text):
+        candidates.append((member, reason))
     family = _clean(row.get("family")).lower()
     fam_fallbacks = _REFERENCE_FAMILY_FALLBACKS.get(family)
     if not fam_fallbacks and "-" in family:
