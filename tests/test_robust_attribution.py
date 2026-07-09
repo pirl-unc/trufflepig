@@ -840,3 +840,18 @@ def test_epithelial_context_caps_caf_marker_to_non_tumor_fraction():
     assert row["attr_tumor_fraction"] <= 0.21
     ctx = tumor_attribution_context(row)
     assert ctx["tier"] == "background_dominant"
+
+
+def test_tumor_attribution_context_adds_low_sample_purity_note():
+    from trufflepig.reporting import tumor_attribution_context
+
+    base = {
+        "observed_tpm": 100.0,
+        "attr_tumor_tpm": 90.0,
+        "attr_tumor_fraction": 0.9,
+        "attr_support_fraction": 1.0,
+    }
+    with_flag = tumor_attribution_context({**base, "sample_low_purity": True})
+    assert any("low sample purity" in n for n in with_flag["notes"])
+    without = tumor_attribution_context(base)
+    assert not any("low sample purity" in n for n in without["notes"])

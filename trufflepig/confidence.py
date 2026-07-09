@@ -61,6 +61,19 @@ class ConfidenceTier:
         return f"{prefix} ({note})" if note else prefix
 
 
+def sample_purity_is_low(purity_tier) -> bool:
+    """True when the sample is in a low-purity regime that distorts tumor-source TPM.
+
+    Keyed off the pipeline's explicit ``"low-purity regime"`` purity-confidence reason —
+    the same trigger as the summary caveat that steers readers to tumor-attributed values
+    — so the inline tumor-source caveat fires exactly when that regime is flagged.
+    """
+    if purity_tier is None:
+        return False
+    reasons = getattr(purity_tier, "reasons", None) or []
+    return any("low-purity regime" in str(reason) for reason in reasons)
+
+
 def concise_confidence_reasons(tier: ConfidenceTier, max_reasons: int = 3) -> str:
     """Return reader-facing shorthand for verbose confidence reasons.
 

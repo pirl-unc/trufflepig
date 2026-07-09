@@ -1721,3 +1721,21 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     assert "## Notable biomarker outliers" in md
     assert "TP53" in md
     assert "expression is not the eligibility criterion" in md
+
+
+def test_summary_low_purity_caveat_rides_on_tumor_source_tpm():
+    # Low-purity sample: the tumor-source caveat rides inline with the target TPMs,
+    # sourced from the sample_low_purity flag that analyze_sample sets on ranges_df.
+    analysis = _make_analysis(purity_tier_label="low")
+    ranges_df = _make_ranges_df()
+    ranges_df["sample_low_purity"] = True
+    md = build_summary(analysis, ranges_df, cancer_code="PRAD", disease_state="")
+    assert "low sample purity — tumor-source estimate is less certain" in md
+
+
+def test_summary_omits_low_purity_caveat_when_not_flagged():
+    analysis = _make_analysis(purity_tier_label="high")
+    ranges_df = _make_ranges_df()
+    ranges_df["sample_low_purity"] = False
+    md = build_summary(analysis, ranges_df, cancer_code="PRAD", disease_state="")
+    assert "low sample purity — tumor-source estimate" not in md
