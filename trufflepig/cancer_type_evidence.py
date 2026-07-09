@@ -7166,8 +7166,16 @@ def _fallback_context_selected(
     if "pan_cancer_signature_ranker" not in hypothesis.evidence_sources:
         return None
     hypothesis.report_label_candidate = True
-    hypothesis.selected_by = hypothesis.selected_by or "pan_cancer_signature_ranker"
-    hypothesis.label_basis = hypothesis.label_basis or "pan_cancer_signature_ranker"
+    # This is a BLOCKED fallback context row (no label was selectable) admitted via the
+    # pan-cancer signature ranker. Force the selector to the ranker rather than
+    # ``or``-preserving whatever is there: a hypothesis that was initially selectable and
+    # later demoted by ``_add_fused_evidence_features`` can still carry a stale selectable
+    # ``selected_by`` (e.g. ``local_expression_reference``) while ``can_select_report_label``
+    # is False. ``_apply_cancer_type_evidence`` treats any non-ranker ``selected_by`` as a
+    # report-scope selection, so preserving the stale value would let this blocked hypothesis
+    # drive the final report label.
+    hypothesis.selected_by = "pan_cancer_signature_ranker"
+    hypothesis.label_basis = "pan_cancer_signature_ranker"
     hypothesis.label_status = hypothesis.label_status or "blocked"
     if not hypothesis.blocking_reasons:
         hypothesis.blocking_reasons = (

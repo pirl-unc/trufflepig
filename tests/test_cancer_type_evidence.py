@@ -5013,3 +5013,33 @@ def test_same_top_contrast_does_not_outrank_exact_reference(monkeypatch):
     luad = next(row for row in result["evidence"] if row["cancer_type"] == "LUAD")
     assert "contrast_discriminator" in luad["evidence_sources"]
     assert luad["selected_by"] == "pan_cancer_signature_ranker"
+
+
+def test_fallback_context_selection_resets_stale_selectable_selector():
+    """A hypothesis initially selectable and later demoted by ``_add_fused_evidence_features``
+    keeps its selectable ``selected_by`` (e.g. ``local_expression_reference``) while
+    ``can_select_report_label`` is False. The blocked fallback-context selection must reset that
+    selector to the pan-cancer ranker — otherwise ``_apply_cancer_type_evidence`` (which treats any
+    non-ranker ``selected_by`` as a report-scope selection) would let the blocked hypothesis drive
+    the final report label."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fallback_context_selected,
+    )
+
+    hyp = CancerTypeEvidence(
+        cancer_type="READ",
+        selected_by="local_expression_reference",  # stale selectable selector
+        can_select_report_label=False,  # ...but demoted, so it must NOT select the label
+        evidence_sources=("pan_cancer_signature_ranker",),
+    )
+    analysis = {"candidate_trace": [{"code": "READ"}]}
+
+    result = _fallback_context_selected({"READ": hyp}, analysis)
+
+    assert result is hyp
+    # Reset to the context ranker (which IS the fallback's admission source), not the stale selector.
+    assert result.selected_by == "pan_cancer_signature_ranker"
+    assert result.label_basis == "pan_cancer_signature_ranker"
+    # The serialized selection the caller reads must carry the ranker so it is not routed to scope.
+    assert result.public_dict()["selected_by"] == "pan_cancer_signature_ranker"
