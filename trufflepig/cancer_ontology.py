@@ -59,16 +59,14 @@ def cancer_type_registry():
 def resolve_cancer_type(*args, **kwargs):
     """Normalize a free-text / alias cancer label to a **trufflepig-supported** registry code.
 
-    Both the oncoref resolution and the pirlygenes fallback are validated against the merged
-    :func:`cancer_type_registry`, which is trufflepig's supported code set (oncoref ∩ pirlygenes
-    + pirlygenes-only codes like ASTB − oncoref-only aggregates like NET / CRC_MSI that have no
-    markers or reference column here):
+    Resolution is validated against :func:`cancer_type_registry` (oncoref's registry minus the
+    per-organ aggregates in :data:`_UNSUPPORTED_AGGREGATES`):
 
     - oncoref resolving to a SUPPORTED code → returned (the common path).
     - oncoref resolving to a DROPPED aggregate (NET, CRC_MSI) → NOT returned: it would only fail
-      later in purity/reference lookup. Try the pirlygenes mapping; if that also doesn't land on a
-      supported code, raise — so an unsupported code fails loudly at resolve time.
-    - oncoref unable to resolve at all → pirlygenes fallback for the pirlygenes-only codes (ASTB).
+      later in purity/reference lookup, so it fails loudly here instead.
+    - oncoref unable to resolve at all → a pirlygenes fallback covers any label that only
+      pirlygenes' alias table maps (e.g. curated display aliases oncoref doesn't carry).
 
     Genuinely-unknown labels still raise (the original oncoref error).
     """
@@ -83,7 +81,7 @@ def resolve_cancer_type(*args, **kwargs):
             return resolved
         onc_err = ValueError(
             f"{resolved!r} resolved by oncoref but is not a trufflepig-supported code "
-            f"(an oncoref-only aggregate dropped from the merged registry)"
+            f"(a per-organ aggregate dropped from the registry; use a specific per-organ code)"
         )
     try:
         pirly_resolved = _pirlygenes().resolve_cancer_type(*args, **kwargs)
