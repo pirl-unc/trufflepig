@@ -12,6 +12,7 @@ from trufflepig.brief import (
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
     _top_therapies,
+    mismatch_repair_summary_line,
 )
 from trufflepig.confidence import ConfidenceTier
 
@@ -646,6 +647,118 @@ def test_summary_mmr_vote_can_use_explicit_crc_context_for_read_call():
 
     assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
     assert "MSI-like probability 0.71" in md
+
+
+def _mmr_analysis(msi_probability, *, mlh1_expression=None, code="COAD"):
+    mmr = {
+        "context_group": "CRC",
+        "decision_threshold": 0.5,
+        "msi_probability": msi_probability,
+    }
+    if mlh1_expression is not None:
+        mmr["mlh1_expression"] = mlh1_expression
+    return {
+        "cancer_type": code,
+        "cancer_type_evidence": {
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": code,
+                        "role": "hierarchical_mismatch_repair_vote",
+                        "code": "MSI",
+                        "status": "admission_context",
+                        "details": {
+                            "label_space": (
+                                "learned_mismatch_repair_release_ensemble"
+                            ),
+                            "mismatch_repair": mmr,
+                        },
+                    }
+                ]
+            }
+        },
+    }
+
+
+def test_mmr_summary_flags_mlh1_retained_msi_tension():
+    line = mismatch_repair_summary_line(
+        _mmr_analysis(0.81, mlh1_expression={"tpm": 18.0, "cohort_ratio": 1.01})
+    )
+    assert "favors MSI-like" in line
+    assert "MLH1 mRNA is retained (18 TPM, 101% of the cohort-typical level)" in line
+    assert "does not exclude MSI" in line
+
+
+def test_mmr_summary_omits_tension_when_mlh1_silenced():
+    line = mismatch_repair_summary_line(
+        _mmr_analysis(0.81, mlh1_expression={"tpm": 4.0, "cohort_ratio": 0.24})
+    )
+    assert "favors MSI-like" in line
+    assert "MLH1 mRNA is retained" not in line
+
+
+def test_mmr_summary_omits_tension_when_no_cohort_ratio():
+    # Classifier surfaced the raw TPM but no reference cohort was in scope, so retention
+    # is unknown — the clause must not fire off the sample TPM alone.
+    line = mismatch_repair_summary_line(
+        _mmr_analysis(0.81, mlh1_expression={"tpm": 18.0})
+    )
+    assert "favors MSI-like" in line
+    assert "MLH1 mRNA is retained" not in line
+
+
+def test_mmr_summary_omits_tension_when_mss():
+    line = mismatch_repair_summary_line(
+        _mmr_analysis(0.20, mlh1_expression={"tpm": 18.0, "cohort_ratio": 1.01})
+    )
+    assert "favors MSS-like" in line
+    assert "MLH1 mRNA is retained" not in line
+
+
+def test_mmr_summary_tension_survives_flat_to_nested_renesting(monkeypatch):
+    # Cross the real seam: the release MMR classifier emits FLAT vote details;
+    # cancer_type_evidence enriches them (adds cohort_ratio) while still flat; the
+    # channel builder re-nests the flat details verbatim under "mismatch_repair"
+    # (cancer_type_evidence.py ~983); brief reads the nested channel. Assert the
+    # tension clause survives that round-trip.
+    import trufflepig.cancer_type_evidence as cte
+
+    monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: 18.0)
+    vote = {
+        "label_space": "learned_mismatch_repair_release_ensemble",
+        "details": {
+            "context_group": "CRC",
+            "decision_threshold": 0.5,
+            "msi_probability": 0.81,
+            "mlh1_expression": {"tpm": 18.0},
+        },
+    }
+    enriched = cte._enrich_mmr_vote_mlh1_cohort_context(vote, "COAD")
+    analysis = {
+        "cancer_type": "COAD",
+        "cancer_type_evidence": {
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": "COAD",
+                        "role": "hierarchical_mismatch_repair_vote",
+                        "code": "MSI",
+                        "status": "admission_context",
+                        "details": {
+                            "label_space": (
+                                "learned_mismatch_repair_release_ensemble"
+                            ),
+                            # Exactly how the channel builder nests it (line ~983).
+                            "mismatch_repair": enriched["details"],
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    line = mismatch_repair_summary_line(analysis)
+    assert "MLH1 mRNA is retained (18 TPM, 100% of the cohort-typical level)" in line
+    assert "does not exclude MSI" in line
 
 
 def test_summary_rna_alternatives_use_post_gate_support_fraction():

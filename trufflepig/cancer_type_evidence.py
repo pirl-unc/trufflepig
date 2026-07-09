@@ -3942,6 +3942,81 @@ def _reference_medians(reference_code: str) -> dict[str, float]:
     }
 
 
+@lru_cache(maxsize=None)
+def _cohort_bulk_gene_median(reference_code: str, gene: str) -> float | None:
+    """Cohort-median BULK clean-TPM for one gene, or ``None`` if unavailable.
+
+    Bulk (not deconvolved) on purpose: the denominator must match the *bulk* sample
+    MLH1 the classifier surfaces, and the MSI-vs-MSS calibration (~0.2-0.3x silenced
+    vs ~1x retained) was measured on these same bulk cohort medians.
+    """
+    code = _clean(reference_code)
+    if not code or not gene:
+        return None
+    try:
+        from .reference import cancer_reference_expression
+    except ImportError:
+        return None
+    try:
+        df = cancer_reference_expression(
+            cancer_types=(code,),
+            genes=(gene,),
+            normalize="tpm_clean",
+            format="long",
+            include_provenance=False,
+        )
+    except (FileNotFoundError, KeyError, ValueError):
+        return None
+    if df is None or df.empty or "expression" not in df.columns:
+        return None
+    if "normalization" in df.columns:
+        df = df[df["normalization"].astype(str).str.lower().eq("tpm_clean")]
+    if "Symbol" in df.columns:
+        df = df[df["Symbol"].astype(str) == gene]
+    values = [
+        float(v)
+        for v in df["expression"]
+        if isinstance(v, (int, float)) and float(v) == float(v)
+    ]
+    return float(values[0]) if values else None
+
+
+def _enrich_mmr_vote_mlh1_cohort_context(
+    vote_dict: Mapping[str, Any],
+    reference_code: str,
+) -> dict[str, Any]:
+    """Add MLH1's cohort-relative level to an MMR vote's details.
+
+    The classifier surfaces only the sample's raw (bulk) MLH1 clean-TPM; "retained vs
+    promoter-silenced" is a cohort-relative call, so we divide by the cohort-typical
+    (bulk median) MLH1 here — where the reference cohort is in scope, and in the same
+    bulk space as the numerator. Silenced MLH1 collapses to a small fraction of the
+    cohort median (measured ~0.2-0.3x), so the ratio cleanly separates retained (~1x)
+    from silenced. Absent reference → unchanged (the report's tension clause does not
+    fire).
+    """
+    vote_dict = dict(vote_dict)
+    # The release vote's details are flat here (``mlh1_expression`` is a direct key);
+    # they are re-nested under ``mismatch_repair`` when the evidence channel is built.
+    details = vote_dict.get("details")
+    if not isinstance(details, Mapping):
+        return vote_dict
+    mlh1 = details.get("mlh1_expression")
+    tpm = mlh1.get("tpm") if isinstance(mlh1, Mapping) else None
+    if not isinstance(tpm, (int, float)):
+        return vote_dict
+    median = _cohort_bulk_gene_median(reference_code, "MLH1") if reference_code else None
+    if not isinstance(median, (int, float)) or median <= 0:
+        return vote_dict
+    mlh1 = dict(mlh1)
+    mlh1["cohort_median_tpm"] = round(float(median), 3)
+    mlh1["cohort_ratio"] = round(float(tpm) / float(median), 4)
+    details = dict(details)
+    details["mlh1_expression"] = mlh1
+    vote_dict["details"] = details
+    return vote_dict
+
+
 def _marker_fraction_against_reference(
     sample_tpm_by_symbol: Mapping[str, float],
     genes: tuple[str, ...],
@@ -4416,7 +4491,10 @@ def _add_learned_hierarchy_candidate_features(
             )
             if release_vote is not None:
                 hypothesis_public_votes.append(
-                    public_vote_dict(release_vote.public_dict())
+                    _enrich_mmr_vote_mlh1_cohort_context(
+                        public_vote_dict(release_vote.public_dict()),
+                        code,
+                    )
                 )
         if build_mismatch_repair_sibling_vote is not None and flat_predictions:
             sibling_vote = build_mismatch_repair_sibling_vote(
