@@ -225,6 +225,33 @@ compute purity/decomposition **after** the final entity decision and delete
 `_reroute_decomposition_to_call`. Acceptance: purity numbers unchanged on the
 sweep except where the old order was demonstrably wrong; harness green.
 
+*Status (2026-07-09).* The **single reconciliation is landed**: T10/T11/T12
+are folded into `main._reconcile_purity_after_decomposition` (adopt →
+lineage-panel override → interval cap, run once for the winning decomposition)
+and the honest-interval finalize barrier is `main._finalize_fused_purity`. The
+cross-artifact contradiction (78%-vs-10% headline) is closed — every headline
+read now goes through the finalized purity.
+
+**Deleting `_reroute_decomposition_to_call` is blocked on redesign-doc Phase 4,
+not doable as an isolated Phase-2 step.** The reroute exists because
+`tumor_purity.analyze_sample` computes the winner's purity (and enriches it with
+the decomposition component, lines ~4605-4643) *before* the cancer-type evidence
+selector runs, so when evidence refines the call to a different lineage the
+pre-evidence purity is stale. To delete the reroute we must compute the winner's
+purity for the *final* code, which requires `analyze_sample`'s winner to already
+equal the final code — i.e. folding the evidence selector into the ranking
+(Phase 4). We **cannot** simply move the enrichment out of `analyze_sample`,
+because `analyze_sample` is a public standalone contract: the diagnostic scripts
+(`eval_nohint_validation`, `diagnose_*`, `eval_full_pipeline_hardcases`),
+`plot_sample_summary`'s no-`analysis` path, and
+`test_analyze_sample_computes_decomposition_once_for_winner` all call it with no
+evidence step and rely on the winner being decomposition-enriched (for them the
+winner *is* the final code). The reroute is main-pipeline-specific, correct,
+fallback-safe, correctly placed (runs at the earliest point the final code is
+known, before the T6 context widening), and pinned by
+`test_purity_rerouted_to_evidence_call_recomputes_full_metadata`. It stays until
+Phase 4 folds report-scope selection into the main decision.
+
 **Phase 3 — freeze + retype.** Make `SampleDecision` frozen and the sole renderer
 input; port `plot_sample_summary`, `plot_purity_method_comparison`,
 `build_summary`, `_generate_text_reports`, `build_actionable`, and

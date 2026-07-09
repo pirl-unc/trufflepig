@@ -5407,6 +5407,15 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
     Recomputing the full purity for ``refined_code`` (explicit → trusted, no expression override) makes
     the entire purity result consistent with the final call. Fires whenever the evidence-refined code
     differs from the code the purity was computed for; fully fallback-safe.
+
+    Retained pending redesign-doc Phase 4. This recompute cannot be deleted as an isolated
+    change: ``analyze_sample`` computes the winner's purity BEFORE the evidence selector runs,
+    and its winner-enrichment is a public standalone contract (diagnostic scripts,
+    ``plot_sample_summary``'s no-``analysis`` path, and
+    ``test_analyze_sample_computes_decomposition_once_for_winner`` rely on it). Deleting the
+    reroute requires ``analyze_sample``'s winner to already equal the final code — i.e. folding
+    report-scope selection into the ranking (Phase 4). See the Phase-2 status note in
+    docs/report-belief-consistency-and-friendliness-plan.md.
     """
     try:
         purity = analysis.get("purity") or {}
