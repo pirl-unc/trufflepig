@@ -421,3 +421,106 @@ actionable content) and captioning figures with the PNG filename (line 201).
   `select_report_scope_from_evidence` and they touch the same files.
 - Run everything through `./test.sh` (not raw pytest) and the local report sweep
   with `--with-figures`; the memory notes and CLAUDE.md apply.
+
+---
+
+## Prioritized PR rollout (autonomous execution plan)
+
+Self-contained so a fresh context can resume from the **tracking issue**
+(pirl-unc/trufflepig **#107**) plus this section. Live status lives in the issue
+(`gh issue view 107`); this section is the fixed spec.
+
+### Execution model
+
+- **Worktree.** All work happens in the isolated worktree
+  `/Users/iskander/code/trufflepig-pr103` (branch per PR). The main checkout
+  `/Users/iskander/code/trufflepig` belongs to a *concurrent session* — never
+  `git checkout` there. Tests in the worktree run with the editable install
+  shadowed: `PYTHONPATH=/Users/iskander/code/trufflepig-pr103 python -m pytest -n <cap> …`
+  (the console `pytest` script imports the main checkout; `python -m` + PYTHONPATH
+  imports the worktree). `<cap>` = `min(logical_cpus-2, 6)` to stay under the
+  concurrent-session memory pressure (mirrors `./test.sh` math).
+- **Per-PR loop** (fully autonomous through merge): branch off latest
+  `origin/main` → implement + tests → targeted validation (affected modules) +
+  local report sweep where the change is report-visible → self-review + spawn a
+  reviewer subagent on the diff, fix findings → push, open PR, squash-merge to
+  `main` via `gh` (server-side; does not touch the concurrent checkout) → update
+  the tracking issue (check the box + comment PR/commit link + result).
+- **Full suite** runs at **wave boundaries only** (≈7 min; not per-PR). Expect
+  the **7 known oncoref-flag-blocked failures** (`test_oncoref_only_aggregates_
+  are_rejected[NET]/[CRC_MSI]`, registry-completeness/literature/ontology set) —
+  those are the parked task-#9 baseline, not regressions.
+- **Deploy = human checkpoint.** `./deploy.sh` needs the user's PyPI creds and is
+  never run by the agent. It **tags whatever `trufflepig/version.py` says and does
+  not bump** — so the final PR of each wave bumps `version.py` (minor). At each
+  wave boundary the agent pauses and asks the user to run `! ./deploy.sh`.
+
+### PR series
+
+**PR-0 — Foundation merge + release (the existing PR #103).**
+Merge `codex/rnaseq-cancer-call-redesign` (67 files, Tier-1: ReportView,
+purity RE-fusion + finalize barrier, reconcile-after-decomposition, the
+disease-state/pathway de-contradiction, reroute Phase-4 doc) → `main`.
+Bump `version.py` → 1.16.0. Deploy v1.16.0. *This is the one large/irreversible
+merge; it is the agreed starting point of the loop.*
+
+**Wave 1 — belief-consistency + information-loss** (release 1.17.0)
+- **PR-1 (§2.6a) PDF renders the tables.** `scripts/build_interpretive_report_pdf.py`
+  stops scraping `summary.md` (drops table rows, truncates at 28 lines): render
+  the therapy table + top-3 targets (tumor-source TPM + safety band) on page 1;
+  caption each figure with its interpretation sentence, not the PNG filename.
+  Interim (superseded by PR-9). Accept: reader PDF shows both tables; local sweep
+  renders; no filename captions.
+- **PR-2 (§2.4) Low-purity caveat inline.** Annotate every tumor-source TPM cell
+  with a low-purity caveat sourced from `purity` confidence, so a TPM from a
+  low-purity sample isn't over-trusted. Small/additive. Accept: unit test on a
+  low-purity vs high-purity analysis; caveat present only when warranted.
+- **PR-3 (§2.4) MLH1-vs-MMR tension.** In `brief.mismatch_repair_summary_line`,
+  when the ensemble favors MSI-like AND MLH1 mRNA is high, add a clause: high
+  MLH1 argues against *MLH1-silencing* MSI but not MSI via MSH2/MSH6/PMS2/POLE.
+  Needs a per-gene MLH1 accessor (ensemble details don't expose per-gene today →
+  either surface the classifier's per-gene z-scores into the vote details, or
+  read MLH1 from the lineage `per_gene`). Keep the biology correct. Bump
+  `version.py` → 1.17.0. Accept: tension clause fires only on MSI-like + high
+  MLH1; test.
+
+**Wave 2 — figure set: dedup + de-contradict** (release 1.18.0)
+- **PR-4 (§2.5) Curated panel scatters → audit-only.** ~10 overlapping panel
+  scatters leave the reader manifest. Accept: reader figure set no longer emits
+  them; audit set unchanged.
+- **PR-5 (§2.5) Composite vs standalone: pick one.** Reader gets the standalone
+  panels; the 4-panel `sample-summary.png` composite → audit-only. Accept: one
+  path in the reader set.
+- **PR-6 (§2.5) One target figure.** Fold the tumor-source-vs-safety-band TPM cue
+  into `priority-targets.png`; drop `priority-target-context.png` +
+  `actionable-targets.png` from the reader PDF (keep in audit). Accept: single
+  target figure in reader set.
+- **PR-7 (§2.5) Signal-matrix collapse.** Collapse the ~13 per-fold MSS/MSI bars
+  into one MSS-vs-MSI summary w/ spread; stop co-plotting probability (0–1) and
+  fused support on one axis. Bump `version.py` → 1.18.0. Accept: one summary bar;
+  separate axes.
+
+**Wave 3 — enabling architecture** (release 1.19.0)
+- **PR-8 (Phase 3) Freeze `SampleDecision`; port renderers.** `plot_sample_summary`,
+  `plot_purity_method_comparison`, `build_summary`, `_generate_text_reports`,
+  `build_actionable`, PDF read the frozen decision, not the mutable `analysis`.
+  Retype candidate vs adopted purity so a renderer can't be handed the wrong one.
+  Accept: cross-artifact invariant harness green; byte-stable reports on the sweep.
+- **PR-9 (§2.6b) PDF + markdown from `SampleDecision`.** Parity guaranteed by
+  construction; figure manifest derived from which beliefs passed threshold
+  (can't ship a figure the text denies). Supersedes PR-1. Accept: PDF/markdown
+  numbers identical by construction.
+- **PR-10 (redesign Phase 4) Fold report-scope into ranking.** `analyze_sample`'s
+  winner already equals the final code → **delete `_reroute_decomposition_to_call`
+  and `_veto_local_reference_lineage_flip`**. Guardrail: the 565-sample confusion
+  eval (`scripts/eval_per_sample_confusion.py`) — no lineage/entity regressions.
+  Bump `version.py` → 1.19.0. Largest/highest-risk; land last. Accept: reroute +
+  veto gone; 565-eval within tolerance.
+
+### Judgment-call defaults (applied unless the user overrides)
+
+- Reader PDF carries the **standalone** panels; the 4-panel composite → audit.
+- **PR-1 is an interim** PDF fix, superseded by the `SampleDecision` render (PR-9)
+  — do not block the PDF value on Phase 3.
+- Deploy at **wave boundaries** (3 deploys: 1.17.0 / 1.18.0 / 1.19.0), plus the
+  PR-0 foundation release 1.16.0.
