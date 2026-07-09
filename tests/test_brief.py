@@ -6,6 +6,7 @@ from trufflepig.brief import (
     build_actionable,
     build_brief,
     build_summary,
+    biomarker_expression_is_not_eligibility,
     _format_therapy_bullet,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
@@ -1644,3 +1645,79 @@ def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
     assert "| **MAGEA4** | afami-cel |" in md
     assert "| **MAGE-A4** |" not in md
     assert "gene symbol not present in input file" not in md
+
+
+# --- Biomarker-outlier belief-consistency (plan §2.4) ---------------------------
+#
+# A biomarker whose clinical eligibility is gated by a DNA alteration (mutation /
+# specific allele / wild-type status) must not be presented as an actionable
+# EXPRESSION outlier — that contradicts the report's own "expression is not the
+# eligibility criterion". The gene's mutation-vs-expression basis is derived from
+# the pirlygenes-authored biomarker rationale, not a hard-coded gene list.
+
+
+def test_biomarker_basis_flags_mutation_gated_rationales():
+    # Mutation / allele / wild-type gated → expression is NOT the biomarker.
+    for rationale in (
+        "Prognostic / predictive; mutation common and linked to chemo response",
+        "G12C targetable; other alleles remain a negative predictor for EGFR TKIs",
+        "Must be wild-type for EGFR-antibody response; pan-RAS testing standard",
+        "V600E mutation — dabrafenib+trametinib eligible",
+        "Activating mutations (exon 19 del / L858R) gate TKI indication",
+        "R132 mutation — ivosidenib eligibility",
+    ):
+        assert biomarker_expression_is_not_eligibility(rationale) is True, rationale
+
+
+def test_biomarker_basis_does_not_flag_expression_readable_rationales():
+    # Amplification / overexpression / IHC / FISH cue wins → expression IS readable,
+    # so HER2/MDM2-style biomarkers are never flagged (avoids the false positive of
+    # telling a clinician "expression isn't the biomarker" where it partly is).
+    for rationale in (
+        "HER2 — gating biomarker for HER2-targeted agents; IHC/ISH 3+ or FISH-amplified eligible",
+        "HER2 amplification — approved indication for trastuzumab combos in RAS WT",
+        "Ring-chromosome 12q amplification with MDM2 — pathognomonic for WDLPS/DDLPS",
+        "Overexpression / mutation — cetuximab eligibility",
+        "",
+    ):
+        assert biomarker_expression_is_not_eligibility(rationale) is False, rationale
+
+
+def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
+    # End-to-end through build_summary (the public surface that renders "Notable
+    # biomarker outliers"): a mutation-gated biomarker surfaced as a high-mRNA
+    # outlier must carry the "expression is not the eligibility criterion" caveat,
+    # so the block can't contradict the report's own eligibility principle.
+    # COAD TP53 is mutation-gated ("mutation common ... chemo response"); render a
+    # strongly-amplified, top-percentile TP53 row so it qualifies as an outlier.
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "COAD"
+    analysis["cancer_name"] = "Colon adenocarcinoma"
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "TP53",
+                "gene_id": "ENSG00000141510",
+                "observed_tpm": 180.0,
+                "amplification_fold": 15.0,
+                "tcga_percentile": 0.99,
+                "attribution": {},
+                "attr_tumor_tpm": 170.0,
+                "attr_tumor_fraction": 0.94,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }
+        ]
+    )
+    md = build_summary(
+        analysis,
+        ranges_df,
+        cancer_code="COAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "## Notable biomarker outliers" in md
+    assert "TP53" in md
+    assert "expression is not the eligibility criterion" in md

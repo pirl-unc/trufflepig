@@ -2089,6 +2089,57 @@ _OUTLIER_MIN_AMPLIFICATION_FOLD = 10.0
 _OUTLIER_MIN_OBSERVED_TPM = 50.0
 _OUTLIER_HIGH_PERCENTILE = 0.95
 
+# Rationale phrasing that marks a biomarker as gated by a DNA alteration
+# (mutation / specific allele / wild-type status) rather than by mRNA level.
+# An amplification / overexpression / IHC / FISH cue WINS (HER2/ERBB2 and MDM2
+# amplicons are legitimately expression-readable), so those are never flagged.
+_BIOMARKER_MUTATION_BASIS_MARKERS = (
+    "mutation",
+    "mutant",
+    "wild-type",
+    "wild type",
+    "wildtype",
+    "activating",
+    "allele",
+    "codon",
+    "v600",
+    "g12",
+    "g13",
+    "q61",
+    "l858",
+    "t790",
+    "exon",
+)
+_BIOMARKER_EXPRESSION_BASIS_MARKERS = (
+    "amplif",  # amplified / amplification / amplicon
+    "overexpress",
+    "expression",
+    "ihc",
+    "fish",
+    "copy-number",
+    "copy number",
+)
+
+
+def biomarker_expression_is_not_eligibility(rationale: str) -> bool:
+    """True when a biomarker-panel gene's clinical eligibility is gated by a DNA
+    alteration (mutation / specific allele / wild-type status), NOT by mRNA level.
+
+    Keyed off the pirlygenes-authored biomarker ``rationale`` so trufflepig
+    surfaces the *consequence* without re-encoding which genes are mutation-driven
+    (that biology stays in pirlygenes). An amplification / overexpression / IHC /
+    FISH cue wins — those biomarkers (HER2/ERBB2, MDM2 amplicons) are legitimately
+    read from expression, so they are never flagged. Resolves the report's
+    self-contradiction of listing TP53/KRAS/NRAS as expression "outliers" while
+    repeating that target expression is not the eligibility criterion (plan §2.4).
+    """
+    text = str(rationale or "").lower()
+    if not text:
+        return False
+    if any(marker in text for marker in _BIOMARKER_EXPRESSION_BASIS_MARKERS):
+        return False
+    return any(marker in text for marker in _BIOMARKER_MUTATION_BASIS_MARKERS)
+
 
 def _notable_biomarker_outliers(
     ranges_df,
@@ -2138,6 +2189,31 @@ def _notable_biomarker_outliers(
     panel_ids = panel_symbols_to_gene_ids(biomarker_set - excluded)
     panel_id_set = set(panel_ids.values())
     panel_sym_fallback = biomarker_set - excluded  # for rows w/o gene_id
+    # Pirlygenes-authored biomarker rationale, keyed by canonical gene_id (with a
+    # symbol fallback for id-less rows). Used to flag mutation/allele-gated
+    # biomarkers so their high-mRNA "outlier" reading carries the "expression is
+    # not the eligibility criterion" caveat (plan §2.4).
+    sym_to_rationale: dict[str, str] = {}
+    id_to_rationale: dict[str, str] = {}
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_key_genes_df
+
+        kdf = cancer_key_genes_df()
+        krows = kdf[(kdf["cancer_code"] == panel_code) & (kdf["role"] == "biomarker")]
+        if panel_subtype is not None:
+            krows = krows[krows["subtype"].fillna("").astype(str) == panel_subtype]
+        for krow in krows.to_dict("records"):
+            rationale = str(krow.get("rationale") or "").strip()
+            if not rationale:
+                continue
+            ksym = str(krow.get("symbol") or "").strip()
+            kid = _versionless_gene_id(krow.get("ensembl_gene_id"))
+            if ksym:
+                sym_to_rationale.setdefault(ksym, rationale)
+            if kid:
+                id_to_rationale.setdefault(kid, rationale)
+    except (ImportError, KeyError, ValueError, TypeError):
+        pass
     candidates: list[dict] = []
     for row in ranges_records(ranges_df):
         gene_id = _versionless_gene_id(row.get("gene_id"))
@@ -2157,6 +2233,7 @@ def _notable_biomarker_outliers(
             and pct < _OUTLIER_HIGH_PERCENTILE
         ):
             continue
+        rationale = id_to_rationale.get(gene_id) or sym_to_rationale.get(row_sym, "")
         candidates.append(
             {
                 "symbol": str(row.get("symbol") or ""),
@@ -2164,6 +2241,10 @@ def _notable_biomarker_outliers(
                 "observed_tpm": observed,
                 "amplification_fold": amp,
                 "tcga_percentile": pct,
+                "rationale": rationale,
+                "expression_not_eligibility": biomarker_expression_is_not_eligibility(
+                    rationale
+                ),
             }
         )
     # Rank: prefer the most amplified, break ties by TPM. Both signals
@@ -2187,7 +2268,16 @@ def _format_biomarker_outlier_bullet(row: dict) -> str:
         parts.append(f"amplified {amp:.1f}× over peak healthy tissue")
     if pct >= _OUTLIER_HIGH_PERCENTILE:
         parts.append(f"TCGA cohort {pct * 100:.0f}th percentile")
-    return f"- **{sym}** — " + "; ".join(parts) + " (biomarker panel)"
+    bullet = f"- **{sym}** — " + "; ".join(parts) + " (biomarker panel)"
+    # Belief-consistency (plan §2.4): a mutation/allele-gated biomarker's high
+    # mRNA is descriptive, not an eligibility signal — say so inline so this block
+    # doesn't contradict the report's "expression is not the eligibility criterion".
+    if row.get("expression_not_eligibility"):
+        bullet += (
+            " — *mutation/allele-gated biomarker: expression is not the "
+            "eligibility criterion; mRNA shown for completeness*"
+        )
+    return bullet
 
 
 # CTA threshold for the "Notable CTAs" summary block. Matches the
