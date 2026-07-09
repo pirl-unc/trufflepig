@@ -283,9 +283,15 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
             "has_issues": False,
         },
     )
-    monkeypatch.setattr(
-        cli_mod, "plot_sample_summary", lambda *a, **k: (None, mock_analysis)
-    )
+    # PR-5 (§2.5): materialize the 4-panel composite PNG the real plot_sample_summary
+    # writes, so its reader-vs-audit routing is exercised (asserted at the end).
+    def _fake_plot_sample_summary(*a, **k):
+        save_to = k.get("save_to_filename")
+        if save_to:
+            cli_mod.Image.new("RGB", (16, 16), "white").save(save_to)
+        return (None, mock_analysis)
+
+    monkeypatch.setattr(cli_mod, "plot_sample_summary", _fake_plot_sample_summary)
     monkeypatch.setattr(
         cli_mod, "plot_tumor_purity", lambda *a, **k: (None, mock_analysis["purity"])
     )
@@ -430,6 +436,18 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
         assert any(
             f"figures/{_name}" in op for op in opened_paths
         )  # present in the audit packet (opened from figures/)
+
+    # PR-5 (§2.5): the 4-panel sample-summary.png composite is audit-only. The mock
+    # wrote {prefix}-sample-summary.png; it must relocate into figures/ (audit) and
+    # NOT be collected into the reader packet from its original location — the four
+    # standalone panels it duplicates stay in the reader set (untouched here).
+    assert (figures_dir / "out-sample-summary.png").exists()  # retained in audit
+    assert (
+        f"{expected_prefix}-sample-summary.png" not in opened_paths
+    )  # composite never collected into the reader packet
+    assert any(
+        "figures/out-sample-summary.png" in op for op in opened_paths
+    )  # composite present in the audit packet
 
     # After the migration, `python -m trufflepig.main` no longer ships
     # a CLI — it's a redirect-only entry point that prints a
