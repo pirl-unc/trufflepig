@@ -5048,7 +5048,7 @@ def test_fallback_context_selection_resets_stale_selectable_selector():
 def test_enrich_mmr_vote_mlh1_cohort_context_adds_ratio(monkeypatch):
     import trufflepig.cancer_type_evidence as cte
 
-    monkeypatch.setattr(cte, "_reference_medians", lambda code: {"MLH1": 18.0})
+    monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: 18.0)
     vote = {"details": {"msi_probability": 0.8, "mlh1_expression": {"tpm": 4.0}}}
     out = cte._enrich_mmr_vote_mlh1_cohort_context(vote, "COAD")
     mlh1 = out["details"]["mlh1_expression"]
@@ -5061,7 +5061,7 @@ def test_enrich_mmr_vote_mlh1_cohort_context_adds_ratio(monkeypatch):
 def test_enrich_mmr_vote_mlh1_cohort_context_noop_without_reference(monkeypatch):
     import trufflepig.cancer_type_evidence as cte
 
-    monkeypatch.setattr(cte, "_reference_medians", lambda code: {})
+    monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: None)
     vote = {"details": {"mlh1_expression": {"tpm": 18.0}}}
     out = cte._enrich_mmr_vote_mlh1_cohort_context(vote, "COAD")
     assert "cohort_ratio" not in out["details"]["mlh1_expression"]
@@ -5070,7 +5070,7 @@ def test_enrich_mmr_vote_mlh1_cohort_context_noop_without_reference(monkeypatch)
 def test_enrich_mmr_vote_mlh1_cohort_context_noop_without_mlh1(monkeypatch):
     import trufflepig.cancer_type_evidence as cte
 
-    monkeypatch.setattr(cte, "_reference_medians", lambda code: {"MLH1": 18.0})
+    monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: 18.0)
     vote = {"details": {"msi_probability": 0.8}}
     out = cte._enrich_mmr_vote_mlh1_cohort_context(vote, "COAD")
     assert out["details"].get("mlh1_expression") is None

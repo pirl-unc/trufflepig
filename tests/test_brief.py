@@ -715,6 +715,52 @@ def test_mmr_summary_omits_tension_when_mss():
     assert "MLH1 mRNA is retained" not in line
 
 
+def test_mmr_summary_tension_survives_flat_to_nested_renesting(monkeypatch):
+    # Cross the real seam: the release MMR classifier emits FLAT vote details;
+    # cancer_type_evidence enriches them (adds cohort_ratio) while still flat; the
+    # channel builder re-nests the flat details verbatim under "mismatch_repair"
+    # (cancer_type_evidence.py ~983); brief reads the nested channel. Assert the
+    # tension clause survives that round-trip.
+    import trufflepig.cancer_type_evidence as cte
+
+    monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: 18.0)
+    vote = {
+        "label_space": "learned_mismatch_repair_release_ensemble",
+        "details": {
+            "context_group": "CRC",
+            "decision_threshold": 0.5,
+            "msi_probability": 0.81,
+            "mlh1_expression": {"tpm": 18.0},
+        },
+    }
+    enriched = cte._enrich_mmr_vote_mlh1_cohort_context(vote, "COAD")
+    analysis = {
+        "cancer_type": "COAD",
+        "cancer_type_evidence": {
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": "COAD",
+                        "role": "hierarchical_mismatch_repair_vote",
+                        "code": "MSI",
+                        "status": "admission_context",
+                        "details": {
+                            "label_space": (
+                                "learned_mismatch_repair_release_ensemble"
+                            ),
+                            # Exactly how the channel builder nests it (line ~983).
+                            "mismatch_repair": enriched["details"],
+                        },
+                    }
+                ]
+            }
+        },
+    }
+    line = mismatch_repair_summary_line(analysis)
+    assert "MLH1 mRNA is retained (18 TPM, 100% of the cohort-typical level)" in line
+    assert "does not exclude MSI" in line
+
+
 def test_summary_rna_alternatives_use_post_gate_support_fraction():
     analysis = _make_analysis()
     analysis["analysis_constraints"] = {}

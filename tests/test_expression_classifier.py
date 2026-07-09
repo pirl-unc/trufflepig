@@ -171,3 +171,14 @@ def test_mismatch_repair_sibling_vote_uses_contextual_msi_mss_labels(
     assert vote is not None
     assert vote.label == expected
     assert vote.label_space == "learned_mismatch_repair_sibling_entity"
+
+
+def test_mlh1_retention_context_surfaces_sample_tpm():
+    from trufflepig.expression_classifier import _mlh1_retention_context
+
+    assert _mlh1_retention_context({"MLH1": 17.5, "A": 1.0}) == {"tpm": 17.5}
+    # Absent MLH1 -> None (nothing to surface).
+    assert _mlh1_retention_context({"A": 1.0}) is None
+    # NaN -> None; negative -> clamped to 0.0.
+    assert _mlh1_retention_context({"MLH1": float("nan")}) is None
+    assert _mlh1_retention_context({"MLH1": -3.0}) == {"tpm": 0.0}

@@ -30,6 +30,7 @@ parseable?".)
 from __future__ import annotations
 
 import logging
+import math
 import re
 from pathlib import Path
 from typing import List, Optional
@@ -1980,7 +1981,11 @@ def _mlh1_msi_tension_clause(mmr: dict) -> str:
     """
     mlh1 = mmr.get("mlh1_expression") or {}
     ratio = mlh1.get("cohort_ratio")
-    if not isinstance(ratio, (int, float)) or ratio < _MLH1_RETAINED_COHORT_RATIO:
+    if (
+        not isinstance(ratio, (int, float))
+        or not math.isfinite(ratio)
+        or ratio < _MLH1_RETAINED_COHORT_RATIO
+    ):
         return ""
     tpm = mlh1.get("tpm")
     tpm_clause = f"{tpm:.0f} TPM, " if isinstance(tpm, (int, float)) else ""
