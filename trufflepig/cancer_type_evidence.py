@@ -3942,6 +3942,41 @@ def _reference_medians(reference_code: str) -> dict[str, float]:
     }
 
 
+def _enrich_mmr_vote_mlh1_cohort_context(
+    vote_dict: Mapping[str, Any],
+    reference_code: str,
+) -> dict[str, Any]:
+    """Add MLH1's cohort-relative level to an MMR vote's details.
+
+    The classifier surfaces only the sample's raw MLH1 clean-TPM; "retained vs
+    promoter-silenced" is a cohort-relative call, so we divide by the cohort-typical
+    (median tumor) MLH1 here — where the reference cohort is in scope. Silenced MLH1
+    collapses to a small fraction of the cohort median (measured ~0.2-0.3x), so the
+    ratio cleanly separates retained (~1x) from silenced. Absent reference → unchanged
+    (the report's tension clause simply does not fire).
+    """
+    vote_dict = dict(vote_dict)
+    # The release vote's details are flat here (``mlh1_expression`` is a direct key);
+    # they are re-nested under ``mismatch_repair`` when the evidence channel is built.
+    details = vote_dict.get("details")
+    if not isinstance(details, Mapping):
+        return vote_dict
+    mlh1 = details.get("mlh1_expression")
+    tpm = mlh1.get("tpm") if isinstance(mlh1, Mapping) else None
+    if not isinstance(tpm, (int, float)):
+        return vote_dict
+    median = _reference_medians(reference_code).get("MLH1") if reference_code else None
+    if not isinstance(median, (int, float)) or median <= 0:
+        return vote_dict
+    mlh1 = dict(mlh1)
+    mlh1["cohort_median_tpm"] = round(float(median), 3)
+    mlh1["cohort_ratio"] = round(float(tpm) / float(median), 4)
+    details = dict(details)
+    details["mlh1_expression"] = mlh1
+    vote_dict["details"] = details
+    return vote_dict
+
+
 def _marker_fraction_against_reference(
     sample_tpm_by_symbol: Mapping[str, float],
     genes: tuple[str, ...],
@@ -4416,7 +4451,10 @@ def _add_learned_hierarchy_candidate_features(
             )
             if release_vote is not None:
                 hypothesis_public_votes.append(
-                    public_vote_dict(release_vote.public_dict())
+                    _enrich_mmr_vote_mlh1_cohort_context(
+                        public_vote_dict(release_vote.public_dict()),
+                        code,
+                    )
                 )
         if build_mismatch_repair_sibling_vote is not None and flat_predictions:
             sibling_vote = build_mismatch_repair_sibling_vote(

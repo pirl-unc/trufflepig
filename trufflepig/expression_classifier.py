@@ -602,6 +602,26 @@ def _release_member_msi_probability(
     return _sigmoid(logit)
 
 
+def _mlh1_retention_context(
+    sample_tpm_by_symbol: Mapping[str, float],
+) -> dict[str, float] | None:
+    """The sample's raw MLH1 clean-TPM (retention is judged cohort-relative downstream).
+
+    MLH1 promoter hypermethylation — the dominant sporadic-MSI mechanism — silences
+    MLH1 to a small fraction of its normal level, so retained MLH1 argues *against* that
+    mechanism (MSI driven by MSH2/MSH6/PMS2 loss or POLE proofreading mutation leaves
+    MLH1 expressed). MLH1 is a moderately-expressed gene, so *within-sample* rank cannot
+    see the silencing (a silenced MLH1 still sits above the sample median); whether it is
+    retained or silenced is only visible relative to the cohort-typical MLH1, which is
+    added where the reference cohort is in scope (``cancer_type_evidence``). Here we only
+    surface the sample fact. Returns ``None`` when MLH1 is absent from the sample.
+    """
+    raw = sample_tpm_by_symbol.get("MLH1")
+    if not isinstance(raw, (int, float)) or float(raw) != float(raw):
+        return None
+    return {"tpm": round(max(0.0, float(raw)), 3)}
+
+
 def _classify_release_mismatch_repair_expression(
     sample_tpm_by_symbol: Mapping[str, float],
     cancer_type: str,
@@ -652,6 +672,7 @@ def _classify_release_mismatch_repair_expression(
             "cancer_type_context": _clean(cancer_type),
             "msi_probability": round(p_msi, 6),
             "decision_threshold": ensemble["decision_threshold"],
+            "mlh1_expression": _mlh1_retention_context(sample_tpm_by_symbol),
             "member_probabilities": member_probs,
             "validation": ensemble.get("validation") or {},
             "interpretation": (

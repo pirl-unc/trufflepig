@@ -1961,6 +1961,37 @@ def mismatch_repair_summary_context(analysis: dict) -> dict:
     return select_mismatch_repair_channel_for_report(graph.get("channels") or [], final_code)
 
 
+# MLH1 at/above this fraction of the cohort-typical (median tumor) MLH1 counts as
+# "retained" (not promoter-silenced): sporadic-MSI silencing collapses MLH1 to a small
+# fraction of the cohort median (measured ~0.2-0.3x in COAD/READ MSI), so half-of-median
+# cleanly separates retained (~1x) from silenced. Within-sample rank cannot see this —
+# MLH1 is moderately expressed, so a silenced MLH1 still sits above the sample median.
+_MLH1_RETAINED_COHORT_RATIO = 0.5
+
+
+def _mlh1_msi_tension_clause(mmr: dict) -> str:
+    """Flag the tension when the ensemble calls MSI-like yet MLH1 mRNA is retained.
+
+    MLH1-promoter silencing (the dominant sporadic-MSI mechanism) depresses MLH1
+    mRNA; retained MLH1 therefore argues against that mechanism but does not exclude
+    MSI arising from MSH2/MSH6/PMS2 loss or POLE proofreading mutation. Retention is
+    judged against the cohort-typical MLH1 (``cohort_ratio``, added in
+    ``cancer_type_evidence``); absent that ratio the clause does not fire.
+    """
+    mlh1 = mmr.get("mlh1_expression") or {}
+    ratio = mlh1.get("cohort_ratio")
+    if not isinstance(ratio, (int, float)) or ratio < _MLH1_RETAINED_COHORT_RATIO:
+        return ""
+    tpm = mlh1.get("tpm")
+    tpm_clause = f"{tpm:.0f} TPM, " if isinstance(tpm, (int, float)) else ""
+    return (
+        f" However, MLH1 mRNA is retained ({tpm_clause}{round(ratio * 100)}% of the "
+        "cohort-typical level), which argues against MLH1-promoter silencing as the "
+        "mechanism; MSI driven by MSH2/MSH6/PMS2 loss or POLE proofreading mutation "
+        "would not depress MLH1, so retained MLH1 does not exclude MSI."
+    )
+
+
 def mismatch_repair_summary_line(
     analysis: dict,
     *,
@@ -1981,6 +2012,7 @@ def mismatch_repair_summary_line(
         threshold = 0.5
     state = "MSI" if p_msi >= threshold else "MSS"
     state_label = "MSI-like" if state == "MSI" else "MSS-like"
+    tension_clause = _mlh1_msi_tension_clause(mmr) if state == "MSI" else ""
     context = str(mmr.get("context_group") or "").strip()
     context_clause = f"{context} " if context else ""
     subtype_state = _mismatch_repair_state_from_code(winning_subtype)
@@ -1997,8 +2029,9 @@ def mismatch_repair_summary_line(
     return (
         f"**Mismatch-repair RNA context:** {context_clause}MMR ensemble favors "
         f"{state_label} expression state (MSI-like probability {p_msi:.2f})."
-        f"{subtype_clause} Confirm MSI/MMR status with MSI-PCR, MMR IHC, or "
-        "validated clinical sequencing before using it for immunotherapy eligibility."
+        f"{tension_clause}{subtype_clause} Confirm MSI/MMR status with MSI-PCR, "
+        "MMR IHC, or validated clinical sequencing before using it for "
+        "immunotherapy eligibility."
     )
 
 
