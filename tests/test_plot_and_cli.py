@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -184,9 +185,31 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli_mod, "plot_gene_expression", lambda *a, **k: calls.append(k)
     )
-    monkeypatch.setattr(
-        cli_mod, "plot_sample_vs_cancer", lambda *a, **k: scatter_calls.append(k)
-    )
+    # PR-4 (§2.5): materialize the per-category curated panel scatter PNGs that the
+    # real plot_sample_vs_cancer emits into its {prefix}-vs-cancer/ dir, so the
+    # reader-vs-audit routing of those PNGs is exercised (asserted at the end).
+    def _fake_plot_sample_vs_cancer(*a, **k):
+        scatter_calls.append(k)
+        save_to = k.get("save_to_filename")
+        if save_to:
+            sdir = Path(str(save_to)).with_suffix("")
+            sdir.mkdir(parents=True, exist_ok=True)
+            for _name in ("Oncogenes.png", "CTAs.png"):
+                cli_mod.Image.new("RGB", (16, 16), "white").save(sdir / _name)
+
+    monkeypatch.setattr(cli_mod, "plot_sample_vs_cancer", _fake_plot_sample_vs_cancer)
+
+    # Record every Image.open path: the reader packet (all-figures.pdf) opens
+    # png_files from their original locations; the audit packet (figure-audit.pdf)
+    # opens the moved figures/ copies. This lets us prove the scatters route to audit.
+    opened_paths = []
+    _real_image_open = cli_mod.Image.open
+
+    def _recording_open(fp, *a, **k):
+        opened_paths.append(str(fp))
+        return _real_image_open(fp, *a, **k)
+
+    monkeypatch.setattr(cli_mod.Image, "open", _recording_open)
     monkeypatch.setattr(
         cli_mod, "plot_therapy_target_tissues", lambda *a, **k: tissue_calls.append(k)
     )
@@ -390,6 +413,23 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert "Prefer the standalone decomposition figures" in readme
     assert "*-decomposition-composition.png" in readme
     assert "*-decomposition.png" not in readme
+
+    # PR-4 (§2.5): the ~10 curated per-category panel scatters are audit-only. The
+    # mock created out-vs-cancer/{Oncogenes,CTAs}.png; each must be relocated into
+    # figures/ (retained, swept into figure-audit.pdf) but NEVER collected into the
+    # reader packet (all-figures.pdf). Reader collection opens png_files from the
+    # original vs-cancer/ location; audit collection opens the moved figures/ copy —
+    # so the vs-cancer/ path must not appear among opened figures, the figures/ copy
+    # must, and the file must survive in figures/.
+    figures_dir = tmp_path / "test-output" / "figures"
+    for _name in ("Oncogenes.png", "CTAs.png"):
+        assert (figures_dir / _name).exists()  # retained in the audit set, not deleted
+        assert not any(
+            f"out-vs-cancer/{_name}" in op for op in opened_paths
+        )  # never collected into the reader packet from its original location
+        assert any(
+            f"figures/{_name}" in op for op in opened_paths
+        )  # present in the audit packet (opened from figures/)
 
     # After the migration, `python -m trufflepig.main` no longer ships
     # a CLI — it's a redirect-only entry point that prints a

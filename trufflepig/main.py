@@ -3823,10 +3823,14 @@ def _analyze_body(run: AnalyzeRun):
         if _ddp and Path(_ddp).exists():
             png_files.append(_ddp)
 
-    # Add per-category scatter PNGs from the vs-cancer output dir
+    # Per-category curated-panel scatter PNGs (DNA_repair, Oncogenes, CTAs, …) are
+    # audit-only (§2.5): ~10 near-overlapping panel scatters bury the ~decision
+    # figures in the reader packet (all-figures.pdf). Route them to audit_only_pngs
+    # so they still move into figures/ and appear in figure-audit.pdf, but no longer
+    # pad the reader packet.
     scatter_dir = Path(scatter_pdf).parent / Path(scatter_pdf).stem
     if scatter_dir.is_dir():
-        png_files.extend(sorted(str(p) for p in scatter_dir.glob("*.png")))
+        audit_only_pngs.extend(sorted(str(p) for p in scatter_dir.glob("*.png")))
     # Purity-adjusted plots go last (different RNA measure)
     for adj_p in adj_pngs:
         if Path(adj_p).exists():
