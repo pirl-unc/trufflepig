@@ -18,12 +18,17 @@ from trufflepig.expression_decomposition import (
 
 
 @lru_cache(maxsize=None)
-def _sample(type_code):
-    """{symbol: TPM} mean profile for a representative cohort (raw; no oncoref). Covers rare types
-    (ATRT/RT/…) absent from the pan-cancer table — routing/lineage tests are rank-based so raw is fine."""
+def _sample(type_code, k=None):
+    """{symbol: TPM} profile for a representative cohort (raw; no oncoref). Covers rare types
+    (ATRT/RT/…) absent from the pan-cancer table — routing/lineage tests are rank-based so raw is fine.
+
+    ``k=None`` averages every representative (a cohort centroid). Since pirlygenes#208 the
+    representatives are oncoref's deterministic farthest-first medoids (extremal, ordered medoid
+    first), so pass ``k=1`` when a test needs the single most-typical sample rather than the mean
+    of extremal picks — averaging extremal medoids washes out lineage/aneuploidy signal."""
     from pirlygenes.expression.accessors import representative_cohort_samples
 
-    d = representative_cohort_samples(type_code).drop_duplicates("Symbol").set_index("Symbol")
+    d = representative_cohort_samples(type_code, k=k).drop_duplicates("Symbol").set_index("Symbol")
     cols = [c for c in d.columns if c.startswith(type_code)]
     return d[cols].mean(axis=1).to_dict()
 
@@ -287,7 +292,11 @@ def test_decomposition_lineage_override_only_for_auto_codes():
     #  - EXPLICIT caller hint (allow_lineage_override=False) → trust the hint, NO override (so a correct
     #    explicit type — e.g. hepatoblastoma's hepatic expression — is never flipped).
     from trufflepig.tumor_purity import _decomposition_purity_component
-    sym = _sample("SARC")
+    # A single canonical soft-tissue sarcoma (leiomyosarcoma). The "SARC" *aggregate* now
+    # expands (pirlygenes#208) to 32 heterogeneous subtypes incl. epithelioid/embryonal ones
+    # (SARC_EPITH/ASPS/CCS/EHE/EWS/GIST) — averaging that grand union no longer reads as
+    # cleanly mesenchymal, so pin the override on an unambiguous mesenchymal exemplar.
+    sym = _sample("SARC_LMS")
     auto = _decomposition_purity_component(sym, "BRCA", allow_lineage_override=True)
     assert auto["lineage_conflict"] is True and auto["mode"] == "mesenchymal"
     assert auto["code_lineage"] == "Epithelial" and auto["expression_lineage"] == "Sarcoma"
@@ -475,7 +484,10 @@ def test_aneuploidy_purity_declines_with_dilution():
     # aneuploidy → lower calibrated purity. Pins direction, not just shape.
     from trufflepig.purity_calibration import aneuploidy_purity
     from trufflepig.aneuploidy_axis import _diploid_reference
-    base = _sample("COAD")
+    # Medoid (k=1), not the mean of all reps: since pirlygenes#208 the reps are extremal
+    # farthest-first medoids whose average can sit below the aneuploidy computability floor
+    # under heavy dilution. The medoid is the single most-typical COAD sample.
+    base = _sample("COAD", k=1)
     ref = _diploid_reference()
     diluted = {k: 0.4 * v + 0.6 * float(ref.get(k, 0.0)) for k, v in base.items()}
     p_pure = aneuploidy_purity(base, "COAD", median_purity=0.6)
