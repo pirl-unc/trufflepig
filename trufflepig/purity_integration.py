@@ -363,11 +363,24 @@ def integrate_from_components(purity: dict, *, decomposition: Optional[dict] = N
     comp = (purity or {}).get("components") or {}
     sig = comp.get("signature") or {}
     lin = comp.get("lineage") or {}
+    # Weight each method by the SAME `_METHOD_RELIABILITY` map the live `best_purity_estimate`
+    # uses, so the two entry points can never fuse the same components with different weights
+    # (ESTIMATE down-weighted as a corroborator, lineage as a tissue-identity floor). This
+    # helper omits only best_purity_estimate's point-selection extras (saturation guard,
+    # signature-stability discount) — the interval fusion itself is identical.
     ms = [
-        measurement_from_interval("signature", sig.get("purity"), sig.get("lower"), sig.get("upper")),
-        measurement_from_interval("lineage", lin.get("purity"), lin.get("lower"), lin.get("upper")),
-        # ESTIMATE has no native interval; give it a modest weight so it informs but doesn't dominate.
-        measurement_from_interval("estimate", comp.get("estimate_purity"), weight=0.5),
+        measurement_from_interval(
+            "signature", sig.get("purity"), sig.get("lower"), sig.get("upper"),
+            weight=_METHOD_RELIABILITY["signature"],
+        ),
+        measurement_from_interval(
+            "lineage", lin.get("purity"), lin.get("lower"), lin.get("upper"),
+            weight=_METHOD_RELIABILITY["lineage"],
+        ),
+        measurement_from_interval(
+            "estimate", comp.get("estimate_purity"),
+            weight=_METHOD_RELIABILITY["estimate"],
+        ),
     ]
     if decomposition:
         ms.append(
@@ -376,6 +389,7 @@ def integrate_from_components(purity: dict, *, decomposition: Optional[dict] = N
                 decomposition.get("overall_estimate"),
                 decomposition.get("hypothesis_purity_lo"),
                 decomposition.get("hypothesis_purity_hi"),
+                weight=_METHOD_RELIABILITY["decomposition"],
             )
         )
     return integrate_purity_estimates([m for m in ms if m is not None])

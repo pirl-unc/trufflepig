@@ -17,6 +17,21 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
 
+# Optional reference/ontology lookups are best-effort co-signals: a missing or malformed
+# reference must degrade to "no evidence", never crash the call. Catch the import/data-access
+# errors those lookups actually raise (mirrors
+# ``expression_classifier._EXPECTED_OPTIONAL_MODEL_ERRORS``) so a genuine programming error
+# (NameError, IndexError, …) still surfaces instead of being silently swallowed.
+_EXPECTED_REFERENCE_ERRORS = (
+    ImportError,
+    OSError,
+    KeyError,
+    ValueError,
+    TypeError,
+    AttributeError,
+)
+
+
 _NORMAL_ORIGIN_MIN_HOST_SCORE = 0.86
 _NORMAL_ORIGIN_MAX_PROTECTIVE_IDENTITY = 0.55
 _NORMAL_ORIGIN_MIN_ALTERNATE_SIGNATURE = 0.35
@@ -83,7 +98,7 @@ def _tumor_up_panel_symbols(cancer_code: str) -> tuple[str, ...]:
             for symbol in panel["symbol"].astype(str)
             if str(symbol).strip()
         )
-    except Exception:
+    except _EXPECTED_REFERENCE_ERRORS:
         return ()
 
 
@@ -101,7 +116,7 @@ def _candidate_reference_codes(code: str) -> tuple[str, ...]:
                 candidate = _clean(candidate)
                 if candidate and candidate not in out:
                     out.append(candidate)
-    except Exception:
+    except _EXPECTED_REFERENCE_ERRORS:
         pass
     return tuple(out)
 
@@ -109,7 +124,7 @@ def _candidate_reference_codes(code: str) -> tuple[str, ...]:
 def _candidate_primary_tissue(code: str) -> str:
     try:
         from .tumor_purity import CANCER_TO_TISSUE
-    except Exception:
+    except _EXPECTED_REFERENCE_ERRORS:
         CANCER_TO_TISSUE = {}
     for candidate in _candidate_reference_codes(code):
         tissue = _clean(CANCER_TO_TISSUE.get(candidate))
@@ -125,7 +140,7 @@ def _pan_reference_by_symbol():
 
         ref = pan_cancer_expression(technical_rna_normalize=True)
         return ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    except Exception:
+    except _EXPECTED_REFERENCE_ERRORS:
         return None
 
 
@@ -220,7 +235,7 @@ class CancerCallFeatureFrame:
                 from .tumor_purity import _score_host_tissue_details
 
                 details = tuple(_score_host_tissue_details(sample, top_n=10))
-            except Exception:
+            except _EXPECTED_REFERENCE_ERRORS:
                 details = ()
         else:
             details = tuple(host_tissue_details)
@@ -278,7 +293,7 @@ class CancerCallFeatureFrame:
             from .tumor_type_ontology import tumor_type_sanity_check
 
             return tumor_type_sanity_check(code, self.sample_tpm_by_symbol)
-        except Exception:
+        except _EXPECTED_REFERENCE_ERRORS:
             return {}
 
     def evidence_for_candidate(

@@ -105,6 +105,20 @@ def test_integrate_from_components_reads_the_standard_purity_shape():
     assert set(out["weights"]) == {"signature", "lineage", "estimate", "decomposition"}
 
 
+def test_integrate_from_components_applies_method_reliability_weights():
+    # Signature and lineage with IDENTICAL point + interval must NOT get equal fused weight:
+    # lineage is down-weighted (tissue-identity floor) via the SAME _METHOD_RELIABILITY map the
+    # live best_purity_estimate uses, so the two fusion entry points can't diverge on weighting.
+    purity = {
+        "components": {
+            "signature": {"purity": 0.55, "lower": 0.48, "upper": 0.62},
+            "lineage": {"purity": 0.55, "lower": 0.48, "upper": 0.62},
+        }
+    }
+    out = integrate_from_components(purity)
+    assert out["weights"]["signature"] > out["weights"]["lineage"]
+
+
 # --- best_purity_estimate: keep the empirically-best point, add an honest interval + saturation guard ---
 
 
