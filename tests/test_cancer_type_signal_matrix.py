@@ -5,7 +5,6 @@ import pandas as pd
 from trufflepig.cancer_type_signal_matrix import (
     SIGNAL_MATRIX_COLUMNS,
     SIGNAL_SAMPLE_SUMMARY_COLUMNS,
-    _md_cell,
     _ontology_layer,
     build_cancer_type_signal_matrix,
     build_signal_matrix_summary_markdown,
@@ -14,6 +13,7 @@ from trufflepig.cancer_type_signal_matrix import (
     status_parent_code,
     subtype_parent_code,
 )
+from trufflepig.reporting import md_table_cell
 
 
 def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
@@ -289,14 +289,15 @@ def test_summary_markdown_survives_all_nan_selector_columns():
     assert "| Sample |" in md_multi  # multi-sample table renders too
 
 
-def test_md_cell_escapes_pipe_and_flattens_newlines():
+def test_md_table_cell_escapes_pipe_and_flattens_newlines():
     """A channel rationale carrying a literal ``|`` or newline must not split or break the
-    markdown table it is interpolated into."""
-    assert _md_cell("STAD | READ conflict") == "STAD \\| READ conflict"
-    assert _md_cell("line one\nline two") == "line one line two"
-    assert _md_cell("carriage\r\nreturn") == "carriage return"
-    assert _md_cell(None) == ""
-    assert _md_cell("") == ""
+    markdown table it is interpolated into (shared public reporting helper)."""
+    assert md_table_cell("STAD | READ conflict") == "STAD \\| READ conflict"
+    assert md_table_cell("line one\nline two") == "line one line two"
+    assert md_table_cell("carriage\r\nreturn") == "carriage return"
+    assert md_table_cell(None) == ""
+    assert md_table_cell("") == ""
+    assert md_table_cell("nan") == ""
 
 
 def test_summary_markdown_is_not_broken_by_pipe_in_rationale():

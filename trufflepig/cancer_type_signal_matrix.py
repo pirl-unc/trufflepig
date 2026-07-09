@@ -22,7 +22,7 @@ from .cancer_ontology import (
     subtype_display_parent_code as subtype_parent_code,
 )
 from .expression_decomposition import _group_to_mode
-from .reporting import cancer_code_display_name
+from .reporting import cancer_code_display_name, md_table_cell
 
 
 SIGNAL_MATRIX_COLUMNS = [
@@ -714,26 +714,6 @@ def build_signal_sample_summary(matrix: pd.DataFrame) -> pd.DataFrame:
     return out[SIGNAL_SAMPLE_SUMMARY_COLUMNS]
 
 
-def _md_cell(value: Any) -> str:
-    """Escape a value for safe interpolation into a single markdown table cell.
-
-    A free-text ``rationale`` can carry a literal ``|`` (splits the row into a
-    stray extra column) or a newline (breaks the table entirely). Escape pipes
-    and flatten any newline/CR run to a single space so one channel's prose can
-    never corrupt the table structure.
-    """
-    text = _clean(value)
-    if not text:
-        return ""
-    return (
-        text.replace("\\", "\\\\")
-        .replace("|", "\\|")
-        .replace("\r\n", " ")
-        .replace("\r", " ")
-        .replace("\n", " ")
-    )
-
-
 def _first_clean(series) -> str:
     """First non-null value of a column, cleaned; ``""`` if the column is empty/all-NaN.
 
@@ -772,8 +752,8 @@ def build_signal_matrix_summary_markdown(
                 & (sub["is_blocked"] != True)  # noqa: E712
             ]
             lines.append(
-                f"| {_md_cell(sample) or '—'} | {_md_cell(final_call) or '—'} | "
-                f"`{_md_cell(selected_by) or '—'}` | {len(sub)} | {len(strong)} |"
+                f"| {md_table_cell(sample) or '—'} | {md_table_cell(final_call) or '—'} | "
+                f"`{md_table_cell(selected_by) or '—'}` | {len(sub)} | {len(strong)} |"
             )
         lines.append("")
         return "\n".join(lines) + "\n"
@@ -809,12 +789,12 @@ def build_signal_matrix_summary_markdown(
             details = {}
         if isinstance(details, Mapping):
             detail_text = _details_summary(details)
-        signal_name = _md_cell(row.get("signal_label") or row.get("signal_source"))
+        signal_name = md_table_cell(row.get("signal_label") or row.get("signal_source"))
         lines.append(
             f"| {signal_name or '—'} | "
-            f"{_md_cell(row.get('predicted_code')) or '—'} | {_md_cell(row.get('ontology_layer')) or '—'} | "
-            f"{_md_cell(row.get('status')) or '—'} | {support_text} | {agree} | "
-            f"{_md_cell(detail_text) or '—'} |"
+            f"{md_table_cell(row.get('predicted_code')) or '—'} | {md_table_cell(row.get('ontology_layer')) or '—'} | "
+            f"{md_table_cell(row.get('status')) or '—'} | {support_text} | {agree} | "
+            f"{md_table_cell(detail_text) or '—'} |"
         )
     lines.append("")
     return "\n".join(lines) + "\n"

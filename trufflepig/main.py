@@ -7383,8 +7383,8 @@ def _cancer_type_decision_trace_markdown(analysis):
     )
     # A channel detail carries free-text rationale that can contain a literal
     # `|` (splits the row into a stray column) or a newline (breaks the table).
-    # Escape it exactly like the signal-matrix summary before interpolation.
-    from .cancer_type_signal_matrix import _md_cell
+    # Escape it via the shared public reporting helper before interpolation.
+    from .reporting import md_table_cell
 
     for row in ordered[:80]:
         support = row.get("support")
@@ -7392,7 +7392,7 @@ def _cancer_type_decision_trace_markdown(analysis):
             f"{float(support):.3f}" if isinstance(support, (int, float)) else ""
         )
         candidate = row.get("candidate_code") or row.get("code") or ""
-        detail = _md_cell(_decision_channel_detail_summary(row.get("details") or {}))
+        detail = md_table_cell(_decision_channel_detail_summary(row.get("details") or {}))
         lines.append(
             f"| {row.get('stage') or ''} | {_cancer_label(candidate)} | "
             f"`{row.get('channel') or ''}` | {row.get('role') or ''} | "

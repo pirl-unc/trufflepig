@@ -44,6 +44,30 @@ def _clean_text(value) -> str:
     return text
 
 
+def md_table_cell(value) -> str:
+    """Escape a value for safe interpolation into a single Markdown table cell.
+
+    A free-text rationale can carry a literal ``|`` (which splits the row into a
+    stray extra column) or a newline (which breaks the table entirely). Clean the
+    value (blank / ``nan`` / ``none`` / ``null`` -> ``""``), escape backslashes and
+    pipes, and flatten any CR/LF run to a single space, so one cell's prose can never
+    corrupt the table structure. Public shared helper — used by the cancer-type
+    signal-matrix summary and the cancer-type decision-trace table.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "null"}:
+        return ""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+
 def _safe_float(value, default=0.0) -> float:
     try:
         result = float(value)
