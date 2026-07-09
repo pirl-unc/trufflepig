@@ -346,6 +346,11 @@ def tumor_attribution_context(row):
         notes.append("matched-normal reference overshoots the sample")
     if _truthy(row.get("low_purity_cap_applied")):
         notes.append("low-purity cap is active")
+    if _truthy(row.get("sample_low_purity")):
+        notes.append(
+            "low sample purity — tumor-source estimate is less certain "
+            "(small tumor fraction amplifies attribution noise)"
+        )
     source_marker = _truthy(row.get("source_marker_non_tumor_prior"))
     source_marker_compartment = _clean_text(row.get("source_marker_compartment"))
     if source_marker:

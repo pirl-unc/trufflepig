@@ -109,3 +109,14 @@ def test_target_confidence_partial_tumor_fraction_moderate():
     tier = compute_target_confidence(target, purity_tier)
     assert tier.tier == "moderate"
     assert any("40% of signal" in r for r in tier.reasons)
+
+
+def test_sample_purity_is_low_keys_off_low_purity_regime_reason():
+    from trufflepig.confidence import ConfidenceTier, sample_purity_is_low
+
+    low = ConfidenceTier(tier="low", reasons=["low-purity regime (28%)"])
+    assert sample_purity_is_low(low) is True
+    # Moderate tier without the low-purity-regime reason -> not flagged.
+    wide = ConfidenceTier(tier="moderate", reasons=["moderate purity CI span (21 pp)"])
+    assert sample_purity_is_low(wide) is False
+    assert sample_purity_is_low(None) is False
