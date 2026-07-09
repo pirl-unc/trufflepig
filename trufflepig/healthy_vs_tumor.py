@@ -321,6 +321,8 @@ class TissueCompositionSignal:
         self,
         purity: float | None = None,
         signature_score: float | None = None,
+        active_cancer_code: str | None = None,
+        active_cancer_label: str | None = None,
     ) -> str | None:
         """Terse banner for the brief — shown for every non-tumor-consistent hint.
 
@@ -371,6 +373,14 @@ class TissueCompositionSignal:
             else "—"
         )
         cohort_rho = self.top_tcga_cohorts[0][1] if self.top_tcga_cohorts else 0.0
+        active_code = str(active_cancer_code or "").strip()
+        active_label = str(active_cancer_label or active_code or "").strip()
+        structural_controls_downstream = bool(
+            not active_code
+            or not cohort
+            or cohort == "—"
+            or active_code.upper() == str(cohort).upper()
+        )
         if self.cancer_hint == "healthy-dominant":
             return (
                 f"**Tissue composition hint: healthy tissue dominant.** Sample profile "
@@ -398,6 +408,16 @@ class TissueCompositionSignal:
                 "appendix",
             )
             if any(tag in tissue_lc for tag in lymphoid_tissues):
+                if not structural_controls_downstream:
+                    return (
+                        f"**Tissue composition hint: structural ambiguity (lymphoid).** Top "
+                        f"normal match is **{tissue_name}** (ρ={rho:.2f}); top "
+                        f"cancer-reference match is {cohort} (ρ={cohort_rho:.2f}). Normal "
+                        f"lymphoid tissue and lymphoid malignancy are indist-"
+                        f"inguishable by bulk-RNA correlation. The {cohort} "
+                        f"structural signal is retained as background/differential "
+                        f"context; downstream report sections use {active_label}."
+                    )
                 return (
                     f"**Tissue composition hint: structural ambiguity (lymphoid).** Top "
                     f"normal match is **{tissue_name}** (ρ={rho:.2f}); top "
@@ -408,6 +428,18 @@ class TissueCompositionSignal:
                     f"tumor-sample prior, but treat the cancer call and "
                     f"purity as soft-confidence — the purity estimate itself "
                     f"is unreliable in this regime."
+                )
+            if not structural_controls_downstream:
+                return (
+                    f"**Tissue composition hint: structural ambiguity (mesenchymal).** Top "
+                    f"normal match is **{tissue_name}** (ρ={rho:.2f}); top cancer-"
+                    f"reference match is {cohort} (ρ={cohort_rho:.2f}). Well-differentiated "
+                    f"sarcomas share a mesenchymal expression program with "
+                    f"normal smooth muscle / adipose / muscle / myometrium, so "
+                    f"bulk-RNA correlation cannot cleanly distinguish tumor "
+                    f"from tissue-of-origin. The {cohort} structural signal is "
+                    f"retained as background/differential context; downstream "
+                    f"report sections use {active_label}."
                 )
             return (
                 f"**Tissue composition hint: structural ambiguity (mesenchymal).** Top "

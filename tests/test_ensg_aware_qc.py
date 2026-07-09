@@ -14,6 +14,7 @@ Pins:
 
 import pandas as pd
 import pytest
+from oncoref.normalization import housekeeping_reference_profile
 
 from oncoref.normalization import housekeeping_reference_profile
 

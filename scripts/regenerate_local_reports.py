@@ -31,11 +31,17 @@ import datetime as dt
 import gc
 import json
 import logging
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+import pandas as pd
+
+from trufflepig.cancer_type_signal_matrix import (
+    build_signal_sample_summary,
+    build_signal_matrix_summary_markdown,
+)
 
 DEFAULT_MANIFEST = Path(
     "/Users/iskander/code/pirlygenes/local_reports/rnaseq-20260504-130527/manifest.json"
@@ -70,6 +76,7 @@ def _translate_command(
     *,
     blind: bool = False,
     use_manifest_cancer_type: bool = False,
+    with_figures: bool = False,
 ) -> list[str]:
     """Translate a manifest ``command`` array into a trufflepig invocation.
 
@@ -131,6 +138,9 @@ def _translate_command(
             # scope is driven entirely by the RNA-inferred top candidate.
             i += 2
             continue
+        if tok == "--no-figures" and with_figures:
+            i += 1
+            continue
         if tok in _FLAGS_NO_VALUE:
             args_after.append(tok)
             i += 1
@@ -167,7 +177,11 @@ def _translate_command(
     # Bulk sweeps for the cancer-type / target / markdown-consistency review need
     # only markdown + TSV; figure rendering is ~62% of analyze runtime (matplotlib
     # text layout), so skip it unless the manifest explicitly requested figures.
-    if "--no-figures" not in out and "--deprecated-figures" not in out:
+    if (
+        not with_figures
+        and "--no-figures" not in out
+        and "--deprecated-figures" not in out
+    ):
         out.append("--no-figures")
     return out
 
@@ -292,6 +306,48 @@ def _run_in_process(name, cmd, log_path: Path) -> tuple[int, float]:
     return int(rc), elapsed
 
 
+def _collect_signal_matrix_artifacts(root: Path, manifest: dict) -> dict:
+    """Concatenate per-run cancer-type signal matrices into root-level artifacts."""
+    frames = []
+    for run in manifest.get("runs", []):
+        if run.get("status") != "ok" or not run.get("workspace"):
+            continue
+        workspace = Path(run["workspace"])
+        for matrix_path in sorted(workspace.glob("**/*-cancer-type-signal-matrix.tsv")):
+            try:
+                df = pd.read_csv(matrix_path, sep="\t")
+            except (OSError, pd.errors.ParserError):
+                continue
+            if df.empty:
+                continue
+            df.insert(0, "run_name", run.get("name", ""))
+            df.insert(1, "source_matrix", str(matrix_path))
+            frames.append(df)
+    if not frames:
+        return {}
+    matrix = pd.concat(frames, ignore_index=True)
+    matrix_path = root / "cancer_type_signal_matrix.tsv"
+    sample_summary_path = root / "cancer_type_signal_sample_summary.tsv"
+    summary_path = root / "cancer_type_signal_summary.md"
+    matrix.to_csv(matrix_path, sep="\t", index=False)
+    sample_summary = build_signal_sample_summary(matrix)
+    sample_summary.to_csv(sample_summary_path, sep="\t", index=False)
+    summary_path.write_text(
+        build_signal_matrix_summary_markdown(
+            matrix,
+            title="Local Report Cancer-Type Signal Matrix Summary",
+        )
+    )
+    return {
+        "path": str(matrix_path),
+        "sample_summary_path": str(sample_summary_path),
+        "summary_path": str(summary_path),
+        "rows": int(len(matrix)),
+        "sample_summary_rows": int(len(sample_summary)),
+        "samples": int(matrix["sample"].nunique()) if "sample" in matrix.columns else 0,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -343,6 +399,14 @@ def main():
         help=(
             "Replay commands through trufflepig.cli in this Python process so "
             "heavy reference caches are reused across local reports."
+        ),
+    )
+    parser.add_argument(
+        "--with-figures",
+        action="store_true",
+        help=(
+            "Generate full figure/PDF artifacts instead of forcing --no-figures. "
+            "Use for report/plot QA; the default remains faster markdown+TSV replay."
         ),
     )
     args = parser.parse_args()
@@ -407,6 +471,7 @@ def main():
             ws,
             blind=args.blind,
             use_manifest_cancer_type=args.use_manifest_cancer_type,
+            with_figures=args.with_figures,
         )
         log_path = logs / f"{name}.log"
         rc, elapsed = runner(name, cmd, log_path)
@@ -439,6 +504,10 @@ def main():
                 "elapsed_seconds": elapsed,
             })
 
+    signal_matrix_artifact = _collect_signal_matrix_artifacts(root, manifest)
+    if signal_matrix_artifact:
+        manifest["cancer_type_signal_matrix"] = signal_matrix_artifact
+
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     summary = ["# trufflepig local-report regeneration", "",
@@ -450,6 +519,16 @@ def main():
     for c in manifest["comparisons"]:
         summary.append(f"| {c['name']} (compare) | {c.get('status', '?')} | "
                        f"{c.get('elapsed_seconds', '-')} |")
+    if signal_matrix_artifact:
+        summary.extend([
+            "",
+            "## Cancer-Type Signal Matrix",
+            "",
+            f"- Matrix: `{signal_matrix_artifact['path']}`",
+            f"- Sample summary: `{signal_matrix_artifact['sample_summary_path']}`",
+            f"- Summary: `{signal_matrix_artifact['summary_path']}`",
+            f"- Rows: {signal_matrix_artifact['rows']}",
+        ])
     (root / "README.md").write_text("\n".join(summary) + "\n")
 
     failed = [r for r in manifest["runs"] + manifest["comparisons"]

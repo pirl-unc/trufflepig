@@ -30,6 +30,7 @@ parseable?".)
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -58,6 +59,7 @@ from .reporting import (
     report_disease_state_text,
     target_observation_state,
     same_lineage_material_target_candidate,
+    select_mismatch_repair_channel_for_report,
     supplied_alteration_context_for_target_row,
     supplied_alteration_supports_target_row,
     subtype_curation_scope_note,
@@ -446,6 +448,40 @@ def _top_candidate_signature_score(analysis) -> float | None:
     return None
 
 
+_PARENT_SCOPE_THERAPY_PATTERNS = {
+    # Pirlygenes currently stores several broadly applicable soft-tissue
+    # sarcoma rows under example subtypes. Keep those rows available for an
+    # unresolved parent SARC call, while still blocking true subtype-only rows
+    # such as GIST, Ewing, synovial-specific, or LMS-only indications.
+    "SARC": (
+        re.compile(r"\bSTS\b", re.IGNORECASE),
+        re.compile(r"\bsoft[- ]tissue sarcomas?\b", re.IGNORECASE),
+    ),
+}
+
+
+def _row_scope_text(target_row) -> str:
+    """The row's SCOPE-declaring field only (``indication``).
+
+    Parent-scope detection must key off the field that DECLARES the row's cancer scope, not the
+    supporting prose (``rationale`` / ``eligibility_note``). A subtype-specific row whose rationale
+    merely *mentions* "soft-tissue sarcoma" (e.g. "...unlike other soft-tissue sarcomas, GIST...")
+    must stay suppressed for a broad SARC call — matching that prose would un-suppress it as if it
+    were pan-SARC and imply subtype-specific eligibility for the broad diagnosis.
+    """
+    if not hasattr(target_row, "get"):
+        return ""
+    return _clean_display_value(target_row.get("indication"))
+
+
+def _subtype_tagged_row_is_parent_scope(target_row, active_code: str) -> bool:
+    patterns = _PARENT_SCOPE_THERAPY_PATTERNS.get(active_code)
+    if not patterns:
+        return False
+    text = _row_scope_text(target_row)
+    return any(pattern.search(text) for pattern in patterns)
+
+
 def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
     """Suppress subtype-specific SARC rows when SARC is unresolved.
 
@@ -464,6 +500,8 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
         return False
     active_panel_subtype = str(analysis.get("_target_panel_subtype") or "").strip()
     if active_panel_subtype and target_subtype == active_panel_subtype:
+        return False
+    if _subtype_tagged_row_is_parent_scope(target_row, active_code):
         return False
     return not bool(supplied_alteration_supports_target_row(target_row, analysis))
 
@@ -584,7 +622,7 @@ def _format_therapy_bullet(
     ranges_df=None,
 ) -> str:
     """One standardized therapy bullet for the brief."""
-    sym = str(target_row.get("symbol") or "")
+    sym = canonical_target_symbol(target_row.get("symbol"))
     agent = _therapy_agent_label(target_row)
     phase = _phase_label(_clean_display_value(target_row.get("phase")))
     indication = _clean_display_value(target_row.get("indication"))
@@ -605,6 +643,15 @@ def _format_therapy_bullet(
         f" Current-therapy check: {state_caution}." if state_caution else ""
     )
     maturity = clinical_maturity_summary(target_row, target_panel=target_panel)
+    label = sym or agent or "therapy"
+    treatment = (
+        agent
+        if sym and agent and agent.lower() != label.lower()
+        else ("agent-only therapy" if not sym else agent)
+    )
+
+    def _header() -> str:
+        return f"- **{label}** — {treatment} ({phase}{indication_clause}). "
 
     def _eligibility_evidence_gap() -> str:
         return _expression_independent_evidence_gap(target_row, analysis)
@@ -625,8 +672,8 @@ def _format_therapy_bullet(
             if path_context:
                 parts.append(path_context)
             return (
-                f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-                f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+                f"{_header()}{_sentence(parts, maturity=maturity)}"
+                f"{caution_suffix}"
             )
         state = target_observation_state(sym, ranges_df)
         if state == "below_detection":
@@ -639,8 +686,7 @@ def _format_therapy_bullet(
         else:
             missing_phrase = "Target **not measured** in this sample"
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{path_prefix}{missing_phrase}.{caution_suffix}"
+            f"{_header()}{path_prefix}{missing_phrase}.{caution_suffix}"
         )
     observed = float(expression_row.get("observed_tpm") or 0.0)
     if observed < 1.0:
@@ -653,12 +699,11 @@ def _format_therapy_bullet(
             if path_context:
                 parts.append(path_context)
             return (
-                f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-                f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+                f"{_header()}{_sentence(parts, maturity=maturity)}"
+                f"{caution_suffix}"
             )
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{path_prefix}Bulk target RNA {observed:.1f} TPM — "
+            f"{_header()}{path_prefix}Bulk target RNA {observed:.1f} TPM — "
             f"**target absent** in this sample.{caution_suffix}"
         )
     if not tumor_band_available(expression_row):
@@ -669,8 +714,8 @@ def _format_therapy_bullet(
         if path_context:
             parts.append(path_context)
         return (
-            f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-            f"{_sentence(parts, maturity=maturity)}{caution_suffix}"
+            f"{_header()}{_sentence(parts, maturity=maturity)}"
+            f"{caution_suffix}"
         )
     source = tumor_attribution_context(expression_row)
     normal = normal_expression_context(expression_row)
@@ -693,8 +738,7 @@ def _format_therapy_bullet(
     interpretation = "; ".join(part for part in interpretation_parts if part)
     maturity_sentence = f" Clinical maturity: {maturity}." if maturity else ""
     return (
-        f"- **{sym}** — {agent} ({phase}{indication_clause}). "
-        f"{interpretation}.{maturity_sentence}{caution_suffix}"
+        f"{_header()}{interpretation}.{maturity_sentence}{caution_suffix}"
     )
 
 
@@ -725,7 +769,7 @@ def _top_therapies(
     # as a fallback for legacy ranges_df frames without gene_id.
     target_records = targets_df.to_dict("records")
     sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
+        canonical_target_symbol(t.get("symbol")) for t in target_records
     )
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)
@@ -741,7 +785,7 @@ def _top_therapies(
 
     scored = []
     for t in target_records:
-        sym = str(t.get("symbol") or "")
+        sym = canonical_target_symbol(t.get("symbol"))
         gene_id = sym_to_id.get(sym.strip())
         expr = id_to_row.get(gene_id) if gene_id else None
         if expr is None:
@@ -763,6 +807,7 @@ def _top_therapies(
                 continue
             if expr_independent:
                 phase = str(t.get("phase") or "")
+                label = sym or _therapy_agent_label(t)
                 scored.append(
                     (
                         (
@@ -776,7 +821,7 @@ def _top_therapies(
                             1,
                             1,
                             0.0,
-                            sym,
+                            label,
                         ),
                         t,
                         None,
@@ -850,10 +895,11 @@ def _top_therapies(
     deduped = []
     seen_symbols = set()
     for sort_key, t, expr in scored:
-        sym = str(t.get("symbol") or "")
-        if sym in seen_symbols:
+        sym = canonical_target_symbol(t.get("symbol"))
+        dedupe_key = sym or _therapy_agent_label(t)
+        if dedupe_key in seen_symbols:
             continue
-        seen_symbols.add(sym)
+        seen_symbols.add(dedupe_key)
         deduped.append((t, expr))
         if len(deduped) >= limit:
             break
@@ -1031,7 +1077,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     """Trace source attribution for non-clean clinical target decisions."""
     if targets_df is None or ranges_df is None or not top_rows:
         return ""
-    top_symbols = {str(t.get("symbol") or "") for t, _ in top_rows}
+    top_symbols = {canonical_target_symbol(t.get("symbol")) for t, _ in top_rows}
     from .common import (
         ranges_by_gene_id,
         ranges_by_symbol,
@@ -1039,15 +1085,15 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     )
     target_records = targets_df.to_dict("records")
     sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
+        canonical_target_symbol(t.get("symbol")) for t in target_records
     )
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)  # fallback for ID-less frames
     omitted = []
     seen = set()
     for target in target_records:
-        sym = str(target.get("symbol") or "").strip()
-        if not sym or sym.lower() == "nan" or sym in top_symbols or sym in seen:
+        sym = canonical_target_symbol(target.get("symbol"))
+        if not sym or sym in top_symbols or sym in seen:
             continue
         seen.add(sym)
         gene_id = sym_to_id.get(sym)
@@ -1269,6 +1315,13 @@ def _caveats_from_purity_tier(
                 "Input appears to be a targeted panel rather than "
                 "whole-transcriptome — relative expression estimates "
                 "should be interpreted within the panel only."
+            )
+        elif "single-method purity reading uncorroborated" in r:
+            out.append(
+                "One purity method read much higher than the others "
+                "with no independent support, so the reported purity "
+                "reflects the agreement of the remaining methods rather "
+                "than that single high reading."
             )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
@@ -1842,9 +1895,9 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     if sig_top and sig_top != str(cancer_code or "").strip():
         sig_clause = f"; raw-signature top {sig_top}"
     return (
-        f"**RNA alternatives:** ordered RNA candidates {', '.join(chunks)}"
-        f"{sig_clause}. Treat these as hypotheses until pathology/clinical "
-        "context resolves them."
+        f"**Retained RNA differential:** ordered RNA candidates {', '.join(chunks)}"
+        f"{sig_clause}. Active report label remains {cancer_code}; treat the "
+        "listed rows as hypotheses until pathology/clinical context resolves them."
     )
 
 
@@ -1856,6 +1909,12 @@ def _subtype_status_line(
     original_winning_subtype: Optional[str],
     analysis: dict,
 ) -> str:
+    mmr_line = mismatch_repair_summary_line(
+        analysis,
+        winning_subtype=winning_subtype,
+    )
+    if mmr_line and _mismatch_repair_state_from_code(winning_subtype):
+        return mmr_line
     if degenerate_status in ("corrected", "degenerate"):
         subtype_note = _render_subtype_note(
             degenerate_resolution or {},
@@ -1874,11 +1933,73 @@ def _subtype_status_line(
             return f"**Subtype status:** {subtype_note}"
     if winning_subtype:
         label = _display_subtype_code(winning_subtype)
+        if mmr_line:
+            return mmr_line
         return (
             f"**Subtype status:** RNA subtype signal is {label}-consistent; "
             "use as expression context unless clinically confirmed."
         )
+    if mmr_line:
+        return mmr_line
     return ""
+
+
+def _mismatch_repair_state_from_code(code: Optional[str]) -> str:
+    text = str(code or "").strip().upper()
+    if text.endswith(("_MSI", "_MSIH", "_DMMR", "_MMRD")):
+        return "MSI"
+    if text.endswith(("_MSS", "_PMMR", "_CNL", "_CNH")):
+        return "MSS"
+    return ""
+
+
+def mismatch_repair_summary_context(analysis: dict) -> dict:
+    """Return the release MMR RNA-state vote for the active report label."""
+
+    graph = ((analysis.get("cancer_type_evidence") or {}).get("staged_evidence_graph") or {})
+    final_code = str(analysis.get("cancer_type") or "").strip()
+    return select_mismatch_repair_channel_for_report(graph.get("channels") or [], final_code)
+
+
+def mismatch_repair_summary_line(
+    analysis: dict,
+    *,
+    winning_subtype: Optional[str] = None,
+) -> str:
+    """Render calibrated MMR RNA context without overstating clinical MSI/MMR."""
+
+    channel = mismatch_repair_summary_context(analysis)
+    if not channel:
+        return ""
+    details = channel.get("details") or {}
+    mmr = details.get("mismatch_repair") or {}
+    p_msi = mmr.get("msi_probability")
+    if not isinstance(p_msi, (int, float)):
+        return ""
+    threshold = mmr.get("decision_threshold")
+    if not isinstance(threshold, (int, float)):
+        threshold = 0.5
+    state = "MSI" if p_msi >= threshold else "MSS"
+    state_label = "MSI-like" if state == "MSI" else "MSS-like"
+    context = str(mmr.get("context_group") or "").strip()
+    context_clause = f"{context} " if context else ""
+    subtype_state = _mismatch_repair_state_from_code(winning_subtype)
+    subtype_clause = ""
+    if subtype_state and subtype_state != state:
+        subtype_clause = (
+            f" This conflicts with the candidate-trace subtype "
+            f"{winning_subtype}; treat MSI/MSS as unresolved RNA context."
+        )
+    elif subtype_state:
+        subtype_clause = (
+            f" This agrees with the candidate-trace subtype {winning_subtype}."
+        )
+    return (
+        f"**Mismatch-repair RNA context:** {context_clause}MMR ensemble favors "
+        f"{state_label} expression state (MSI-like probability {p_msi:.2f})."
+        f"{subtype_clause} Confirm MSI/MMR status with MSI-PCR, MMR IHC, or "
+        "validated clinical sequencing before using it for immunotherapy eligibility."
+    )
 
 
 def _clinical_context_caveats(analysis) -> List[str]:
@@ -1968,6 +2089,57 @@ _OUTLIER_MIN_AMPLIFICATION_FOLD = 10.0
 _OUTLIER_MIN_OBSERVED_TPM = 50.0
 _OUTLIER_HIGH_PERCENTILE = 0.95
 
+# Rationale phrasing that marks a biomarker as gated by a DNA alteration
+# (mutation / specific allele / wild-type status) rather than by mRNA level.
+# An amplification / overexpression / IHC / FISH cue WINS (HER2/ERBB2 and MDM2
+# amplicons are legitimately expression-readable), so those are never flagged.
+_BIOMARKER_MUTATION_BASIS_MARKERS = (
+    "mutation",
+    "mutant",
+    "wild-type",
+    "wild type",
+    "wildtype",
+    "activating",
+    "allele",
+    "codon",
+    "v600",
+    "g12",
+    "g13",
+    "q61",
+    "l858",
+    "t790",
+    "exon",
+)
+_BIOMARKER_EXPRESSION_BASIS_MARKERS = (
+    "amplif",  # amplified / amplification / amplicon
+    "overexpress",
+    "expression",
+    "ihc",
+    "fish",
+    "copy-number",
+    "copy number",
+)
+
+
+def biomarker_expression_is_not_eligibility(rationale: str) -> bool:
+    """True when a biomarker-panel gene's clinical eligibility is gated by a DNA
+    alteration (mutation / specific allele / wild-type status), NOT by mRNA level.
+
+    Keyed off the pirlygenes-authored biomarker ``rationale`` so trufflepig
+    surfaces the *consequence* without re-encoding which genes are mutation-driven
+    (that biology stays in pirlygenes). An amplification / overexpression / IHC /
+    FISH cue wins — those biomarkers (HER2/ERBB2, MDM2 amplicons) are legitimately
+    read from expression, so they are never flagged. Resolves the report's
+    self-contradiction of listing TP53/KRAS/NRAS as expression "outliers" while
+    repeating that target expression is not the eligibility criterion (plan §2.4).
+    """
+    text = str(rationale or "").lower()
+    if not text:
+        return False
+    if any(marker in text for marker in _BIOMARKER_EXPRESSION_BASIS_MARKERS):
+        return False
+    return any(marker in text for marker in _BIOMARKER_MUTATION_BASIS_MARKERS)
+
 
 def _notable_biomarker_outliers(
     ranges_df,
@@ -2017,6 +2189,31 @@ def _notable_biomarker_outliers(
     panel_ids = panel_symbols_to_gene_ids(biomarker_set - excluded)
     panel_id_set = set(panel_ids.values())
     panel_sym_fallback = biomarker_set - excluded  # for rows w/o gene_id
+    # Pirlygenes-authored biomarker rationale, keyed by canonical gene_id (with a
+    # symbol fallback for id-less rows). Used to flag mutation/allele-gated
+    # biomarkers so their high-mRNA "outlier" reading carries the "expression is
+    # not the eligibility criterion" caveat (plan §2.4).
+    sym_to_rationale: dict[str, str] = {}
+    id_to_rationale: dict[str, str] = {}
+    try:
+        from pirlygenes.gene_sets_cancer import cancer_key_genes_df
+
+        kdf = cancer_key_genes_df()
+        krows = kdf[(kdf["cancer_code"] == panel_code) & (kdf["role"] == "biomarker")]
+        if panel_subtype is not None:
+            krows = krows[krows["subtype"].fillna("").astype(str) == panel_subtype]
+        for krow in krows.to_dict("records"):
+            rationale = str(krow.get("rationale") or "").strip()
+            if not rationale:
+                continue
+            ksym = str(krow.get("symbol") or "").strip()
+            kid = _versionless_gene_id(krow.get("ensembl_gene_id"))
+            if ksym:
+                sym_to_rationale.setdefault(ksym, rationale)
+            if kid:
+                id_to_rationale.setdefault(kid, rationale)
+    except (ImportError, KeyError, ValueError, TypeError):
+        pass
     candidates: list[dict] = []
     for row in ranges_records(ranges_df):
         gene_id = _versionless_gene_id(row.get("gene_id"))
@@ -2036,6 +2233,7 @@ def _notable_biomarker_outliers(
             and pct < _OUTLIER_HIGH_PERCENTILE
         ):
             continue
+        rationale = id_to_rationale.get(gene_id) or sym_to_rationale.get(row_sym, "")
         candidates.append(
             {
                 "symbol": str(row.get("symbol") or ""),
@@ -2043,6 +2241,10 @@ def _notable_biomarker_outliers(
                 "observed_tpm": observed,
                 "amplification_fold": amp,
                 "tcga_percentile": pct,
+                "rationale": rationale,
+                "expression_not_eligibility": biomarker_expression_is_not_eligibility(
+                    rationale
+                ),
             }
         )
     # Rank: prefer the most amplified, break ties by TPM. Both signals
@@ -2066,7 +2268,16 @@ def _format_biomarker_outlier_bullet(row: dict) -> str:
         parts.append(f"amplified {amp:.1f}× over peak healthy tissue")
     if pct >= _OUTLIER_HIGH_PERCENTILE:
         parts.append(f"TCGA cohort {pct * 100:.0f}th percentile")
-    return f"- **{sym}** — " + "; ".join(parts) + " (biomarker panel)"
+    bullet = f"- **{sym}** — " + "; ".join(parts) + " (biomarker panel)"
+    # Belief-consistency (plan §2.4): a mutation/allele-gated biomarker's high
+    # mRNA is descriptive, not an eligibility signal — say so inline so this block
+    # doesn't contradict the report's "expression is not the eligibility criterion".
+    if row.get("expression_not_eligibility"):
+        bullet += (
+            " — *mutation/allele-gated biomarker: expression is not the "
+            "eligibility criterion; mRNA shown for completeness*"
+        )
+    return bullet
 
 
 # CTA threshold for the "Notable CTAs" summary block. Matches the
@@ -2160,9 +2371,13 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     n_in_input_low = 0
     n_in_input_present = 0
     n_not_in_input = 0
+    n_agent_only = 0
     for t in target_records:
-        sym = str(t.get("symbol") or "")
-        if not sym or sym == "—":
+        sym = canonical_target_symbol(t.get("symbol"))
+        if not sym:
+            if expression_independent_indication(t):
+                n_total += 1
+                n_agent_only += 1
             continue
         n_total += 1
         gene_id = sym_to_id.get(sym.strip())
@@ -2203,6 +2418,11 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
         parts.append(
             f"{n_not_in_input} not present in input file (coverage gap, "
             "investigate symbol mapping)"
+        )
+    if n_agent_only:
+        parts.append(
+            f"{n_agent_only} agent-only / histology-indication rows without "
+            "a direct RNA target"
         )
     body = "; ".join(parts) if parts else "no qualifying rows"
     return (
@@ -2247,6 +2467,8 @@ def build_summary(
         banner = hvt.brief_banner(
             purity=purity.get("overall_estimate") if purity else None,
             signature_score=_top_candidate_signature_score(analysis),
+            active_cancer_code=cancer_code,
+            active_cancer_label=cancer_name,
         )
         if banner:
             lines.append(banner)
@@ -2408,10 +2630,11 @@ def build_summary(
     if subtype_line:
         lines.append(subtype_line)
 
-    # Purity
-    overall = purity.get("overall_estimate")
-    lower = purity.get("overall_lower")
-    upper = purity.get("overall_upper")
+    # Purity — headline read through the shared ReportView surface so the summary text and the
+    # sample-summary figure cannot disagree (both call finalized_purity_headline).
+    from .report_view import finalized_purity_headline
+
+    overall, lower, upper = finalized_purity_headline(analysis)
     if overall is not None and lower is not None and upper is not None:
         tier_label = (
             getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"
@@ -2520,7 +2743,7 @@ def build_summary(
             # on-label / in-trial distinction explicit rather than only inline.
             from .plot_target_deep_dive import _PRIORITY_STATUS_LABELS
 
-            approved_bullets, clinical_bullets = [], []
+            supplied_evidence_bullets, approved_bullets, clinical_bullets = [], [], []
             for target_row, expression_row in top:
                 bullet = _format_therapy_bullet(
                     target_row,
@@ -2531,10 +2754,16 @@ def build_summary(
                     ranges_df=ranges_df,
                 )
                 phase = str(target_row.get("phase") or "").strip().lower()
-                if phase == "approved":
+                if supplied_alteration_supports_target_row(target_row, therapy_analysis):
+                    supplied_evidence_bullets.append(bullet)
+                elif phase == "approved":
                     approved_bullets.append(bullet)
                 else:
                     clinical_bullets.append(bullet)
+            if supplied_evidence_bullets:
+                lines.append("### Supplied eligibility evidence matched\n")
+                lines.extend(supplied_evidence_bullets)
+                lines.append("")
             if approved_bullets:
                 lines.append(
                     f"### {_PRIORITY_STATUS_LABELS['approved_disease_matched']}\n"
@@ -2747,6 +2976,8 @@ def build_actionable(
         banner = hvt.brief_banner(
             purity=purity.get("overall_estimate") if purity else None,
             signature_score=_top_candidate_signature_score(analysis),
+            active_cancer_code=cancer_code,
+            active_cancer_label=cancer_code_display_name(cancer_code, cancer_code),
         )
         if banner:
             lines.append(f"\n{banner}")

@@ -261,7 +261,7 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     bullets = _integrated_evidence_bullets(analysis)
     text = "\n".join(bullets)
     assert "**RNA classifier line**" in text
-    assert "SARC (Sarcoma) is the leading broad RNA candidate" in text
+    assert "pan-cancer signature ranker does not independently set the report label" in text
     assert "integrated evidence selected COAD (Colon Adenocarcinoma)" in text
     assert "SARC (Sarcoma) is the leading label" not in text
 
@@ -294,13 +294,49 @@ def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference
 
     text = "\n".join(_integrated_evidence_bullets(analysis))
 
-    assert "CESC (Cervical Squamous / Adenocarcinoma) is the leading broad RNA candidate" in text
+    assert (
+        "CESC (Cervical Squamous / Adenocarcinoma) is the leading "
+        "pan-cancer signature-ranker candidate"
+    ) in text
     assert (
         "BRCA (Breast Invasive Carcinoma) is the active fallback "
         "expression/reference context"
     ) in text
     assert "CESC (Cervical Squamous / Adenocarcinoma) is the active fallback" not in text
     assert "used for cohort-normalized downstream analyses" not in text
+
+
+def test_integrated_evidence_mmr_skips_unrelated_retained_candidate():
+    analysis = _base_analysis(
+        cancer_type="GBM",
+        cancer_name="Glioblastoma",
+        candidate_trace=[{"code": "GBM", "support_fraction_of_top": 1.0}],
+        cancer_type_evidence={
+            "staged_evidence_graph": {
+                "channels": [
+                    {
+                        "candidate_code": "COAD",
+                        "role": "hierarchical_mismatch_repair_vote",
+                        "code": "MSI",
+                        "status": "admission_context",
+                        "details": {
+                            "label_space": "learned_mismatch_repair_release_ensemble",
+                            "mismatch_repair": {
+                                "context_group": "CRC",
+                                "decision_threshold": 0.5,
+                                "msi_probability": 0.94,
+                            },
+                        },
+                    }
+                ]
+            }
+        },
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis))
+
+    assert "Mismatch-repair RNA context" not in text
+    assert "CRC MMR ensemble" not in text
 
 
 def test_candidate_label_empty_trace():

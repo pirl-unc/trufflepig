@@ -13,6 +13,7 @@ from collections import Counter
 from functools import lru_cache
 import re
 
+from .cancer_ontology import cancer_codes_context_compatible
 from .hla import (
     extract_hla_types_from_text,
     hla_types_compatibility_status,
@@ -41,6 +42,30 @@ def _clean_text(value) -> str:
     if text.lower() == "nan":
         return ""
     return text
+
+
+def md_table_cell(value) -> str:
+    """Escape a value for safe interpolation into a single Markdown table cell.
+
+    A free-text rationale can carry a literal ``|`` (which splits the row into a
+    stray extra column) or a newline (which breaks the table entirely). Clean the
+    value (blank / ``nan`` / ``none`` / ``null`` -> ``""``), escape backslashes and
+    pipes, and flatten any CR/LF run to a single space, so one cell's prose can never
+    corrupt the table structure. Public shared helper — used by the cancer-type
+    signal-matrix summary and the cancer-type decision-trace table.
+    """
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "null"}:
+        return ""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("|", "\\|")
+        .replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
 
 
 def _safe_float(value, default=0.0) -> float:
@@ -182,6 +207,76 @@ def cancer_code_display_name(code, fallback=None):
     if fallback_text:
         return fallback_text
     return text.replace("_", " ").strip()
+
+
+def mismatch_repair_channel_matches_report(channel, active_code) -> bool:
+    """Whether an MMR evidence channel belongs to the active report scope.
+
+    MMR votes are orthogonal molecular-state context, not cancer-type calls.
+    A retained CRC/UCEC/STAD alternative must not leak an MSI/MMR statement into
+    a report for an unrelated final diagnosis. Sibling entities are only allowed
+    when the channel itself declares that broader context, e.g. CRC for COAD/READ.
+    """
+
+    if not isinstance(channel, dict):
+        return False
+    active = _clean_text(active_code)
+    candidate = _clean_text(channel.get("candidate_code"))
+    if not active or not candidate:
+        return False
+    details = channel.get("details") or {}
+    if not isinstance(details, dict):
+        details = {}
+    mmr = details.get("mismatch_repair") or {}
+    if not isinstance(mmr, dict):
+        mmr = {}
+    context_group = _clean_text(mmr.get("context_group"))
+    return cancer_codes_context_compatible(
+        active,
+        candidate,
+        context_code=context_group,
+    )
+
+
+def _mismatch_repair_channel_priority(channel, active_code) -> int | None:
+    if not isinstance(channel, dict):
+        return None
+    if channel.get("role") != "hierarchical_mismatch_repair_vote":
+        return None
+    details = channel.get("details") or {}
+    if not isinstance(details, dict):
+        return None
+    mmr = details.get("mismatch_repair") or {}
+    if not isinstance(mmr, dict):
+        return None
+    p_msi = mmr.get("msi_probability")
+    if not isinstance(p_msi, (int, float)):
+        return None
+    if not mismatch_repair_channel_matches_report(channel, active_code):
+        return None
+
+    active = _clean_text(active_code)
+    candidate = _clean_text(channel.get("candidate_code"))
+    label_space = _clean_text(details.get("label_space"))
+    priority = 8 if candidate == active else 2
+    if label_space == "learned_mismatch_repair_release_ensemble":
+        priority += 4
+    if channel.get("status") in {"admission_context", "informative"}:
+        priority += 1
+    return priority
+
+
+def select_mismatch_repair_channel_for_report(channels, active_code) -> dict:
+    """Pick the MMR channel that belongs to the active report scope."""
+
+    best: tuple[int, dict] | None = None
+    for channel in channels or []:
+        priority = _mismatch_repair_channel_priority(channel, active_code)
+        if priority is None:
+            continue
+        if best is None or priority > best[0]:
+            best = (priority, channel)
+    return dict(best[1]) if best else {}
 
 
 def subtype_curation_scope_note(
@@ -427,6 +522,9 @@ def indication_biomarker(target_row) -> str:
     agent_class = _agent_class_text(target_row)
     agent = _clean_text(target_row.get("agent") if hasattr(target_row, "get") else "")
     agent_low = agent.lower()
+    symbol = canonical_target_symbol(
+        target_row.get("symbol") if hasattr(target_row, "get") else ""
+    )
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
         return "mutation"
     if cancer_code == "ADCC" and "lenvatinib" in agent_low:
@@ -437,6 +535,8 @@ def indication_biomarker(target_row) -> str:
         return "tmb_high"
     if _MUTATION_INDICATION.search(text):
         return "mutation"
+    if _TARGET_EXPRESSION_INDICATION.search(text):
+        return "target_expression"
     if _HISTOLOGY_ONLY_THERAPY_CONTEXT.search(
         low
     ) and not _TARGET_EXPRESSION_INDICATION.search(low):
@@ -445,6 +545,8 @@ def indication_biomarker(target_row) -> str:
     if _IMMUNE_CHECKPOINT_AGENTS.search(
         agent
     ) and not _TARGET_EXPRESSION_INDICATION.search(text):
+        return "histology_only"
+    if not symbol and agent:
         return "histology_only"
 
     return "target_expression"
@@ -639,6 +741,29 @@ def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
     )
 
 
+def pathway_state_figure_axes(therapy_response_scores) -> list:
+    """Therapy-response axes the pathway-state figure would plot.
+
+    ``plot_therapy.plot_therapy_pathway_state`` renders one row per axis that has
+    a measurable up- OR down-panel geomean fold, and skips the figure entirely
+    when none qualify. This is the SINGLE source for "does the therapy-pathway-
+    state figure have content": the figure filters its rows through it, and
+    :func:`report_disease_state_text` consults it so the disease-state text can
+    never deny a pattern the figure visibly shows (belief-consistency; the
+    figure and the threshold logic share one source — plan §2.4/§2.5).
+
+    Returns the qualifying axis keys in input order (empty ⇒ no figure renders).
+    """
+    axes = []
+    for cls, score in (therapy_response_scores or {}).items():
+        up_fold = getattr(score, "up_geomean_fold", None)
+        down_fold = getattr(score, "down_geomean_fold", None)
+        if up_fold is None and down_fold is None:
+            continue
+        axes.append(cls)
+    return axes
+
+
 def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     """Consistent disease-state sentence for Markdown reports.
 
@@ -647,6 +772,11 @@ def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     Markdown, silence reads like missing propagation rather than a
     negative finding, so reports render a bounded no-pattern statement
     when therapy-state panels were actually evaluated.
+
+    The negative statement is scoped to the SYNTHESIZED (curated multi-axis)
+    pattern, never to the per-axis states: when the therapy-pathway-state figure
+    renders (``pathway_state_figure_axes`` non-empty) the text points at it
+    instead of asserting nothing exists, so text and figure agree.
     """
     text = _clean_text(disease_state)
     if text:
@@ -654,14 +784,31 @@ def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     scores = (
         analysis.get("therapy_response_scores") if isinstance(analysis, dict) else None
     )
-    if scores:
-        if isinstance(analysis, dict) and analysis.get("pathway_activity_inferences"):
-            return (
-                "No strong RNA-defined therapy-exposure pattern passed reporting "
-                "thresholds; active pathway evidence is summarized separately."
-            )
-        return "No strong RNA-defined therapy-exposure or pathway-state pattern passed reporting thresholds."
-    return ""
+    if not scores:
+        return ""
+    has_inferences = bool(
+        isinstance(analysis, dict) and analysis.get("pathway_activity_inferences")
+    )
+    if pathway_state_figure_axes(scores):
+        # The figure visibly shows these per-axis states — do NOT deny a pattern.
+        # Scope the negative to the curated multi-axis synthesis and point at the
+        # figure so the reader can reconcile the two.
+        base = (
+            "No curated multi-axis disease-state pattern matched the profile, but "
+            "individual therapy-axis states are shown in the therapy-pathway-state "
+            "figure."
+        )
+        if has_inferences:
+            return base + " Active pathway evidence is summarized separately."
+        return base
+    # No axis has a measurable fold → the figure does not render either, so the
+    # bounded "nothing passed" statement is truthful.
+    if has_inferences:
+        return (
+            "No strong RNA-defined therapy-exposure pattern passed reporting "
+            "thresholds; active pathway evidence is summarized separately."
+        )
+    return "No strong RNA-defined therapy-exposure or pathway-state pattern passed reporting thresholds."
 
 
 def tumor_attribution_band_text(row):
@@ -2134,6 +2281,10 @@ def candidate_winning_subtype_for_analysis(analysis):
         return None
 
     active_code = _clean_text(analysis.get("cancer_type"))
+    selected_scope = (
+        (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+    )
+    selected_features = selected_scope.get("decision_features") or {}
     row = None
     if active_code:
         for candidate in candidate_trace:
@@ -2144,6 +2295,15 @@ def candidate_winning_subtype_for_analysis(analysis):
             return None
     else:
         row = candidate_trace[0]
+
+    if (
+        _clean_text(selected_scope.get("cancer_type")) == active_code
+        and _clean_text(selected_scope.get("selected_by")) == "fused_evidence"
+        and selected_features.get(
+            "learned_compartment_anchored_pan_cancer_context"
+        )
+    ):
+        return None
 
     return _clean_text(row.get("winning_subtype")) or None
 

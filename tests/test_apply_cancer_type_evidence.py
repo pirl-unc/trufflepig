@@ -54,8 +54,8 @@ def test_selected_report_scope_basis_label_names_integrated_evidence_source():
     )
 
 
-def test_primary_expression_match_populates_analysis_dict_without_promoting():
-    """When the top broad RNA support is the strongest evidence, the
+def test_pan_cancer_signature_ranker_populates_analysis_dict_without_promoting():
+    """When the top pan-cancer signature-ranker support is the strongest evidence, the
     helper records cancer_type_evidence in analysis but does NOT promote
     report_scope_cancer_type (the caller's auto-detected code stays in
     play for the rest of the pipeline)."""
@@ -81,11 +81,11 @@ def test_primary_expression_match_populates_analysis_dict_without_promoting():
     assert "cancer_type_evidence" in analysis
     assert cancer_type_evidence is analysis["cancer_type_evidence"]
 
-    # Selection happened, but selected_by is primary_expression_match → no
+    # Selection happened, but selected_by is pan_cancer_signature_ranker -> no
     # report-scope promotion. The caller keeps the auto-detected code.
     assert selected_scope is not None
     assert selected_scope["cancer_type"] == "PRAD"
-    assert selected_scope["selected_by"] == "primary_expression_match"
+    assert selected_scope["selected_by"] == "pan_cancer_signature_ranker"
     assert report_scope_cancer_type is None
     assert rare_scope_inference is None
     assert fine_scope_inference is None

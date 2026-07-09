@@ -332,12 +332,6 @@ def test_synthetic_coad_lymph_mix_stays_crc_family():
     assert candidates[1]["code"] in {"COAD", "READ"}
 
 
-@pytest.mark.xfail(
-    reason="structured tissue contaminant: a 70% normal-liver / 30% COAD mix is ranked LIHC "
-    "on the purity-term crutch (COAD's signature is higher). Pre-existing on main; the "
-    "principled fix (purity-term removal + normal-tissue-of-origin dominance) is tracked in #101.",
-    strict=False,
-)
 def test_synthetic_coad_liver_mix_uses_liver_background():
     """CRC mixed with liver background should stay CRC-family and use hepatocyte context."""
     df = _mix_samples(
@@ -936,6 +930,8 @@ def test_plot_decomposition_candidates_surfaces_fit_and_markers(tmp_path):
     assert any("fit err" in t and "markers" in t for t in texts), (
         f"missing fit/markers annotation; texts: {texts}"
     )
+    assert any("ADOPTED" in t for t in texts), texts
+    assert any("audit only" in t for t in texts), texts
 
 
 def test_plot_decomposition_candidates_handles_missing_reconstruction_error(tmp_path):

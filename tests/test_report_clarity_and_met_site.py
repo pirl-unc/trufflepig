@@ -7,11 +7,51 @@ import pytest
 
 from trufflepig.main import (
     _build_target_report,
+    _cancer_type_vote_summary_markdown,
+    _clamp_interval_to_cap,
     _constrain_purity_interval_with_decomposition,
     _effective_met_site_for_background,
+    _finalize_fused_purity,
     _infer_likely_met_site_context,
     _next_best_support_gap,
 )
+
+
+def test_vote_summary_escapes_pipe_and_newline_in_detail_cells():
+    """A free-text channel rationale carrying `|` or a newline must not break the
+    Cancer-Type Evidence Votes table (same contract as the decision-trace table:
+    both route the detail through reporting.md_table_cell)."""
+    analysis = {
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "COAD",
+                "selected_by": "pan_cancer_signature_ranker",
+                "evidence_channels": [
+                    {
+                        "channel": "local_expression_reference",
+                        "role": "supporting",
+                        "support": 0.9,
+                        "status": "supporting",
+                        "details": {"panel": "lineage|program\nrationale"},
+                        "selects_report_label": False,
+                    }
+                ],
+            }
+        },
+    }
+    md = _cancer_type_vote_summary_markdown(analysis)
+    data_rows = [
+        ln
+        for ln in md.splitlines()
+        if ln.startswith("| ") and "Signal" not in ln and "---" not in ln
+    ]
+    assert data_rows, md
+    row = data_rows[0]
+    # The pipe is escaped (kept as a literal `\|` in the cell) and the newline is
+    # flattened, so the row still has exactly the 5-column / 6-delimiter structure.
+    assert "\n" not in row
+    assert "\\|" in row
+    assert row.replace("\\|", "").count("|") == 6
 
 
 def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
@@ -299,6 +339,80 @@ def test_decomposition_interval_cap_ignores_tiny_non_tumor_assignments():
 
     assert changed is False
     assert purity["overall_upper"] == pytest.approx(1.0)
+
+
+def test_fused_upper_never_exceeds_decomposition_cap():
+    """The random-effects fusion pass must not widen the upper bound back above
+    the physical decomposition cap. Reviewer scenario: a cap ~0.84 must survive a
+    discordant fused upper ~0.97."""
+    cap = 0.8425
+    est, lo, up = _clamp_interval_to_cap(0.60, 0.31, 0.97, cap)
+    assert up == pytest.approx(cap)
+    # A point/lower already below the cap are left untouched.
+    assert est == pytest.approx(0.60)
+    assert lo == pytest.approx(0.31)
+
+
+def test_clamp_interval_to_cap_pulls_point_and_lower_below_ceiling():
+    """If the whole fused interval sits above the cap, the point and lower are
+    pulled down so lower <= estimate <= upper stays coherent."""
+    est, lo, up = _clamp_interval_to_cap(0.95, 0.90, 0.99, 0.84)
+    assert up == pytest.approx(0.84)
+    assert est == pytest.approx(0.84)
+    assert lo == pytest.approx(0.84)
+
+
+def test_clamp_interval_to_cap_is_noop_without_cap():
+    """No decomposition cap (None / non-numeric) leaves the fused interval intact."""
+    assert _clamp_interval_to_cap(0.7, 0.5, 0.9, None) == (0.7, 0.5, 0.9)
+    assert _clamp_interval_to_cap(0.7, 0.5, 0.9, "n/a") == (0.7, 0.5, 0.9)
+
+
+def _saturated_nut_like_analysis():
+    """A ceiling-pinned (~100%) purity whose only physical signal (decomposition
+    residual) says ~55% and whose signature is uncorroborating — the NUT-carcinoma
+    saturation the anti-saturation guard exists to catch."""
+    return {
+        "purity": {
+            "overall_estimate": 1.0,
+            "overall_lower": 0.9,
+            "overall_upper": 1.0,
+            "components": {
+                "signature": {"purity": 0.5, "stability": 0.8},
+                "lineage": {"purity": 1.0},  # saturated -> dropped from the fusion
+                "estimate_purity": 0.9,
+                "decomposition": {"residual_fraction": 0.55},
+            },
+        },
+        "decomposition": {"purity_stability": {"fragile": False}},
+    }
+
+
+def test_finalize_fused_purity_desaturates_ceiling_pinned_read():
+    analysis = _saturated_nut_like_analysis()
+    _finalize_fused_purity(analysis)
+    p = analysis["purity"]
+    assert p["pre_fusion_estimate"] == 1.0
+    assert p["best_integration"]["point_source"] == "desaturated_fusion"
+    assert p["overall_estimate"] < 0.85  # pulled off the spurious 100%
+    assert p["overall_upper"] <= 1.0
+
+
+def test_finalize_fused_purity_respects_decomposition_cap():
+    analysis = _saturated_nut_like_analysis()
+    analysis["purity"]["components"]["decomposition_interval_cap"] = {
+        "constrained_upper": 0.60,
+    }
+    _finalize_fused_purity(analysis)
+    p = analysis["purity"]
+    assert p["overall_upper"] <= 0.60  # fused interval never re-widens above the cap
+    assert p["overall_estimate"] <= 0.60
+
+
+def test_finalize_fused_purity_is_safe_without_purity():
+    analysis = {"decomposition": {}}
+    _finalize_fused_purity(analysis)  # must not raise
+    assert "purity" not in analysis
 
 
 def test_summary_md_structure_for_report_clarity(tmp_path):
@@ -950,6 +1064,90 @@ def test_target_report_falls_back_to_mixed_source_surface_targets(tmp_path):
     assert "mixed-source rather than tumor-supported" in recs_block
 
 
+def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
+    """Issue #105: host-attributed disease-relevant genes should not read as active opportunities."""
+
+    purity = {
+        "overall_estimate": 0.64,
+        "overall_lower": 0.55,
+        "overall_upper": 0.72,
+    }
+    analysis = {
+        "sample_mode": "solid",
+        "cancer_type": "BLCA",
+        "cancer_name": "Bladder Urothelial Carcinoma",
+        "mhc1": {"HLA-A": 100, "HLA-B": 200, "HLA-C": 80, "B2M": 300},
+        "call_summary": {
+            "label_options": ["BLCA"],
+            "label_display": "BLCA (Bladder Urothelial Carcinoma)",
+            "reported_site": "liver-associated host context",
+        },
+    }
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "FGFR3",
+                "gene_id": "ENSG00000068078",
+                "category": "therapy_target",
+                "observed_tpm": 10.6,
+                "median_est": 11.0,
+                "est_1": 0.0,
+                "est_9": 11.0,
+                "pct_cancer_median": 1.0,
+                "tcga_percentile": 0.5,
+                "is_surface": True,
+                "is_cta": False,
+                "tme_explainable": True,
+                "tme_dominant": True,
+                "low_confidence_tumor": True,
+                "excluded_from_ranking": False,
+                "therapies": "",
+                "max_healthy_tpm": 16.0,
+                "tme_fold_lo": 0.1,
+                "tme_fold_med": 0.2,
+                "tme_fold_hi": 0.3,
+                "cohort_prior_tpm": 0.0,
+                "tme_only_tpm": 1.2,
+                "matched_normal_tpm": 0.0,
+                "matched_normal_tissue": "",
+                "matched_normal_fraction": 0.0,
+                "estimation_path": "clamped",
+                "attr_tumor_tpm": 0.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm_high": 0.0,
+                "attr_tumor_fraction": 0.0,
+                "attr_tumor_fraction_low": 0.0,
+                "attr_tumor_fraction_high": 0.0,
+                "attr_support_fraction": 0.0,
+                "attr_top_compartment": "hepatocyte",
+                "attr_top_compartment_tpm": 1.2,
+                "matched_normal_over_predicted": False,
+                "broadly_expressed": True,
+                "n_healthy_tissues_expressed": 20,
+                **{f"est_{i + 1}": 0.0 for i in range(9)},
+            }
+        ]
+    )
+
+    prefix = str(tmp_path / "pfo017-liver")
+    _write_target_report(
+        ranges_df,
+        analysis,
+        prefix,
+        cancer_type="BLCA",
+        purity_result=purity,
+    )
+    targets = (tmp_path / "pfo017-liver-targets.md").read_text()
+
+    assert "### Audit-only rows: not tumor-supported in this sample" in targets
+    active_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[0]
+    audit_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[1]
+    assert "erdafitinib" not in active_block
+    assert "FGFR3" in audit_block
+    assert "erdafitinib" in audit_block
+    assert "audit-only negative/background evidence" in audit_block
+
+
 def test_ci_confidence_tier_buckets():
     from trufflepig.main import _ci_confidence_tier
 
@@ -999,3 +1197,63 @@ def test_cli_analyze_rejects_invalid_met_site(monkeypatch, tmp_path):
             output_dir=out_dir,
             met_site="not_a_site",
         )
+
+
+def _axis(up=None, down=None, state="down"):
+    return SimpleNamespace(
+        up_geomean_fold=up,
+        down_geomean_fold=down,
+        state=state,
+        up_genes_measured=5,
+        down_genes_measured=5,
+        message="",
+    )
+
+
+def test_disease_state_text_shares_render_source_with_pathway_figure():
+    """Belief-consistency (plan §2.4/§2.5): the disease-state text must not deny a
+    pattern the therapy-pathway-state figure visibly shows. Both route through the
+    single ``pathway_state_figure_axes`` predicate, so whenever the figure would
+    render an axis the text points at the figure instead of asserting nothing
+    passed thresholds."""
+    from trufflepig.reporting import (
+        pathway_state_figure_axes,
+        report_disease_state_text,
+    )
+
+    # Axes with a measurable fold → the figure renders these rows.
+    scores = {"IFN_response": _axis(up=0.35), "EMT": _axis(down=1.9, state="up")}
+    axes = pathway_state_figure_axes(scores)
+    assert axes == ["IFN_response", "EMT"]  # single source of "figure has content"
+
+    text = report_disease_state_text("", {"therapy_response_scores": scores})
+    # The figure shows the axes, so the text must NOT claim nothing passed.
+    assert "passed reporting thresholds" not in text
+    assert "therapy-pathway-state figure" in text
+
+    # A non-empty synthesized narrative always wins verbatim.
+    assert (
+        report_disease_state_text("AR-active CRPC.", {"therapy_response_scores": scores})
+        == "AR-active CRPC."
+    )
+
+
+def test_disease_state_text_keeps_bounded_no_pattern_when_figure_empty():
+    """When no axis has a measurable fold the figure does not render, so the bounded
+    'nothing passed thresholds' statement is truthful and is preserved."""
+    from trufflepig.reporting import (
+        pathway_state_figure_axes,
+        report_disease_state_text,
+    )
+
+    scores = {"IFN_response": _axis(up=None, down=None)}
+    assert pathway_state_figure_axes(scores) == []
+    text = report_disease_state_text("", {"therapy_response_scores": scores})
+    assert "No strong RNA-defined therapy-exposure" in text
+
+    # With a separate active-pathway inference, the bounded statement defers to it.
+    text2 = report_disease_state_text(
+        "",
+        {"therapy_response_scores": scores, "pathway_activity_inferences": [{"label": "MAPK"}]},
+    )
+    assert "active pathway evidence is summarized separately" in text2.lower()

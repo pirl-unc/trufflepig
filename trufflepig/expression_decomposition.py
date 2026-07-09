@@ -70,6 +70,13 @@ logger = logging.getLogger(__name__)
 
 
 # ── output contract (documents the result shape; structural, not enforced at runtime) ──
+#
+# NOTE: this is the LINEAGE-ROUTED decomposition result (key-accessed: ``result["modes"]``,
+# ``result["purity"]``). It is a distinct type from the template-NNLS-hypothesis
+# ``decomposition.engine.DecompositionResult`` dataclass (attribute-accessed: ``r.template``,
+# ``r.reconstruction_error``, ``r.purity_result``) that ``decompose_sample`` returns. The two used
+# to share the name ``DecompositionResult``; this one was renamed ``RoutedDecompositionResult`` so a
+# reader can tell at a glance which shape a value has.
 class ModeMetrics(TypedDict, total=False):
     residual_fraction: float | None          # residual mass fraction under this mode
     subtracted: dict[str, float]             # background → subtracted fraction
@@ -116,7 +123,7 @@ class LineageInfo(TypedDict):
     confidence: str
 
 
-class DecompositionResult(TypedDict, total=False):
+class RoutedDecompositionResult(TypedDict, total=False):
     selected_mode: str | None
     lineage: LineageInfo
     routing: str
@@ -550,7 +557,7 @@ def _build_purity_block(sel, sample, signatures, proliferative) -> PurityBlock:
 
 def decompose_expression(sample_tpm_by_symbol: Mapping[str, float], cancer=None, *,
                          space: str = "percentile", route_via_classifier: bool = True,
-                         run_all: bool = False, met_sites: Sequence[str] | None = None) -> DecompositionResult:
+                         run_all: bool = False, met_sites: Sequence[str] | None = None) -> RoutedDecompositionResult:
     """Lineage-routed decomposition + tumor characterization for one sample.
 
     ``met_sites`` is **off by default**; pass e.g. ``["liver"]`` only when met evidence

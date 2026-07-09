@@ -1,8 +1,8 @@
 """Regression tests for ``_veto_local_reference_lineage_flip`` (main.py).
 
-The veto reverts a LOCAL-EXPRESSION-REFERENCE (deconvolved) flip into the sarcoma
-(mesenchymal) compartment only when TWO independent signals — the bulk classifier's
-pre-call AND ``compartment_call`` — agree on the *other* (non-mesenchymal) lineage.
+The veto reverts a LOCAL-EXPRESSION-REFERENCE (deconvolved) cross-lineage flip
+only when TWO independent signals — the bulk classifier's pre-call AND
+``compartment_call`` — agree on the original lineage.
 
 A ``compartment_call`` abstention (``compartment=None``) or a near-tie
 (``confident=False``) is NOT an independent signal: it must not be mapped through
@@ -40,7 +40,31 @@ def patched_veto(monkeypatch):
         import trufflepig.cancer_type_centroid as ctc
 
         monkeypatch.setattr(ctc, "compartment_call", lambda *a, **k: compartment_call_result)
-        analysis = {"cancer_type_evidence": {"selected": {"code": "SARC_DDLPS"}}}
+        analysis = {
+            "cancer_type_evidence": {
+                "selected": {"code": "SARC_DDLPS"},
+                "staged_evidence_graph": {
+                    "selected": {
+                        "code": "SARC_DDLPS",
+                        "selected_by": "local_expression_reference",
+                        "selects_report_label": True,
+                    },
+                    "channels": [
+                        {
+                            "candidate_code": "SARC_DDLPS",
+                            "code": "SARC_DDLPS",
+                            "channel": "deconvolved_tumor_reference",
+                            "role": "tumor_program_reference",
+                            "stage": "exact_subtype",
+                            "status": "selected_report_label",
+                            "support": 0.91,
+                            "selects_report_label": True,
+                            "details": {},
+                        }
+                    ],
+                },
+            }
+        }
         return tp_main._veto_local_reference_lineage_flip(
             analysis,
             pd.DataFrame({"gene_id": ["X"], "tpm": [1.0]}),
@@ -74,3 +98,162 @@ def test_veto_fires_on_confident_epithelial_compartment(patched_veto):
     assert result is None  # reverted to the bulk call
     assert analysis["cancer_type_evidence_vetoed"]["kept_call"] == "READ"
     assert analysis["inferred_cancer_type"] == "READ"
+    graph = analysis["cancer_type_evidence"]["staged_evidence_graph"]
+    assert graph["selected"] is None
+    assert graph["vetoed_selected"]["code"] == "SARC_DDLPS"
+    channel = graph["channels"][0]
+    assert channel["selects_report_label"] is False
+    assert channel["status"] == "vetoed"
+    assert "veto_reason" in channel["details"]
+
+
+def test_decision_trace_uses_veto_over_stale_graph_selection():
+    """Legacy report JSON may still carry a graph-selected vetoed label."""
+
+    body = tp_main._cancer_type_decision_trace_markdown(
+        {
+            "inferred_cancer_type": "READ",
+            "cancer_type_evidence_vetoed": {
+                "vetoed_call": "SARC_DDLPS",
+                "kept_call": "READ",
+                "reason": "local-expression reference conflicted with bulk context",
+            },
+            "cancer_type_evidence": {
+                "selected": None,
+                "staged_evidence_graph": {
+                    "selected": {
+                        "code": "SARC_DDLPS",
+                        "selected_by": "local_expression_reference",
+                        "selects_report_label": True,
+                    },
+                    "channels": [
+                        {
+                            "candidate_code": "SARC_DDLPS",
+                            "code": "SARC_DDLPS",
+                            "channel": "deconvolved_tumor_reference",
+                            "role": "tumor_program_reference",
+                            "stage": "exact_subtype",
+                            "status": "selected_report_label",
+                            "support": 0.91,
+                            "selects_report_label": True,
+                            "details": {},
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    assert "Evidence selection vetoed" in body
+    assert "READ" in body
+    assert "Selected report label: **SARC_DDLPS" not in body
+
+
+def test_decision_trace_escapes_pipe_and_newline_in_detail_cell():
+    """A free-text rationale containing a literal ``|`` or newline must not corrupt
+    the markdown table (extra columns / broken rows)."""
+
+    body = tp_main._cancer_type_decision_trace_markdown(
+        {
+            "cancer_type_evidence": {
+                "selected": {"code": "BRCA", "selected_by": "expression_context"},
+                "staged_evidence_graph": {
+                    "selected": {"code": "BRCA", "selects_report_label": True},
+                    "channels": [
+                        {
+                            "candidate_code": "BRCA",
+                            "channel": "signature_panel",
+                            "role": "context",
+                            "stage": "broad",
+                            "status": "context_only",
+                            "support": 0.42,
+                            "details": {
+                                "rationale": "score a|b split\nover two lines"
+                            },
+                        }
+                    ],
+                },
+            },
+        }
+    )
+
+    # The pipe is escaped and the newline flattened, so every table row still has
+    # exactly the 7 declared columns (8 pipes: leading, 6 separators, trailing).
+    data_rows = [
+        ln
+        for ln in body.splitlines()
+        if ln.startswith("|") and "signature_panel" in ln
+    ]
+    assert len(data_rows) == 1
+    row = data_rows[0]
+    assert "\\|" in row  # pipe escaped
+    # Escaped `\|` is not a column separator; only the 8 structural pipes remain.
+    assert row.replace("\\|", "").count("|") == 8
+    assert "score a" in row and "over two lines" in row  # newline flattened, text kept
+
+
+def test_veto_fires_on_non_sarcoma_cross_lineage_flip(monkeypatch):
+    """Generalized guard: the local-reference channel cannot flip a BRCA-like bulk call to heme
+    when the confident compartment also supports epithelial/solid lineage."""
+    import trufflepig.cancer_ontology as tp_onto
+    import trufflepig.cancer_type_centroid as ctc
+    import trufflepig.tumor_purity as tp_purity
+
+    monkeypatch.setattr(tp_purity, "_build_sample_tpm_by_symbol", lambda df: {})
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda *a, **k: {"compartment": "Epithelial", "confident": True},
+    )
+    monkeypatch.setattr(
+        tp_onto,
+        "cancer_lineage_group",
+        lambda code: {"BRCA": "Epithelial", "LAML": "Heme"}.get(str(code), ""),
+    )
+
+    analysis = {"cancer_type_evidence": {"selected": {"code": "LAML"}}}
+    result = tp_main._veto_local_reference_lineage_flip(
+        analysis,
+        pd.DataFrame({"gene_id": ["X"], "tpm": [1.0]}),
+        report_scope_cancer_type="LAML",
+        rna_inferred_cancer_type="BRCA",
+        selected_scope={"selected_by": "local_expression_reference"},
+    )
+
+    assert result is None
+    assert analysis["cancer_type_evidence_vetoed"]["kept_call"] == "BRCA"
+
+
+def test_veto_preserves_flip_into_embryonal_lineage(monkeypatch):
+    """Carve-out: a flip INTO the embryonal lineage is a legitimate rescue, not the spurious
+    sarcoma attractor the veto targets. A hepatoblastoma (HEPB) sample is systematically read as
+    its solid tissue-of-origin (LIHC) by BOTH the bulk classifier and the confident solid
+    compartment, so their agreement is not two independent signals. The local-reference flip to the
+    embryonal call must survive — vetoing it back to LIHC would revert a correct rescue."""
+    import trufflepig.cancer_ontology as tp_onto
+    import trufflepig.cancer_type_centroid as ctc
+    import trufflepig.tumor_purity as tp_purity
+
+    monkeypatch.setattr(tp_purity, "_build_sample_tpm_by_symbol", lambda df: {})
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda *a, **k: {"compartment": "Epithelial", "confident": True},  # → solid
+    )
+    monkeypatch.setattr(
+        tp_onto,
+        "cancer_lineage_group",
+        lambda code: {"LIHC": "Epithelial", "HEPB": "Embryonal"}.get(str(code), ""),
+    )
+
+    analysis = {"cancer_type_evidence": {"selected": {"code": "HEPB"}}}
+    result = tp_main._veto_local_reference_lineage_flip(
+        analysis,
+        pd.DataFrame({"gene_id": ["X"], "tpm": [1.0]}),
+        report_scope_cancer_type="HEPB",
+        rna_inferred_cancer_type="LIHC",
+        selected_scope={"selected_by": "local_expression_reference"},
+    )
+
+    assert result == "HEPB"  # NOT reverted — the embryonal rescue is preserved
+    assert "cancer_type_evidence_vetoed" not in analysis

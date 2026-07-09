@@ -193,7 +193,8 @@ DECOMPOSITION_PARAMETERS = {
         "met_site_dominance_min_delta": 0.10,
         "met_site_dominance_min_extra_fraction": 0.25,
         "met_site_dominance_gain": 12.0,
-        "met_site_dominance_cap": 3.0,
+        "met_site_dominance_extra_gain": 2.0,
+        "met_site_dominance_cap": 4.0,
         # The dominance boost may fire ONLY for a leading tumor hypothesis. site_delta =
         # met-site-score − origin-score is large whenever the origin tissue is ABSENT — which is true
         # both for a real met AND for a WRONG primary whose origin simply isn't in the sample (an
@@ -409,7 +410,13 @@ def _resolve_templates(
 
 @dataclass
 class DecompositionResult:
-    """Result of decomposing a sample into broad components."""
+    """Result of decomposing a sample into broad components (one template-NNLS hypothesis).
+
+    Attribute-accessed (``r.template``, ``r.reconstruction_error``, ``r.purity_result``). This is a
+    distinct type from the lineage-routed ``expression_decomposition.RoutedDecompositionResult``
+    TypedDict (key-accessed: ``result["modes"]``, ``result["purity"]``); the two previously shared
+    the name ``DecompositionResult``.
+    """
 
     template: str
     cancer_type: str
@@ -1291,13 +1298,21 @@ def _fit_one_hypothesis(
             and extra_sample_fraction >= scoring["met_site_dominance_min_extra_fraction"]
             and cancer_support >= scoring["met_site_dominance_min_support"]
         ):
+            extra_delta = float(
+                extra_sample_fraction - scoring["met_site_dominance_min_extra_fraction"]
+            )
             site_boost = float(
                 np.clip(
-                    1.0 + scoring["met_site_dominance_gain"] * site_delta,
+                    1.0
+                    + scoring["met_site_dominance_gain"] * site_delta
+                    + scoring["met_site_dominance_extra_gain"] * max(extra_delta, 0.0),
                     1.0,
                     scoring["met_site_dominance_cap"],
                 )
             )
+            site_evidence["site_dominance_boost"] = site_boost
+            site_evidence["site_delta_vs_origin"] = site_delta
+            site_evidence["extra_delta_for_dominance"] = extra_delta
             score *= site_boost
 
     # Purity floor penalty (#98): candidates with biologically

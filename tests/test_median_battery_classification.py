@@ -1,9 +1,11 @@
-"""Battery contract: every TCGA cohort median must classify as itself.
+"""Battery contract: every TCGA cohort median must classify as itself or a
+declared near-indistinguishable sibling.
 
 Running ``rank_cancer_type_candidates`` on the ``<code>_TPM`` median
 vector (as a pseudo-sample) is the easiest possible classification
 task — if the classifier can't call the cohort median correctly, any
-real-sample call against that cohort is suspect.
+real-sample call against that cohort is suspect. COAD/READ is the accepted
+exception because the report layer treats colorectal siblings as compatible.
 
 This battery caught the original BLCA→ESCA and PAAD→STAD miscalls
 (#160, #162) and now pins the post-fix contract. Running at the
@@ -16,6 +18,11 @@ import pytest
 
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+_ACCEPTED_SIBLING_TOP1 = {
+    "COAD": {"READ"},
+    "READ": {"COAD"},
+}
 
 
 def _all_tcga_codes():
@@ -42,7 +49,7 @@ def test_tcga_cohort_median_classifies_as_itself(code):
     ranked = rank_cancer_type_candidates(df)
     assert ranked, f"{code}: ranker returned no candidates"
     top_code = ranked[0]["code"]
-    assert top_code == code, (
+    assert top_code == code or top_code in _ACCEPTED_SIBLING_TOP1.get(code, set()), (
         f"{code} median miscalled as {top_code}. Top 3: "
         + ", ".join(f"{r['code']}(gm={r['support_geomean']:.3f})" for r in ranked[:3])
     )

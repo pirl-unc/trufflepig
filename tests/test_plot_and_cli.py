@@ -473,17 +473,17 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # The old free-form summary.md that carried family-call phrasing
-    # (CRC-family, Possible labels, subtype-candidates clause) was
+    # (CRC-family, retained-labels, subtype-candidates clause) was
     # retired in 4.41.0 as ~80% redundant with analysis.md. The
     # content below is now only checked in analysis.md.
     detailed = (tmp_path / "sample-analysis.md").read_text()
     assert "not literal" in detailed  # tissue-score caveat
-    assert "Possible report labels" in detailed
+    assert "Retained alternatives" in detailed
     assert "Broad family context" in detailed
     assert "Fit quality" in detailed
     assert "Integrated evidence synthesis" in detailed
-    assert "Parallel hypotheses still alive" in detailed
-    assert "Top broad possibilities" in detailed
+    assert "Cancer-Type Differential" in detailed
+    assert "Raw decomposition audit" in detailed
     assert "Residual Tissue-like Programs" in detailed
 
 
@@ -1000,10 +1000,9 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
     text = (tmp_path / "coad-targets.md").read_text()
     assert "## Tumor context for interpretation" in text
     assert "## Therapy Prioritization at a Glance" in text
-    assert (
-        "provisional between **COAD (Colon Adenocarcinoma)** and **READ (Rectum Adenocarcinoma)**"
-        in text
-    )
+    assert "**Working label**: **COAD (Colon Adenocarcinoma)**" in text
+    assert "Retained alternatives" in text
+    assert "downstream target and biomarker interpretation below uses the working label" in text
     assert "colon-like matched-normal reference" in text
     assert "CEACAM5" in text
     assert "MAGEA4" in text

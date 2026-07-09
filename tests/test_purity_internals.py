@@ -20,6 +20,31 @@ from trufflepig.tumor_purity import (
     _select_tumor_specific_genes_for_panel,
 )
 from trufflepig.purity_calibration import _reference_code_candidates
+from trufflepig import tumor_purity as _tp
+
+
+# ── subtype-reference reachability + refinable-subtype gating ──────────────
+
+
+def test_subtype_tumor_tpm_lookup_reaches_pam50_subtype_column():
+    """PAM50 subtypes (BRCA_Basal, …) live in the ``subtype`` column with cancer_code=BRCA, unlike
+    SARC subtypes whose code IS the cancer_code. The lookup must reach both conventions, else every
+    PAM50 subtype reference is silently unreachable (denominator-less lineage purity)."""
+    sarc = _tp._subtype_tumor_tpm_lookup("SARC_LMS")  # cancer_code convention
+    basal = _tp._subtype_tumor_tpm_lookup("BRCA_Basal")  # subtype-column convention
+    assert sarc, "SARC_LMS reference should be reachable (cancer_code convention)"
+    assert basal, "BRCA_Basal reference should be reachable (subtype-column convention)"
+    # basal identity markers are expressed in the basal reference; luminal ER is not
+    assert basal.get("KRT5", 0) > 0 and basal.get("KRT14", 0) > 0
+    assert basal.get("ESR1", 0) == 0  # triple-negative reference lacks ER
+
+
+def test_cohort_refinable_subtypes_fires_only_for_paneled_referenced_subtypes():
+    """A non-mixture cohort qualifies for subtype-lineage refinement only when a subtype has BOTH a
+    curated panel and a reachable reference. BRCA qualifies (curated BRCA_Basal panel + reference); a
+    cohort with neither does not."""
+    assert _tp._cohort_has_refinable_subtypes("BRCA") is True
+    assert _tp._cohort_has_refinable_subtypes("CHOL") is False  # no curated molecular-subtype panel
 
 
 # ── _compile_excluded_gene_matcher ───────────────────────────────────────

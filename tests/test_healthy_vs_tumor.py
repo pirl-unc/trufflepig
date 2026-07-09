@@ -172,3 +172,25 @@ def test_brief_banner_fires_for_healthy_and_ambiguous_hints():
             assert "liver" in banner
         else:
             assert banner is None, f"banner should NOT fire for hint={hint}"
+
+
+def test_structural_banner_respects_active_report_label():
+    r = TissueCompositionSignal(
+        top_normal_tissues=[("smooth_muscle_nTPM", 0.9)],
+        top_tcga_cohorts=[("SARC_TPM", 0.82), ("READ_TPM", 0.81)],
+        proliferation_log2_mean=4.0,
+        proliferation_genes_observed=13,
+        cancer_hint="possibly-tumor",
+        structural_ambiguity=True,
+        n_reference_genes=5000,
+        verdict="",
+    )
+
+    banner = r.brief_banner(
+        active_cancer_code="READ",
+        active_cancer_label="READ (Rectum Adenocarcinoma)",
+    )
+
+    assert "retained as background/differential context" in banner
+    assert "downstream report sections use READ (Rectum Adenocarcinoma)" in banner
+    assert "SARC-specific downstream analysis" not in banner

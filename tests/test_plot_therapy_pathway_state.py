@@ -149,4 +149,33 @@ def test_state_ordering_active_suppressed_first(tmp_path):
     )
     labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
     assert "suppressed axis" in labels[0]
-    assert "near baseline" in labels[2]
+    assert "near cohort median" in labels[2]
+
+
+def test_indeterminate_enrichment_is_labeled_mild_not_baseline(tmp_path):
+    scores = {
+        "angiogenesis": TherapyAxisScore(
+            therapy_class="aPD1_exclusion_angiogenesis",
+            state="indeterminate",
+            up_geomean_fold=1.52,
+            up_genes_measured=5,
+        ),
+    }
+    fig = plot_therapy_pathway_state(
+        therapy_response_scores=scores,
+        cancer_code="READ",
+        save_to_filename=str(tmp_path / "tps_mild.png"),
+    )
+    ax = fig.axes[0]
+    labels = [t.get_text() for t in ax.get_yticklabels()]
+    assert "mild enrichment" in labels[0]
+    assert "near baseline" not in labels[0]
+    assert ax.get_title(loc="left") == "Therapy-response pathway RNA — READ"
+    assert "selected cancer-cohort median" in ax.get_xlabel()
+    legend_labels = [
+        text.get_text()
+        for legend in [ax.get_legend()]
+        if legend is not None
+        for text in legend.get_texts()
+    ]
+    assert "mild enrichment" in legend_labels

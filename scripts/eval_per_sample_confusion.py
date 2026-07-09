@@ -32,9 +32,14 @@ from pirlygenes.expression.accessors import (
 from pirlygenes.gene_sets_cancer import cancer_lineage_group, cancer_type_registry
 from trufflepig.cancer_type_evidence import _primary_tissue_key_for_code
 from trufflepig.expression_decomposition import _group_to_mode
+from trufflepig.cancer_type_signal_matrix import (
+    build_cancer_type_signal_matrix,
+    build_signal_sample_summary,
+    build_signal_matrix_summary_markdown,
+)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from eval_nohint_validation import full_granularity_call  # noqa: E402
+from eval_nohint_validation import full_granularity_analysis, full_granularity_call  # noqa: E402
 
 _REGISTRY = {r["code"]: r for r in cancer_type_registry().to_dict("records")}
 _NAME = {code: str(row.get("name") or code) for code, row in _REGISTRY.items()}
@@ -125,7 +130,12 @@ def _clean_cohort(type_code):
     return raw["Ensembl_Gene_ID"].values, raw["Symbol"].values, cleaned, sample_cols
 
 
-def call_each_sample(type_code):
+def call_each_sample(
+    type_code,
+    *,
+    collect_signal_matrix=False,
+    collect_signal_summary=False,
+):
     """Yield (sample_column, final_call) for every individual sample in a cohort."""
     ensembl, symbols, cleaned, sample_cols = _clean_cohort(type_code)
     for col in sample_cols:
@@ -133,18 +143,53 @@ def call_each_sample(type_code):
             {"ensembl_gene_id": ensembl, "gene_symbol": symbols, "TPM": cleaned[col].values}
         )
         try:
-            _bulk, final_call = full_granularity_call(df)
+            if collect_signal_matrix or collect_signal_summary:
+                _bulk, final_call, analysis = full_granularity_analysis(df)
+                matrix = build_cancer_type_signal_matrix(
+                    analysis,
+                    sample_id=f"{type_code}:{col}",
+                )
+                if collect_signal_summary:
+                    summary = build_signal_sample_summary(matrix)
+                    summary.insert(1, "truth_type", type_code)
+                    summary.insert(2, "truth_sample", col)
+                    summary_records = summary.to_dict("records")
+                else:
+                    summary_records = []
+                if collect_signal_matrix:
+                    matrix.insert(1, "truth_type", type_code)
+                    matrix.insert(2, "truth_sample", col)
+                    matrix_records = matrix.to_dict("records")
+                else:
+                    matrix_records = []
+            else:
+                _bulk, final_call = full_granularity_call(df)
+                matrix_records = []
+                summary_records = []
         except EXPECTED_SAMPLE_ERRORS as exc:
             final_call = f"ERROR:{str(exc)[:30]}"
-        yield col, final_call
+            matrix_records = []
+            summary_records = []
+        yield col, final_call, matrix_records, summary_records
 
 
 def _eval_one_cohort(truth):
     """Worker: all (sample, final_call) for one cohort. Top-level + picklable for the pool."""
     try:
-        return truth, list(call_each_sample(truth))
+        return truth, [
+            (sample, call)
+            for sample, call, _matrix, _summary in call_each_sample(truth)
+        ]
     except Exception as exc:  # noqa: BLE001 — a cohort that fails to load shouldn't kill the run
         return truth, [("<cohort-error>", f"ERROR:{str(exc)[:40]}")]
+
+
+def _eval_one_cohort_with_signal_summary(truth):
+    """Worker: calls plus compact signal summary rows for one cohort."""
+    try:
+        return truth, list(call_each_sample(truth, collect_signal_summary=True))
+    except Exception as exc:  # noqa: BLE001 — a cohort that fails to load shouldn't kill the run
+        return truth, [("<cohort-error>", f"ERROR:{str(exc)[:40]}", [], [])]
 
 
 def _default_workers():
@@ -165,26 +210,67 @@ def _default_workers():
     return cap
 
 
-def main(workers=None):
+def main(workers=None, signal_matrix_out=None, signal_summary_out=None):
     types = sorted(available_representative_cohorts())
+    collect_signal_matrix = bool(signal_matrix_out)
+    collect_signal_summary = bool(signal_summary_out) or collect_signal_matrix
+    if collect_signal_matrix and (workers is None or workers != 1):
+        print("# --signal-matrix-out requested; forcing serial run so evidence rows stay local", flush=True)
+        workers = 1
     if workers is None:
         workers = _default_workers()
     results = []  # (truth_type, sample, final_call, match_level)
+    signal_frames = []
+    signal_summary_frames = []
     print(f"# {len(types)} cohorts, {workers} worker(s)", flush=True)
     if workers <= 1:
-        stream = ((t, list(call_each_sample(t))) for t in types)
+        stream = (
+            (
+                t,
+                list(
+                    call_each_sample(
+                        t,
+                        collect_signal_matrix=collect_signal_matrix,
+                        collect_signal_summary=collect_signal_summary,
+                    )
+                ),
+            )
+            for t in types
+        )
         pool = None
     else:
         # 'spawn' (macOS default) gives each worker a clean interpreter that re-imports the
         # reference matrices once; 'fork' would copy the parent's half-built caches.
         pool = mp.get_context("spawn").Pool(workers)
-        stream = pool.imap_unordered(_eval_one_cohort, types)
+        worker = (
+            _eval_one_cohort_with_signal_summary
+            if collect_signal_summary
+            else _eval_one_cohort
+        )
+        stream = pool.imap_unordered(worker, types)
     done = 0
     for truth, calls in stream:
         done += 1
-        for sample, final_call in calls:
+        for row in calls:
+            if len(row) == 4:
+                sample, final_call, matrix_records, summary_records = row
+            elif len(row) == 3:
+                sample, final_call, matrix_records = row
+                summary_records = []
+            else:
+                sample, final_call = row
+                matrix_records = []
+                summary_records = []
             results.append((truth, sample, final_call, match_level(final_call, truth)))
-        print(f"  [{done}/{len(types)}] {truth:16s} -> {[c for _, c in calls]}", flush=True)
+            if matrix_records:
+                signal_frames.append(pd.DataFrame(matrix_records))
+            if summary_records:
+                signal_summary_frames.append(pd.DataFrame(summary_records))
+        print(
+            f"  [{done}/{len(types)}] {truth:16s} -> "
+            f"{[row[1] for row in calls]}",
+            flush=True,
+        )
     if pool is not None:
         pool.close()
         pool.join()
@@ -221,6 +307,23 @@ def main(workers=None):
     print("\n==== cross-entity mixups (lineage-only or miss), most frequent ====")
     for (truth, call, lvl), cnt in mixups.most_common(30):
         print(f"  {cnt}×  {truth:16s} -> {call:16s} [{lvl}]")
+    if signal_matrix_out and signal_frames:
+        matrix = pd.concat(signal_frames, ignore_index=True)
+        matrix.to_csv(signal_matrix_out, sep="\t", index=False)
+        summary_path = str(signal_matrix_out).rsplit(".", 1)[0] + ".md"
+        with open(summary_path, "w") as fh:
+            fh.write(
+                build_signal_matrix_summary_markdown(
+                    matrix,
+                    title="565 Representative-Sample Cancer-Type Signal Matrix Summary",
+                )
+            )
+        print(f"\n[signal-matrix] wrote {signal_matrix_out}")
+        print(f"[signal-matrix] wrote {summary_path}")
+    if signal_summary_out and signal_summary_frames:
+        summary = pd.concat(signal_summary_frames, ignore_index=True)
+        summary.to_csv(signal_summary_out, sep="\t", index=False)
+        print(f"\n[signal-summary] wrote {signal_summary_out}")
     return results
 
 
@@ -228,5 +331,27 @@ if __name__ == "__main__":
     _ap = argparse.ArgumentParser(description="Per-sample cancer-type confusion over all cohorts.")
     _ap.add_argument("--workers", type=int, default=None,
                      help="parallel worker processes (default: memory-aware cap; 1 = serial)")
+    _ap.add_argument(
+        "--signal-matrix-out",
+        default=None,
+        help="Optional TSV path for the concatenated cancer-type signal matrix. Forces serial mode.",
+    )
+    _ap.add_argument(
+        "--signal-summary-out",
+        default=None,
+        help=(
+            "Optional compact one-row-per-sample cancer-type signal summary TSV. "
+            "Can run in parallel."
+        ),
+    )
     _args = _ap.parse_args()
-    sys.exit(0 if main(workers=_args.workers) is not None else 1)
+    sys.exit(
+        0
+        if main(
+            workers=_args.workers,
+            signal_matrix_out=_args.signal_matrix_out,
+            signal_summary_out=_args.signal_summary_out,
+        )
+        is not None
+        else 1
+    )

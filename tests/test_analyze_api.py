@@ -676,6 +676,132 @@ def test_should_adopt_decomposition_purity_contract():
     assert not should_adopt_decomposition_purity("COAD", missing)
 
 
+def _decomp_hyp(cancer_type, purity, recon, template, warnings=()):
+    return SimpleNamespace(
+        cancer_type=cancer_type,
+        purity=purity,
+        reconstruction_error=recon,
+        template=template,
+        warnings=list(warnings),
+    )
+
+
+def test_decomposition_purity_stability_flags_fragile_and_stable():
+    from trufflepig.analyze import decomposition_purity_stability
+
+    # READ-like: top-by-score hypothesis is a low-purity over-subtracted fit while the same-cancer
+    # templates span 5%–78% — the adopted point purity is one pick in a wide range.
+    fragile = [
+        _decomp_hyp("READ", 0.10, 16.75, "solid_primary",
+                    ["Many genes are overexplained by the TME background"]),
+        _decomp_hyp("READ", 0.78, 2.68, "met_liver"),
+        _decomp_hyp("READ", 0.40, 3.0, "met_bone"),
+        _decomp_hyp("READ", 0.05, 4.0, "met_skin"),
+    ]
+    out = decomposition_purity_stability(fragile)
+    assert out["fragile"] is True
+    assert out["tme_overexplained"] is True
+    assert out["hypothesis_purity_spread"] == pytest.approx(0.73)
+    assert len(out["top_hypotheses"]) == 4
+
+    # Osteosarcoma-like: every same-cancer template agrees at ~99% purity → stable, no over-subtraction.
+    stable = [
+        _decomp_hyp("SARC", 0.994, 5.2, "solid_primary"),
+        _decomp_hyp("SARC", 0.994, 2.6, "met_bone"),
+        _decomp_hyp("SARC", 0.994, 4.7, "met_liver"),
+    ]
+    out2 = decomposition_purity_stability(stable)
+    assert out2["fragile"] is False
+    assert out2["tme_overexplained"] is False
+    assert out2["hypothesis_purity_spread"] == pytest.approx(0.0)
+
+    # Defensive: empty input → empty dict, no raise.
+    assert decomposition_purity_stability([]) == {}
+
+
+def test_reconcile_decomposition_purity_rejects_fragile_and_fully_inconsistent():
+    from trufflepig.analyze import reconcile_decomposition_purity
+
+    classifier = {
+        "overall_estimate": 0.55,
+        "overall_lower": 0.45,
+        "overall_upper": 0.65,  # trustworthy: non-saturated with a real interval
+        "components": {
+            "signature": {"purity": 0.58},
+            "lineage": {"purity": 0.62},
+            "estimate_purity": 0.55,
+        },
+    }
+    decomp = {"overall_estimate": 0.10, "overall_lower": 0.06, "overall_upper": 0.16}
+    stability = {"fragile": True, "tme_overexplained": True,
+                 "hypothesis_purity_lo": 0.03, "hypothesis_purity_hi": 0.78,
+                 "hypothesis_purity_spread": 0.75}
+    action, out = reconcile_decomposition_purity(classifier, decomp, stability)
+    # 10% disagrees with every independent signal (58/62/55%) by > margin → reject.
+    assert action == "reject"
+    assert out["overall_estimate"] == 0.55  # classifier purity kept
+    assert "decomposition_purity_rejected" in out
+
+
+def test_reconcile_does_not_fall_back_to_saturated_signature():
+    """The TME-overexplained low-purity case: the decomposition (9%) disagrees with a SATURATED
+    signature (~100%) that is exactly what decomposition corrects. Falling back would revert to a
+    wrong ~100%; the gate must widen instead of reject."""
+    from trufflepig.analyze import reconcile_decomposition_purity
+
+    saturated_classifier = {
+        "overall_estimate": 1.0,
+        "overall_lower": 1.0,
+        "overall_upper": 1.0,  # saturated + zero-width → NOT a trustworthy fall-back
+        "components": {
+            "signature": {"purity": 1.0},
+            "lineage": {"purity": 0.98},
+            "estimate_purity": 0.95,
+        },
+    }
+    decomp = {"overall_estimate": 0.09, "overall_lower": 0.03, "overall_upper": 0.20}
+    stability = {"fragile": True, "tme_overexplained": True,
+                 "hypothesis_purity_lo": 0.06, "hypothesis_purity_hi": 0.19,
+                 "hypothesis_purity_spread": 0.13}
+    action, out = reconcile_decomposition_purity(saturated_classifier, decomp, stability)
+    assert action == "widen"  # NOT reject — keeps the honest low purity, widened
+    assert out["overall_estimate"] == 0.09
+    assert "purity_interval_widened_for_fragility" in out
+
+
+def test_reconcile_decomposition_purity_widens_when_consistent_with_one_signal():
+    from trufflepig.analyze import reconcile_decomposition_purity
+
+    classifier = {
+        "overall_estimate": 0.15,
+        "components": {
+            "signature": {"purity": 0.12},  # corroborates the ~10% decomposition
+            "lineage": {"purity": 0.62},
+            "estimate_purity": 0.55,
+        },
+    }
+    decomp = {"overall_estimate": 0.10, "overall_lower": 0.06, "overall_upper": 0.16}
+    stability = {"fragile": True, "tme_overexplained": True,
+                 "hypothesis_purity_lo": 0.03, "hypothesis_purity_hi": 0.78,
+                 "hypothesis_purity_spread": 0.75}
+    action, out = reconcile_decomposition_purity(classifier, decomp, stability)
+    # signature agrees within margin → keep the 10% point but widen to span the hypotheses.
+    assert action == "widen"
+    assert out["overall_estimate"] == 0.10  # point kept
+    assert out["overall_lower"] == pytest.approx(0.03)
+    assert out["overall_upper"] == pytest.approx(0.78)
+    assert "purity_interval_widened_for_fragility" in out
+
+
+def test_reconcile_decomposition_purity_adopts_stable_unchanged():
+    from trufflepig.analyze import reconcile_decomposition_purity
+
+    decomp = {"overall_estimate": 0.994, "overall_lower": 0.99, "overall_upper": 1.0}
+    action, out = reconcile_decomposition_purity({}, decomp, {"fragile": False})
+    assert action == "adopt"
+    assert out is decomp  # returned unchanged
+
+
 def test_wilms_deconvolved_reference_uses_expression_source_code_alias():
     import pandas as pd
 

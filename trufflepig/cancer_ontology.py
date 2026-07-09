@@ -160,6 +160,129 @@ def registry_parent_code(code):
     return "" if parent.lower() in ("", "nan", "none") else parent
 
 
+MOLECULAR_STATUS_SUFFIXES = (
+    "_MSI",
+    "_MSIH",
+    "_DMMR",
+    "_MMRD",
+    "_MSS",
+    "_PMMR",
+    "_MMRP",
+    "_CIN",
+    "_CNL",
+    "_CNH",
+    "_HPV_pos",
+    "_HPV_neg",
+    "_HPVpos",
+    "_HPVneg",
+    "_EGFR",
+    "_ALK",
+    "_KRAS",
+    "_BRAF",
+    "_ERBB2",
+    "_HER2",
+    "_ROS1",
+    "_RET",
+    "_MET",
+    "_NTRK",
+    "_IDHmut",
+    "_IDHwt",
+)
+
+
+def molecular_status_parent_code(code):
+    """Cancer entity for an orthogonal molecular/status code, or ''.
+
+    Examples: ``READ_MSI`` → ``READ``, ``HNSC_HPV_pos`` → ``HNSC``.
+    Ordinary entity codes are intentionally not rolled up here: ``READ``
+    stays ``''`` rather than becoming its registry parent ``CRC``.
+    """
+
+    text = str(code or "").strip()
+    if not text:
+        return ""
+    for suffix in MOLECULAR_STATUS_SUFFIXES:
+        if text.endswith(suffix):
+            return text[: -len(suffix)]
+    return ""
+
+
+def subtype_display_parent_code(code):
+    """Display parent for a true subtype code in compact evidence views.
+
+    This helper is deliberately for display/nomenclature. It should not be
+    used to decide whether two top-level entities are biologically equivalent.
+    """
+
+    text = str(code or "").strip()
+    if "_" not in text:
+        return ""
+    parent = registry_parent_code(text)
+    if parent and parent != text:
+        return parent
+    if text.startswith("SARC_"):
+        return "SARC"
+    return ""
+
+
+def _entity_base_code(code):
+    text = str(code or "").strip()
+    return molecular_status_parent_code(text) or text
+
+
+def _registry_ancestors(code):
+    text = _entity_base_code(code)
+    ancestors = []
+    seen = set()
+    while text and text not in seen:
+        ancestors.append(text)
+        seen.add(text)
+        text = registry_parent_code(text)
+    return tuple(ancestors)
+
+
+def cancer_codes_entity_compatible(left, right):
+    """Whether two codes refer to the same report entity or parent/subtype chain.
+
+    This is stricter than lineage/family compatibility. ``READ`` and ``COAD``
+    are not entity-compatible here even though both are CRC-family tumors;
+    callers with a model that is explicitly trained at a broader molecular
+    context layer can add that context-specific rule separately.
+    """
+
+    left_base = _entity_base_code(left)
+    right_base = _entity_base_code(right)
+    if not left_base or not right_base:
+        return False
+    if left_base == right_base:
+        return True
+    left_ancestors = set(_registry_ancestors(left_base))
+    right_ancestors = set(_registry_ancestors(right_base))
+    return left_base in right_ancestors or right_base in left_ancestors
+
+
+def cancer_codes_context_compatible(left, right, *, context_code=None):
+    """Whether two codes are compatible for an explicitly broader context.
+
+    Use this for model/report contexts that are intentionally broader than a
+    single registry entity, such as CRC-level mismatch-repair RNA context for
+    COAD and READ. Without ``context_code`` this is just entity compatibility.
+    """
+
+    if cancer_codes_entity_compatible(left, right):
+        return True
+    context = str(context_code or "").strip()
+    if not context:
+        return False
+    left_base = _entity_base_code(left)
+    right_base = _entity_base_code(right)
+    if not left_base or not right_base:
+        return False
+    left_ancestors = set(_registry_ancestors(left_base))
+    right_ancestors = set(_registry_ancestors(right_base))
+    return context in left_ancestors and context in right_ancestors
+
+
 def cancer_family(code):
     """The registry *family* of a code (e.g. heme-bcell, heme-tcell, heme-myeloid, carcinoma-gi,
     sarcoma) — the middle layer between lineage group and entity, used for category-informed

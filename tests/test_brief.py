@@ -6,10 +6,12 @@ from trufflepig.brief import (
     build_actionable,
     build_brief,
     build_summary,
+    biomarker_expression_is_not_eligibility,
     _format_therapy_bullet,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
+    _top_therapies,
 )
 from trufflepig.confidence import ConfidenceTier
 
@@ -156,6 +158,34 @@ def _make_ranges_df():
             },
         ]
     )
+
+
+def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
+    """Cross-artifact invariant (text side): the summary markdown renders the FINALIZED purity from
+    the frozen ReportView snapshot, so it can never disagree with the sample-summary figure — both
+    route through finalized_purity_headline. Here the live dict still holds a stale 78% candidate
+    purity while the snapshot captured the finalized 10%."""
+    from trufflepig.report_view import build_report_view
+
+    analysis = _make_analysis(purity_point=0.78, ci_low=0.70, ci_high=0.85)
+    analysis["report_view"] = build_report_view(
+        {
+            "purity": {
+                "overall_estimate": 0.10,
+                "overall_lower": 0.06,
+                "overall_upper": 0.16,
+            }
+        }
+    )
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "**Purity:** 10% (model interval 6%–16%" in md
+    assert "78%" not in md  # the stale candidate purity never reaches the report
 
 
 def test_brief_is_compact():
@@ -466,10 +496,156 @@ def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
         disease_state="",
     )
 
-    assert "**RNA alternatives:** ordered RNA candidates PRAD (rank 1)" in md
+    assert "**Retained RNA differential:** ordered RNA candidates PRAD (rank 1)" in md
     assert "BLCA (rank 2, 0.80x top support)" in md
     assert "COAD (rank 3, 0.50x top support)" in md
     assert "raw-signature top BLCA" in md
+
+
+def test_summary_mmr_release_vote_overrides_conflicting_mss_subtype_text():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "READ",
+            "cancer_name": "Rectum Adenocarcinoma",
+            "analysis_constraints": {},
+            "cancer_type_source": "auto-detected",
+            "candidate_trace": [
+                {
+                    "code": "READ",
+                    "support_geomean": 0.50,
+                    "support_fraction_of_top": 0.93,
+                    "signature_score": 0.54,
+                    "winning_subtype": "READ_MSS",
+                }
+            ],
+            "cancer_type_evidence": {
+                "staged_evidence_graph": {
+                    "channels": [
+                        {
+                            "candidate_code": "READ",
+                            "role": "hierarchical_mismatch_repair_vote",
+                            "code": "MSI",
+                            "status": "admission_context",
+                            "details": {
+                                "label_space": (
+                                    "learned_mismatch_repair_release_ensemble"
+                                ),
+                                "mismatch_repair": {
+                                    "context_group": "CRC",
+                                    "decision_threshold": 0.5,
+                                    "msi_probability": 0.808925,
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="READ",
+        disease_state="",
+    )
+
+    assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
+    assert "MSI-like probability 0.81" in md
+    assert "conflicts with the candidate-trace subtype READ_MSS" in md
+    assert "MSS Rectum Adenocarcinoma-consistent" not in md
+    assert "RNA subtype signal is" not in md
+
+
+def test_summary_mmr_vote_ignores_unrelated_retained_candidate():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "GBM",
+            "cancer_name": "Glioblastoma",
+            "analysis_constraints": {},
+            "cancer_type_source": "auto-detected",
+            "candidate_trace": [{"code": "GBM", "support_fraction_of_top": 1.0}],
+            "cancer_type_evidence": {
+                "staged_evidence_graph": {
+                    "channels": [
+                        {
+                            "candidate_code": "COAD",
+                            "role": "hierarchical_mismatch_repair_vote",
+                            "code": "MSI",
+                            "status": "admission_context",
+                            "details": {
+                                "label_space": (
+                                    "learned_mismatch_repair_release_ensemble"
+                                ),
+                                "mismatch_repair": {
+                                    "context_group": "CRC",
+                                    "decision_threshold": 0.5,
+                                    "msi_probability": 0.92,
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="GBM",
+        disease_state="",
+    )
+
+    assert "Mismatch-repair RNA context" not in md
+    assert "CRC MMR ensemble" not in md
+
+
+def test_summary_mmr_vote_can_use_explicit_crc_context_for_read_call():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "READ",
+            "cancer_name": "Rectum Adenocarcinoma",
+            "analysis_constraints": {},
+            "cancer_type_source": "auto-detected",
+            "candidate_trace": [{"code": "READ", "support_fraction_of_top": 1.0}],
+            "cancer_type_evidence": {
+                "staged_evidence_graph": {
+                    "channels": [
+                        {
+                            "candidate_code": "COAD",
+                            "role": "hierarchical_mismatch_repair_vote",
+                            "code": "MSI",
+                            "status": "admission_context",
+                            "details": {
+                                "label_space": (
+                                    "learned_mismatch_repair_release_ensemble"
+                                ),
+                                "mismatch_repair": {
+                                    "context_group": "CRC",
+                                    "decision_threshold": 0.5,
+                                    "msi_probability": 0.71,
+                                },
+                            },
+                        }
+                    ]
+                }
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="READ",
+        disease_state="",
+    )
+
+    assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
+    assert "MSI-like probability 0.71" in md
 
 
 def test_summary_rna_alternatives_use_post_gate_support_fraction():
@@ -524,7 +700,7 @@ def test_summary_does_not_list_rna_alternatives_for_supplied_label():
     )
 
     assert "expression-reference context is concordant with supplied PRAD" in md
-    assert "**RNA alternatives:**" not in md
+    assert "**Retained RNA differential:**" not in md
 
 
 def test_low_confidence_call_punctuation_is_clean():
@@ -761,6 +937,52 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
     assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
+
+
+def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "SARC"
+    analysis["cancer_name"] = "Sarcoma"
+    targets_df = pd.DataFrame(
+        [
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "trabectedin",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "advanced LMS",
+            },
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "doxorubicin",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "first-line STS",
+            },
+            {
+                "cancer_code": "SARC",
+                "subtype": "leiomyosarcoma",
+                "symbol": float("nan"),
+                "agent": "pazopanib",
+                "agent_class": "small_molecule",
+                "phase": "approved",
+                "indication": "advanced non-adipocytic STS",
+            },
+        ]
+    )
+    ranges_df = pd.DataFrame(columns=["symbol", "observed_tpm"])
+
+    top = _top_therapies(targets_df, ranges_df, analysis=analysis)
+
+    assert [row["agent"] for row, _expr in top] == ["doxorubicin", "pazopanib"]
+    line = _format_therapy_bullet(top[0][0], top[0][1], analysis=analysis)
+    assert line.startswith("- **doxorubicin** — agent-only therapy")
+    assert "target expression is not the eligibility criterion" in line
+    assert "nan" not in line.lower()
 
 
 def test_therapy_bullet_uses_agent_class_when_agent_is_missing():
@@ -1423,3 +1645,79 @@ def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
     assert "| **MAGEA4** | afami-cel |" in md
     assert "| **MAGE-A4** |" not in md
     assert "gene symbol not present in input file" not in md
+
+
+# --- Biomarker-outlier belief-consistency (plan §2.4) ---------------------------
+#
+# A biomarker whose clinical eligibility is gated by a DNA alteration (mutation /
+# specific allele / wild-type status) must not be presented as an actionable
+# EXPRESSION outlier — that contradicts the report's own "expression is not the
+# eligibility criterion". The gene's mutation-vs-expression basis is derived from
+# the pirlygenes-authored biomarker rationale, not a hard-coded gene list.
+
+
+def test_biomarker_basis_flags_mutation_gated_rationales():
+    # Mutation / allele / wild-type gated → expression is NOT the biomarker.
+    for rationale in (
+        "Prognostic / predictive; mutation common and linked to chemo response",
+        "G12C targetable; other alleles remain a negative predictor for EGFR TKIs",
+        "Must be wild-type for EGFR-antibody response; pan-RAS testing standard",
+        "V600E mutation — dabrafenib+trametinib eligible",
+        "Activating mutations (exon 19 del / L858R) gate TKI indication",
+        "R132 mutation — ivosidenib eligibility",
+    ):
+        assert biomarker_expression_is_not_eligibility(rationale) is True, rationale
+
+
+def test_biomarker_basis_does_not_flag_expression_readable_rationales():
+    # Amplification / overexpression / IHC / FISH cue wins → expression IS readable,
+    # so HER2/MDM2-style biomarkers are never flagged (avoids the false positive of
+    # telling a clinician "expression isn't the biomarker" where it partly is).
+    for rationale in (
+        "HER2 — gating biomarker for HER2-targeted agents; IHC/ISH 3+ or FISH-amplified eligible",
+        "HER2 amplification — approved indication for trastuzumab combos in RAS WT",
+        "Ring-chromosome 12q amplification with MDM2 — pathognomonic for WDLPS/DDLPS",
+        "Overexpression / mutation — cetuximab eligibility",
+        "",
+    ):
+        assert biomarker_expression_is_not_eligibility(rationale) is False, rationale
+
+
+def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
+    # End-to-end through build_summary (the public surface that renders "Notable
+    # biomarker outliers"): a mutation-gated biomarker surfaced as a high-mRNA
+    # outlier must carry the "expression is not the eligibility criterion" caveat,
+    # so the block can't contradict the report's own eligibility principle.
+    # COAD TP53 is mutation-gated ("mutation common ... chemo response"); render a
+    # strongly-amplified, top-percentile TP53 row so it qualifies as an outlier.
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "COAD"
+    analysis["cancer_name"] = "Colon adenocarcinoma"
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "TP53",
+                "gene_id": "ENSG00000141510",
+                "observed_tpm": 180.0,
+                "amplification_fold": 15.0,
+                "tcga_percentile": 0.99,
+                "attribution": {},
+                "attr_tumor_tpm": 170.0,
+                "attr_tumor_fraction": 0.94,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }
+        ]
+    )
+    md = build_summary(
+        analysis,
+        ranges_df,
+        cancer_code="COAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "## Notable biomarker outliers" in md
+    assert "TP53" in md
+    assert "expression is not the eligibility criterion" in md

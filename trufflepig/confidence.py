@@ -167,6 +167,20 @@ def compute_purity_confidence(
         if overall < 0.08:
             tier = "low"
 
+    # Anti-saturation guard provenance: if the honest-fusion pass replaced a near-100% single-method
+    # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method
+    # consensus because nothing corroborated it, say so and cap the tier — a desaturated estimate is
+    # never "high confidence". See main.py best_purity_estimate wiring.
+    best_integration = None
+    try:
+        best_integration = purity.get("best_integration")
+    except AttributeError:
+        best_integration = None
+    if isinstance(best_integration, dict) and best_integration.get("point_source") == "desaturated_fusion":
+        if tier == "high":
+            tier = "moderate"
+        reasons.append("high single-method purity reading uncorroborated — using method consensus")
+
     sev = (degradation_severity or "none").lower()
     if sev in ("moderate", "severe"):
         # Severe RNA degradation biases long-transcript quantification;
@@ -188,6 +202,26 @@ def compute_purity_confidence(
                 break
 
     return ConfidenceTier(tier=tier, reasons=reasons)
+
+
+def purity_confidence_for_analysis(analysis) -> ConfidenceTier:
+    """Purity confidence tier from a full analysis dict.
+
+    Single source for the ``compute_purity_confidence`` call: derives the
+    degradation severity from ``analysis['sample_context']`` and applies it.
+    Both the markdown (``_generate_text_reports``) and the ReportView snapshot
+    call this so a report can never show one purity tier in a figure and a
+    different one in text.
+    """
+    purity = analysis.get("purity") or {}
+    deg = getattr(
+        analysis.get("sample_context"), "degradation_severity", "none"
+    )
+    return compute_purity_confidence(
+        purity,
+        sample_context=analysis.get("sample_context"),
+        degradation_severity=deg,
+    )
 
 
 def compute_call_confidence(analysis) -> ConfidenceTier:

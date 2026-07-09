@@ -2,6 +2,8 @@
 
 """Plot helpers for broad-compartment decomposition results."""
 
+import textwrap
+
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -241,7 +243,7 @@ def plot_decomposition_candidates(
     rows = results[:top_candidates]
     n = len(rows)
     if figsize is None:
-        figsize = (12, 0.55 * n + 1.8)
+        figsize = (14, 0.82 * n + 2.1)
 
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -250,6 +252,9 @@ def plot_decomposition_candidates(
         if labels is not None
         else [f"{row.cancer_type} / {row.template}" for row in rows]
     )
+    display_labels = [
+        textwrap.fill(str(label).replace("; ", "; "), width=58) for label in labels
+    ]
     y = np.arange(n)
 
     tumor_vals = np.zeros(n)
@@ -279,7 +284,7 @@ def plot_decomposition_candidates(
         edgecolor="white",
         linewidth=0.5,
         height=0.6,
-        label="Template-specific compartment",
+        label="Template-specific host/site compartment",
     )
     ax.barh(
         y,
@@ -293,10 +298,11 @@ def plot_decomposition_candidates(
     )
 
     # Inline percent labels inside each segment, only if the segment is
-    # wide enough to hold a readable label.
+    # wide enough to hold a readable label. Keep these terse; long
+    # segment names collide with the hypothesis label in real reports.
     def _annotate(vals, offsets, fmt):
         for i, (v, off) in enumerate(zip(vals, offsets)):
-            if v * 100 >= 7:
+            if v * 100 >= 18:
                 ax.text(
                     off * 100 + v * 100 / 2,
                     i,
@@ -308,9 +314,9 @@ def plot_decomposition_candidates(
                     fontweight="bold",
                 )
 
-    _annotate(tumor_vals, np.zeros(n), lambda v: f"tumor {v:.0%}")
-    _annotate(tmpl_vals, tumor_vals, lambda v: f"site {v:.0%}")
-    _annotate(shared_vals, tumor_vals + tmpl_vals, lambda v: f"immune/stroma {v:.0%}")
+    _annotate(tumor_vals, np.zeros(n), lambda v: f"{v:.0%}")
+    _annotate(tmpl_vals, tumor_vals, lambda v: f"{v:.0%}")
+    _annotate(shared_vals, tumor_vals + tmpl_vals, lambda v: f"{v:.0%}")
 
     # Right-side per-row score text. Kept textual (not a second bar) so
     # it's not confused with a width-encoded quantity.
@@ -352,17 +358,27 @@ def plot_decomposition_candidates(
 
         ax.text(
             101,
-            i - 0.18,
-            f"score {score:.2f}  (cancer {cancer:.2f} · site {site:.2f})",
+            i - 0.24,
+            (
+                ("ADOPTED · " if i == 0 else "audit only · ")
+                + f"score {score:.2f}  (cancer {cancer:.2f} · site {site:.2f})"
+            ),
             va="center",
             ha="left",
             fontsize=8.5,
             color="#333333",
         )
+        site_evidence = getattr(row, "site_evidence", {}) or {}
+        site_status = str(site_evidence.get("status") or "").replace("_", " ")
         ax.text(
             101,
             i + 0.20,
-            f"fit err {err:.2f} · markers {median_marker:.2f}",
+            (
+                f"tumor fraction {float(row.purity or 0.0):.0%} · "
+                f"host site/shared {tmpl_vals[i]:.0%}/{shared_vals[i]:.0%} · "
+                f"fit err {err:.2f} · markers {median_marker:.2f}"
+                + (f" · site {site_status}" if site_status else "")
+            ),
             va="center",
             ha="left",
             fontsize=8,
@@ -409,10 +425,12 @@ def plot_decomposition_candidates(
         )
 
     ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=9.5)
+    ax.set_yticklabels(display_labels, fontsize=9.5)
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel("Percent of sample")
+    ax.set_xlabel(
+        "Percent of sample (bar composition only; adopted row drives downstream attribution)"
+    )
     # Legend above the plot area so it never overlaps the last row's
     # segment labels — the title still sits above the legend. Legend
     # entries include the hatched "gated" pattern only when at least
@@ -428,6 +446,8 @@ def plot_decomposition_candidates(
         )
     # Title kept single-line — the per-bar segments + legend already
     # explain that each row is one candidate's composition.
+    if title == "Sample decomposition candidates":
+        title = "Decomposition candidates - adopted first; retained rows are audit-only"
     ax.set_title(title, fontweight="bold", pad=28)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -491,12 +511,11 @@ def plot_decomposition_summary(
     if call_summary:
         lines = []
         if call_summary.get("label_options"):
-            if len(call_summary["label_options"]) == 2:
+            lines.append(f"Report label: {call_summary['label_options'][0]}")
+            if len(call_summary["label_options"]) >= 2:
                 lines.append(
-                    f"Possible labels: {call_summary['label_options'][0]} or {call_summary['label_options'][1]}"
+                    "Retained alternatives: see differential section"
                 )
-            else:
-                lines.append(f"Resolved label: {call_summary['label_options'][0]}")
         if call_summary.get("site_indeterminate"):
             lines.append("Site/template: indeterminate")
         elif call_summary.get("reported_site"):

@@ -303,6 +303,12 @@ def test_plot_priority_targets_saves_png(tmp_path):
     )
     assert fig is not None
     assert out.exists()
+    ax = fig.axes[0]
+    assert ax.get_title() == "Target Priority Ranking — PRAD"
+    assert not ax.spines["top"].get_visible()
+    assert not ax.spines["right"].get_visible()
+    assert ax.spines["left"].get_visible()
+    assert ax.spines["bottom"].get_visible()
     texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
     assert "Approved / disease-matched" in texts
     assert any(
@@ -454,10 +460,30 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     ax_range = fig.axes[0]
     assert ax_range.get_xscale() == "linear"
     assert "log10(TPM+1)" in ax_range.get_xlabel()
+    assert "bulk sample TPM" in ax_range.get_xlabel()
+    assert ax_range.get_title() == "Tumor-attributed range vs bulk expression"
+    assert fig._suptitle is not None
+    assert fig._suptitle.get_text() == "Target Expression and Priority Score — PRAD"
+    assert not ax_range.spines["top"].get_visible()
+    assert not ax_range.spines["right"].get_visible()
     assert fig.legends
     texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
     assert "Approved / disease-matched" in texts
     assert "Exploratory / expression-linked" in texts
+    header_texts = [
+        text
+        for text in fig.axes[0].texts
+        if text.get_text() in {"Approved / disease-matched", "Exploratory / expression-linked"}
+    ]
+    assert header_texts
+    assert all(text.get_ha() == "right" for text in header_texts)
+    assert all(text.get_position()[0] < 0 for text in header_texts)
+    legend_texts = [
+        text.get_text()
+        for legend in fig.legends
+        for text in legend.get_texts()
+    ]
+    assert "bulk sample TPM" in legend_texts
 
 
 def test_priority_target_context_can_use_actionable_target_symbols(tmp_path):

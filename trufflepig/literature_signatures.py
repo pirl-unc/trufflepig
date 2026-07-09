@@ -281,9 +281,14 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_merkel_literature",
         "Merkel-cell carcinoma epithelial/neuroendocrine marker program",
     ),
+    # ACINIC (acinic cell carcinoma, salivary) has no direct cohort. Member descent
+    # (oncoref#329) routes effective_expression_reference() to its in-lineage salivary
+    # sibling ADCC (adenoid cystic) rather than the cross-family squamous HNSC, so ADCC
+    # must lead parent_context_codes to satisfy the contract (see the GBC entry below for
+    # the analogous member-vs-family case). ADCC is also the biologically better context.
     LiteratureSignature(
         "ACINIC",
-        ("HNSC",),
+        ("ADCC", "HNSC"),
         ("NR4A3", "ANO1", "AQP5", "SOX10", "BCL6"),
         "PMID:31094928",
         "acinic-cell carcinoma NR4A3/acinar-salivary marker program",

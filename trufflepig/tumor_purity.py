@@ -234,16 +234,14 @@ _CANCER_FAMILY_GROUP_CODE_COUNTS = Counter(
     for family in _CANCER_FAMILY_BY_CODE.values()
 )
 
-# Cancer-type ranking: support_score is the PRODUCT of the per-candidate
-# evidence factors assembled in _recompute_candidate_support. purity_estimate is
-# deliberately NOT one of them: per-candidate purity measures how much the
-# sample's *composition* matches a cohort, which double-counts signature_score
-# and structurally rewards whichever lineage dominates the sample — i.e. stroma
-# (MESENCHYMAL/SARC) in any low-purity tumor — over the true tumor lineage. (It
-# sank true COAD calls below stroma-pure SARC on stroma-diluted colorectal
-# samples.) Purity is reported separately, never as cancer-type evidence. The
-# geomean exponent must track the factor count so support_geomean stays
-# comparable across the post-rescue recomputations below.
+# Cancer-type ranking: support_score is the GEOMETRIC MEAN of the per-candidate
+# evidence factors assembled in _candidate_support_score / _recompute_candidate_support.
+# It still includes candidate-specific purity for compatibility with the calibrated
+# truth set, but that term is no longer allowed to stand alone as tumor identity:
+# cancer_call.CancerCallFeatureFrame adds staged identity evidence and can demote a
+# candidate whose apparent tumor support is better explained by a dominant normal
+# tissue of origin. The geomean exponent must track the factor count so
+# support_geomean stays comparable across the post-rescue recomputations below.
 _SUPPORT_FACTOR_COUNT = 5
 _SUPPORT_GEOMEAN_EXPONENT = 1.0 / _SUPPORT_FACTOR_COUNT
 
@@ -898,6 +896,13 @@ def _subtype_tumor_tpm_lookup(subtype_code):
         matched = sub_df[sub_df["cancer_code"] == code]
         if not matched.empty:
             break
+    if matched.empty and "subtype" in sub_df.columns:
+        # The data carries subtype references under TWO conventions: the SARC-family subtypes are
+        # stored with the subtype code AS the ``cancer_code`` (matched above), while the PAM50-style
+        # subtypes (BRCA_Basal, BRCA_Her2, BRCA_LumA/B, …) keep the parent in ``cancer_code`` and put
+        # the subtype in the ``subtype`` column. Without this fallback every PAM50 subtype reference is
+        # silently unreachable, so the mixture-cohort lineage path has no denominator for them.
+        matched = sub_df[sub_df["subtype"].astype(str) == str(subtype_code)]
     if matched.empty:
         return {}
     return dict(zip(matched["symbol"], matched["tumor_tpm_median"].astype(float)))
@@ -1075,6 +1080,30 @@ def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
         return scores
     except Exception:  # noqa: BLE001 — pick refinement; fall back to the HK ranking
         return {}
+
+
+def _cohort_has_refinable_subtypes(parent_code) -> bool:
+    """True when a NON-mixture cohort still has ≥1 subtype carrying BOTH a curated lineage panel and a
+    reachable subtype reference — so the mixture-cohort lineage evaluation can refine its purity.
+
+    Not cached: ``_lineage_genes_map()`` honors a test monkeypatch (the ``LINEAGE_GENES`` override), and
+    the underlying ``_subtype_tumor_tpm_lookup`` is already ``lru_cache``d, so the per-call cost is a
+    handful of dict lookups.
+
+    This lets a cohort whose parent lineage panel is subtype-biased benefit from a subtype panel
+    WITHOUT registering it as an oncoref mixture cohort (which would change classification). The
+    canonical case is breast: the parent BRCA panel is luminal-only (ESR1/GATA3/FOXA1), so a basal/
+    triple-negative sample gets a null/poor lineage purity; a curated ``BRCA_Basal`` panel evaluated
+    against the ``BRCA_Basal`` tumor reference recovers it. Safe by construction — the evaluation only
+    REPLACES the parent result when a subtype panel genuinely fits better (more anchoring genes or
+    higher concordance; see ``_mixture_cohort_lineage_summary``), so a luminal sample (where the basal
+    panel scores poorly) is unchanged.
+    """
+    lineage_map = _lineage_genes_map()
+    for subtype_code in cancer_type_subtypes_of(parent_code) or []:
+        if lineage_map.get(subtype_code) and _subtype_tumor_tpm_lookup(subtype_code):
+            return True
+    return False
 
 
 def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
@@ -2075,7 +2104,9 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     # gene-count and scores better concordance.
     winning_subtype = None
     mixture_subtype_details = None
-    if is_mixture_cohort(reference_cancer_code):
+    if is_mixture_cohort(reference_cancer_code) or _cohort_has_refinable_subtypes(
+        reference_cancer_code
+    ):
         mixture = _mixture_cohort_lineage_summary(
             reference_cancer_code, sample_tpm, hk_syms
         )
@@ -3664,6 +3695,7 @@ def _recompute_candidate_support(row, family_params, family_factor=None):
         family_params,
         centroid_factor=row.get("centroid_support_factor"),  # None unless the centroid pass set it
     )
+    score *= float(row.get("staged_identity_factor") or 1.0)
     # support_score IS the geomean now (computed once, in [0, 1]); support_geomean
     # is retained as an alias only so existing readers keep resolving.
     row["support_score"] = score
@@ -4186,8 +4218,10 @@ def rank_cancer_type_candidates(
     # remain the primary guard against false positives (DLBC on a
     # COAD/lymph mix has sig 0.61 < 0.80, rejected there). Lowering
     # the ratio to 1.3 preserves the BLCA / PAAD wins without reopening
-    # the COAD/lymph regression.
-    _ORPHAN_DOMINANCE_RATIO = 1.3
+    # the COAD/lymph regression. Later staged-identity evidence narrowed
+    # BLCA-vs-LUSC to ~1.27× while BLCA remained the direct top call, so
+    # keep a small margin below that empirical median-battery boundary.
+    _ORPHAN_DOMINANCE_RATIO = 1.25
     _ORPHAN_DOMINANCE_MIN_SIGNATURE = 0.80
     _ORPHAN_DOMINANCE_MIN_PURITY = 0.40
     family_matched_rows = [r for r in rows if r["family_label"] is not None]
@@ -4220,6 +4254,12 @@ def rank_cancer_type_candidates(
             row["code"],
         )
     )
+    if sample_tpm:
+        from .cancer_call import CancerCallFeatureFrame, apply_staged_identity_evidence
+
+        call_frame = CancerCallFeatureFrame.from_sample(sample_tpm)
+        rows = apply_staged_identity_evidence(rows, call_frame)
+
     if unconstrained:
         if tissue_signal is None:
             needs_coarse_context = (
@@ -4645,6 +4685,10 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
     }
 
 
+# Shared with brief.py's summary markdown so figure and text route through one read surface.
+from .report_view import finalized_purity_headline as _finalized_purity_headline
+
+
 def plot_sample_summary(
     df_gene_expr,
     cancer_type=None,
@@ -4727,10 +4771,10 @@ def plot_sample_summary(
         lines = []
         if fit_label:
             lines.append(f"Fit: {fit_label}")
-        if len(label_options) == 2:
-            lines.append(f"Possible labels: {label_options[0]} or {label_options[1]}")
-        elif len(label_options) == 1:
+        if label_options:
             lines.append(f"Lead label: {label_options[0]}")
+            if len(label_options) >= 2:
+                lines.append("Retained alternatives: see differential section")
         fusion_note = _fusion_plot_note(analysis)
         if fusion_note:
             lines.append(fusion_note)
@@ -4747,7 +4791,10 @@ def plot_sample_summary(
 
     # ---- Panel 2: Purity and microenvironment ----
     ax2 = fig.add_subplot(gs[0, 1])
-    overall = purity["overall_estimate"]
+    # Headline purity (overall + CI) is read from the FROZEN ReportView snapshot when present, so
+    # this patient-facing panel can never draw a stale candidate purity; the composition-detail
+    # components below still come from the live purity dict. See _finalized_purity_headline.
+    overall, purity_lo, purity_hi = _finalized_purity_headline(analysis)
     stromal_enr = purity["components"]["stromal"]["enrichment"]
     immune_enr = purity["components"]["immune"]["enrichment"]
 
@@ -4809,9 +4856,9 @@ def plot_sample_summary(
     ax2.set_xlabel(comp_xlabel, fontsize=10)
     ax2.legend(loc="upper right", fontsize=9, framealpha=0.9)
 
-    # Add text annotations below
-    lo = purity["overall_lower"]
-    hi = purity["overall_upper"]
+    # Add text annotations below (headline CI from the frozen snapshot, same source as `overall`)
+    lo = purity_lo
+    hi = purity_hi
     details = [
         f"{detail_prefix}: {overall:.0%}"
         + (f" [{lo:.0%}–{hi:.0%}]" if lo is not None else "")

@@ -139,6 +139,26 @@ def test_sarc_reference_is_parental_not_a_single_histology_subset():
     )
 
 
+def test_report_code_compatibility_distinguishes_entity_from_context():
+    from trufflepig.cancer_ontology import (
+        cancer_codes_context_compatible,
+        cancer_codes_entity_compatible,
+        molecular_status_parent_code,
+        subtype_display_parent_code,
+    )
+
+    assert molecular_status_parent_code("READ_MSI") == "READ"
+    assert molecular_status_parent_code("HNSC_HPV_pos") == "HNSC"
+    assert subtype_display_parent_code("SARC_ASPS") == "SARC"
+
+    assert cancer_codes_entity_compatible("READ", "READ_MSI")
+    assert cancer_codes_entity_compatible("SARC", "SARC_ASPS")
+    assert not cancer_codes_entity_compatible("READ", "COAD")
+
+    assert cancer_codes_context_compatible("READ", "COAD", context_code="CRC")
+    assert not cancer_codes_context_compatible("GBM", "COAD", context_code="CRC")
+
+
 def test_sarcoma_membership_matches_pirlygenes():
     """trufflepig's sarcoma-membership notion must equal pirlygenes'
     canonical ``sarcoma_lineage_codes()`` — for every registry code. The
