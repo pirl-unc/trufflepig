@@ -118,8 +118,10 @@ def test_context_separates_nutm_report_label_from_fallback_reference():
 
 def test_context_uses_documented_fallback_when_fine_expression_is_missing():
     # ACINIC (acinic cell carcinoma) has no direct cohort of its own, so it
-    # still exercises the salivary-family fallback to HNSC. (ADCC gained its
-    # own cohort in pirlygenes >=5.11 and now resolves directly.)
+    # still exercises the salivary-family fallback to HNSC. Since the oncoref
+    # registry gave ACINIC an SGC (salivary-gland-carcinoma) parent, the honest
+    # reason is now the 2-hop "registry parent; salivary family fallback".
+    # (ADCC gained its own cohort in pirlygenes >=5.11 and now resolves directly.)
     context = cancer_type_context_from_analysis(
         {
             "cancer_type": "ACINIC",
@@ -132,7 +134,10 @@ def test_context_uses_documented_fallback_when_fine_expression_is_missing():
     assert not context.report_has_expression_ref
     assert context.code_for("expression") == "HNSC"
     assert context.best_expression_source_kind == "deconvolved_tumor_reference"
-    assert context.best_expression_fallback_reason == "salivary family fallback"
+    assert (
+        context.best_expression_fallback_reason
+        == "registry parent; salivary family fallback"
+    )
     assert not context.best_expression_direct
 
 
@@ -300,7 +305,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "TCGA",
             "ensembl_symbol",
             False,
-            "salivary family fallback",
+            "registry parent; salivary family fallback",
         ),
         (
             # NEC_MERKEL gained its own Merkel-cell cohort in the reference rebuild,

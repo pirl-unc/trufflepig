@@ -54,9 +54,12 @@ def test_detection_floor_strips_noise_only_evidence():
 
     # the noise-driven rare-marker type loses its inflated score ...
     assert with_clamp["PCPG"] < without_clamp["PCPG"]
-    # ... while the genuinely-expressed type is ~unchanged (its markers are above
-    # the detection floor, so the clamp never touches them).
-    assert with_clamp["PAAD"] >= without_clamp["PAAD"] - 1e-9
+    # ... while the genuinely-expressed type is essentially unaffected and stays dominant.
+    # The clamp may lightly touch a genuine-but-weakly-expressed marker (e.g. FOXL1 sits just
+    # below the HK detection floor in PAAD's own column after the reference refresh), but it
+    # must not meaningfully erode PAAD or dethrone it.
+    assert with_clamp["PAAD"] >= without_clamp["PAAD"] - 0.05
+    assert max(with_clamp, key=with_clamp.get) == "PAAD"
 
 
 def test_detection_floor_lets_expressed_marker_type_outrank_noise():
