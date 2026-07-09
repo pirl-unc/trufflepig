@@ -58,9 +58,6 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "T_ALL",
         "NEC_MERKEL",
         "MTC",
-        # NEN_G3_EXTRAPULMONARY — new oncoref source-scope leaf (extrapulmonary
-        # grade-3 NEN, pembrolizumab scope); no matched-normal panel yet.
-        "NEN_G3_EXTRAPULMONARY",
         # NCI-coverage expansion (pirlygenes 5.18) — new leaf types without a
         # matched-normal panel yet (added in the #46 follow-on).
         "ANSC",
@@ -146,8 +143,6 @@ _MISSING_THERAPY_AXIS = frozenset(
         "THYMCA",
         # ASTB — no therapy-response axis panel yet (rare CNS leaf).
         "ASTB",
-        # NEN_G3_EXTRAPULMONARY — new oncoref source-scope leaf; no therapy-axis panel yet.
-        "NEN_G3_EXTRAPULMONARY",
     }
 )
 
@@ -241,11 +236,6 @@ _TOLERATED_GAPS_EXPLICIT = {
     # literature signature (BEND2/MN1/GFAP), biomarker supplied by pirlygenes;
     # lineage panel + therapy targets not yet deposited for this rare leaf.
     "ASTB": {"lineage", "therapy"},
-    # NEN_G3_EXTRAPULMONARY (extrapulmonary grade-3 NEN) — new oncoref
-    # source-scope leaf. Expression resolves via the neuroendocrine-family
-    # fallback to SCLC + a curated literature signature / ontology markers;
-    # lineage panel, biomarker and therapy targets are not yet deposited.
-    "NEN_G3_EXTRAPULMONARY": {"lineage", "biomarker", "therapy"},
 }
 
 
@@ -372,11 +362,28 @@ def test_baseline_missing_sets_only_list_real_codes():
 
 def test_baseline_missing_sets_match_current_data():
     coverage = _leaf_codes_with_coverage()
+    leaf_codes = set(coverage)
     missing_mn_actual = {c for c, f in coverage.items() if not f["matched_normal"]}
     missing_ax_actual = {c for c, f in coverage.items() if not f["therapy_axis"]}
 
-    stale_mn = set(_MISSING_MATCHED_NORMAL) - missing_mn_actual
-    stale_ax = set(_MISSING_THERAPY_AXIS) - missing_ax_actual
+    # Reparent-tolerance (mirrors pirlygenes' _baseline_drift): a declared code
+    # oncoref has since moved under a parent is no longer a leaf the completeness
+    # check evaluates, so it is neither stale nor a real gap — report it as
+    # reparented-out (prunable, non-failing) instead of forcing a frozenset edit
+    # on every taxonomy reshape (e.g. NEC_MERKEL -> NEC, THYMCA -> THYM_EPITHELIAL
+    # in oncoref 1.8.107). The genuine signals survive: stale = a still-leaf code
+    # that GAINED data; new = an uncovered leaf not yet declared.
+    reparented_out = (
+        set(_MISSING_MATCHED_NORMAL) | set(_MISSING_THERAPY_AXIS)
+    ) - leaf_codes
+    if reparented_out:
+        print(
+            "\n[baseline] _MISSING_* entries oncoref reparented out of leaf "
+            f"status (prunable, non-failing): {sorted(reparented_out)}"
+        )
+
+    stale_mn = (set(_MISSING_MATCHED_NORMAL) & leaf_codes) - missing_mn_actual
+    stale_ax = (set(_MISSING_THERAPY_AXIS) & leaf_codes) - missing_ax_actual
     new_mn = missing_mn_actual - set(_MISSING_MATCHED_NORMAL)
     new_ax = missing_ax_actual - set(_MISSING_THERAPY_AXIS)
 

@@ -69,7 +69,7 @@ def test_all_codes_without_direct_expression_reference_have_literature_signature
     # ontology_level == "grouping" unions are scored via their constituent cohorts;
     # "molecular_subtype" codes classify as their parent (the molecular axis —
     # MSI/EBV/HER2/... — is orthogonal to the expression signature); and
-    # "evidence_scope" buckets (NET_NONPANCREATIC, NEN_G3_EXTRAPULMONARY — oncoref
+    # "evidence_scope" buckets (NET_NONPANCREATIC, NEN_EXTRAPULMONARY_HG — oncoref
     # #326) are literature-pooling scopes with no own marker program, scored via
     # their members. An "_UNCLASSIFIED" bucket has no defining marker by definition.
     # Gate on oncoref's semantic ontology_level, not a hand-maintained code list.
