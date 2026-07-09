@@ -1644,13 +1644,20 @@ def plot_therapy_pathway_state(
     # informative), baseline-ish axes last. Within each bucket keep the
     # input order so cancer-type-specific ordering (AR first for PRAD,
     # ER first for BRCA etc.) is preserved.
+    # Single source of truth for which axes are renderable — shared with
+    # report_disease_state_text so the figure and the disease-state text can
+    # never disagree on whether a pathway-state pattern is present (#136,
+    # plan §2.4/§2.5). Local import keeps matplotlib out of the text layer.
+    from .reporting import pathway_state_figure_axes
+
+    renderable_axes = set(pathway_state_figure_axes(therapy_response_scores))
     items = []
     for cls, score in (therapy_response_scores or {}).items():
+        if cls not in renderable_axes:
+            continue
         state = getattr(score, "state", "indeterminate")
         up_fold = getattr(score, "up_geomean_fold", None)
         down_fold = getattr(score, "down_geomean_fold", None)
-        if up_fold is None and down_fold is None:
-            continue
         items.append(
             {
                 "cls": cls,

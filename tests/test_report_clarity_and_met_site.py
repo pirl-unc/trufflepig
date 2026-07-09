@@ -1197,3 +1197,63 @@ def test_cli_analyze_rejects_invalid_met_site(monkeypatch, tmp_path):
             output_dir=out_dir,
             met_site="not_a_site",
         )
+
+
+def _axis(up=None, down=None, state="down"):
+    return SimpleNamespace(
+        up_geomean_fold=up,
+        down_geomean_fold=down,
+        state=state,
+        up_genes_measured=5,
+        down_genes_measured=5,
+        message="",
+    )
+
+
+def test_disease_state_text_shares_render_source_with_pathway_figure():
+    """Belief-consistency (plan §2.4/§2.5): the disease-state text must not deny a
+    pattern the therapy-pathway-state figure visibly shows. Both route through the
+    single ``pathway_state_figure_axes`` predicate, so whenever the figure would
+    render an axis the text points at the figure instead of asserting nothing
+    passed thresholds."""
+    from trufflepig.reporting import (
+        pathway_state_figure_axes,
+        report_disease_state_text,
+    )
+
+    # Axes with a measurable fold → the figure renders these rows.
+    scores = {"IFN_response": _axis(up=0.35), "EMT": _axis(down=1.9, state="up")}
+    axes = pathway_state_figure_axes(scores)
+    assert axes == ["IFN_response", "EMT"]  # single source of "figure has content"
+
+    text = report_disease_state_text("", {"therapy_response_scores": scores})
+    # The figure shows the axes, so the text must NOT claim nothing passed.
+    assert "passed reporting thresholds" not in text
+    assert "therapy-pathway-state figure" in text
+
+    # A non-empty synthesized narrative always wins verbatim.
+    assert (
+        report_disease_state_text("AR-active CRPC.", {"therapy_response_scores": scores})
+        == "AR-active CRPC."
+    )
+
+
+def test_disease_state_text_keeps_bounded_no_pattern_when_figure_empty():
+    """When no axis has a measurable fold the figure does not render, so the bounded
+    'nothing passed thresholds' statement is truthful and is preserved."""
+    from trufflepig.reporting import (
+        pathway_state_figure_axes,
+        report_disease_state_text,
+    )
+
+    scores = {"IFN_response": _axis(up=None, down=None)}
+    assert pathway_state_figure_axes(scores) == []
+    text = report_disease_state_text("", {"therapy_response_scores": scores})
+    assert "No strong RNA-defined therapy-exposure" in text
+
+    # With a separate active-pathway inference, the bounded statement defers to it.
+    text2 = report_disease_state_text(
+        "",
+        {"therapy_response_scores": scores, "pathway_activity_inferences": [{"label": "MAPK"}]},
+    )
+    assert "active pathway evidence is summarized separately" in text2.lower()

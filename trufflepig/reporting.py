@@ -741,6 +741,29 @@ def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
     )
 
 
+def pathway_state_figure_axes(therapy_response_scores) -> list:
+    """Therapy-response axes the pathway-state figure would plot.
+
+    ``plot_therapy.plot_therapy_pathway_state`` renders one row per axis that has
+    a measurable up- OR down-panel geomean fold, and skips the figure entirely
+    when none qualify. This is the SINGLE source for "does the therapy-pathway-
+    state figure have content": the figure filters its rows through it, and
+    :func:`report_disease_state_text` consults it so the disease-state text can
+    never deny a pattern the figure visibly shows (belief-consistency; the
+    figure and the threshold logic share one source — plan §2.4/§2.5).
+
+    Returns the qualifying axis keys in input order (empty ⇒ no figure renders).
+    """
+    axes = []
+    for cls, score in (therapy_response_scores or {}).items():
+        up_fold = getattr(score, "up_geomean_fold", None)
+        down_fold = getattr(score, "down_geomean_fold", None)
+        if up_fold is None and down_fold is None:
+            continue
+        axes.append(cls)
+    return axes
+
+
 def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     """Consistent disease-state sentence for Markdown reports.
 
@@ -749,6 +772,11 @@ def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     Markdown, silence reads like missing propagation rather than a
     negative finding, so reports render a bounded no-pattern statement
     when therapy-state panels were actually evaluated.
+
+    The negative statement is scoped to the SYNTHESIZED (curated multi-axis)
+    pattern, never to the per-axis states: when the therapy-pathway-state figure
+    renders (``pathway_state_figure_axes`` non-empty) the text points at it
+    instead of asserting nothing exists, so text and figure agree.
     """
     text = _clean_text(disease_state)
     if text:
@@ -756,14 +784,31 @@ def report_disease_state_text(disease_state: str | None, analysis=None) -> str:
     scores = (
         analysis.get("therapy_response_scores") if isinstance(analysis, dict) else None
     )
-    if scores:
-        if isinstance(analysis, dict) and analysis.get("pathway_activity_inferences"):
-            return (
-                "No strong RNA-defined therapy-exposure pattern passed reporting "
-                "thresholds; active pathway evidence is summarized separately."
-            )
-        return "No strong RNA-defined therapy-exposure or pathway-state pattern passed reporting thresholds."
-    return ""
+    if not scores:
+        return ""
+    has_inferences = bool(
+        isinstance(analysis, dict) and analysis.get("pathway_activity_inferences")
+    )
+    if pathway_state_figure_axes(scores):
+        # The figure visibly shows these per-axis states — do NOT deny a pattern.
+        # Scope the negative to the curated multi-axis synthesis and point at the
+        # figure so the reader can reconcile the two.
+        base = (
+            "No curated multi-axis disease-state pattern matched the profile, but "
+            "individual therapy-axis states are shown in the therapy-pathway-state "
+            "figure."
+        )
+        if has_inferences:
+            return base + " Active pathway evidence is summarized separately."
+        return base
+    # No axis has a measurable fold → the figure does not render either, so the
+    # bounded "nothing passed" statement is truthful.
+    if has_inferences:
+        return (
+            "No strong RNA-defined therapy-exposure pattern passed reporting "
+            "thresholds; active pathway evidence is summarized separately."
+        )
+    return "No strong RNA-defined therapy-exposure or pathway-state pattern passed reporting thresholds."
 
 
 def tumor_attribution_band_text(row):
