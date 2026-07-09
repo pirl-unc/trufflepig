@@ -352,17 +352,23 @@ def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
     code_text = _clean(code)
     row = _registry_records().get(code_text, {})
     candidates: list[tuple[str, str]] = []
+    # A code's OWN reference-backed members (a NET site atom for NET, CHOL for BTC, ADCC
+    # for SGC) are the most faithful in-lineage fallback, so they come FIRST — before the
+    # registry parent. Walking UP to the parent and back DOWN risks landing in a
+    # different-lineage sibling subtree: since oncoref 1.8.107 reparented NET under the new
+    # NEN grouping, a parent-first walk resolved NET -> NEN -> NEC_LUNG_LARGECELL (a
+    # poorly-differentiated neuroendocrine CARCINOMA) — the exact cross-lineage stranger
+    # this descent exists to avoid. Leaf subtypes (COAD_MSI, …) have no reference-backed
+    # members, so this list is empty for them and the registry parent below still wins,
+    # keeping a parented subtype on its parent reference. The proper fix is a pooled
+    # member-union reference upstream (oncoref#329); this is the defensive interim.
+    for member, reason in _reference_backed_member_candidates(code_text):
+        candidates.append((member, reason))
     parent = _clean(row.get("parent_code"))
     if parent:
         candidates.append((parent, "registry parent"))
     for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
         candidates.append((fallback, "curated code fallback"))
-    # A reference-backed member is a faithful in-lineage fallback; try it before the
-    # cross-family fallback below (a grouping should resolve to its own member, not a
-    # family stranger). Placed after the registry parent so parented subtypes keep
-    # their parent reference; groupings (no parent) reach their members here.
-    for member, reason in _reference_backed_member_candidates(code_text):
-        candidates.append((member, reason))
     family = _clean(row.get("family")).lower()
     fam_fallbacks = _REFERENCE_FAMILY_FALLBACKS.get(family)
     if not fam_fallbacks and "-" in family:
