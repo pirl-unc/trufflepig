@@ -16,6 +16,8 @@ import pandas as pd
 import pytest
 from oncoref.normalization import housekeeping_reference_profile
 
+from oncoref.normalization import housekeeping_reference_profile
+
 from trufflepig.expression_qc import classify_gene_qc
 from trufflepig.expression_normalize import (
     normalize_expression,
@@ -90,19 +92,21 @@ def test_normalize_expression_without_id_col_falls_back_to_symbol():
 
 
 def test_tpm_to_housekeeping_normalized_matches_via_ensembl_id():
-    ref = housekeeping_reference_profile().head(2)
-    panel_ids = ref["Ensembl_Gene_ID"].tolist()
+    # Pull two genes straight from the active HK reference profile by stable ID, so this stays
+    # correct as the panel evolves (the panel is now the curated stable set that excludes
+    # ACTB/GAPDH; hard-coding them made this test skip normalization with panel_genes_present==0).
+    panel_ids = housekeeping_reference_profile().head(2)["Ensembl_Gene_ID"].tolist()
     df = pd.DataFrame(
         {
-            "Ensembl_Gene_ID": panel_ids + ["ENSG00000136997"],
+            "Ensembl_Gene_ID": panel_ids + ["ENSG00000136997"],  # + MYC (non-HK control)
             # Symbols deliberately wrong; the ENSG path should still match the HK panel by stable ID.
             "Symbol": ["NOT_PANEL_1", "NOT_PANEL_2", "MYC"],
             "S_TPM": [100.0, 100.0, 200.0],
         }
     )
     out, record = tpm_to_housekeeping_normalized(df)
-    # The symbols are deliberately wrong, so the two HK-panel genes (ACTB, GAPDH) can only have
-    # been found via their stable Ensembl IDs — oncoref's record reports them as present. If
-    # matching fell back to symbols, none would match (NOT_ACTB/NOT_GAPDH aren't HK; MYC isn't HK).
+    # The symbols are deliberately wrong, so the two HK-panel genes can only have been found via
+    # their stable Ensembl IDs — oncoref's record reports them as present. If matching fell back to
+    # symbols, none would match (NOT_PANEL_1/2 aren't HK; MYC isn't HK).
     assert record["panel_genes_present"] >= 2
     assert record["applied"]

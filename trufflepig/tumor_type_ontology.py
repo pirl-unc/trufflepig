@@ -164,6 +164,12 @@ _CURATED_HIGH: Mapping[str, tuple[str, ...]] = {
     # excludes cytokeratins/EPCAM so the epithelial low-default isn't contradicted.
     "MENINGIOMA": ("SSTR2", "PGR", "MUC1", "VIM", "NF2"),
     "CHOROID_PLEXUS": ("TTR", "OTX2", "AQP1", "KCNJ13", "CLIC6"),
+    # RCC_NCC_UNCLASSIFIED (non-clear-cell RCC, unclassified) — new oncoref
+    # renal leaf. Seed the pan-renal-epithelial lineage program: PAX8/PAX2 are
+    # the defining renal transcription factors; KRT7 marks the papillary/
+    # chromophobe end and KRT8/KRT18 the shared epithelial keratins. Low markers
+    # come from the carcinoma family default (immune/mesenchymal exclusions).
+    "RCC_NCC_UNCLASSIFIED": ("PAX8", "PAX2", "KRT7", "KRT8", "KRT18"),
 }
 
 _CURATED_LOW: Mapping[str, tuple[str, ...]] = {

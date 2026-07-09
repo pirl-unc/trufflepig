@@ -71,6 +71,14 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "MPNST Schwann-lineage and NF1/PRC2-associated markers",
     ),
     LiteratureSignature(
+        "SARC_MMNST",
+        ("SARC",),
+        ("SOX10", "S100B", "MLANA", "PMEL", "NGFR"),
+        "curated_pathology_literature",
+        "malignant melanotic nerve-sheath tumor (melanotic schwannoma): "
+        "Schwann-lineage SOX10/S100 plus melanocytic MLANA/PMEL program",
+    ),
+    LiteratureSignature(
         "SARC_ANGIO",
         ("SARC",),
         ("ERG", "PECAM1", "CD34", "VWF", "KDR"),
@@ -468,8 +476,12 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "cutaneous squamous cell carcinoma keratinocyte squamous program",
     ),
     LiteratureSignature(
+        # COAD is GBC's current effective reference: reparenting GBC under the BTC
+        # biliary grouping routes its fallback through the carcinoma-gi family to
+        # COAD rather than to its data-bearing sibling CHOL (a fallback-priority
+        # follow-up). CHOL/PAAD remain the biologically-preferred biliary contexts.
         "GBC",
-        ("CHOL", "PAAD"),
+        ("CHOL", "PAAD", "COAD"),
         ("KRT7", "KRT19", "CEACAM5", "MUC1", "ERBB2"),
         "curated_pathology_literature",
         "gallbladder adenocarcinoma biliary epithelial program (KRT7/19, HER2)",

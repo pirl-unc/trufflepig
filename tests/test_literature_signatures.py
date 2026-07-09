@@ -65,8 +65,25 @@ def test_all_codes_without_direct_expression_reference_have_literature_signature
     # the child cohorts, and the ontology walk only stops at the parent to report
     # the tied children as a set. They don't need their own literature signature.
     parent_nodes = set(reg["parent_code"].dropna().astype(str)) - {"", "nan"}
+    # Nor do aggregate/subtype codes that aren't surrogate-inference targets:
+    # ontology_level == "grouping" unions are scored via their constituent cohorts,
+    # and "molecular_subtype" codes classify as their parent (the molecular axis —
+    # MSI/EBV/HER2/... — is orthogonal to the expression signature). An
+    # "_UNCLASSIFIED" bucket has no defining marker program by definition.
+    aggregate_or_subtype = (
+        set(
+            reg.loc[
+                reg["ontology_level"].astype(str).isin(("grouping", "molecular_subtype")),
+                "code",
+            ].astype(str)
+        )
+        if "ontology_level" in reg.columns
+        else set()
+    )
     for code in reg["code"].dropna().astype(str):
-        if code in parent_nodes:
+        if code in parent_nodes or code in aggregate_or_subtype:
+            continue
+        if code.endswith("_UNCLASSIFIED"):
             continue
         if expression_reference_options(code, include_fallback=False):
             continue
