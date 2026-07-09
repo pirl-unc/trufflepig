@@ -17,19 +17,16 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence
 
 
-# Optional reference/ontology lookups are best-effort co-signals: a missing or malformed
-# reference must degrade to "no evidence", never crash the call. Catch the import/data-access
-# errors those lookups actually raise (mirrors
-# ``expression_classifier._EXPECTED_OPTIONAL_MODEL_ERRORS``) so a genuine programming error
-# (NameError, IndexError, …) still surfaces instead of being silently swallowed.
-_EXPECTED_REFERENCE_ERRORS = (
-    ImportError,
-    OSError,
-    KeyError,
-    ValueError,
-    TypeError,
-    AttributeError,
-)
+# These helpers pull best-effort co-signals from bundled reference/ontology data. The two
+# failure modes are handled DIFFERENTLY rather than caught together:
+#   * a failed *import* of an internal module is a structural bug — it is NOT caught, so it
+#     surfaces at the call site instead of silently degrading to "no evidence";
+#   * *missing/degenerate reference data* (an absent bundled matrix, a degenerate sample) is a
+#     legitimate runtime condition — only the data ACCESS is wrapped, in the narrow set of
+#     errors those loads/compute steps actually raise, and degrades to empty.
+# Imports stay function-local ONLY to break the cancer_call <-> tumor_purity import cycle
+# (tumor_purity.py lazy-imports this module in turn), never to be swallowed.
+_MISSING_REFERENCE_DATA_ERRORS = (FileNotFoundError, OSError, KeyError, ValueError, TypeError)
 
 
 _NORMAL_ORIGIN_MIN_HOST_SCORE = 0.86
@@ -85,21 +82,21 @@ def _tumor_up_panel_symbols(cancer_code: str) -> tuple[str, ...]:
     code = _clean(cancer_code)
     if not code:
         return ()
-    try:
-        from .reference import heme_tumor_up_vs_matched_normal, tumor_up_vs_matched_normal
+    from .reference import heme_tumor_up_vs_matched_normal, tumor_up_vs_matched_normal
 
+    try:
         panel = tumor_up_vs_matched_normal(cancer_code=code)
         if panel is None or panel.empty:
             panel = heme_tumor_up_vs_matched_normal(cancer_code=code)
-        if panel is None or panel.empty or "symbol" not in panel.columns:
-            return ()
-        return tuple(
-            str(symbol).upper()
-            for symbol in panel["symbol"].astype(str)
-            if str(symbol).strip()
-        )
-    except _EXPECTED_REFERENCE_ERRORS:
+    except _MISSING_REFERENCE_DATA_ERRORS:
         return ()
+    if panel is None or panel.empty or "symbol" not in panel.columns:
+        return ()
+    return tuple(
+        str(symbol).upper()
+        for symbol in panel["symbol"].astype(str)
+        if str(symbol).strip()
+    )
 
 
 def _candidate_reference_codes(code: str) -> tuple[str, ...]:
@@ -107,25 +104,23 @@ def _candidate_reference_codes(code: str) -> tuple[str, ...]:
     if not code:
         return ()
     out: list[str] = [code]
-    try:
-        from .tumor_type_ontology import tumor_type_ontology_entry
+    from .tumor_type_ontology import tumor_type_ontology_entry
 
-        entry = tumor_type_ontology_entry(code)
-        if entry is not None:
-            for candidate in (entry.parent_code, *entry.ancestors):
-                candidate = _clean(candidate)
-                if candidate and candidate not in out:
-                    out.append(candidate)
-    except _EXPECTED_REFERENCE_ERRORS:
-        pass
+    entry = tumor_type_ontology_entry(code)  # total: returns None for an unknown code
+    if entry is not None:
+        for candidate in (entry.parent_code, *entry.ancestors):
+            candidate = _clean(candidate)
+            if candidate and candidate not in out:
+                out.append(candidate)
     return tuple(out)
 
 
 def _candidate_primary_tissue(code: str) -> str:
-    try:
-        from .tumor_purity import CANCER_TO_TISSUE
-    except _EXPECTED_REFERENCE_ERRORS:
-        CANCER_TO_TISSUE = {}
+    # Function-local import only to break the cancer_call <-> tumor_purity cycle; tumor_purity is
+    # always importable by the time this runs, so an import failure here is a real bug, not
+    # something to swallow.
+    from .tumor_purity import CANCER_TO_TISSUE
+
     for candidate in _candidate_reference_codes(code):
         tissue = _clean(CANCER_TO_TISSUE.get(candidate))
         if tissue:
@@ -135,13 +130,13 @@ def _candidate_primary_tissue(code: str) -> str:
 
 @lru_cache(maxsize=1)
 def _pan_reference_by_symbol():
-    try:
-        from .reference import pan_cancer_expression
+    from .reference import pan_cancer_expression
 
+    try:
         ref = pan_cancer_expression(technical_rna_normalize=True)
-        return ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    except _EXPECTED_REFERENCE_ERRORS:
+    except _MISSING_REFERENCE_DATA_ERRORS:
         return None
+    return ref.drop_duplicates(subset="Symbol").set_index("Symbol")
 
 
 @lru_cache(maxsize=8192)
@@ -231,11 +226,13 @@ class CancerCallFeatureFrame:
         sample = _sample_dict(sample_tpm_by_symbol)
         details: Sequence[Mapping[str, Any]]
         if host_tissue_details is None:
-            try:
-                from .tumor_purity import _score_host_tissue_details
+            # Function-local import breaks the cancer_call <-> tumor_purity cycle; only the
+            # scoring CALL (which can hit degenerate sample data) is guarded, not the import.
+            from .tumor_purity import _score_host_tissue_details
 
+            try:
                 details = tuple(_score_host_tissue_details(sample, top_n=10))
-            except _EXPECTED_REFERENCE_ERRORS:
+            except _MISSING_REFERENCE_DATA_ERRORS:
                 details = ()
         else:
             details = tuple(host_tissue_details)
@@ -289,11 +286,11 @@ class CancerCallFeatureFrame:
         return tuple(distinctive)
 
     def marker_sanity(self, code: str) -> dict[str, Any]:
-        try:
-            from .tumor_type_ontology import tumor_type_sanity_check
+        from .tumor_type_ontology import tumor_type_sanity_check
 
+        try:
             return tumor_type_sanity_check(code, self.sample_tpm_by_symbol)
-        except _EXPECTED_REFERENCE_ERRORS:
+        except _MISSING_REFERENCE_DATA_ERRORS:
             return {}
 
     def evidence_for_candidate(
