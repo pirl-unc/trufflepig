@@ -33,24 +33,26 @@ def _analyze_body_source() -> str:
 def test_sample_summary_renders_after_purity_finalization():
     src = _analyze_body_source()
 
-    # The last two writes that can change analysis["purity"]:
-    #   1. decomposition-purity adoption (+ lineage-panel override that follows it)
-    #   2. the decomposition interval cap (tightens overall_upper)
-    adopt_pos = src.index("should_adopt_decomposition_purity(")
-    cap_pos = src.index("_constrain_purity_interval_with_decomposition(")
+    # Purity is finalized by two calls, in this order, before any purity-dependent
+    # figure renders:
+    #   1. _reconcile_purity_after_decomposition — decomposition-purity adoption +
+    #      lineage-panel override + the decomposition interval cap.
+    #   2. _finalize_fused_purity — random-effects fusion + anti-saturation guard.
+    reconcile_pos = src.index("_reconcile_purity_after_decomposition(")
+    finalize_pos = src.index("_finalize_fused_purity(")
 
     # The purity-dependent overview figure.
     render_pos = src.index("plot_sample_summary(")
 
-    assert render_pos > adopt_pos, (
-        "plot_sample_summary is rendered BEFORE decomposition-purity adoption; "
+    assert render_pos > reconcile_pos, (
+        "plot_sample_summary is rendered BEFORE decomposition-purity reconciliation; "
         "its composition/purity panel will show the pre-decomposition candidate "
         "purity and contradict purity-methods and the markdown (the 78%-vs-10% "
         "headline bug)."
     )
-    assert render_pos > cap_pos, (
-        "plot_sample_summary is rendered before the decomposition interval cap; "
-        "the rendered purity interval can differ from purity-methods/markdown."
+    assert render_pos > finalize_pos, (
+        "plot_sample_summary is rendered before the fused/anti-saturation "
+        "finalization; the rendered purity can differ from purity-methods/markdown."
     )
 
 
@@ -63,8 +65,8 @@ def test_purity_finalization_markers_are_singular():
     """
     src = _analyze_body_source()
     for marker in (
-        "should_adopt_decomposition_purity(",
-        "_constrain_purity_interval_with_decomposition(",
+        "_reconcile_purity_after_decomposition(",
+        "_finalize_fused_purity(",
         "plot_sample_summary(",
     ):
         assert src.count(marker) == 1, (
