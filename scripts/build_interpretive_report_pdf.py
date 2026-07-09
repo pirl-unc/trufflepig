@@ -446,6 +446,334 @@ def _draw_wrapped(
     return y
 
 
+def _parse_markdown_tables(md_path: Path) -> list[dict]:
+    """Extract every pipe-delimited markdown table from *md_path*, tagged with the
+    ``##`` / ``###`` heading it sits under.
+
+    The old scrape (:func:`_summary_records`) dropped every ``|`` row on the floor,
+    so the therapy and target tables never reached the reader PDF. This recovers
+    them structurally: each returned table is
+    ``{"section", "subsection", "headers": [...], "rows": [[cell, ...], ...]}`` with
+    the ``|---|`` separator row removed and markdown emphasis stripped from cells.
+    """
+    tables: list[dict] = []
+    if not md_path.exists():
+        return tables
+    section = ""
+    subsection = ""
+    pending: list[list[str]] = []
+
+    def _flush() -> None:
+        nonlocal pending
+        if len(pending) >= 2:
+            headers = pending[0]
+            body = pending[1:]
+            # Drop the |---|---:| alignment separator row when present. Tolerate an
+            # empty cell in it (``| --- | | --- |``): every non-empty cell must be
+            # dashes/colons, and at least one cell must actually carry a dash.
+            if (
+                body
+                and body[0]
+                and all(set(cell) <= set("-: ") for cell in body[0])
+                and any("-" in cell for cell in body[0])
+            ):
+                body = body[1:]
+            rows = [row for row in body if any(cell.strip() for cell in row)]
+            if headers and rows:
+                tables.append(
+                    {
+                        "section": section,
+                        "subsection": subsection,
+                        "headers": headers,
+                        "rows": rows,
+                    }
+                )
+        pending = []
+
+    for raw in md_path.read_text(errors="replace").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("|"):
+            pending.append([_clean_markdown(cell) for cell in stripped.strip("|").split("|")])
+            continue
+        _flush()
+        if stripped.startswith("### "):
+            subsection = _clean_markdown(stripped.lstrip("# "))
+        elif stripped.startswith("## "):
+            section = _clean_markdown(stripped.lstrip("# "))
+            subsection = ""
+    _flush()
+    return tables
+
+
+def _find_table(
+    tables: list[dict],
+    *,
+    section_contains: str | None = None,
+    header_all: tuple[str, ...] = (),
+) -> dict | None:
+    """First table whose heading contains *section_contains* and whose header row
+    contains a column matching every key in *header_all* (case-insensitive)."""
+    for table in tables:
+        heading = f"{table['section']} {table['subsection']}".lower()
+        if section_contains and section_contains.lower() not in heading:
+            continue
+        headers_low = [h.lower() for h in table["headers"]]
+        if header_all and not all(any(key in h for h in headers_low) for key in header_all):
+            continue
+        return table
+    return None
+
+
+def _col_index(headers: list[str], *keys: str) -> int | None:
+    """Index of the first header column containing any of *keys* (case-insensitive)."""
+    low = [h.lower() for h in headers]
+    for key in keys:
+        for idx, header in enumerate(low):
+            if key in header:
+                return idx
+    return None
+
+
+def _cell(cells: list[str], idx: int | None) -> str:
+    if idx is None or idx >= len(cells):
+        return ""
+    return cells[idx].strip()
+
+
+def _lead_clause(text: str, *, max_chars: int = 72) -> str:
+    """Leading clause of a verbose interpretation cell — the actionable head
+    ("confirm MSI-H / dMMR status", "background-dominant", "tumor-supported") before
+    the semicolon-joined tail of maturity/eligibility boilerplate."""
+    # _clean_markdown has already folded em/en-dashes to "-", so " - " catches the
+    # em-dash-delimited head; ";" catches the semicolon-joined form.
+    text = _clean_markdown(text)
+    for sep in (" - ", "; "):
+        if sep in text:
+            text = text.split(sep, 1)[0]
+            break
+    return _short_text(text, max_chars=max_chars)
+
+
+def _tumor_from_attribution(text: str) -> str:
+    """Tumor-source TPM out of an attribution cell like
+    'tumor 847 / T cell 0 - broadly expr.' -> '847'."""
+    match = re.search(r"tumor\s+([0-9.]+)", text, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _safety_band(tme: str, attribution: str) -> str:
+    """Normal-tissue safety read for a surface target: the TME flag
+    (``tissue-explainable`` / ``background-dominant``) plus the broad-normal-
+    expression cue. An empty TME flag means no single healthy tissue explains the
+    signal, i.e. it is tumor-enriched."""
+    band = tme.strip() or "tumor-enriched"
+    lowered = attribution.lower()
+    if "broadly expr" in lowered:
+        band += " · broad normal expr."
+    elif "matched-normal over-pred" in lowered:
+        band += " · matched-normal overshoot"
+    return _short_text(band, max_chars=58)
+
+
+def _therapy_table(analyze_dir: Path, prefix: str) -> tuple[list[tuple[str, int]] | None, list[list[str]] | None]:
+    """(columns, rows) for the therapy shortlist, or (None, None).
+
+    Reads the ``## Therapy Prioritization`` table from the analysis report, dedups
+    repeated targets (one target can list several agents), and keeps the top 3.
+    """
+    tables = _parse_markdown_tables(analyze_dir / f"{prefix}-analysis.md")
+    table = _find_table(
+        tables,
+        section_contains="therapy prioritization",
+        header_all=("target", "agent", "phase"),
+    )
+    if table is None:
+        return None, None
+    headers = table["headers"]
+    i_target = _col_index(headers, "target", "gene")
+    i_agent = _col_index(headers, "agent")
+    i_phase = _col_index(headers, "phase")
+    i_tumor = _col_index(headers, "tumor-source", "tumor-attributed", "tumor source")
+    i_interp = _col_index(headers, "interpretation")
+    rows: list[list[str]] = []
+    seen: set[str] = set()
+    for cells in table["rows"]:
+        target = _cell(cells, i_target)
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        agent = _cell(cells, i_agent)
+        phase = _cell(cells, i_phase)
+        agent_phase = agent + (f" · {phase}" if phase else "")
+        rows.append(
+            [
+                target,
+                agent_phase or "—",
+                _cell(cells, i_tumor) or "—",
+                _lead_clause(_cell(cells, i_interp)) or "—",
+            ]
+        )
+        if len(rows) >= 3:
+            break
+    if not rows:
+        return None, None
+    columns = [("Target", 15), ("Agent / phase", 33), ("Tumor-src TPM", 20), ("Eligibility / RNA source", 44)]
+    return columns, rows
+
+
+def _priority_target_table(analyze_dir: Path, prefix: str) -> tuple[list[tuple[str, int]] | None, list[list[str]] | None]:
+    """(columns, rows) for the top priority targets with tumor-source TPM and a
+    normal-tissue safety band, or (None, None).
+
+    Prefers the evidence report's ``### Surface Protein Targets`` table (ranked by
+    expression, carries the TME safety flag and the tumor/non-tumor attribution
+    split); falls back to the summary's tumor-source attribution table when the
+    evidence report is absent.
+    """
+    ev_tables = _parse_markdown_tables(analyze_dir / f"{prefix}-evidence.md")
+    table = _find_table(
+        ev_tables,
+        section_contains="surface protein targets",
+        header_all=("gene", "tme"),
+    )
+    if table is not None:
+        headers = table["headers"]
+        i_gene = _col_index(headers, "gene", "target")
+        i_bulk = _col_index(headers, "bulk tpm")
+        i_attr = _col_index(headers, "attribution")
+        i_tme = _col_index(headers, "tme")
+        i_pct = _col_index(headers, "ref %ile", "%ile")
+        rows: list[list[str]] = []
+        for cells in table["rows"]:
+            gene = _cell(cells, i_gene)
+            if not gene:
+                continue
+            attribution = _cell(cells, i_attr)
+            tumor_tpm = _tumor_from_attribution(attribution) or _cell(cells, i_bulk)
+            rows.append(
+                [
+                    gene,
+                    tumor_tpm or "—",
+                    _safety_band(_cell(cells, i_tme), attribution),
+                    _cell(cells, i_pct) or "—",
+                ]
+            )
+            if len(rows) >= 3:
+                break
+        if rows:
+            columns = [("Target", 20), ("Tumor-src TPM", 21), ("Normal-tissue safety", 43), ("Cohort %ile", 16)]
+            return columns, rows
+
+    su_tables = _parse_markdown_tables(analyze_dir / f"{prefix}-summary.md")
+    table = _find_table(su_tables, header_all=("gene", "tumor-source"))
+    if table is not None:
+        headers = table["headers"]
+        i_gene = _col_index(headers, "gene")
+        i_tumor = _col_index(headers, "tumor-source")
+        i_attr = _col_index(headers, "non-tumor attribution")
+        i_frac = _col_index(headers, "tumor fraction")
+        rows = []
+        for cells in table["rows"]:
+            gene = _cell(cells, i_gene)
+            if not gene:
+                continue
+            rows.append(
+                [
+                    gene,
+                    _cell(cells, i_tumor) or "—",
+                    _cell(cells, i_attr) or "—",
+                    _cell(cells, i_frac) or "—",
+                ]
+            )
+            if len(rows) >= 3:
+                break
+        if rows:
+            columns = [("Target", 20), ("Tumor-src TPM", 21), ("Top non-tumor source", 43), ("Tumor frac", 16)]
+            return columns, rows
+    return None, None
+
+
+def _wrap_cell(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_px: int,
+    *,
+    max_lines: int = 2,
+) -> list[str]:
+    """Wrap *text* into at most *max_lines* lines fitting *max_px*, ellipsizing the
+    last line when it still overflows."""
+    words = re.findall(r"\S+\s*", text)
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = current + word
+        if current and _line_width(draw, candidate, font) > max_px:
+            lines.append(current.rstrip())
+            current = word.lstrip()
+            if len(lines) >= max_lines:
+                break
+        else:
+            current = candidate
+    if current and len(lines) < max_lines:
+        lines.append(current.rstrip())
+    if not lines:
+        return [""]
+    # Ellipsize the last line whenever it still overflows — including a single
+    # unbreakable token that never got a chance to wrap — so a cell never bleeds
+    # into its neighbour column.
+    if _line_width(draw, lines[-1], font) > max_px:
+        while lines[-1] and _line_width(draw, lines[-1] + "...", font) > max_px:
+            lines[-1] = lines[-1].rsplit(" ", 1)[0] if " " in lines[-1] else lines[-1][:-1]
+        lines[-1] = lines[-1].rstrip() + "..."
+    return lines
+
+
+def _draw_table(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    columns: list[tuple[str, int]],
+    rows: list[list[str]],
+    *,
+    total_width: int,
+    max_cell_lines: int = 2,
+) -> int:
+    """Render a compact table: a bold accent header row over a rule, then wrapped
+    cells with a faint separator between rows. *columns* is ``(title, weight)``;
+    weights set relative column widths. Returns the y below the table."""
+    header_font = _font(23, bold=True)
+    cell_font = _font(23)
+    total_weight = sum(weight for _, weight in columns) or 1
+    col_x: list[int] = []
+    col_w: list[int] = []
+    cursor = x
+    for _, weight in columns:
+        width = int(total_width * weight / total_weight)
+        col_x.append(cursor)
+        col_w.append(width)
+        cursor += width
+    for (title, _), cxi in zip(columns, col_x):
+        draw.text((cxi, y), title, fill=ACCENT, font=header_font)
+    y += 36
+    draw.rectangle((x, y, x + total_width, y + 2), fill=RULE)
+    y += 14
+    for row in rows:
+        wrapped = [
+            _wrap_cell(draw, str(cell), cell_font, width - 24, max_lines=max_cell_lines)
+            for cell, width in zip(row, col_w)
+        ]
+        row_lines = max((len(lines) for lines in wrapped), default=1)
+        for lines, cxi in zip(wrapped, col_x):
+            ly = y
+            for line in lines:
+                draw.text((cxi, ly), line, fill=TEXT_COLOR, font=cell_font)
+                ly += 30
+        y += row_lines * 30 + 16
+        draw.rectangle((x, y - 9, x + total_width, y - 8), fill=RULE)
+    return y + 6
+
+
 def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.Image:
     records = _summary_records(analyze_dir / f"{title}-summary.md")
     img = Image.new("RGB", (PAGE_W, PAGE_H), "white")
@@ -520,31 +848,59 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
         if y > 1500:
             break
 
-    y = _section_heading(draw, "Therapy implications", y + 25)
-    therapy_records = [
-        record
-        for record in _section_records(records, "Top candidate therapies")
-        if re.match(r"^[A-Za-z0-9.-]+ - ", record["text"])
-    ][:4]
-    if therapy_records:
-        for record in therapy_records[:4]:
-            gene, body = _therapy_summary(record["text"])
-            y = _draw_labeled_bullet(
-                draw,
-                label=gene,
-                body=body,
-                y=y,
-                max_width=PAGE_W - 2 * MARGIN - 40,
-            )
+    # Therapy shortlist as a compact table (PR-1 §2.6a): the interpreted report
+    # emits it as a markdown table the old scrape dropped. Render it directly so the
+    # reader sees the agent, phase, and tumor-source TPM per target — not just prose.
+    # Fall back to the interpreted therapy bullets when the call has no curated panel.
+    therapy_cols, therapy_rows = _therapy_table(analyze_dir, title)
+    y = _section_heading(draw, "Candidate therapies", y + 25)
+    if therapy_cols and therapy_rows:
+        y = _draw_table(
+            draw,
+            MARGIN,
+            y,
+            therapy_cols,
+            therapy_rows,
+            total_width=PAGE_W - 2 * MARGIN,
+        )
     else:
-        for line in highlights[:3]:
-            y = _draw_labeled_bullet(
-                draw,
-                label="Therapy",
-                body=line,
-                y=y,
-                max_width=PAGE_W - 2 * MARGIN - 40,
-            )
+        therapy_records = [
+            record
+            for record in _section_records(records, "Top candidate therapies")
+            if re.match(r"^[A-Za-z0-9.-]+ - ", record["text"])
+        ][:4]
+        if therapy_records:
+            for record in therapy_records[:4]:
+                gene, body = _therapy_summary(record["text"])
+                y = _draw_labeled_bullet(
+                    draw,
+                    label=gene,
+                    body=body,
+                    y=y,
+                    max_width=PAGE_W - 2 * MARGIN - 40,
+                )
+        else:
+            for line in highlights[:3]:
+                y = _draw_labeled_bullet(
+                    draw,
+                    label="Therapy",
+                    body=line,
+                    y=y,
+                    max_width=PAGE_W - 2 * MARGIN - 40,
+                )
+
+    # Top priority targets with tumor-source TPM and a normal-tissue safety band.
+    target_cols, target_rows = _priority_target_table(analyze_dir, title)
+    if target_cols and target_rows and y < PAGE_H - 950:
+        y = _section_heading(draw, "Priority surface targets", y + 22)
+        y = _draw_table(
+            draw,
+            MARGIN,
+            y,
+            target_cols,
+            target_rows,
+            total_width=PAGE_W - 2 * MARGIN,
+        )
 
     notable = [
         record["text"]
