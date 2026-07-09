@@ -147,6 +147,12 @@ def test_all_leaf_tissues_either_covered_or_documented():
         # CRC parent node's primary_tissue (colon/rectum covered separately);
         # the abstract colorectal grouping falls back to bulk.
         "colorectum",
+        # Grouping-node primary tissues from the oncoref registry: BTC (biliary
+        # tract; GBC/CHOL sites covered separately) and the NET/NEN neuroendocrine
+        # aggregate — no single-cell decomposition reference, transparent bulk
+        # fallback until per-site panels are curated.
+        "biliary_tract",
+        "neuroendocrine",
     }
     uncovered = all_tissues - covered - _ACKNOWLEDGED_BULK_FALLBACK
     assert not uncovered, (

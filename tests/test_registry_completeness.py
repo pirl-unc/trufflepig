@@ -39,8 +39,6 @@ from trufflepig.reference import (
 
 _MISSING_MATCHED_NORMAL = frozenset(
     {
-        "ACINIC",
-        "ADCC",
         "NPC",
         "NUTM",
         # ALCL: heme T-cell lymphoma (pirlygenes leaf addition); no
@@ -58,19 +56,16 @@ _MISSING_MATCHED_NORMAL = frozenset(
         "MDS",
         "MPN",
         "T_ALL",
-        "NET_LUNG",
-        "NEC_LUNG_LARGECELL",
         "NEC_MERKEL",
-        "NET_MIDGUT",
-        "NET_RECTAL",
         "MTC",
+        # NEN_G3_EXTRAPULMONARY — new oncoref source-scope leaf (extrapulmonary
+        # grade-3 NEN, pembrolizumab scope); no matched-normal panel yet.
+        "NEN_G3_EXTRAPULMONARY",
         # NCI-coverage expansion (pirlygenes 5.18) — new leaf types without a
         # matched-normal panel yet (added in the #46 follow-on).
-        "NET_PANCREAS",
         "ANSC",
         "BCC",
         "cSCC",
-        "GBC",
         "PENSCC",
         "VSCC",
         "VAGC",
@@ -95,15 +90,12 @@ _MISSING_MATCHED_NORMAL = frozenset(
 _MISSING_THERAPY_AXIS = frozenset(
     {
         "ACC",
-        "ACINIC",
-        "ADCC",
         # ALCL: no therapy-response axis panel yet (new heme T-cell leaf).
         "ALCL",
         "ATRT",
         "BL",
         "BLCA",
         "B_ALL",
-        "CHOL",
         "CLL",
         "CML",
         "CTCL",
@@ -118,24 +110,18 @@ _MISSING_THERAPY_AXIS = frozenset(
         "KIRP",
         "LGG",
         "LIHC",
-        "NET_LUNG",
-        "NEC_LUNG_LARGECELL",
         "MCL",
         "MDS",
         "NEC_MERKEL",
         "MESO",
-        "NET_MIDGUT",
         "MPN",
         "MTC",
         "NPC",
         "NUTM",
         "PAAD",
-        "NET_PANCREAS",
         "PCPG",
         "RB",
-        "NET_RECTAL",
         "RT",
-        "STAD",
         "TGCT",
         "THYM",
         "T_ALL",
@@ -146,7 +132,6 @@ _MISSING_THERAPY_AXIS = frozenset(
         "ANSC",
         "BCC",
         "cSCC",
-        "GBC",
         "PENSCC",
         "VSCC",
         "VAGC",
@@ -161,6 +146,8 @@ _MISSING_THERAPY_AXIS = frozenset(
         "THYMCA",
         # ASTB — no therapy-response axis panel yet (rare CNS leaf).
         "ASTB",
+        # NEN_G3_EXTRAPULMONARY — new oncoref source-scope leaf; no therapy-axis panel yet.
+        "NEN_G3_EXTRAPULMONARY",
     }
 )
 
@@ -254,6 +241,11 @@ _TOLERATED_GAPS_EXPLICIT = {
     # literature signature (BEND2/MN1/GFAP), biomarker supplied by pirlygenes;
     # lineage panel + therapy targets not yet deposited for this rare leaf.
     "ASTB": {"lineage", "therapy"},
+    # NEN_G3_EXTRAPULMONARY (extrapulmonary grade-3 NEN) — new oncoref
+    # source-scope leaf. Expression resolves via the neuroendocrine-family
+    # fallback to SCLC + a curated literature signature / ontology markers;
+    # lineage panel, biomarker and therapy targets are not yet deposited.
+    "NEN_G3_EXTRAPULMONARY": {"lineage", "biomarker", "therapy"},
 }
 
 

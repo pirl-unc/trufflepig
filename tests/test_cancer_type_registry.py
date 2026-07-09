@@ -10,9 +10,13 @@ from pirlygenes.gene_sets_cancer import (
     cancer_type_registry,
     cancer_types_in_family,
     cancer_types_by_tissue,
-    cancer_type_subtypes_of,
 )
 
+# trufflepig's subtype enumeration is transitive (flattens oncoref's intermediate
+# tiers SARC_LPS/SARC_RMS/SARC_ESS to their leaf tiles) — the set the classifier
+# actually resolves among, so exercise that view here rather than the one-level
+# pirlygenes helper.
+from trufflepig.cancer_ontology import cancer_type_subtypes_of
 from trufflepig.reference import subtype_deconvolved_expression
 
 

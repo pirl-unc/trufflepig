@@ -16,13 +16,10 @@ B/T/myeloid) decomposition backgrounds.
 """
 from __future__ import annotations
 
-import logging
 from functools import lru_cache
 
 import oncoref.cancer_ontology as _onc_ont
 import oncoref.cancer_types as _onc_types
-
-logger = logging.getLogger(__name__)
 
 
 def _pirlygenes():
@@ -34,46 +31,29 @@ def _pirlygenes():
 
 def cancer_lineage_group(code):
     """Lineage group (Epithelial/Sarcoma/Heme/Melanoma/Neuroendocrine/Germ cell/Embryonal/CNS) for a
-    cancer code — oncoref-canonical, with a pirlygenes fallback for codes oncoref lacks (e.g. ASTB)."""
-    group = _onc_ont.cancer_lineage_group(code)
-    if group:
-        return group
-    try:
-        return _pirlygenes().cancer_lineage_group(code)
-    except (KeyError, ValueError, ImportError):
-        return None
+    cancer code — oncoref-canonical."""
+    return _onc_ont.cancer_lineage_group(code)
+
+
+# Aggregate codes oncoref carries as first-class registry rows but which trufflepig does NOT classify
+# per-sample: it represents them per-organ (CRC_MSI → COAD_MSI/READ_MSI) or per-site (NET → the
+# individual NET_* cohorts). Dropping them keeps ``resolve_cancer_type`` failing loudly rather than
+# emitting a vague whole-group call that has no dedicated markers/reference of its own.
+_UNSUPPORTED_AGGREGATES = frozenset({"NET", "CRC_MSI"})
 
 
 @lru_cache(maxsize=None)
 def cancer_type_registry():
-    """The cancer-type registry DataFrame — oncoref-sourced metadata, constrained to the code set
-    trufflepig supports (behaviour-neutral switch).
+    """The cancer-type registry DataFrame — oncoref-canonical, minus the aggregate codes trufflepig
+    represents per-organ (:data:`_UNSUPPORTED_AGGREGATES`).
 
-    = oncoref's rows for every code trufflepig already recognised (the pirlygenes code set),
-    **plus** the pirlygenes-only codes oncoref doesn't yet carry (currently ASTB; oncoref#221),
-    **minus** oncoref-only *aggregate* codes (CRC_MSI, NET) that trufflepig represents per-organ
-    (COAD_MSI/READ_MSI, per-site NETs) and has no markers for. Adopting those aggregates is a
-    separate, validated step — they already have curated ontology markers waiting.
+    Since pirlygenes now re-exports oncoref's registry, the two code sets are identical, so this is
+    just oncoref's registry with the per-organ aggregates filtered out. (The historical pirlygenes
+    merge — extra pirlygenes-only codes like ASTB, minus oncoref-only aggregates — is obsolete now
+    that oncoref carries every code, incl. ASTB.)
     """
-    onc = _onc_ont.cancer_type_registry()
-    try:
-        pirly = _pirlygenes().cancer_type_registry()
-    except (ImportError, AttributeError):
-        return onc
-    pcodes = set(pirly["code"].astype(str))
-    onc_codes = set(onc["code"].astype(str))
-    kept = onc[onc["code"].astype(str).isin(pcodes)]                 # oncoref rows, trufflepig-known codes
-    pirly_only = sorted(pcodes - onc_codes)                          # e.g. ASTB
-    dropped = sorted(onc_codes - pcodes)                             # e.g. CRC_MSI, NET
-    if not pirly_only:
-        if dropped:
-            logger.debug("cancer_type_registry: dropping %d oncoref-only aggregate codes (%s)", len(dropped), dropped)
-        return kept
-    import pandas as pd
-
-    extra = pirly[pirly["code"].astype(str).isin(pirly_only)].reindex(columns=onc.columns)
-    logger.debug("cancer_type_registry: +%s (pirlygenes-only), -%s (oncoref-only aggregates)", pirly_only, dropped)
-    return pd.concat([kept, extra], ignore_index=True)
+    reg = _onc_ont.cancer_type_registry()
+    return reg[~reg["code"].astype(str).isin(_UNSUPPORTED_AGGREGATES)].reset_index(drop=True)
 
 
 def resolve_cancer_type(*args, **kwargs):
@@ -114,16 +94,41 @@ def resolve_cancer_type(*args, **kwargs):
     raise onc_err
 
 
-def cancer_type_subtypes_of(parent_code):
-    """Child subtype codes of a (mixture) parent.
+@lru_cache(maxsize=None)
+def _children_by_parent() -> dict[str, list[str]]:
+    """``{parent_code: [direct child codes]}`` from the (oncoref) registry."""
+    reg = cancer_type_registry()
+    out: dict[str, list[str]] = {}
+    for code, parent in zip(reg["code"].astype(str), reg["parent_code"].fillna("").astype(str)):
+        p = parent.strip()
+        if p and p.lower() not in ("nan", "none"):
+            out.setdefault(p, []).append(code)
+    return out
 
-    Kept on **pirlygenes** deliberately: it's tied to which subtypes carry a curated lineage-gene
-    panel (``lineage-genes.csv``), and oncoref nests RMS subtypes under ``SARC_RMS`` (a *more correct*
-    2-level hierarchy) whereas trufflepig's single-level mixture refinement expects them flat under
-    ``SARC``. Migrating this requires making ``_mixture_cohort_lineage_summary`` recurse first — a
-    separate, validated change — so for a behaviour-neutral ontology switch this stays pirlygenes.
+
+def cancer_type_subtypes_of(parent_code, *, recursive: bool = True):
+    """Registry subtype codes of a (mixture) parent.
+
+    Since oncoref nests some subtypes under intermediate tiers (a *more correct* 2-level hierarchy:
+    ``SARC_LPS`` -> ``SARC_DDLPS``/``SARC_MYXLPS``/…, ``SARC_RMS`` -> the RMS leaves, ``SARC_ESS`` ->
+    its leaves), this returns the **transitive** set of all descendant tiles by default — the flat
+    leaf set trufflepig's single-level mixture / centroid refinement enumerates (``SARC`` -> every
+    ``SARC_*``). Pass ``recursive=False`` for direct children only.
     """
-    return _pirlygenes().cancer_type_subtypes_of(parent_code)
+    kids = _children_by_parent()
+    if not recursive:
+        return list(kids.get(str(parent_code), []))
+    out: list[str] = []
+    seen: set[str] = set()
+    stack = list(kids.get(str(parent_code), []))
+    while stack:
+        code = stack.pop()
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+        stack.extend(kids.get(code, []))
+    return out
 
 
 def is_mixture_cohort(code):
