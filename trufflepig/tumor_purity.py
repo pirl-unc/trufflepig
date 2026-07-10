@@ -2519,6 +2519,33 @@ def plot_tumor_purity(
     return fig, result
 
 
+def _adopted_overall_for_methods_plot(purity_result, report_view):
+    """Return the ``(overall, lower, upper)`` adopted-purity row for the
+    method-comparison figure.
+
+    Prefer the frozen :class:`ReportView` snapshot so this figure's "Adopted
+    overall" reference line can never disagree with the sample-summary headline
+    or the markdown (the 78%-vs-10% belief-consistency bug). Fall back
+    FIELD-BY-FIELD to the result dict — the same ``_pick`` semantics as
+    ``report_view.finalized_purity_headline`` — so a snapshot that carries a
+    point but no CI (``purity_lo``/``purity_hi`` None) does NOT blank an interval
+    the result dict still holds; otherwise the figure's adopted row would show a
+    different interval than the headline it is meant to match. Standalone callers
+    pass no view and fall back to the result dict unchanged.
+    """
+    purity_result = purity_result or {}
+
+    def _pick(view_attr, live_key):
+        val = getattr(report_view, view_attr, None) if report_view is not None else None
+        return val if val is not None else purity_result.get(live_key)
+
+    return (
+        _pick("purity", "overall_estimate"),
+        _pick("purity_lo", "overall_lower"),
+        _pick("purity_hi", "overall_upper"),
+    )
+
+
 def plot_purity_method_comparison(
     purity_result,
     save_to_filename=None,
@@ -2526,6 +2553,7 @@ def plot_purity_method_comparison(
     figsize=(10, 5.5),
     decomposition_result=None,
     title=None,
+    report_view=None,
 ):
     """Compare every purity estimation method on one axis (#124).
 
@@ -2680,9 +2708,11 @@ def plot_purity_method_comparison(
 
     n_before_adopted = len(rows)
 
-    overall = purity_result.get("overall_estimate")
-    overall_lower = purity_result.get("overall_lower")
-    overall_upper = purity_result.get("overall_upper")
+    # The "Adopted overall" reference row is the sample's finalized headline —
+    # read it from the frozen ReportView when supplied (see the helper).
+    overall, overall_lower, overall_upper = _adopted_overall_for_methods_plot(
+        purity_result, report_view
+    )
     if overall is not None:
         rows.append(
             (
