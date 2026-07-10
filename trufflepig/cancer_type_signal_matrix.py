@@ -814,6 +814,8 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
 
     df = matrix.copy()
     df["_support"] = df["support"].fillna(0.0).astype(float)
+    df["_support_low"] = df["_support"]
+    df["_support_high"] = df["_support"]
     df["_selected"] = df["selects_report_label"].fillna(False).astype(bool)
     df["_details_map"] = df["details"].map(_parse_details)
     df["_label_space"] = df["_details_map"].map(
@@ -874,7 +876,9 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
         code, variant, variant_kind = display_code(row)
         variant_note = f" ({variant_kind} row {variant})" if variant else ""
         if row.get("_mmr"):
-            return f"MMR release ensemble: {pred}-like"
+            n = _safe_float(row.get("_mmr_n_votes"))
+            votes = f" ({int(n)} candidate votes)" if n and n > 1 else ""
+            return f"MMR release ensemble: {pred}-like{votes}"
         if source == "learned_expression_classifier":
             role_labels = {
                 "hierarchical_compartment_vote": "Learned compartment",
@@ -916,6 +920,21 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
         return "#f59e0b"
 
     df["_display_bucket"] = df.apply(display_bucket, axis=1)
+    # Collapse the many near-duplicate per-candidate MMR MSI/MSS votes (one row
+    # per contextualized status code) into a single MSS-vs-MSI summary bar that
+    # carries the mean support and its min/max spread, instead of ~13 stacked
+    # purple bars that all restate the same underlying MMR ensemble call.
+    mmr_mask = df["_mmr"].astype(bool)
+    mmr_summary = None
+    if int(mmr_mask.sum()) > 1:
+        supports = df.loc[mmr_mask, "_support"].astype(float)
+        mmr_summary = {
+            "support": float(supports.mean()),
+            "low": float(supports.min()),
+            "high": float(supports.max()),
+            "n": int(mmr_mask.sum()),
+        }
+        df.loc[mmr_mask, "_display_bucket"] = "mmr:summary"
     ranked = (
         df.sort_values(["_selected", "_mmr", "_support"], ascending=[False, False, False], kind="stable")
         .drop_duplicates("_display_bucket", keep="first")
@@ -924,6 +943,14 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
     )
     if ranked.empty:
         return ranked
+    if mmr_summary is not None:
+        # The dominant (highest-support) vote survives dedup and represents the
+        # call; restate its bar as the vote mean with the spread as an error bar.
+        sel = ranked["_display_bucket"] == "mmr:summary"
+        ranked.loc[sel, "_support"] = mmr_summary["support"]
+        ranked.loc[sel, "_support_low"] = mmr_summary["low"]
+        ranked.loc[sel, "_support_high"] = mmr_summary["high"]
+        ranked.loc[sel, "_mmr_n_votes"] = mmr_summary["n"]
     ranked["display_label"] = ranked.apply(display_label, axis=1)
     ranked["display_color"] = ranked.apply(display_color, axis=1)
     return ranked
@@ -946,21 +973,70 @@ def plot_cancer_type_signal_matrix(
     if ranked.empty:
         return None
 
-    labels = ranked["display_label"].tolist()
-    colors = ranked["display_color"].tolist()
-    fig_h = max(4.8, 0.36 * len(ranked) + 1.6)
-    fig, ax = plt.subplots(figsize=(10.5, fig_h))
-    y = list(range(len(ranked)))[::-1]
-    ax.barh(y, ranked["_support"].tolist(), color=colors, alpha=0.86)
-    ax.set_yticks(y)
-    ax.set_yticklabels(labels, fontsize=8)
-    ax.set_xlim(0, max(1.0, float(ranked["_support"].max()) * 1.08))
-    ax.set_xlabel("Evidence support / probability")
-    final_call = _clean(ranked["final_call"].dropna().astype(str).iloc[0])
-    ax.set_title(f"Cancer-type decision evidence - final call {final_call}")
-    ax.grid(axis="x", alpha=0.25)
-    for spine in ("top", "right", "left"):
-        ax.spines[spine].set_visible(False)
+    # Fused-evidence support is an unbounded aggregate score (>1), while learned
+    # probabilities, MMR calls, and support fractions live on 0-1. Sharing one
+    # x-axis lets the big fused bars crush every probability bar into a sliver,
+    # so draw the two scales on separate stacked panels.
+    support = ranked["_support"].astype(float)
+    scored = ranked[support > 1.0]
+    prob = ranked[support <= 1.0]
+    panels = [
+        (sub, xlabel)
+        for sub, xlabel in (
+            (scored, "Fused evidence support (unbounded score)"),
+            (prob, "Probability / support fraction (0-1)"),
+        )
+        if not sub.empty
+    ]
+    if not panels:
+        return None
+
+    def _draw(ax, sub: pd.DataFrame, xlabel: str) -> None:
+        supp = sub["_support"].astype(float)
+        y = list(range(len(sub)))[::-1]
+        ax.barh(y, supp.tolist(), color=sub["display_color"].tolist(), alpha=0.86)
+        # Draw spread whiskers only on rows that actually carry a spread (the MMR
+        # vote summary), so zero-width caps don't clutter the point estimates.
+        err_lo = (supp - sub["_support_low"].astype(float)).clip(lower=0.0)
+        err_hi = (sub["_support_high"].astype(float) - supp).clip(lower=0.0)
+        spread = (err_lo + err_hi) > 0
+        if bool(spread.any()):
+            keep = spread.tolist()
+            ax.errorbar(
+                [v for v, k in zip(supp.tolist(), keep) if k],
+                [v for v, k in zip(y, keep) if k],
+                xerr=[
+                    [v for v, k in zip(err_lo.tolist(), keep) if k],
+                    [v for v, k in zip(err_hi.tolist(), keep) if k],
+                ],
+                fmt="none",
+                ecolor="#374151",
+                elinewidth=1.0,
+                capsize=3,
+            )
+        ax.set_yticks(y)
+        ax.set_yticklabels(sub["display_label"].tolist(), fontsize=8)
+        ax.set_xlim(0, max(1.0, float(supp.max()) * 1.08))
+        ax.set_xlabel(xlabel)
+        ax.grid(axis="x", alpha=0.25)
+        for spine in ("top", "right", "left"):
+            ax.spines[spine].set_visible(False)
+
+    heights = [max(1, len(sub)) for sub, _ in panels]
+    total = sum(heights)
+    fig_h = max(4.8, 0.36 * total + 1.3 * len(panels))
+    fig, axes = plt.subplots(
+        len(panels),
+        1,
+        figsize=(10.5, fig_h),
+        gridspec_kw={"height_ratios": heights},
+        squeeze=False,
+    )
+    for ax, (sub, xlabel) in zip(axes[:, 0], panels):
+        _draw(ax, sub, xlabel)
+    final_calls = ranked["final_call"].dropna().astype(str)
+    final_call = _clean(final_calls.iloc[0]) if not final_calls.empty else ""
+    axes[0, 0].set_title(f"Cancer-type decision evidence - final call {final_call}")
     fig.tight_layout()
     out = Path(out_path)
     fig.savefig(out, dpi=dpi, bbox_inches="tight")
