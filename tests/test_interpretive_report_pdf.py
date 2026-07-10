@@ -1,16 +1,20 @@
-"""Guards for the reader-facing interpretive-report PDF manifest.
+"""Guards for the reader-facing interpretive-report PDF and its shared document.
 
 The reader PDF captions each figure with an *interpretation sentence* (what the
 figure means for the decision), not its PNG filename, and its figure manifest must
 stay in sync with the figures the pipeline actually emits — a stale manifest
 silently omitted the therapy figure (``treatments.png``) and shipped names that no
-longer exist. These are cheap structural checks; the rendering itself is validated
-by eye against a real report.
+longer exist. The parsing/manifest logic now lives in
+:mod:`trufflepig.report_document` (shared with the pipeline so the PDF renders from
+one serialized decision); these are cheap structural checks, and the rendering
+itself is validated by eye against a real report.
 """
 
 import importlib.util
 import inspect
 from pathlib import Path
+
+from trufflepig import report_document as rd
 
 
 def _load_pdf_builder():
@@ -22,9 +26,8 @@ def _load_pdf_builder():
     return module
 
 
-def test_figure_specs_are_suffix_title_interpretation_triples():
-    b = _load_pdf_builder()
-    for entry in b.FIGURE_SPECS:
+def test_figure_registry_entries_are_suffix_title_interpretation_triples():
+    for entry in rd.FIGURE_REGISTRY:
         assert len(entry) == 3, f"expected (suffix, title, interpretation): {entry!r}"
         suffix, title, interpretation = entry
         assert suffix.endswith(".png")
@@ -33,8 +36,7 @@ def test_figure_specs_are_suffix_title_interpretation_triples():
 
 
 def test_reader_manifest_includes_therapy_and_excludes_near_duplicates():
-    b = _load_pdf_builder()
-    suffixes = {suffix for suffix, _, _ in b.FIGURE_SPECS}
+    suffixes = {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
     # The ranked-therapy figure must be present (was silently dropped by the old
     # manifest, which looked only for priority-targets/actionable-targets).
     assert "treatments.png" in suffixes
@@ -49,10 +51,11 @@ def test_figure_page_captions_with_interpretation_not_filename():
     assert params[:3] == ["path", "title", "interpretation"]
 
 
-# --- §2.6a: the reader PDF renders the therapy + priority-target tables ---------
+# --- §2.6b: the document parsers recover the therapy + priority-target tables ----
 # The old scrape dropped every markdown table row on the floor. These pin that the
-# builder now recovers the therapy shortlist and the top surface targets (with their
-# tumor-source TPM and normal-tissue safety band) straight from the report markdown.
+# shared document builder recovers the therapy shortlist and the top surface targets
+# (with their tumor-source TPM and normal-tissue safety band) straight from the
+# report markdown, as structured {columns, rows} tables.
 
 _ANALYSIS_MD = """\
 # Analysis
@@ -104,10 +107,9 @@ _SUMMARY_WITH_ATTR_MD = """\
 
 
 def test_parse_markdown_tables_tags_sections_and_strips_separator(tmp_path):
-    b = _load_pdf_builder()
     md = tmp_path / "x-analysis.md"
     md.write_text(_ANALYSIS_MD)
-    tables = b._parse_markdown_tables(md)
+    tables = rd.parse_markdown_tables(md)
     assert len(tables) == 1
     table = tables[0]
     assert table["section"] == "Therapy Prioritization"
@@ -118,9 +120,9 @@ def test_parse_markdown_tables_tags_sections_and_strips_separator(tmp_path):
 
 
 def test_therapy_table_dedups_targets_and_limits_to_three(tmp_path):
-    b = _load_pdf_builder()
     (tmp_path / "s-analysis.md").write_text(_ANALYSIS_MD)
-    cols, rows = b._therapy_table(tmp_path, "s")
+    table = rd._therapy_table(tmp_path, "s")
+    cols, rows = table["columns"], table["rows"]
     assert [c[0] for c in cols] == ["Target", "Agent / phase", "Tumor-src TPM", "Eligibility / RNA source"]
     # EGFR appears twice in the source but is deduped; capped at 3 rows.
     assert [r[0] for r in rows] == ["CD274", "CEACAM5", "EGFR"]
@@ -132,9 +134,9 @@ def test_therapy_table_dedups_targets_and_limits_to_three(tmp_path):
 
 
 def test_priority_target_table_reads_tumor_source_and_safety_band(tmp_path):
-    b = _load_pdf_builder()
     (tmp_path / "s-evidence.md").write_text(_EVIDENCE_MD)
-    cols, rows = b._priority_target_table(tmp_path, "s")
+    table = rd._priority_target_table(tmp_path, "s")
+    cols, rows = table["columns"], table["rows"]
     assert [c[0] for c in cols] == ["Target", "Tumor-src TPM", "Normal-tissue safety", "Cohort %ile"]
     assert [r[0] for r in rows] == ["CEACAM5", "EPCAM", "SLC2A1"]  # top 3 by rank
     assert rows[0][1] == "847"  # tumor-source TPM parsed out of the attribution cell
@@ -145,10 +147,10 @@ def test_priority_target_table_reads_tumor_source_and_safety_band(tmp_path):
 
 
 def test_priority_target_table_falls_back_to_summary_attribution(tmp_path):
-    b = _load_pdf_builder()
     # No evidence.md: the summary's tumor-source attribution table is the fallback.
     (tmp_path / "s-summary.md").write_text(_SUMMARY_WITH_ATTR_MD)
-    cols, rows = b._priority_target_table(tmp_path, "s")
+    table = rd._priority_target_table(tmp_path, "s")
+    cols, rows = table["columns"], table["rows"]
     assert [c[0] for c in cols][:2] == ["Target", "Tumor-src TPM"]
     assert [r[0] for r in rows] == ["CD274", "ERBB2", "BRAF"]
     assert rows[1][1] == "13.3"  # tumor-source bulk TPM column
@@ -157,9 +159,9 @@ def test_priority_target_table_falls_back_to_summary_attribution(tmp_path):
 def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     b = _load_pdf_builder()
     # A report with no therapy/target tables (the local-sweep safety case): the
-    # extractors return (None, None) and the PDF still renders.
+    # extractors return None and the PDF still renders from the document.
     (tmp_path / "s-summary.md").write_text("# Sample s\n\n- **Cancer call:** SARC\n")
-    assert b._therapy_table(tmp_path, "s") == (None, None)
-    assert b._priority_target_table(tmp_path, "s") == (None, None)
+    assert rd._therapy_table(tmp_path, "s") is None
+    assert rd._priority_target_table(tmp_path, "s") is None
     out = b.build_interpretive_report_pdf(tmp_path)
     assert out.exists() and out.stat().st_size > 0
