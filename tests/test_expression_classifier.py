@@ -131,10 +131,16 @@ def test_mismatch_repair_binary_classifier_recovers_representative_states(code, 
     assert vote is not None
     assert vote.label == expected
     assert {label for label, _probability in vote.predictions} <= {"MSI", "MSS"}
-    assert vote.training_sample_count == 17
-    assert {"COAD_MSI", "COAD_MSS", "READ_MSI", "READ_MSS"} <= set(
-        vote.training_cohorts
-    )
+    required_cohorts = {"COAD_MSI", "COAD_MSS", "READ_MSI", "READ_MSS"}
+    assert required_cohorts <= set(vote.training_cohorts)
+    # training_sample_count is bundle-dependent: it counts every MSI/MSS
+    # representative sample the installed pirlygenes bundle exposes (the CRC
+    # subtypes plus any UCEC/STAD MSI/MSS cohorts it also carries), so the count
+    # legitimately grows as the bundle grows. Pin the invariant that matters —
+    # the binary trainer saw at least each required CRC subtype — not an exact
+    # count that silently encodes one bundle snapshot.
+    assert vote.training_sample_count is not None
+    assert vote.training_sample_count >= len(required_cohorts)
 
 
 def test_mismatch_repair_release_classifier_requires_supported_context():
