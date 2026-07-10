@@ -256,6 +256,90 @@ def test_compact_signal_plot_collapses_orthogonal_status_variants():
     assert "Rare fusion subtype anchor: SARC (subtype row SARC_ASPS)" in labels
 
 
+def _mmr_and_scale_matrix() -> pd.DataFrame:
+    """A matrix with 13 near-duplicate MMR release-ensemble votes plus a mix of
+    unbounded fused-support and 0-1 probability rows."""
+    import json
+
+    def row(*, source, code, support, role="", context="", details=None,
+            selected=False, rank=None):
+        out = {column: "" for column in SIGNAL_MATRIX_COLUMNS}
+        out.update({
+            "sample": "case-msi", "final_call": "COAD", "final_lineage": "solid",
+            "signal_source": source, "signal_label": source, "predicted_code": code,
+            "context_code": context, "role": role, "support": support,
+            "confidence": support, "rank": rank, "selects_report_label": selected,
+            "entity_agrees_final": code.startswith("COAD"), "lineage_agrees_final": True,
+            "is_blocked": False, "is_context_only": False,
+            "details": json.dumps(details or {}),
+        })
+        return out
+
+    rel = {"label_space": "mmr_release_ensemble"}
+    rows = [
+        row(source="fused_evidence", code="COAD", support=2.7, selected=True),
+        row(source="fused_evidence", code="READ", support=1.3),
+        row(source="pan_cancer_signature_ranker", code="COAD", support=0.92, rank=1),
+        row(source="learned_expression_classifier", code="COAD", support=0.88,
+            role="hierarchical_entity_vote"),
+    ]
+    contexts = ["COAD_MSI", "READ_MSI", "STAD_MSI", "UCEC_MSI"] * 3 + ["COAD_MSI"]
+    for i, ctx in enumerate(contexts):  # 13 votes
+        rows.append(row(
+            source="mismatch_repair_status", code=ctx, context=ctx,
+            role="mismatch_repair_release_vote", details=rel,
+            support=0.62 + 0.01 * (i % 5),
+        ))
+    return pd.DataFrame(rows)
+
+
+def test_compact_signal_plot_collapses_mmr_votes_into_one_summary():
+    compact = compact_signal_plot_rows(_mmr_and_scale_matrix(), max_rows=20)
+
+    mmr = compact[compact["_mmr"].astype(bool)]
+    assert len(mmr) == 1, "the 13 per-candidate MMR votes must fold to one summary bar"
+    label = mmr["display_label"].iloc[0]
+    assert "MMR release ensemble" in label
+    assert "13 candidate votes" in label
+    # The summary bar carries the vote mean with a genuine min/max spread.
+    r = mmr.iloc[0]
+    assert r["_support_low"] < r["_support"] < r["_support_high"]
+    # Non-MMR rows carry no spread (low == support == high).
+    non_mmr = compact[~compact["_mmr"].astype(bool)]
+    assert (non_mmr["_support_low"] == non_mmr["_support"]).all()
+    assert (non_mmr["_support_high"] == non_mmr["_support"]).all()
+
+
+def test_plot_cancer_type_signal_matrix_splits_scales_onto_separate_axes(tmp_path, monkeypatch):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from trufflepig.cancer_type_signal_matrix import plot_cancer_type_signal_matrix
+
+    captured: dict = {}
+    real_subplots = plt.subplots
+
+    def spy_subplots(*args, **kwargs):
+        fig, axes = real_subplots(*args, **kwargs)
+        captured["fig"] = fig
+        captured["nrows"] = args[0] if args else kwargs.get("nrows", 1)
+        return fig, axes
+
+    monkeypatch.setattr(plt, "subplots", spy_subplots)
+
+    out = tmp_path / "signal.png"
+    saved = plot_cancer_type_signal_matrix(_mmr_and_scale_matrix(), out, max_rows=20)
+    assert saved is not None and out.exists()
+
+    # Unbounded fused-support (>1) and 0-1 probability rows land on separate panels.
+    assert captured["nrows"] == 2
+    xlabels = [ax.get_xlabel() for ax in captured["fig"].axes]
+    assert any("unbounded" in x for x in xlabels)
+    assert any("0-1" in x for x in xlabels)
+    plt.close(captured["fig"])
+
+
 def test_ontology_layer_keeps_base_entity_winner_an_entity():
     """A fused_evidence / learned_* selection reports the ``exact_subtype`` decision stage even
     when it wins a base entity. The layer of a base-entity code (no ``_`` suffix) must stay
