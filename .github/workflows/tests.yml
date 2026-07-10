@@ -20,7 +20,7 @@ jobs:
       # on the first failure.
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
 
     steps:
       - name: Checkout repository
@@ -44,6 +44,17 @@ jobs:
         with:
           path: ~/.cache/pyensembl/
           key: pyensembl-75-81-111-112-${{ runner.os }}
+
+      - name: Cache pirlygenes data bundle
+        # The ~350 MB pirlygenes reference bundle (pan-cancer-expression etc.) is
+        # fetched on demand from the pinned GitHub release the first time a test
+        # loads a reference matrix. Cache it so it downloads once, not per matrix
+        # job / per run. Keyed on pyproject (which pins the pirlygenes floor) so a
+        # dependency bump re-fetches.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pirlygenes/
+          key: pirlygenes-data-${{ hashFiles('pyproject.toml') }}-${{ runner.os }}
 
       - name: Install Ensembl genome data
         run: |
