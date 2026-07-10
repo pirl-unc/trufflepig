@@ -161,3 +161,65 @@ def test_empty_dir_therapy_and_targets_are_none(tmp_path):
     assert doc["therapy"] is None
     assert doc["targets"] is None
     assert all(f["present"] is False for f in doc["figures"])
+
+
+# Issue #105: when the analysis markdown splits Therapy Prioritization into a
+# "Sample-supported" active subsection and an "Audit-only" subsection (background-
+# attributed disease-curation rows), the PDF therapy shortlist must read only the
+# active subsection — otherwise a host-attributed FGFR3/erdafitinib row would
+# still surface in the PDF as if it were an expression-supported target.
+_ANALYSIS_AUDIT_SPLIT = """# Analysis
+
+## Therapy Prioritization
+
+### Sample-supported / clinically reviewable rows
+
+| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
+|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
+| **FOLH1** | lu-psma | radioligand | approved | mCRPC | 142.0 | tumor 128 | 12 | tumor-supported; approved standard |
+
+### Audit-only rows: not tumor-supported in this sample
+
+These rows remain visible as disease-curation provenance or negative evidence.
+
+| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
+|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
+| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | audit-only negative/background evidence; background-dominant |
+"""
+
+
+def test_therapy_table_reads_active_subsection_not_audit_only(tmp_path):
+    (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
+    (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_AUDIT_SPLIT)
+    (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
+
+    table = rd._therapy_table(tmp_path, _PREFIX)
+    assert table is not None
+    targets = {row[0] for row in table["rows"]}
+    # Active row is surfaced; the host-attributed audit-only row is not.
+    assert "FOLH1" in targets
+    assert "FGFR3" not in targets
+    assert "erdafitinib" not in {cell for row in table["rows"] for cell in row}
+
+
+_ANALYSIS_ALL_AUDIT = """# Analysis
+
+## Therapy Prioritization
+
+### Sample-supported / clinically reviewable rows
+
+*No curated therapy row had tumor-supported or clinically reviewable RNA evidence in this sample.*
+
+### Audit-only rows: not tumor-supported in this sample
+
+| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
+|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
+| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | audit-only negative/background evidence; background-dominant |
+"""
+
+
+def test_therapy_table_is_none_when_only_audit_only_rows(tmp_path):
+    # If every curated therapy row is audit-only (active subsection has no table),
+    # the PDF shortlist is empty rather than falling back to the audit rows.
+    (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_ALL_AUDIT)
+    assert rd._therapy_table(tmp_path, _PREFIX) is None

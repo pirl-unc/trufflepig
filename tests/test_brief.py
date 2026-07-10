@@ -1758,6 +1758,56 @@ def test_actionable_renders_tumor_band_without_attribution_dict():
     )
 
 
+def test_actionable_background_dominant_therapy_row_is_audit_only():
+    # Issue #105: on a liver-met BLCA sample, an FGFR3/erdafitinib row whose RNA is
+    # attributed to hepatocyte/background (tumor-source TPM 0) must land in the
+    # audit-only therapy section, not the active-opportunity table — matching the
+    # *-targets.md split so the summary, the analysis markdown, and the PDF agree.
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "BLCA"
+    analysis["cancer_name"] = "Bladder Urothelial Carcinoma"
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "FGFR3",
+                "gene_id": "ENSG00000068078",
+                "observed_tpm": 10.6,
+                "attribution": {},
+                "attr_tumor_tpm": 0.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm_high": 0.0,
+                "attr_tumor_fraction": 0.0,
+                "attr_tumor_fraction_low": 0.0,
+                "attr_tumor_fraction_high": 0.0,
+                "attr_support_fraction": 0.0,
+                "attr_top_compartment": "hepatocyte",
+                "attr_top_compartment_tpm": 1.2,
+                "tme_dominant": True,
+                "tme_explainable": True,
+                "matched_normal_over_predicted": False,
+            }
+        ]
+    )
+    md = build_actionable(
+        analysis,
+        ranges_df,
+        cancer_code="BLCA",
+        disease_state="",
+        sample_id="pfo017-liver",
+    )
+    assert "## Therapy Prioritization" in md
+    assert "### Audit-only rows: not tumor-supported in this sample" in md
+    therapy_section = md.split("## Therapy Prioritization", 1)[1]
+    active_block, audit_block = therapy_section.split(
+        "### Audit-only rows: not tumor-supported in this sample", 1
+    )
+    # The host-attributed FGFR3 row is not presented as an active opportunity.
+    assert "erdafitinib" not in active_block
+    assert "FGFR3" in audit_block
+    assert "erdafitinib" in audit_block
+    assert "audit-only negative/background evidence" in audit_block
+
+
 def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
     import trufflepig.brief as brief_mod
 
