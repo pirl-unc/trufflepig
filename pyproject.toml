@@ -19,7 +19,7 @@ dependencies = [
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    "oncoref>=1.8.0,<2",
+    "oncoref>=1.8.113,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
     # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype
