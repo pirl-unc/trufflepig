@@ -156,6 +156,48 @@ def test_priority_target_table_falls_back_to_summary_attribution(tmp_path):
     assert rows[1][1] == "13.3"  # tumor-source bulk TPM column
 
 
+def test_headline_cards_prefer_reportview_headline_over_records():
+    b = _load_pdf_builder()
+    # A ReportView-shape headline is present: the call + purity cards come from it,
+    # not from the parsed markdown records — so the PDF headline reads the decision.
+    doc = {
+        "headline": {
+            "cancer_type": "PRAD",
+            "cancer_type_name": "Prostate adenocarcinoma",
+            "purity": 0.10,
+            "purity_lo": 0.06,
+            "purity_hi": 0.16,
+            "purity_confidence": "moderate",
+        },
+        "records": [
+            {"section": "", "subsection": "", "label": "Cancer call", "value": "STALE", "text": ""},
+            {"section": "", "subsection": "", "label": "Purity", "value": "99% stale", "text": ""},
+        ],
+    }
+    call, purity = b._headline_cards(doc)
+    assert call == "PRAD (Prostate adenocarcinoma)"
+    assert purity == "10% (model interval 6%-16%, moderate confidence)"
+    assert "STALE" not in call and "99%" not in purity
+
+
+def test_headline_cards_fall_back_to_records_without_reportview_shape():
+    b = _load_pdf_builder()
+    # Fallback headline shape (standalone build / an analyze dir predating the
+    # sidecar): no cancer_type/purity fields, so the cards read the parsed records.
+    doc = {
+        "headline": {"cancer_type_name": "PRAD", "purity_display": "10% ..."},
+        "records": [
+            {"section": "", "subsection": "", "label": "Cancer call",
+             "value": "PRAD (Prostate adenocarcinoma)", "text": ""},
+            {"section": "", "subsection": "", "label": "Purity",
+             "value": "10% (model interval 6%-16%, moderate confidence)", "text": ""},
+        ],
+    }
+    call, purity = b._headline_cards(doc)
+    assert call == "PRAD (Prostate adenocarcinoma)"
+    assert "10%" in purity
+
+
 def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     b = _load_pdf_builder()
     # A report with no therapy/target tables (the local-sweep safety case): the

@@ -318,6 +318,43 @@ def _draw_table(
     return y + 6
 
 
+def _headline_cards(document: dict) -> tuple[str, str]:
+    """The (cancer-call, purity) card strings, preferring the structural ReportView
+    headline over the parsed markdown.
+
+    The headline dict carries the finalized decision (``cancer_type`` / ``purity`` /
+    ``purity_lo`` / ``purity_hi`` / ``purity_confidence``) — the same values the
+    figures and the markdown headline render — so formatting the cards from it makes
+    the PDF's headline agree with them by construction. Falls back per field to the
+    parsed ``Cancer call`` / ``Purity`` records for the fallback headline shape (a
+    standalone build with no ReportView) or an analyze dir predating the sidecar.
+    """
+    records = document.get("records") or []
+    headline = document.get("headline") or {}
+
+    ctype = headline.get("cancer_type")
+    if ctype:
+        name = headline.get("cancer_type_name") or ""
+        call = f"{ctype} ({name})" if name and name != ctype else str(ctype)
+    else:
+        call = record_value(records, "Cancer call")
+
+    purity_value = headline.get("purity")
+    if purity_value is not None:
+        text = f"{purity_value:.0%}"
+        lo, hi = headline.get("purity_lo"), headline.get("purity_hi")
+        conf = headline.get("purity_confidence") or ""
+        if lo is not None and hi is not None:
+            text += f" (model interval {lo:.0%}-{hi:.0%}"
+            text += f", {conf} confidence)" if conf else ")"
+        elif conf:
+            text += f" ({conf} confidence)"
+        purity = text
+    else:
+        purity = record_value(records, "Purity")
+    return call, purity
+
+
 def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     records = document.get("records") or []
     title = document.get("prefix") or ""
@@ -337,9 +374,13 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     )
     draw.rectangle((MARGIN, MARGIN + 130, PAGE_W - MARGIN, MARGIN + 136), fill=ACCENT)
 
-    call = record_value(records, "Cancer call")
+    # Read the call + purity cards from the structural ReportView headline (the
+    # authoritative finalized decision the figures also read), so the PDF's headline
+    # can't drift from the figures/markdown by construction — not merely by the
+    # parity test. Falls back to the parsed records for the fallback headline shape
+    # or an analyze dir produced before the sidecar existed.
+    call, purity = _headline_cards(document)
     mmr = record_value(records, "Mismatch-repair RNA context")
-    purity = record_value(records, "Purity")
     sample = record_value(records, "Sample")
     quant = record_value(records, "RNA quant QC")
     sample_card = sample
