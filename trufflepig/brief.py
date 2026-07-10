@@ -2996,9 +2996,18 @@ def build_actionable(
         confidence_clause = f"**{tier_label}** confidence"
         if tier_reasons and tier_label in {"low", "moderate"}:
             confidence_clause += " (" + "; ".join(tier_reasons) + ")"
+        # Render the interval only when both bounds are present. The field-by-field
+        # headline pick can leave a bound None (view carries a point but no CI, and
+        # the live dict has none either); guard the same way build_summary does so a
+        # missing bound degrades to a bare point estimate instead of a format crash.
+        interval_clause = (
+            f" (model interval {lower:.0%}–{upper:.0%})"
+            if lower is not None and upper is not None
+            else ""
+        )
         lines.append(
-            f"\nPurity point estimate: **{overall:.0%}** "
-            f"(model interval {lower:.0%}–{upper:.0%}). {confidence_clause.capitalize()}."
+            f"\nPurity point estimate: **{overall:.0%}**{interval_clause}. "
+            f"{confidence_clause.capitalize()}."
         )
 
     lines.append("")
