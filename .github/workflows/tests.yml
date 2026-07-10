@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Force a headless matplotlib backend so figure-rendering tests never try to
+    # open a display on the runner.
+    env:
+      MPLBACKEND: Agg
+    strategy:
+      # Report every Python version's result rather than cancelling the matrix
+      # on the first failure.
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # pyensembl is pulled in transitively by pirlygenes (not a direct
+          # trufflepig dependency); the [test] extra adds pytest/xdist/httpx/etc.
+          pip install -e ".[test]"
+
+      - name: Cache pyensembl data
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pyensembl/
+          key: pyensembl-81-111-112-${{ runner.os }}
+
+      - name: Install Ensembl genome data
+        run: |
+          # trufflepig resolves gene IDs against every installed Ensembl release
+          # and loads pirlygenes' cancer-reference-expression aggregate, whose
+          # source cohorts were annotated at the release-81 (2015) vintage.
+          # ~0.5% of ENSG IDs retire per release, so release 112 alone pushes
+          # test_gene_ids over its 2% unresolvable tolerance; 81 + 111 + 112
+          # keeps the gene-id / aneuploidy tests resolving (mirrors pirlygenes CI).
+          pyensembl install --release 112 --species homo_sapiens
+          pyensembl install --release 111 --species homo_sapiens
+          pyensembl install --release 81 --species homo_sapiens
+          # Fail fast if a release didn't materialize — otherwise the dependent
+          # tests would silently *skip* and CI would go green without them.
+          python -c "from pyensembl import EnsemblRelease; assert EnsemblRelease(112).genes_by_name('TP53'); assert EnsemblRelease(111).genes_by_name('TP53'); assert EnsemblRelease(81).genes_by_name('TP53'); print('Ensembl 81 + 111 + 112 ready')"
+
+      - name: Run unit tests
+        # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
+        # (Linux branch reads /proc/meminfo), so it stays within the runner's
+        # memory budget without a hand-tuned -n.
+        run: bash test.sh -q
