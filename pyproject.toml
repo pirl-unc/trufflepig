@@ -21,7 +21,12 @@ dependencies = [
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
     "oncoref>=1.8.0,<2",
     "numpy>=2.0.0",
-    "pandas>=2.0",
+    # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
+    # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype
+    # fillna downcast change, removed legacy APIs). Without this cap a fresh
+    # `pip install` resolves pandas 3.x and breaks at import/runtime. Lifting the
+    # cap is a deliberate pandas-3 migration, tracked separately.
+    "pandas>=2.0,<3",
     "matplotlib>=3.5.0",
     "tqdm",
     "pyyaml",
