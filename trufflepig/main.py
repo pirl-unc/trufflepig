@@ -4314,6 +4314,34 @@ inferred from expression alone.
     readme_path.write_text(readme)
     print(f"[output] Wrote {readme_path}")
 
+    # Structured report document (§2.6b): one serialized artifact the interpretive
+    # PDF renders from, so the PDF can never disagree with the figures/markdown. It
+    # carries the frozen ReportView headline + the just-emitted reports (parsed once,
+    # server-side, so the markdown stays byte-stable) + a belief-gated figure
+    # manifest. Written before manifest discovery so it is itself catalogued.
+    # Best-effort: a serialization failure must never abort the analysis (the PDF
+    # falls back to building the document from the markdown directly).
+    try:
+        from .report_document import write_report_document
+
+        report_document_path = write_report_document(
+            paths.out_dir,
+            paths.prefix_base,
+            report_view=analysis.get("report_view"),
+        )
+        print(f"[output] Wrote {report_document_path}")
+    except (OSError, ValueError, TypeError):
+        # Tolerate only the realistic failure surface of "parse the reports, build a
+        # dict, json.dump it, write the file": filesystem errors and value/type
+        # errors from (de)serialization. Anything else here — a KeyError,
+        # AttributeError — is a bug in the document builder, not a runtime data
+        # condition, so let it surface loudly instead of silently shipping a run
+        # whose interpretive PDF has to fall back to scraping the markdown.
+        _LOGGER.warning(
+            "write_report_document failed; interpretive PDF will fall back to markdown",
+            exc_info=True,
+        )
+
     manifest_path = "%s-manifest.json" % prefix if prefix else "manifest.json"
     run.artifacts = discover_output_artifacts(paths.out_dir, paths.prefix_base)
     run.add_artifact(

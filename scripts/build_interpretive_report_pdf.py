@@ -6,6 +6,14 @@ The full ``all-figures.pdf`` is useful for exhaustive review, and
 shorter reader-facing artifact: report highlights plus the plots that directly
 support the interpreted text. Raw reference-context maps are intentionally not
 included by default because they bypass the fused cancer-type evidence graph.
+
+The PDF renders entirely from the structured report document
+(``<prefix>-report.json``; see :mod:`trufflepig.report_document`) — the finalized
+headline, the at-a-glance records, the therapy and target tables, and a
+belief-gated figure manifest — and never re-reads the markdown, so it cannot
+disagree with the figures or the reports. When the sidecar is absent (an analyze
+dir produced before it existed, or a standalone build) the document is
+reconstructed from the reports on the fly.
 """
 
 from __future__ import annotations
@@ -16,6 +24,20 @@ import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+from trufflepig.report_document import (
+    clean_markdown,
+    find_figure,
+    load_report_document,
+    record_value,
+    section_records,
+    short_text,
+)
+
+# The draw helpers below were written against the underscore-prefixed names these
+# parsers used before they moved to the shared module; alias to keep them verbatim.
+_clean_markdown = clean_markdown
+_short_text = short_text
 
 PAGE_W, PAGE_H = 2550, 3300
 MARGIN = 150
@@ -28,84 +50,6 @@ SOFT_BLUE = (239, 246, 255)
 SOFT_AMBER = (255, 251, 235)
 SOFT_GREEN = (240, 253, 244)
 SOFT_RED = (254, 242, 242)
-
-# Reader-facing figure manifest. Each entry is (filename-suffix, title,
-# interpretation sentence). The interpretation is what the figure *means* for the
-# decision — it replaces the old practice of captioning a figure with its PNG
-# filename. Figures are gated on existence at build time (``_find_figure`` returns
-# None when the underlying analysis didn't emit the plot), so a belief that never
-# fired never ships a figure. Ordering is decision-first: the call and its evidence,
-# then composition/purity, then what to do (therapy), then sample context.
-#
-# Therapy figures are emitted under whichever name the run produced
-# (``treatments`` for the ranked-therapy view, ``priority-targets`` for the
-# score-decomposition view); both are listed and the missing one is skipped. The
-# near-duplicate log-TPM dumbbell plots (``priority-target-context``,
-# ``actionable-targets``) are intentionally NOT in the reader PDF — they live in
-# the audit PDF (see module docstring); they restate the same ~18 genes the
-# therapy figures already cover.
-FIGURE_SPECS = [
-    (
-        "sample-summary.png",
-        "Integrated sample summary",
-        "One-page synthesis: the cancer-type call, tumor-vs-background composition, "
-        "and purity for this sample.",
-    ),
-    (
-        "cancer-type-signal-matrix.png",
-        "Cancer-type evidence",
-        "Which independent signals (expression signature, cohort centroid, "
-        "decomposition, mismatch-repair) supported the reported cancer type, and how "
-        "strongly each voted.",
-    ),
-    (
-        "decomposition-composition.png",
-        "Tumor / background composition",
-        "Estimated fraction of the sample that is tumor versus each normal, immune, "
-        "and stromal background component.",
-    ),
-    (
-        "decomposition-candidates.png",
-        "Decomposition hypotheses",
-        "Competing tumor/background decomposition fits ranked by residual; the "
-        "top-ranked hypothesis is the one adopted for purity and attribution.",
-    ),
-    (
-        "purity-methods.png",
-        "Purity method agreement",
-        "Independent purity estimates (signature, lineage, ESTIMATE, decomposition "
-        "residual) and their agreement — the reported purity is their fused consensus, "
-        "widened when the methods disagree.",
-    ),
-    (
-        "purity.png",
-        "Purity estimate",
-        "Reported tumor-purity point estimate with its uncertainty interval.",
-    ),
-    (
-        "treatments.png",
-        "Candidate therapies",
-        "Therapies ranked for this call, each shown with the eligibility gate (the "
-        "assay that actually confirms it) — RNA expression alone is not the criterion.",
-    ),
-    (
-        "priority-targets.png",
-        "Prioritized targets",
-        "Why each actionable target ranks where it does: the score decomposition "
-        "behind the therapy shortlist.",
-    ),
-    (
-        "therapy-pathway-state.png",
-        "Therapy pathway state",
-        "Expression state of therapy-relevant pathways (antigen presentation, "
-        "interferon, and others) that modulate the candidate treatments above.",
-    ),
-    (
-        "sample-context.png",
-        "Sample in cohort context",
-        "Where this sample sits relative to the reference cohort in expression space.",
-    ),
-]
 
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -125,14 +69,6 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFon
         except OSError:
             continue
     return ImageFont.load_default()
-
-
-def _clean_markdown(line: str) -> str:
-    line = re.sub(r"`([^`]+)`", r"\1", line)
-    line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
-    line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
-    line = line.replace("\u2014", "-").replace("\u2013", "-")
-    return line.strip()
 
 
 def _line_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
@@ -180,88 +116,6 @@ def _draw_rich_wrapped(
     if line:
         flush()
     return y
-
-
-def _split_label_value(line: str) -> tuple[str, str]:
-    text = line.lstrip("- ").strip()
-    markdown = re.match(r"\*\*([^*:]+):\*\*\s*(.*)", text)
-    if markdown:
-        return _clean_markdown(markdown.group(1)), _clean_markdown(markdown.group(2))
-    bold_prefix = re.match(r"\*\*([^*]+)\*\*\s*(.*)", text)
-    if bold_prefix and ":" in bold_prefix.group(1):
-        label, value = bold_prefix.group(1).split(":", 1)
-        combined = (value.strip() + " " + bold_prefix.group(2).strip()).strip()
-        return _clean_markdown(label), _clean_markdown(combined)
-    clean = _clean_markdown(text)
-    if ":" in clean:
-        label, value = clean.split(":", 1)
-        return label.strip(), value.strip()
-    return "", clean
-
-
-def _summary_records(summary_path: Path) -> list[dict[str, str]]:
-    records: list[dict[str, str]] = []
-    section = ""
-    subsection = ""
-    if not summary_path.exists():
-        return records
-    for raw in summary_path.read_text(errors="replace").splitlines():
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        if stripped.startswith("### "):
-            subsection = _clean_markdown(stripped.lstrip("# "))
-            continue
-        if stripped.startswith("## "):
-            section = _clean_markdown(stripped.lstrip("# "))
-            subsection = ""
-            continue
-        if stripped.startswith("#"):
-            continue
-        if stripped.startswith("|") or set(_clean_markdown(stripped)) <= {"-", " "}:
-            continue
-        label, value = _split_label_value(stripped)
-        if stripped.startswith("- "):
-            clean = _clean_markdown(stripped).lstrip("- ").strip()
-            if not label:
-                label, value = "", clean
-        elif not label:
-            value = _clean_markdown(stripped)
-        records.append(
-            {
-                "section": section,
-                "subsection": subsection,
-                "label": label,
-                "value": value,
-                "text": _clean_markdown(stripped).lstrip("- ").strip(),
-            }
-        )
-    return records
-
-
-def _record_value(records: list[dict[str, str]], label: str) -> str:
-    for record in records:
-        if record["label"].lower() == label.lower():
-            return record["value"]
-    return ""
-
-
-def _record_text(records: list[dict[str, str]], label: str) -> str:
-    for record in records:
-        if record["label"].lower() == label.lower():
-            return record["text"]
-    return ""
-
-
-def _section_records(records: list[dict[str, str]], section: str) -> list[dict[str, str]]:
-    return [record for record in records if record["section"].lower() == section.lower()]
-
-
-def _short_text(text: str, *, max_chars: int) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
-    if len(text) <= max_chars:
-        return text
-    return text[: max_chars - 3].rsplit(" ", 1)[0] + "..."
 
 
 def _therapy_summary(line: str) -> tuple[str, str]:
@@ -364,69 +218,6 @@ def _draw_labeled_bullet(
     )
 
 
-def _highlight_lines(
-    summary_path: Path,
-    analysis_path: Path | None,
-    *,
-    max_lines: int = 28,
-) -> list[str]:
-    lines: list[str] = []
-    if summary_path.exists():
-        for raw in summary_path.read_text(errors="replace").splitlines():
-            line = _clean_markdown(raw)
-            if not line or line.startswith("|") or set(line) <= {"-", " "}:
-                continue
-            if line.startswith("#"):
-                continue
-            lines.append(line.lstrip("- ").strip())
-            if len(lines) >= max_lines:
-                break
-    if analysis_path and analysis_path.exists():
-        analysis_lines = analysis_path.read_text(errors="replace").splitlines()
-        wanted_prefixes = (
-            "- **Mismatch-repair RNA context**:",
-            "- **Integrated evidence**:",
-            "- **Selected report label**:",
-        )
-        for raw in analysis_lines:
-            if any(raw.startswith(prefix) for prefix in wanted_prefixes):
-                line = _clean_markdown(raw).lstrip("- ").strip()
-                if line and line not in lines:
-                    lines.append(line)
-            if len(lines) >= max_lines + 6:
-                break
-    return lines[: max_lines + 6]
-
-
-def _find_prefix(analyze_dir: Path) -> str:
-    summaries = sorted(
-        path
-        for path in analyze_dir.glob("*-summary.md")
-        if not path.name.endswith("-cancer-type-signal-summary.md")
-    )
-    if summaries:
-        latest = max(summaries, key=lambda path: path.stat().st_mtime)
-        return latest.name.removesuffix("-summary.md")
-    analyses = sorted(analyze_dir.glob("*-analysis.md"))
-    if analyses:
-        latest = max(analyses, key=lambda path: path.stat().st_mtime)
-        return latest.name.removesuffix("-analysis.md")
-    raise FileNotFoundError(f"No *-summary.md or *-analysis.md found in {analyze_dir}")
-
-
-def _find_figure(analyze_dir: Path, prefix: str, suffix: str) -> Path | None:
-    name = f"{prefix}-{suffix}"
-    candidates = [
-        analyze_dir / name,
-        analyze_dir / "figures" / name,
-    ]
-    candidates.extend(analyze_dir.glob(f"**/{name}"))
-    for path in candidates:
-        if path.exists() and path.is_file():
-            return path
-    return None
-
-
 def _draw_wrapped(
     draw: ImageDraw.ImageDraw,
     text: str,
@@ -444,253 +235,6 @@ def _draw_wrapped(
             draw.text((x, y), line, fill=fill, font=font)
             y += font.size + line_gap if hasattr(font, "size") else 30
     return y
-
-
-def _parse_markdown_tables(md_path: Path) -> list[dict]:
-    """Extract every pipe-delimited markdown table from *md_path*, tagged with the
-    ``##`` / ``###`` heading it sits under.
-
-    The old scrape (:func:`_summary_records`) dropped every ``|`` row on the floor,
-    so the therapy and target tables never reached the reader PDF. This recovers
-    them structurally: each returned table is
-    ``{"section", "subsection", "headers": [...], "rows": [[cell, ...], ...]}`` with
-    the ``|---|`` separator row removed and markdown emphasis stripped from cells.
-    """
-    tables: list[dict] = []
-    if not md_path.exists():
-        return tables
-    section = ""
-    subsection = ""
-    pending: list[list[str]] = []
-
-    def _flush() -> None:
-        nonlocal pending
-        if len(pending) >= 2:
-            headers = pending[0]
-            body = pending[1:]
-            # Drop the |---|---:| alignment separator row when present. Tolerate an
-            # empty cell in it (``| --- | | --- |``): every non-empty cell must be
-            # dashes/colons, and at least one cell must actually carry a dash.
-            if (
-                body
-                and body[0]
-                and all(set(cell) <= set("-: ") for cell in body[0])
-                and any("-" in cell for cell in body[0])
-            ):
-                body = body[1:]
-            rows = [row for row in body if any(cell.strip() for cell in row)]
-            if headers and rows:
-                tables.append(
-                    {
-                        "section": section,
-                        "subsection": subsection,
-                        "headers": headers,
-                        "rows": rows,
-                    }
-                )
-        pending = []
-
-    for raw in md_path.read_text(errors="replace").splitlines():
-        stripped = raw.strip()
-        if stripped.startswith("|"):
-            pending.append([_clean_markdown(cell) for cell in stripped.strip("|").split("|")])
-            continue
-        _flush()
-        if stripped.startswith("### "):
-            subsection = _clean_markdown(stripped.lstrip("# "))
-        elif stripped.startswith("## "):
-            section = _clean_markdown(stripped.lstrip("# "))
-            subsection = ""
-    _flush()
-    return tables
-
-
-def _find_table(
-    tables: list[dict],
-    *,
-    section_contains: str | None = None,
-    header_all: tuple[str, ...] = (),
-) -> dict | None:
-    """First table whose heading contains *section_contains* and whose header row
-    contains a column matching every key in *header_all* (case-insensitive)."""
-    for table in tables:
-        heading = f"{table['section']} {table['subsection']}".lower()
-        if section_contains and section_contains.lower() not in heading:
-            continue
-        headers_low = [h.lower() for h in table["headers"]]
-        if header_all and not all(any(key in h for h in headers_low) for key in header_all):
-            continue
-        return table
-    return None
-
-
-def _col_index(headers: list[str], *keys: str) -> int | None:
-    """Index of the first header column containing any of *keys* (case-insensitive)."""
-    low = [h.lower() for h in headers]
-    for key in keys:
-        for idx, header in enumerate(low):
-            if key in header:
-                return idx
-    return None
-
-
-def _cell(cells: list[str], idx: int | None) -> str:
-    if idx is None or idx >= len(cells):
-        return ""
-    return cells[idx].strip()
-
-
-def _lead_clause(text: str, *, max_chars: int = 72) -> str:
-    """Leading clause of a verbose interpretation cell — the actionable head
-    ("confirm MSI-H / dMMR status", "background-dominant", "tumor-supported") before
-    the semicolon-joined tail of maturity/eligibility boilerplate."""
-    # _clean_markdown has already folded em/en-dashes to "-", so " - " catches the
-    # em-dash-delimited head; ";" catches the semicolon-joined form.
-    text = _clean_markdown(text)
-    for sep in (" - ", "; "):
-        if sep in text:
-            text = text.split(sep, 1)[0]
-            break
-    return _short_text(text, max_chars=max_chars)
-
-
-def _tumor_from_attribution(text: str) -> str:
-    """Tumor-source TPM out of an attribution cell like
-    'tumor 847 / T cell 0 - broadly expr.' -> '847'."""
-    match = re.search(r"tumor\s+([0-9.]+)", text, re.IGNORECASE)
-    return match.group(1) if match else ""
-
-
-def _safety_band(tme: str, attribution: str) -> str:
-    """Normal-tissue safety read for a surface target: the TME flag
-    (``tissue-explainable`` / ``background-dominant``) plus the broad-normal-
-    expression cue. An empty TME flag means no single healthy tissue explains the
-    signal, i.e. it is tumor-enriched."""
-    band = tme.strip() or "tumor-enriched"
-    lowered = attribution.lower()
-    if "broadly expr" in lowered:
-        band += " · broad normal expr."
-    elif "matched-normal over-pred" in lowered:
-        band += " · matched-normal overshoot"
-    return _short_text(band, max_chars=58)
-
-
-def _therapy_table(analyze_dir: Path, prefix: str) -> tuple[list[tuple[str, int]] | None, list[list[str]] | None]:
-    """(columns, rows) for the therapy shortlist, or (None, None).
-
-    Reads the ``## Therapy Prioritization`` table from the analysis report, dedups
-    repeated targets (one target can list several agents), and keeps the top 3.
-    """
-    tables = _parse_markdown_tables(analyze_dir / f"{prefix}-analysis.md")
-    table = _find_table(
-        tables,
-        section_contains="therapy prioritization",
-        header_all=("target", "agent", "phase"),
-    )
-    if table is None:
-        return None, None
-    headers = table["headers"]
-    i_target = _col_index(headers, "target", "gene")
-    i_agent = _col_index(headers, "agent")
-    i_phase = _col_index(headers, "phase")
-    i_tumor = _col_index(headers, "tumor-source", "tumor-attributed", "tumor source")
-    i_interp = _col_index(headers, "interpretation")
-    rows: list[list[str]] = []
-    seen: set[str] = set()
-    for cells in table["rows"]:
-        target = _cell(cells, i_target)
-        if not target or target in seen:
-            continue
-        seen.add(target)
-        agent = _cell(cells, i_agent)
-        phase = _cell(cells, i_phase)
-        agent_phase = agent + (f" · {phase}" if phase else "")
-        rows.append(
-            [
-                target,
-                agent_phase or "—",
-                _cell(cells, i_tumor) or "—",
-                _lead_clause(_cell(cells, i_interp)) or "—",
-            ]
-        )
-        if len(rows) >= 3:
-            break
-    if not rows:
-        return None, None
-    columns = [("Target", 15), ("Agent / phase", 33), ("Tumor-src TPM", 20), ("Eligibility / RNA source", 44)]
-    return columns, rows
-
-
-def _priority_target_table(analyze_dir: Path, prefix: str) -> tuple[list[tuple[str, int]] | None, list[list[str]] | None]:
-    """(columns, rows) for the top priority targets with tumor-source TPM and a
-    normal-tissue safety band, or (None, None).
-
-    Prefers the evidence report's ``### Surface Protein Targets`` table (ranked by
-    expression, carries the TME safety flag and the tumor/non-tumor attribution
-    split); falls back to the summary's tumor-source attribution table when the
-    evidence report is absent.
-    """
-    ev_tables = _parse_markdown_tables(analyze_dir / f"{prefix}-evidence.md")
-    table = _find_table(
-        ev_tables,
-        section_contains="surface protein targets",
-        header_all=("gene", "tme"),
-    )
-    if table is not None:
-        headers = table["headers"]
-        i_gene = _col_index(headers, "gene", "target")
-        i_bulk = _col_index(headers, "bulk tpm")
-        i_attr = _col_index(headers, "attribution")
-        i_tme = _col_index(headers, "tme")
-        i_pct = _col_index(headers, "ref %ile", "%ile")
-        rows: list[list[str]] = []
-        for cells in table["rows"]:
-            gene = _cell(cells, i_gene)
-            if not gene:
-                continue
-            attribution = _cell(cells, i_attr)
-            tumor_tpm = _tumor_from_attribution(attribution) or _cell(cells, i_bulk)
-            rows.append(
-                [
-                    gene,
-                    tumor_tpm or "—",
-                    _safety_band(_cell(cells, i_tme), attribution),
-                    _cell(cells, i_pct) or "—",
-                ]
-            )
-            if len(rows) >= 3:
-                break
-        if rows:
-            columns = [("Target", 20), ("Tumor-src TPM", 21), ("Normal-tissue safety", 43), ("Cohort %ile", 16)]
-            return columns, rows
-
-    su_tables = _parse_markdown_tables(analyze_dir / f"{prefix}-summary.md")
-    table = _find_table(su_tables, header_all=("gene", "tumor-source"))
-    if table is not None:
-        headers = table["headers"]
-        i_gene = _col_index(headers, "gene")
-        i_tumor = _col_index(headers, "tumor-source")
-        i_attr = _col_index(headers, "non-tumor attribution")
-        i_frac = _col_index(headers, "tumor fraction")
-        rows = []
-        for cells in table["rows"]:
-            gene = _cell(cells, i_gene)
-            if not gene:
-                continue
-            rows.append(
-                [
-                    gene,
-                    _cell(cells, i_tumor) or "—",
-                    _cell(cells, i_attr) or "—",
-                    _cell(cells, i_frac) or "—",
-                ]
-            )
-            if len(rows) >= 3:
-                break
-        if rows:
-            columns = [("Target", 20), ("Tumor-src TPM", 21), ("Top non-tumor source", 43), ("Tumor frac", 16)]
-            return columns, rows
-    return None, None
 
 
 def _wrap_cell(
@@ -774,8 +318,46 @@ def _draw_table(
     return y + 6
 
 
-def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.Image:
-    records = _summary_records(analyze_dir / f"{title}-summary.md")
+def _headline_cards(document: dict) -> tuple[str, str]:
+    """The (cancer-call, purity) card strings, preferring the structural ReportView
+    headline over the parsed markdown.
+
+    The headline dict carries the finalized decision (``cancer_type`` / ``purity`` /
+    ``purity_lo`` / ``purity_hi`` / ``purity_confidence``) — the same values the
+    figures and the markdown headline render — so formatting the cards from it makes
+    the PDF's headline agree with them by construction. Falls back per field to the
+    parsed ``Cancer call`` / ``Purity`` records for the fallback headline shape (a
+    standalone build with no ReportView) or an analyze dir predating the sidecar.
+    """
+    records = document.get("records") or []
+    headline = document.get("headline") or {}
+
+    ctype = headline.get("cancer_type")
+    if ctype:
+        name = headline.get("cancer_type_name") or ""
+        call = f"{ctype} ({name})" if name and name != ctype else str(ctype)
+    else:
+        call = record_value(records, "Cancer call")
+
+    purity_value = headline.get("purity")
+    if purity_value is not None:
+        text = f"{purity_value:.0%}"
+        lo, hi = headline.get("purity_lo"), headline.get("purity_hi")
+        conf = headline.get("purity_confidence") or ""
+        if lo is not None and hi is not None:
+            text += f" (model interval {lo:.0%}-{hi:.0%}"
+            text += f", {conf} confidence)" if conf else ")"
+        elif conf:
+            text += f" ({conf} confidence)"
+        purity = text
+    else:
+        purity = record_value(records, "Purity")
+    return call, purity
+
+
+def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
+    records = document.get("records") or []
+    title = document.get("prefix") or ""
     img = Image.new("RGB", (PAGE_W, PAGE_H), "white")
     draw = ImageDraw.Draw(img)
     title_font = _font(62, bold=True)
@@ -792,11 +374,15 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
     )
     draw.rectangle((MARGIN, MARGIN + 130, PAGE_W - MARGIN, MARGIN + 136), fill=ACCENT)
 
-    call = _record_value(records, "Cancer call")
-    mmr = _record_value(records, "Mismatch-repair RNA context")
-    purity = _record_value(records, "Purity")
-    sample = _record_value(records, "Sample")
-    quant = _record_value(records, "RNA quant QC")
+    # Read the call + purity cards from the structural ReportView headline (the
+    # authoritative finalized decision the figures also read), so the PDF's headline
+    # can't drift from the figures/markdown by construction — not merely by the
+    # parity test. Falls back to the parsed records for the fallback headline shape
+    # or an analyze dir produced before the sidecar existed.
+    call, purity = _headline_cards(document)
+    mmr = record_value(records, "Mismatch-repair RNA context")
+    sample = record_value(records, "Sample")
+    quant = record_value(records, "RNA quant QC")
     sample_card = sample
     if quant:
         sample_card = f"{sample}; {quant}" if sample else quant
@@ -828,12 +414,12 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
     y += 78
 
     interpretation_items = [
-        ("Call basis", _record_value(records, "Cancer-type basis")),
-        ("MMR RNA", _record_value(records, "Mismatch-repair RNA context")),
-        ("Competing RNA context", _record_value(records, "Retained RNA differential")),
-        ("Composition caution", _record_value(records, "Tissue composition hint")),
-        ("Rare-marker prompt", _record_value(records, "Rare-marker prompt")),
-        ("Disease state", _record_value(records, "Disease state")),
+        ("Call basis", record_value(records, "Cancer-type basis")),
+        ("MMR RNA", record_value(records, "Mismatch-repair RNA context")),
+        ("Competing RNA context", record_value(records, "Retained RNA differential")),
+        ("Composition caution", record_value(records, "Tissue composition hint")),
+        ("Rare-marker prompt", record_value(records, "Rare-marker prompt")),
+        ("Disease state", record_value(records, "Disease state")),
     ]
     for label, body in interpretation_items:
         if not body:
@@ -848,25 +434,25 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
         if y > 1500:
             break
 
-    # Therapy shortlist as a compact table (PR-1 §2.6a): the interpreted report
-    # emits it as a markdown table the old scrape dropped. Render it directly so the
-    # reader sees the agent, phase, and tumor-source TPM per target — not just prose.
-    # Fall back to the interpreted therapy bullets when the call has no curated panel.
-    therapy_cols, therapy_rows = _therapy_table(analyze_dir, title)
+    # Therapy shortlist as a compact table (the structured document carries it as
+    # {columns, rows}); fall back to the interpreted therapy bullets when the call
+    # has no curated panel.
+    therapy = document.get("therapy") or {}
+    therapy_rows = therapy.get("rows")
     y = _section_heading(draw, "Candidate therapies", y + 25)
-    if therapy_cols and therapy_rows:
+    if therapy_rows:
         y = _draw_table(
             draw,
             MARGIN,
             y,
-            therapy_cols,
+            therapy["columns"],
             therapy_rows,
             total_width=PAGE_W - 2 * MARGIN,
         )
     else:
         therapy_records = [
             record
-            for record in _section_records(records, "Top candidate therapies")
+            for record in section_records(records, "Top candidate therapies")
             if re.match(r"^[A-Za-z0-9.-]+ - ", record["text"])
         ][:4]
         if therapy_records:
@@ -880,7 +466,7 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
                     max_width=PAGE_W - 2 * MARGIN - 40,
                 )
         else:
-            for line in highlights[:3]:
+            for line in (document.get("highlights") or [])[:3]:
                 y = _draw_labeled_bullet(
                     draw,
                     label="Therapy",
@@ -890,14 +476,15 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
                 )
 
     # Top priority targets with tumor-source TPM and a normal-tissue safety band.
-    target_cols, target_rows = _priority_target_table(analyze_dir, title)
-    if target_cols and target_rows and y < PAGE_H - 950:
+    targets = document.get("targets") or {}
+    target_rows = targets.get("rows")
+    if target_rows and y < PAGE_H - 950:
         y = _section_heading(draw, "Priority surface targets", y + 22)
         y = _draw_table(
             draw,
             MARGIN,
             y,
-            target_cols,
+            targets["columns"],
             target_rows,
             total_width=PAGE_W - 2 * MARGIN,
         )
@@ -928,7 +515,7 @@ def _title_page(title: str, highlights: list[str], analyze_dir: Path) -> Image.I
 
     caveats = [
         record["text"]
-        for record in _section_records(records, "Caveats")
+        for record in section_records(records, "Caveats")
         if record["text"]
     ][:3]
     if caveats and y < PAGE_H - 680:
@@ -1000,17 +587,22 @@ def _figure_page(path: Path, title: str, interpretation: str = "") -> Image.Imag
 
 def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None) -> Path:
     analyze_dir = analyze_dir.resolve()
-    prefix = _find_prefix(analyze_dir)
-    summary_path = analyze_dir / f"{prefix}-summary.md"
-    analysis_path = analyze_dir / f"{prefix}-analysis.md"
+    document = load_report_document(analyze_dir)
+    prefix = document["prefix"]
     output = output or analyze_dir / f"{prefix}-interpretive-report.pdf"
 
-    highlights = _highlight_lines(summary_path, analysis_path)
-    pages = [_title_page(prefix, highlights, analyze_dir)]
-    for suffix, title, interpretation in FIGURE_SPECS:
-        figure = _find_figure(analyze_dir, prefix, suffix)
+    pages = [_title_page(document, analyze_dir)]
+    # Figure manifest is belief-gated at the source (a plot is only emitted when
+    # its underlying belief passed threshold), so ``present`` guarantees the PDF
+    # never ships a figure the report text denies.
+    for figure_spec in document.get("figures") or []:
+        if not figure_spec.get("present"):
+            continue
+        figure = find_figure(analyze_dir, prefix, figure_spec["suffix"])
         if figure is not None:
-            pages.append(_figure_page(figure, title, interpretation))
+            pages.append(
+                _figure_page(figure, figure_spec["title"], figure_spec.get("caption") or "")
+            )
     pages[0].save(output, save_all=True, append_images=pages[1:])
     return output
 
