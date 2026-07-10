@@ -17,6 +17,16 @@ from typing import Iterator, Optional
 import weakref
 
 
+# Below this cohort-median TPM the "vs cohort" fold divides by a value at the
+# RNA-seq detection floor, so the ratio is noise amplified into a huge number
+# (e.g. NTRK1 "137×" off a ~0.16 TPM cohort median), not biology (#85.3). Shared
+# by every "vs cohort" render surface — the markdown target cell
+# (``main._render_vs_tcga_cell``) and the tumor-expression figure
+# (``plot_tumor_expr``) — so the table and its companion plot can't disagree.
+# 1.0 TPM matches the informative floor used in ``cancer_type_centroid``.
+VS_TCGA_REF_FLOOR_TPM = 1.0
+
+
 class NoDeepcopyFrozenSet(frozenset):
     """Immutable set whose deepcopy is itself.
 

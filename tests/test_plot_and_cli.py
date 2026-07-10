@@ -171,6 +171,52 @@ def test_plot_gene_expression_smoke(monkeypatch, tmp_path):
     assert kwargs["dpi"] == 123
 
 
+def test_tumor_expr_plot_suppresses_near_zero_median_fold():
+    """#85.3: the tumor-expression figure's "vs reference" panel applies the same
+    detection-floor guard as the markdown cell — a finite fold off a sub-1-TPM
+    cohort median renders "ref X TPM", not a noise-amplified bar — so the plot
+    and the table can't disagree."""
+    import matplotlib.pyplot as plt
+
+    import trufflepig.plot_tumor_expr as pte_mod
+
+    df_ranges = pd.DataFrame(
+        [
+            {  # near-zero cohort median → the 137× fold is noise
+                "category": "surface",
+                "symbol": "NTRK1",
+                "therapies": "",
+                "median_est": 22.0,
+                "pct_cancer_median": 137.4,
+                "tcga_cohort_median_tpm": 0.16,
+                **{f"est_{i + 1}": 22.0 for i in range(9)},
+            },
+            {  # detectable cohort median → a real fold, kept
+                "category": "surface",
+                "symbol": "ERBB2",
+                "therapies": "",
+                "median_est": 50.0,
+                "pct_cancer_median": 3.2,
+                "tcga_cohort_median_tpm": 45.0,
+                **{f"est_{i + 1}": 50.0 for i in range(9)},
+            },
+        ]
+    )
+    purity = {"overall_lower": 0.3, "overall_estimate": 0.5, "overall_upper": 0.7}
+    fig = pte_mod.plot_tumor_expression_ranges(
+        df_ranges, purity, "BRCA", categories=["surface"]
+    )
+    try:
+        texts = [t.get_text() for ax in fig.axes for t in ax.texts]
+    finally:
+        plt.close(fig)
+    # Near-zero-median gene shows the reference TPM, not the noise fold.
+    assert "ref 0.16 TPM" in texts
+    assert not any(t in ("137.4×", "137×") for t in texts)
+    # A real fold off a detectable cohort median is preserved.
+    assert "3.2×" in texts
+
+
 def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     calls = []
     scatter_calls = []
