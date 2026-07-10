@@ -1,5 +1,7 @@
 """Audit structured therapy-path curation for cancer-key-genes rows."""
 
+from __future__ import annotations
+
 import pandas as pd
 
 from trufflepig._data import DATA_DIR as _DATA_DIR
