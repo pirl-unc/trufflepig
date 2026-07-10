@@ -14,15 +14,36 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    "pirlygenes>=5.2.0,<6",
+    # >=5.23.21: earlier wheels can't resolve pan-cancer-expression on a clean
+    # install (the data bundle downloads but get_data raises "not found" — fixed
+    # in pirlygenes 5.23.21). trufflepig's reference loads depend on it.
+    "pirlygenes>=5.23.21,<6",
     # oncoref is the canonical cancer-type ontology + normalization source (imported
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    "oncoref>=1.8.0,<2",
+    "oncoref>=1.8.113,<2",
     "numpy>=2.0.0",
-    "pandas>=2.0",
+    # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
+    # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype
+    # fillna downcast change, removed legacy APIs). Without this cap a fresh
+    # `pip install` resolves pandas 3.x and breaks at import/runtime. Lifting the
+    # cap is a deliberate pandas-3 migration, tracked separately.
+    "pandas>=2.0,<3",
     "matplotlib>=3.5.0",
+    # scipy (nnls background subtraction, spearman, rankdata) and scikit-learn
+    # (the learned expression classifier) are core runtime deps; seaborn and
+    # adjustText are imported at module top in the plotting modules. All four
+    # were undeclared and only resolved locally via unrelated packages — a clean
+    # `pip install` raised ModuleNotFoundError for them (caught by CI).
+    # Floors are the first releases with numpy-2 support (this project already
+    # requires numpy>=2.0.0), so the declared minimum matches what pip can
+    # actually resolve rather than a lower version that would silently pull an
+    # ABI-incompatible build if the numpy floor were ever relaxed.
+    "scipy>=1.13",
+    "scikit-learn>=1.4.2",
+    "seaborn>=0.13.2",
+    "adjustText>=0.8",
     "tqdm",
     "pyyaml",
 ]

@@ -1,0 +1,92 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Force a headless matplotlib backend so figure-rendering tests never try to
+    # open a display on the runner. TEST_SH_MAX caps pytest-xdist at one worker so
+    # the ~1.5 GB/worker reference matrices can't OOM-kill the runner.
+    env:
+      MPLBACKEND: Agg
+      TEST_SH_MAX: "1"
+    strategy:
+      # Report every Python version's result rather than cancelling the matrix
+      # on the first failure.
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # pyensembl is pulled in transitively by pirlygenes (not a direct
+          # trufflepig dependency); the [test] extra adds pytest/xdist/httpx/etc.
+          pip install -e ".[test]"
+
+      - name: Resolve pirlygenes data-bundle version
+        id: pirlygenes-data
+        # The bundle lives in a DATA_VERSION-stamped dir (bundled_data/v{DATA_VERSION}),
+        # and DATA_VERSION is decoupled from both the pip version and the pyproject
+        # floor. Emit the RESOLVED value so the cache key below tracks it directly.
+        run: |
+          echo "version=$(python -c 'import pirlygenes.data_bundle as d; print(d.DATA_VERSION)')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pyensembl data
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pyensembl/
+          key: pyensembl-75-81-111-112-${{ runner.os }}
+
+      - name: Cache pirlygenes data bundle
+        # The ~350 MB pirlygenes reference bundle (pan-cancer-expression etc.) is
+        # fetched on demand from the pinned GitHub release the first time a test
+        # loads a reference matrix. Cache it so it downloads once, not per matrix
+        # job / per run. Key on the RESOLVED DATA_VERSION (not pyproject): an
+        # upstream pirlygenes release that bumps DATA_VERSION without any pyproject
+        # edit then misses the stale key and re-saves the new bundle, instead of a
+        # stale-key restore hit that never re-persists and silently re-downloads
+        # ~350 MB on every subsequent run.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pirlygenes/
+          key: pirlygenes-data-v${{ steps.pirlygenes-data.outputs.version }}-${{ runner.os }}
+
+      - name: Install Ensembl genome data
+        run: |
+          # trufflepig resolves gene IDs against every installed Ensembl release
+          # and loads pirlygenes' cancer-reference-expression aggregate, whose
+          # source cohorts were annotated at the release-81 (2015) vintage.
+          # ~0.5% of ENSG IDs retire per release, so release 112 alone pushes
+          # test_gene_ids over its 2% unresolvable tolerance; 81 + 111 + 112
+          # keeps the gene-id tests resolving (mirrors pirlygenes CI). Release 75
+          # is the fixed vintage the aneuploidy chromosome-arm gene map is built
+          # against (test_aneuploidy_axis / decomposition aneuploidy tests).
+          pyensembl install --release 112 --species homo_sapiens
+          pyensembl install --release 111 --species homo_sapiens
+          pyensembl install --release 81 --species homo_sapiens
+          pyensembl install --release 75 --species homo_sapiens
+          # Fail fast if a release didn't materialize — otherwise the dependent
+          # tests would silently *skip* and CI would go green without them.
+          python -c "from pyensembl import EnsemblRelease; assert EnsemblRelease(112).genes_by_name('TP53'); assert EnsemblRelease(111).genes_by_name('TP53'); assert EnsemblRelease(81).genes_by_name('TP53'); assert EnsemblRelease(75).genes_by_name('TP53'); print('Ensembl 75 + 81 + 111 + 112 ready')"
+
+      - name: Run unit tests
+        # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
+        # (Linux branch reads /proc/meminfo), so it stays within the runner's
+        # memory budget without a hand-tuned -n.
+        run: bash test.sh -q
