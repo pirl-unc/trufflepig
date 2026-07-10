@@ -2525,15 +2525,24 @@ def _adopted_overall_for_methods_plot(purity_result, report_view):
 
     Prefer the frozen :class:`ReportView` snapshot so this figure's "Adopted
     overall" reference line can never disagree with the sample-summary headline
-    or the markdown (the 78%-vs-10% belief-consistency bug). Standalone callers
+    or the markdown (the 78%-vs-10% belief-consistency bug). Fall back
+    FIELD-BY-FIELD to the result dict — the same ``_pick`` semantics as
+    ``report_view.finalized_purity_headline`` — so a snapshot that carries a
+    point but no CI (``purity_lo``/``purity_hi`` None) does NOT blank an interval
+    the result dict still holds; otherwise the figure's adopted row would show a
+    different interval than the headline it is meant to match. Standalone callers
     pass no view and fall back to the result dict unchanged.
     """
-    if report_view is not None and getattr(report_view, "purity", None) is not None:
-        return report_view.purity, report_view.purity_lo, report_view.purity_hi
+    purity_result = purity_result or {}
+
+    def _pick(view_attr, live_key):
+        val = getattr(report_view, view_attr, None) if report_view is not None else None
+        return val if val is not None else purity_result.get(live_key)
+
     return (
-        purity_result.get("overall_estimate"),
-        purity_result.get("overall_lower"),
-        purity_result.get("overall_upper"),
+        _pick("purity", "overall_estimate"),
+        _pick("purity_lo", "overall_lower"),
+        _pick("purity_hi", "overall_upper"),
     )
 
 

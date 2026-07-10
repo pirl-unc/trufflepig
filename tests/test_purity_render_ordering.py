@@ -159,3 +159,16 @@ def test_methods_plot_adopted_row_falls_back_without_view():
 
     stale = {"overall_estimate": 0.42, "overall_lower": 0.30, "overall_upper": 0.55}
     assert _adopted_overall_for_methods_plot(stale, None) == (0.42, 0.30, 0.55)
+
+
+def test_methods_plot_adopted_row_falls_back_field_by_field():
+    """A snapshot carrying a point but no CI (purity_lo/hi None) must not blank the figure's
+    adopted interval when the result dict still holds one. The methods-plot helper must fall back
+    per field exactly like _finalized_purity_headline, so the figure's 'Adopted overall' row and
+    the sample-summary headline show the SAME interval — not a bar-less point in one and a 20-40%
+    range in the other. This is the divergence the all-or-nothing fallback let through."""
+    from trufflepig.tumor_purity import _adopted_overall_for_methods_plot
+
+    view = build_report_view({"purity": {"overall_estimate": 0.30}})  # point only, no CI
+    result = {"overall_estimate": 0.30, "overall_lower": 0.20, "overall_upper": 0.40}
+    assert _adopted_overall_for_methods_plot(result, view) == (0.30, 0.20, 0.40)
