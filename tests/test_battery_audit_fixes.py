@@ -80,6 +80,32 @@ def test_render_vs_tcga_preserves_large_finite_folds_uncapped():
     assert "\u00d7" in out  # × symbol preserved
 
 
+def test_render_vs_tcga_finite_below_ref_floor_shows_ref_tpm_not_noise_fold():
+    """#85.3: a 'finite' state whose cohort median is still below the detection
+    floor divides by a near-zero denominator, so the fold (e.g. NTRK1 137x) is
+    noise. Show the reference TPM instead — the same rendering as not_in_cohort."""
+    row = _row(
+        tcga_ref_state="finite",
+        pct_cancer_median=137.4,
+        tcga_cohort_median_tpm=0.16,
+    )
+    assert _render_vs_tcga_cell(row) == "ref 0.16 TPM"
+
+
+def test_render_vs_tcga_large_fold_kept_when_cohort_median_is_detectable():
+    """The floor gates on the DENOMINATOR, not the fold magnitude: a large fold
+    off a genuinely detectable cohort median (>=1 TPM) is real over-expression
+    and must be preserved (guards against re-capping the ITGA10 case)."""
+    row = _row(
+        tcga_ref_state="finite",
+        pct_cancer_median=1548.45,
+        tcga_cohort_median_tpm=5.0,
+    )
+    out = _render_vs_tcga_cell(row)
+    assert "1548" in out
+    assert "×" in out
+
+
 # ── #40: lineage estimator returns TME-dominated genes separately ──
 
 

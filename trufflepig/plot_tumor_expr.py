@@ -16,7 +16,11 @@ from functools import lru_cache
 import numpy as np
 import matplotlib.pyplot as plt
 
-from .common import _guess_gene_cols, ensembl_id_to_symbol_map
+from .common import (
+    _guess_gene_cols,
+    ensembl_id_to_symbol_map,
+    VS_TCGA_REF_FLOOR_TPM,
+)
 from .plot_data_helpers import _strip_ensembl_version
 from pirlygenes.gene_sets_cancer import (
     housekeeping_gene_ids, is_extended_housekeeping_symbol, CTA_gene_id_to_name, therapy_target_gene_id_to_name, cancer_surfaceome_gene_id_to_name,
@@ -2540,6 +2544,24 @@ def plot_tumor_expression_ranges(
                     ha="center",
                     va="center",
                     zorder=4,
+                    transform=ax_pct.get_yaxis_transform(),
+                )
+                continue
+            # #85.3: a finite fold off a cohort median below the detection floor
+            # is a near-zero-denominator artifact (e.g. NTRK1 "137\u00d7" off a ~0.16
+            # TPM median). Show the reference TPM instead of a noise-amplified
+            # bar, matching the markdown "vs cohort" cell so the plot and table
+            # can't disagree.
+            cohort_tpm = row.get("tcga_cohort_median_tpm")
+            if cohort_tpm is not None and 0 < cohort_tpm < VS_TCGA_REF_FLOOR_TPM:
+                ax_pct.text(
+                    0.5,
+                    i,
+                    f"ref {cohort_tpm:.2f} TPM",
+                    fontsize=base_font - 2,
+                    color="gray",
+                    ha="center",
+                    va="center",
                     transform=ax_pct.get_yaxis_transform(),
                 )
                 continue
