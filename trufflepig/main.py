@@ -3781,7 +3781,10 @@ def _analyze_body(run: AnalyzeRun):
         reference_mtdna_qc_png,
         burden_qc_png,
         degradation_png,
-        summary_png,
+        # sample-summary.png (the legacy 4-panel composite) is audit-only (§2.5):
+        # its four panels are already emitted as standalone reader figures below
+        # (hypotheses_png, purity_png, tissues_png, mhc_png), so in the reader packet
+        # the composite only duplicates them. Routed to audit_only_pngs (below).
         decomp_png,
         # Standalone decomposition PNGs — composition / component breakdown
         # / candidate bars. Historically missed the move-to-figures/ step
@@ -3810,6 +3813,9 @@ def _analyze_body(run: AnalyzeRun):
         "%s-treatments.png" % prefix if prefix else "treatments.png",
     ]
     audit_only_pngs.extend(embedding_pngs)
+    # The 4-panel composite (see note in png_files) ships in the audit packet only;
+    # the reader packet keeps the four standalone panels it duplicates.
+    audit_only_pngs.append(summary_png)
     if ct_png:
         png_files.append(ct_png)
     # Deep-dive plots
