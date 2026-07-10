@@ -282,7 +282,18 @@ _REFERENCE_CODE_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     # GI-adeno bulk; gallbladder is biliary adeno; DIPG/EPN are glial, not
     # the embryonal MBL the cns-family fallback resolves first).
     "ANSC": ("CESC", "HNSC"),
+    # Biliary: the BTC grouping and its gallbladder leaf (GBC) are biliary
+    # adenocarcinoma; without curation they fall through the carcinoma-gi family
+    # to the colorectal bulk (COAD). Route them to CHOL (their own bile-duct
+    # cohort) then PAAD (nearest ductal adeno).
+    "BTC": ("CHOL", "PAAD"),
     "GBC": ("CHOL", "PAAD"),
+    # Renal: the RCC grouping and its non-clear-cell leaf (RCC_NCC) have no own
+    # cohort; without curation they fall through the carcinoma-gu family to CESC
+    # (cervix!) — a poor lineage match for a kidney tumour. Route them to the real
+    # renal cohorts (clear-cell / papillary / chromophobe) instead.
+    "RCC": ("KIRC", "KIRP", "KICH"),
+    "RCC_NCC": ("KIRC", "KIRP", "KICH"),
     "DIPG": ("GBM", "LGG"),
     "EPN": ("GBM", "LGG"),
     "CRANIO": ("LGG", "GBM"),
@@ -321,11 +332,18 @@ def _fallback_candidates(code: str) -> tuple[tuple[str, str], ...]:
     code_text = _clean(code)
     row = _registry_records().get(code_text, {})
     candidates: list[tuple[str, str]] = []
+    # Curated per-code fallbacks come BEFORE the registry parent: they exist
+    # precisely to override a poor parent/family lineage match. If the parent is
+    # tried first and recursively resolves through ITS family fallback, it can
+    # defeat the code's own curation — e.g. gallbladder GBC is biliary and curated
+    # to CHOL, but its parent BTC (no cohort) recurses via the carcinoma-gi family
+    # to the colorectal bulk COAD, which would otherwise win. Placing curation
+    # first makes it authoritative; parent + family below only fire without it.
+    for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
+        candidates.append((fallback, "curated code fallback"))
     parent = _clean(row.get("parent_code"))
     if parent:
         candidates.append((parent, "registry parent"))
-    for fallback in _REFERENCE_CODE_FALLBACKS.get(code_text, ()):
-        candidates.append((fallback, "curated code fallback"))
     family = _clean(row.get("family")).lower()
     fam_fallbacks = _REFERENCE_FAMILY_FALLBACKS.get(family)
     if not fam_fallbacks and "-" in family:

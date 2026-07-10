@@ -229,13 +229,50 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
+            # PCN is curated to MM; the curated fallback now resolves it (and is
+            # attributed as such) ahead of the registry parent.
             "PCN",
             "MM",
             "observed_bulk_reference",
             "MMRF_COMMPASS",
             "ensembl_symbol",
             False,
-            "registry parent",
+            "curated code fallback",
+        ),
+        (
+            # Gallbladder is biliary: its curated CHOL fallback must win over the
+            # carcinoma-gi bulk (COAD) that its BTC parent would otherwise recurse
+            # into. Regression guard for the parent-before-curation ordering bug.
+            "GBC",
+            "CHOL",
+            "deconvolved_tumor_reference",
+            "TCGA",
+            "ensembl_symbol",
+            False,
+            "curated code fallback",
+        ),
+        (
+            # The BTC biliary grouping itself has no cohort and must route to its
+            # bile-duct child CHOL, not the carcinoma-gi colorectal bulk (COAD).
+            "BTC",
+            "CHOL",
+            "deconvolved_tumor_reference",
+            "TCGA",
+            "ensembl_symbol",
+            False,
+            "curated code fallback",
+        ),
+        (
+            # Non-clear-cell RCC has no own cohort; without curation it fell
+            # through the carcinoma-gu family to CESC (cervix). It must resolve to
+            # a real renal cohort (clear-cell KIRC) instead.
+            "RCC_NCC",
+            "KIRC",
+            "deconvolved_tumor_reference",
+            "TCGA",
+            "ensembl_symbol",
+            False,
+            "curated code fallback",
         ),
         # Types that gained their own cohort in pirlygenes >=5.11 and now
         # resolve directly instead of falling back to a parent/family.
