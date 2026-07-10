@@ -1409,6 +1409,13 @@ def plot_priority_targets(
         )
         left += np.array(values)
 
+    # §2.5: fold the tumor-source-vs-safety-band cue into this (now single) reader
+    # target figure so dropping the near-duplicate context/actionable dumbbells does
+    # not lose the source/safety signal. One marker per target, left of its bar:
+    # shape = tumor-source tier (o supported / D mixed / X background), fill =
+    # healthy-tissue safety tier — reusing the same row["marker"]/row["color"] the
+    # audit-only context plot renders.
+    cue_x = -0.62
     for i, row in enumerate(rows):
         ax.text(
             row["total_score"] + 0.14,
@@ -1418,12 +1425,27 @@ def plot_priority_targets(
             fontsize=9,
             color="#444444",
         )
+        ax.scatter(
+            cue_x,
+            y_pos[i],
+            marker=row["marker"],
+            s=90,
+            facecolor=row["color"],
+            edgecolor="black",
+            linewidth=0.8,
+            zorder=5,
+            clip_on=False,
+        )
 
     labels = [row["symbol"] for row in rows]
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontsize=10)
     _draw_priority_group_headers(ax, group_headers)
     ax.set_ylim(max(y_pos) + 0.7, -1.15)
+    ax.set_xlim(
+        cue_x - 0.45,
+        max(row["total_score"] for row in rows) + 0.95,
+    )
     ax.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
     ax.set_axisbelow(True)
     ax.set_xlabel("Integrated priority score")
@@ -1435,7 +1457,18 @@ def plot_priority_targets(
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.legend(loc="lower right", fontsize=8, frameon=False)
-    fig.tight_layout(rect=[0.0, 0.03, 1.0, 0.97])
+    fig.text(
+        0.5,
+        0.008,
+        "Marker left of each target — shape = tumor source (o supported / D mixed / "
+        "X background); fill = healthy-tissue safety "
+        "(blue same-lineage · green restricted/CTA · orange broad · red vital-tissue).",
+        ha="center",
+        va="bottom",
+        fontsize=7.5,
+        color="#555555",
+    )
+    fig.tight_layout(rect=[0.0, 0.06, 1.0, 0.97])
 
     if save_to_filename:
         fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
