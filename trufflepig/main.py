@@ -3643,7 +3643,11 @@ def _analyze_body(run: AnalyzeRun):
                     save_dpi=output_dpi,
                 )
                 if fig is not None:
-                    adj_pngs.append(priority_target_context_png)
+                    # priority-target-context.png is audit-only (§2.5): its tumor-
+                    # source/safety-band cue is now folded into priority-targets.png
+                    # (the single reader target figure). Route to audit, not adj_pngs
+                    # (which flows to the reader packet).
+                    audit_only_pngs.append(priority_target_context_png)
                     print(
                         f"[plot] Saved priority target context to {priority_target_context_png}"
                     )
@@ -3818,9 +3822,14 @@ def _analyze_body(run: AnalyzeRun):
     audit_only_pngs.append(summary_png)
     if ct_png:
         png_files.append(ct_png)
+    # actionable-targets.png is audit-only (§2.5): it is a near-duplicate target
+    # dumbbell of priority-targets.png (the single reader target figure, which now
+    # carries the tumor-source/safety cue), so route it to audit while the reader
+    # keeps one target figure.
+    if targets_deep_png and Path(targets_deep_png).exists():
+        audit_only_pngs.append(targets_deep_png)
     # Deep-dive plots
     for _ddp in [
-        targets_deep_png,
         cta_deep_png,
         attrib_targets_png,
         attrib_cta_png,

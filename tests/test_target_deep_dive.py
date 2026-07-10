@@ -317,6 +317,13 @@ def test_plot_priority_targets_saves_png(tmp_path):
         if legend is not None
         for text in legend.get_texts()
     )
+    # PR-6 (§2.5): the tumor-source-vs-safety-band cue is folded into this (single
+    # reader) target figure — one scatter marker per target (shape = source tier,
+    # fill = healthy-tissue safety), plus an explanatory caption. Without the fold
+    # the ranking plot draws only barh (no scatter collections) and no such caption.
+    assert len(ax.collections) >= 2  # one source/safety cue marker per target row
+    fig_texts = "\n".join(text.get_text() for text in fig.texts)
+    assert "healthy-tissue safety" in fig_texts  # the folded cue's caption
 
 
 def test_priority_targets_exclude_hla_mismatched_rows(tmp_path):
