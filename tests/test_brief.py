@@ -189,6 +189,33 @@ def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
     assert "78%" not in md  # the stale candidate purity never reaches the report
 
 
+def test_actionable_purity_reads_frozen_snapshot_not_stale_live_dict():
+    """Cross-artifact invariant (actionable side): build_actionable was ported onto the frozen
+    ReportView surface in PR-8, so the longer clinical review renders the SAME finalized purity as
+    the summary and the figure. Stale 78% candidate in the live dict, finalized 10% in the snapshot."""
+    from trufflepig.report_view import build_report_view
+
+    analysis = _make_analysis(purity_point=0.78, ci_low=0.70, ci_high=0.85)
+    analysis["report_view"] = build_report_view(
+        {
+            "purity": {
+                "overall_estimate": 0.10,
+                "overall_lower": 0.06,
+                "overall_upper": 0.16,
+            }
+        }
+    )
+    md = build_actionable(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    assert "Purity point estimate: **10%** (model interval 6%–16%" in md
+    assert "78%" not in md  # the stale candidate purity never reaches the actionable review
+
+
 def test_brief_is_compact():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()

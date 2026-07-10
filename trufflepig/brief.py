@@ -2485,7 +2485,21 @@ def build_summary(
     """
     from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
 
+    from .report_view import finalized_purity_headline
+
     purity = analysis.get("purity") or {}
+    # Pin the whole renderer's adopted purity to the single frozen ReportView
+    # surface (not just the headline below) so the tissue-composition banner and
+    # the headline read one finalized number — no figure/text divergence. Byte-
+    # stable: build_summary always renders after purity finalization.
+    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
+    if _fp_overall is not None:
+        purity = {
+            **purity,
+            "overall_estimate": _fp_overall,
+            "overall_lower": _fp_lower,
+            "overall_upper": _fp_upper,
+        }
     purity_tier = analysis.get("purity_confidence")
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code
@@ -2669,9 +2683,7 @@ def build_summary(
         lines.append(subtype_line)
 
     # Purity — headline read through the shared ReportView surface so the summary text and the
-    # sample-summary figure cannot disagree (both call finalized_purity_headline).
-    from .report_view import finalized_purity_headline
-
+    # sample-summary figure cannot disagree (both call finalized_purity_headline; imported above).
     overall, lower, upper = finalized_purity_headline(analysis)
     if overall is not None and lower is not None and upper is not None:
         tier_label = (
@@ -2919,7 +2931,22 @@ def build_actionable(
     """
     from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
 
+    from .report_view import finalized_purity_headline
+
     purity = analysis.get("purity") or {}
+    # Read the finalized purity from the single frozen ReportView surface so this
+    # renderer can't diverge from the figure / summary markdown — even if a future
+    # reorder rendered it before the live purity dict was updated (the 78%-vs-10%
+    # belief-consistency bug). Byte-stable today: every caller renders after
+    # finalization, so the frozen value already equals the live dict here.
+    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
+    if _fp_overall is not None:
+        purity = {
+            **purity,
+            "overall_estimate": _fp_overall,
+            "overall_lower": _fp_lower,
+            "overall_upper": _fp_upper,
+        }
     purity_tier = analysis.get("purity_confidence")
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code

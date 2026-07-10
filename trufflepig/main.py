@@ -3121,6 +3121,7 @@ def _analyze_body(run: AnalyzeRun):
             save_to_filename=methods_png,
             save_dpi=output_dpi,
             decomposition_result=best_for_methods,
+            report_view=analysis.get("report_view"),
         )
         _plt.close("all")
 
@@ -7532,8 +7533,22 @@ def _generate_text_reports(
     df_expr=None,
 ):
     """Write the detailed ``*-analysis.md`` report."""
+    from .report_view import finalized_purity_headline
+
     cancer_code = analysis["cancer_type"]
     purity = analysis["purity"]
+    # Pin the adopted-purity headline to the single frozen ReportView surface so
+    # analysis.md can never show a stale pre-finalization purity — figure ==
+    # summary == analysis.md by construction. Byte-stable today (rendered after
+    # finalization); the guard survives a future reorder that isn't.
+    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
+    if _fp_overall is not None:
+        purity = {
+            **purity,
+            "overall_estimate": _fp_overall,
+            "overall_lower": _fp_lower,
+            "overall_upper": _fp_upper,
+        }
     mhc1 = analysis["mhc1"]
     top_tissues = analysis["tissue_scores"][:5]
     tissue_score_details = {

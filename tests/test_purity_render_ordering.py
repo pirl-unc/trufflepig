@@ -138,3 +138,24 @@ def test_headline_purity_falls_back_field_by_field_when_snapshot_field_is_none()
     overall, lo, hi = _finalized_purity_headline(analysis)
     assert overall == 0.30
     assert lo == 0.20 and hi == 0.40  # live-dict CI preserved
+
+
+def test_methods_plot_adopted_row_prefers_frozen_view():
+    """PR-8: the method-comparison figure's 'Adopted overall' row reads the frozen ReportView, so
+    its adopted reference line matches the sample-summary headline. Stale 78% in the passed dict,
+    finalized 10% in the view → the view wins."""
+    from trufflepig.tumor_purity import _adopted_overall_for_methods_plot
+
+    view = build_report_view(
+        {"purity": {"overall_estimate": 0.10, "overall_lower": 0.06, "overall_upper": 0.16}}
+    )
+    stale = {"overall_estimate": 0.78, "overall_lower": 0.70, "overall_upper": 0.85}
+    assert _adopted_overall_for_methods_plot(stale, view) == (0.10, 0.06, 0.16)
+
+
+def test_methods_plot_adopted_row_falls_back_without_view():
+    """Standalone callers (no ReportView) keep reading the passed result dict unchanged."""
+    from trufflepig.tumor_purity import _adopted_overall_for_methods_plot
+
+    stale = {"overall_estimate": 0.42, "overall_lower": 0.30, "overall_upper": 0.55}
+    assert _adopted_overall_for_methods_plot(stale, None) == (0.42, 0.30, 0.55)
