@@ -1277,6 +1277,13 @@ def _technical_qc_quality_flags(
     return out
 
 
+# Below this cohort-median TPM the "vs cohort" fold divides by a value at the
+# RNA-seq detection floor, so the ratio is noise amplified into a huge number
+# (e.g. NTRK1 "137×" off a ~0.16 TPM cohort median), not biology (#85.3). 1.0 TPM
+# matches the informative floor used elsewhere (cancer_type_centroid).
+_VS_TCGA_REF_FLOOR_TPM = 1.0
+
+
 def _render_vs_tcga_cell(row):
     """Render the "vs TCGA" column for a target-table row.
 
@@ -1304,6 +1311,14 @@ def _render_vs_tcga_cell(row):
     cohort_tpm = row.get("tcga_cohort_median_tpm")
 
     if state == "finite" and _pd.notna(vs_tcga):
+        # #85.3: a "finite" cohort median that is still below the detection
+        # floor makes the fold a near-zero-denominator artifact (e.g. NTRK1
+        # "137×" off a ~0.16 TPM cohort median). Show the reference TPM
+        # instead — the same honest rendering as ``not_in_cohort`` below — so a
+        # noise-amplified ratio isn't surfaced as over-expression. The numeric
+        # ``pct_cancer_median`` is untouched; only this display cell changes.
+        if cohort_tpm is not None and cohort_tpm < _VS_TCGA_REF_FLOOR_TPM:
+            return f"ref {cohort_tpm:.2f} TPM" if cohort_tpm > 0 else "ref 0"
         return render_fold(vs_tcga)
     if state == "not_in_cohort":
         if cohort_tpm is not None and cohort_tpm > 0:
