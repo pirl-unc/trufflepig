@@ -273,12 +273,22 @@ def find_table(
     *,
     section_contains: Optional[str] = None,
     header_all: tuple = (),
+    subsection_excludes: Optional[str] = None,
 ) -> Optional[dict]:
     """First table whose heading contains *section_contains* and whose header row
-    contains a column matching every key in *header_all* (case-insensitive)."""
+    contains a column matching every key in *header_all* (case-insensitive).
+
+    When *subsection_excludes* is set, tables whose ``###`` subsection contains it
+    are skipped — used to keep the PDF's therapy shortlist on the active rows and
+    off the "Audit-only rows" subsection (issue #105)."""
     for table in tables:
         heading = f"{table['section']} {table['subsection']}".lower()
         if section_contains and section_contains.lower() not in heading:
+            continue
+        if (
+            subsection_excludes
+            and subsection_excludes.lower() in table["subsection"].lower()
+        ):
             continue
         headers_low = [h.lower() for h in table["headers"]]
         if header_all and not all(any(key in h for h in headers_low) for key in header_all):
@@ -345,6 +355,7 @@ def _therapy_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
         tables,
         section_contains="therapy prioritization",
         header_all=("target", "agent", "phase"),
+        subsection_excludes="audit-only",
     )
     if table is None:
         return None

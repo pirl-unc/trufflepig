@@ -3098,14 +3098,6 @@ def build_actionable(
             )
             lines.append(tpm_semantics_note())
             lines.append("")
-            lines.append(
-                "| Target | Agent | Class | Phase | Indication | "
-                "Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |"
-            )
-            lines.append(
-                "|--------|-------|-------|-------|------------|"
-                "----------|-------------------------------|---------------------|----------------|"
-            )
             phase_order = {
                 "approved": 0,
                 "phase_3": 1,
@@ -3143,9 +3135,10 @@ def build_actionable(
                     return "—"
                 return s
 
-            for t in sorted_df.to_dict("records"):
+            def _therapy_row_record(t):
                 raw_sym = t.get("symbol")
                 sym = canonical_target_symbol(_cell(raw_sym))
+                reliability = "provisional"
                 # Agent-only rows (no gene target — e.g. doxorubicin, pazopanib,
                 # trabectedin for sarcoma) have a blank ``symbol``; sym_to_row
                 # keying by "nan" would always miss, so skip the lookup and
@@ -3200,6 +3193,14 @@ def build_actionable(
                         )
                         if conflict:
                             interp_cell += "; " + conflict
+                        # A curated indication with no measured RNA is only
+                        # audit-only when it also lacks an expression-independent
+                        # (biomarker) basis; otherwise keep it provisional.
+                        reliability = (
+                            "provisional"
+                            if expression_independent_indication(t)
+                            else "unsupported"
+                        )
                     else:
                         obs_cell = f"{float(expr.get('observed_tpm') or 0):.1f}"
                         tumor_source_cell = tumor_band_cell(expr)
@@ -3250,15 +3251,86 @@ def build_actionable(
                             clinical_maturity_summary(t, target_panel=targets_df)
                         )
                         interp_cell = "; ".join(part for part in interp_parts if part)
-                phase = _phase_label(str(t.get("phase") or ""))
-                bold = "**" if phase == "Approved" and sym != "—" else ""
-                lines.append(
-                    f"| {bold}{sym}{bold} | {_cell(t.get('agent'))} | "
-                    f"{_cell(t.get('agent_class'))} | {phase} | "
-                    f"{_cell(t.get('indication'))} | {obs_cell} | "
-                    f"{tumor_source_cell} | {context_cell} | {interp_cell} |"
+                        reliability = target_reliability_status(expr, target_row=t)
+                # Route host/background-attributed disease-curation rows (e.g. a
+                # BLCA FGFR3/erdafitinib row whose RNA is hepatocyte-attributed)
+                # out of the active-opportunity table and into an audit-only
+                # section — the same partition ``_build_target_report`` applies to
+                # ``*-targets.md`` (issue #105), so the summary, the analysis
+                # markdown, and the PDF agree.
+                audit_only = (
+                    reliability == "unsupported"
+                    and not expression_independent_indication(t)
                 )
-            lines.append("")
+                if audit_only:
+                    interp_cell = (
+                        "audit-only negative/background evidence; " + interp_cell
+                    )
+                phase = _phase_label(str(t.get("phase") or ""))
+                return {
+                    "sym": sym,
+                    "agent": _cell(t.get("agent")),
+                    "agent_class": _cell(t.get("agent_class")),
+                    "phase": phase,
+                    "indication": _cell(t.get("indication")),
+                    "obs_cell": obs_cell,
+                    "tumor_source_cell": tumor_source_cell,
+                    "context_cell": context_cell,
+                    "interp_cell": interp_cell,
+                    "audit_only": audit_only,
+                }
+
+            therapy_records = [
+                _therapy_row_record(t) for t in sorted_df.to_dict("records")
+            ]
+            active_records = [r for r in therapy_records if not r["audit_only"]]
+            audit_records = [r for r in therapy_records if r["audit_only"]]
+
+            def _render_therapy_records(records):
+                lines.append(
+                    "| Target | Agent | Class | Phase | Indication | "
+                    "Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |"
+                )
+                lines.append(
+                    "|--------|-------|-------|-------|------------|"
+                    "----------|-------------------------------|---------------------|----------------|"
+                )
+                for rec in records:
+                    bold = (
+                        "**"
+                        if rec["phase"] == "Approved" and rec["sym"] != "—"
+                        else ""
+                    )
+                    lines.append(
+                        f"| {bold}{rec['sym']}{bold} | {rec['agent']} | "
+                        f"{rec['agent_class']} | {rec['phase']} | "
+                        f"{rec['indication']} | {rec['obs_cell']} | "
+                        f"{rec['tumor_source_cell']} | {rec['context_cell']} | "
+                        f"{rec['interp_cell']} |"
+                    )
+                lines.append("")
+
+            if audit_records:
+                lines.append("### Sample-supported / clinically reviewable rows\n")
+                if active_records:
+                    _render_therapy_records(active_records)
+                else:
+                    lines.append(
+                        "*No curated therapy row had tumor-supported or clinically "
+                        "reviewable RNA evidence in this sample.*\n"
+                    )
+                lines.append(
+                    "### Audit-only rows: not tumor-supported in this sample\n"
+                )
+                lines.append(
+                    "These rows remain visible as disease-curation provenance or "
+                    "negative evidence. They should not be read as "
+                    "expression-supported therapeutic opportunities unless "
+                    "orthogonal molecular evidence supplies eligibility.\n"
+                )
+                _render_therapy_records(audit_records)
+            else:
+                _render_therapy_records(active_records)
         else:
             lines.append(
                 "## Therapy Prioritization\n"
