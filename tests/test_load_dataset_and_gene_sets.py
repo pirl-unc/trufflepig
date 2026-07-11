@@ -133,7 +133,17 @@ def test_cta_filtered_and_evidence():
     assert filtered_names & excluded_names == set()  # no overlap
 
     evidence_df = gsc.CTA_evidence()
-    assert len(evidence_df) == len(all_names)
+    # pirlygenes guarantees COVERAGE (every unfiltered CTA gene has an evidence
+    # row), NOT exact row-count equality. oncoref owns CTA membership while the
+    # evidence frame stays on tsarina, which may retain a few extra candidates
+    # oncoref filters upstream (e.g. the testis histone H1-6) when the
+    # separately-versioned oncoref/tsarina floors disagree by a gene. The old
+    # `len(evidence_df) == len(all_names)` only held on bundles where the two
+    # counts happened to coincide (published 5.23.21) and broke under others
+    # (5.23.23 → 391 vs 390). Assert the invariant pirlygenes itself pins
+    # (test_cta_set_and_evidence_rows_line_up): coverage of the owned set.
+    evidence_ids = set(evidence_df["Ensembl_Gene_ID"].astype(str).str.strip())
+    assert set(all_ids) <= evidence_ids
     expected_cols = [
         "protein_reproductive",
         "protein_thymus",
