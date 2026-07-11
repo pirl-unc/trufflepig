@@ -12,7 +12,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trufflepig.main import _render_vs_tcga_cell
+from trufflepig.main import (
+    _classify_lineage_calibration_genes,
+    _render_vs_tcga_cell,
+)
 from trufflepig.sample_quality import _MT_GENES, assess_sample_quality
 from trufflepig.tumor_purity import _lineage_purity_estimates
 
@@ -104,6 +107,35 @@ def test_render_vs_tcga_large_fold_kept_when_cohort_median_is_detectable():
     out = _render_vs_tcga_cell(row)
     assert "1548" in out
     assert "×" in out
+
+
+# ── #85.2: de-differentiation narration must not fire for expressed genes ──
+
+
+def test_lineage_calibration_expressed_low_ratio_gene_is_not_de_differentiated():
+    """#85.2: a lineage gene with a low per-gene purity ratio but real expression
+    (e.g. CDK4 at 101 TPM / 3.5%) is a reference-scaling outlier, not loss — it
+    must land in expressed_below_scale, not possibly_lost."""
+    genes = [
+        {"gene": "FOXA1", "purity": 0.40, "sample_tpm": 120.0},  # retained
+        {"gene": "CDK4", "purity": 0.035, "sample_tpm": 101.5},  # expressed, low ratio
+        {"gene": "GHOST", "purity": 0.02, "sample_tpm": 1.2},    # low ratio AND low TPM
+    ]
+    retained, expressed_below_scale, possibly_lost = (
+        _classify_lineage_calibration_genes(genes, median_p=0.40)
+    )
+    assert [g["gene"] for g in retained] == ["FOXA1"]
+    # The expressed gene is NOT narrated as de-differentiated/lost.
+    assert [g["gene"] for g in expressed_below_scale] == ["CDK4"]
+    # Only the low-ratio AND low-expression gene reads as possible loss.
+    assert [g["gene"] for g in possibly_lost] == ["GHOST"]
+
+
+def test_lineage_calibration_none_median_keeps_all_retained():
+    genes = [{"gene": "A", "purity": 0.1, "sample_tpm": 5.0}]
+    retained, below, lost = _classify_lineage_calibration_genes(genes, median_p=None)
+    assert [g["gene"] for g in retained] == ["A"]
+    assert below == [] and lost == []
 
 
 # ── #40: lineage estimator returns TME-dominated genes separately ──

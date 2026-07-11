@@ -7560,6 +7560,42 @@ def _build_evidence_report(
     return "\n".join(lines)
 
 
+# A lineage gene whose per-gene purity ratio (sample ÷ TCGA reference) is a low
+# outlier but which is still expressed at a real TPM is a reference-scaling
+# artifact — its TCGA reference is very high — NOT evidence the tumor lost the
+# gene (#85.2). Narrating CDK4 at 101 TPM as "de-differentiated" contradicts the
+# therapy tables that show it highly expressed. Only a gene that is BOTH a
+# low-ratio outlier AND expressed below this floor reads as possible loss.
+_LINEAGE_EXPRESSED_TPM_FLOOR = 10.0
+
+
+def _classify_lineage_calibration_genes(sorted_genes, median_p):
+    """Split lineage-calibration genes for the purity-per-gene narration.
+
+    Returns ``(retained, expressed_below_scale, possibly_lost)``:
+
+    - ``retained`` — per-gene purity within half the median: a reliable anchor.
+    - Genes below that half-median threshold are excluded from the estimate as
+      outliers; the reason matters for how they read:
+      - ``expressed_below_scale`` — still expressed (sample TPM ≥
+        ``_LINEAGE_EXPRESSED_TPM_FLOOR``): the low ratio is reference scaling,
+        not loss.
+      - ``possibly_lost`` — low ratio AND low expression: a genuine low/absent
+        signal that can honestly read as de-differentiation.
+    """
+    if median_p is None or median_p <= 0:
+        return list(sorted_genes), [], []
+    retained, expressed_below_scale, possibly_lost = [], [], []
+    for g in sorted_genes:
+        if g["purity"] >= median_p * 0.5:
+            retained.append(g)
+        elif (g.get("sample_tpm") or 0.0) >= _LINEAGE_EXPRESSED_TPM_FLOOR:
+            expressed_below_scale.append(g)
+        else:
+            possibly_lost.append(g)
+    return retained, expressed_below_scale, possibly_lost
+
+
 def _generate_text_reports(
     analysis,
     embedding_meta,
@@ -8420,13 +8456,12 @@ def _generate_text_reports(
         sorted_genes = sorted(lineage_genes, key=lambda g: g["purity"], reverse=True)
         median_p = lineage.get("purity")
 
-        # Identify retained vs de-differentiated
-        if median_p is not None and median_p > 0:
-            retained = [g for g in sorted_genes if g["purity"] >= median_p * 0.5]
-            lost = [g for g in sorted_genes if g["purity"] < median_p * 0.5]
-        else:
-            retained = sorted_genes
-            lost = []
+        # Identify retained vs excluded, and split the excluded cluster by
+        # whether the gene is actually expressed — a high-TPM low-ratio gene is a
+        # reference-scaling outlier, not de-differentiation (#85.2).
+        retained, expressed_below_scale, possibly_lost = (
+            _classify_lineage_calibration_genes(sorted_genes, median_p)
+        )
 
         # Not found in sample — but distinguish genuinely absent from
         # detected-but-uninformative. The estimator skips lineage genes
@@ -8458,11 +8493,15 @@ def _generate_text_reports(
         )
         lines.append("| Gene | Purity est. | Interpretation |")
         lines.append("|------|------------|----------------|")
+        _interp_by_gene = {}
+        for g in retained:
+            _interp_by_gene[g["gene"]] = "retained — reliable"
+        for g in expressed_below_scale:
+            _interp_by_gene[g["gene"]] = "expressed — below reference scale"
+        for g in possibly_lost:
+            _interp_by_gene[g["gene"]] = "likely de-differentiated / low"
         for g in sorted_genes:
-            if g in retained:
-                interp = "retained — reliable"
-            else:
-                interp = "likely de-differentiated"
+            interp = _interp_by_gene.get(g["gene"], "retained — reliable")
             lines.append(f"| {g['gene']} | {g['purity']:.1%} | {interp} |")
         for gene_name, entry in skipped_detected.items():
             s_tpm = entry["sample_tpm"]
@@ -8497,13 +8536,23 @@ def _generate_text_reports(
                     "These genes are expressed at levels consistent with their "
                     "TCGA reference, indicating retained lineage identity (does not distinguish tumor cells from normal cells of the same lineage)."
                 )
-        if lost:
-            lost_names = ", ".join(g["gene"] for g in lost)
+        if expressed_below_scale:
+            exp_names = ", ".join(g["gene"] for g in expressed_below_scale)
             lines.append(
-                f"\n**Possible de-differentiation**: {lost_names}. "
-                "These genes give much lower purity estimates, suggesting "
-                "the tumor may have lost expression of these markers — "
-                "common in metastatic or treatment-resistant disease. "
+                f"\n**Expressed, below reference scale**: {exp_names}. "
+                "These genes are expressed in this sample (see the bulk TPM in the "
+                "target tables) but give low per-gene purity ratios against a high "
+                "TCGA reference — a reference-scaling effect, not loss of expression. "
+                "They are excluded from the purity estimate as scaling outliers, not "
+                "read as de-differentiation."
+            )
+        if possibly_lost:
+            lost_names = ", ".join(g["gene"] for g in possibly_lost)
+            lines.append(
+                f"\n**Possible low / de-differentiated**: {lost_names}. "
+                "These genes give much lower purity estimates and are expressed at "
+                "low TPM, so the tumor may have reduced or lost expression of these "
+                "markers — common in metastatic or treatment-resistant disease. "
                 "These are excluded from the purity estimate."
             )
         if not_found:
