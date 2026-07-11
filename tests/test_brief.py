@@ -1950,3 +1950,72 @@ def test_summary_omits_low_purity_caveat_when_not_flagged():
     ranges_df["sample_low_purity"] = False
     md = build_summary(analysis, ranges_df, cancer_code="PRAD", disease_state="")
     assert "low sample purity — tumor-source estimate" not in md
+
+
+def test_summary_omits_support_pct_when_preservation_unknown():
+    """An 'unknown' preservation call carries no confidence (defaults to 0.0),
+    so appending '(support 0%)' next to it reads as a spurious quantified
+    claim. The summary must omit the support parenthetical (#85 minor)."""
+    analysis = _make_analysis(preservation="unknown")
+    analysis["sample_context"].preservation_confidence = 0.0
+    md = build_summary(analysis, _make_ranges_df(), cancer_code="PRAD", disease_state="")
+    assert "preservation inferred as unknown from RNA QC." in md
+    assert "preservation inferred as unknown from RNA QC (" not in md
+
+
+def test_summary_keeps_support_pct_for_known_preservation():
+    """A known preservation call keeps its support parenthetical."""
+    analysis = _make_analysis(preservation="ffpe")
+    md = build_summary(analysis, _make_ranges_df(), cancer_code="PRAD", disease_state="")
+    assert "from RNA QC (" in md
+
+
+def test_rna_alternatives_flags_lineage_incoherent_runner_up():
+    """A runner-up whose histogenesis is incoherent with its own gene pattern
+    (near-zero lineage concordance) is annotated so it does not read as
+    'second-strongest' without caveat (#85.5)."""
+    from trufflepig.brief import _rna_alternatives_line
+
+    analysis = {
+        "candidate_trace": [
+            {
+                "code": "LUAD",
+                "support_geomean": 0.80,
+                "signature_score": 0.5,
+                "lineage_concordance": 0.9,
+            },
+            {
+                "code": "LAML",
+                "support_geomean": 0.60,
+                "signature_score": 0.1,
+                "lineage_concordance": 0.0,
+            },
+            {
+                "code": "COAD",
+                "support_geomean": 0.40,
+                "signature_score": 0.2,
+                "lineage_concordance": 0.85,
+            },
+        ],
+    }
+    line = _rna_alternatives_line(analysis, "LUAD")
+    assert "LAML (rank 2" in line
+    assert "lineage-incoherent" in line
+    # Only the incoherent runner-up is flagged, not the concordant one.
+    assert line.count("lineage-incoherent") == 1
+
+
+def test_rna_alternatives_no_caveat_when_concordance_missing():
+    """Missing lineage_concordance is treated as coherent (no caveat) — the
+    trace simply didn't score it; 0.0 is the real incoherence signal."""
+    from trufflepig.brief import _rna_alternatives_line
+
+    analysis = {
+        "candidate_trace": [
+            {"code": "LUAD", "support_geomean": 0.80},
+            {"code": "LUSC", "support_geomean": 0.60},
+        ],
+    }
+    line = _rna_alternatives_line(analysis, "LUAD")
+    assert "LUSC (rank 2" in line
+    assert "lineage-incoherent" not in line

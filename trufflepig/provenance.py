@@ -19,6 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
+from .report_view import finalized_purity_headline
 from .reporting import (
     partition_tumor_core_rows,
     summarize_reliability_reasons,
@@ -153,12 +154,28 @@ def build_provenance_md(
     lines.append("## Tumor Purity and Coarse Composition\n")
     best = decomp_results[0] if decomp_results else None
     if best is not None:
-        tumor_frac = float(getattr(best, "purity", 0.0) or 0.0)
         fractions = dict(getattr(best, "fractions", {}) or {})
+        # Display the FINALIZED headline purity as tumor%, not the
+        # decomposition's own pre-fusion tumor fraction. best.purity is frozen
+        # at fit time from the pre-fusion purity, but _finalize_fused_purity
+        # later re-fuses (blending in the residual fraction + anti-saturation),
+        # moving the headline. Reading best.purity here made "Fitted fractions:
+        # tumor X%" contradict the reported purity (#85.1). Rescale the
+        # non-tumor components so they sum to 1 - tumor%, preserving their
+        # relative proportions, so the coarse composition equals the headline
+        # by construction.
+        headline_tumor = finalized_purity_headline(analysis)[0]
+        decomp_tumor = float(getattr(best, "purity", 0.0) or 0.0)
+        tumor_frac = decomp_tumor if headline_tumor is None else float(headline_tumor)
+        tumor_frac = min(max(tumor_frac, 0.0), 1.0)
         non_tumor = sorted(
             ((c, f) for c, f in fractions.items() if c != "tumor" and f > 0),
             key=lambda kv: -kv[1],
         )
+        non_tumor_mass = sum(f for _, f in non_tumor)
+        if non_tumor_mass > 0:
+            rescale = (1.0 - tumor_frac) / non_tumor_mass
+            non_tumor = [(c, f * rescale) for c, f in non_tumor]
         top = non_tumor[:5]
         parts = [f"**tumor {tumor_frac:.0%}**"]
         for comp, frac in top:
@@ -248,13 +265,17 @@ def build_provenance_md(
         lines.append("*No target-expression ranges available.*")
     lines.append("")
 
-    # Chain summary + cross-links
-    overall = purity.get("overall_estimate")
+    # Chain summary + cross-links. Read the FINALIZED headline (not the live
+    # purity dict) so the "subtracts X% as non-tumor" figure equals the
+    # 1 - tumor% of the coarse-composition section above by construction — the
+    # two must not disagree within one provenance page (#85.1).
+    overall = finalized_purity_headline(analysis)[0]
     if overall is not None:
+        tumor_pct = min(max(float(overall), 0.0), 1.0)
         lines.append(
             f"**Chain summary:** observed expression → library-prep-aware "
             f"artifact expectations → preservation-adjusted quantification → "
-            f"decomposition subtracts {1 - float(overall):.0%} as non-tumor "
+            f"decomposition subtracts {1 - tumor_pct:.0%} as non-tumor "
             "compartments → residual is the tumor-linked signal used for "
             "therapy-target ranking."
         )

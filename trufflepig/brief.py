@@ -1876,7 +1876,16 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
                 if support_ratio >= 0.995
                 else f", {support_ratio:.2f}x top support"
             )
-        chunks.append(f"{code} (rank {idx}{ratio})")
+        # Flag a runner-up whose histogenesis is incoherent with its own gene
+        # pattern (near-zero lineage concordance): the support score can still
+        # rank it #2, but the expected lineage markers are absent, so it should
+        # not read as "second-strongest" without a caveat. None means the trace
+        # didn't score concordance (treat as coherent); 0.0 is a real signal.
+        _conc_raw = row.get("lineage_concordance")
+        incoherent = ""
+        if idx > 1 and _conc_raw is not None and float(_conc_raw) < 0.2:
+            incoherent = " — lineage-incoherent: expected gene pattern absent"
+        chunks.append(f"{code} (rank {idx}{ratio}{incoherent})")
     if not chunks:
         return ""
 
@@ -2711,9 +2720,16 @@ def build_summary(
         pres_conf = getattr(sample_context, "preservation_confidence", 0.0)
         if pres_label == "fresh frozen":
             pres_label = "fresh/frozen-like"
+        # An "unknown" preservation call carries no confidence (defaults to
+        # 0.0), so appending "(support 0%)" reads as a spurious quantified
+        # claim next to "unknown". Omit the support parenthetical in that case,
+        # matching the analysis.md/plot preservation lines (#85 minor).
+        support_clause = (
+            "" if pres_label == "unknown" else f" ({heuristic_support_label(pres_conf)})"
+        )
         lines.append(
             f"**Sample:** {prep_label}; preservation inferred as {pres_label} "
-            f"from RNA QC ({heuristic_support_label(pres_conf)})."
+            f"from RNA QC{support_clause}."
         )
     rna_qc_line = rna_quant_qc_summary_line(analysis.get("rna_quant_qc"))
     if rna_qc_line:
