@@ -117,6 +117,10 @@ def test_provenance_composition_uses_finalized_headline_not_decomp_purity():
     # tumor% equals the finalized headline (60%), not the frozen decomp (28%).
     assert "**tumor 60%**" in md
     assert "tumor 28%" not in md
+    # The Chain summary's non-tumor figure must equal 1 - headline (40%), not
+    # 1 - decomp (72%), so the two purity-bearing lines agree on one page.
+    assert "subtracts 40% as non-tumor" in md
+    assert "subtracts 72% as non-tumor" not in md
 
 
 def test_provenance_composition_falls_back_to_decomp_when_no_headline():

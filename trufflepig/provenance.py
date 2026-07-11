@@ -265,13 +265,17 @@ def build_provenance_md(
         lines.append("*No target-expression ranges available.*")
     lines.append("")
 
-    # Chain summary + cross-links
-    overall = purity.get("overall_estimate")
+    # Chain summary + cross-links. Read the FINALIZED headline (not the live
+    # purity dict) so the "subtracts X% as non-tumor" figure equals the
+    # 1 - tumor% of the coarse-composition section above by construction — the
+    # two must not disagree within one provenance page (#85.1).
+    overall = finalized_purity_headline(analysis)[0]
     if overall is not None:
+        tumor_pct = min(max(float(overall), 0.0), 1.0)
         lines.append(
             f"**Chain summary:** observed expression → library-prep-aware "
             f"artifact expectations → preservation-adjusted quantification → "
-            f"decomposition subtracts {1 - float(overall):.0%} as non-tumor "
+            f"decomposition subtracts {1 - tumor_pct:.0%} as non-tumor "
             "compartments → residual is the tumor-linked signal used for "
             "therapy-target ranking."
         )
