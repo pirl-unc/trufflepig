@@ -221,6 +221,16 @@ def test_source_cohort_values_are_canonical():
     dependency instead of drifting as new cohorts are added. A handful of
     non-expression values (curated literature, the pan-cancer Xena matrix,
     blank) are not in that manifest and are allowed explicitly.
+
+    A registry cohort may also be a *stratification* of a canonical base —
+    ``<base>_<stratification>`` (e.g. ``TREEHOUSE_POLYA_25_01`` →
+    ``TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY`` for the liposarcoma
+    histology split behind SARC_DDLPS/SARC_WDLPS). The registry and the
+    expression-reference manifest ship in the same pirlygenes package but can
+    lag each other across a published wheel vs. a dev checkout, so a
+    stratification whose base is canonical is accepted rather than hard-failing
+    trufflepig's CI on upstream data lag. A typo in the *base* still matches no
+    canonical prefix and is caught.
     """
     import pirlygenes as _pirlygenes
 
@@ -231,11 +241,21 @@ def test_source_cohort_values_are_canonical():
         .astype(str)
     )
     valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
+    canonical_bases = {c for c in canonical if c}
+
+    def _is_stratification_of_canonical(value):
+        return any(value.startswith(base + "_") for base in canonical_bases)
+
     present = set(df["source_cohort"].fillna("").astype(str).unique())
     # COMPUTED_* are pirlygenes' computed aggregate cohorts (e.g. the SARC
     # grand union COMPUTED_PAN_SARCOMA, Phase C.2) — a legitimate cohort
     # category that isn't a single deposited dataset in the manifest.
-    unknown = {c for c in (present - valid) if not c.startswith("COMPUTED_")}
+    unknown = {
+        c
+        for c in (present - valid)
+        if not c.startswith("COMPUTED_")
+        and not _is_stratification_of_canonical(c)
+    }
     assert not unknown, f"unknown source_cohort values: {unknown}"
 
 
