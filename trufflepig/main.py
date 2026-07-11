@@ -7534,9 +7534,15 @@ def _build_evidence_report(
             lines.append("| Feature | Raw TPM | Raw share | QC class |")
             lines.append("|---|---:|---:|---|")
             for row in top_removed[:10]:
+                # A few-thousand-TPM technical feature can be ~0.1-0.4% of raw
+                # mass, which "{:.0%}" rounds to a misleading "0%" next to a
+                # large Raw TPM. Render "<1%" for a nonzero sub-0.5% share,
+                # mirroring the QC-summary idiom (#85 minor).
+                share_val = float(row.get("share") or 0.0)
+                share_label = "<1%" if 0.0 < share_val < 0.005 else f"{share_val:.0%}"
                 lines.append(
                     f"| {row.get('gene') or '—'} | {float(row.get('tpm') or 0.0):.1f} | "
-                    f"{float(row.get('share') or 0.0):.0%} | {row.get('qc_class') or '—'} |"
+                    f"{share_label} | {row.get('qc_class') or '—'} |"
                 )
         lines.append("")
     fusion_body = _fusion_evidence_markdown(analysis)
@@ -7841,10 +7847,17 @@ def _generate_text_reports(
             lines.append(rna_qc_body)
         n_det = ctx_signals.get("genes_detected_above_1_tpm")
         if n_det is not None:
+            # Labeled by frame so it is not read as contradicting the
+            # "Gene detection" count in the run-level quantifier QC table:
+            # that count is the raw quantifier frame at >=1 TPM, this one is
+            # the symbol-collapsed (transcript/proteoform-folded) frame at
+            # >1 TPM, so the two legitimately differ (#85 minor).
             lines.append(
-                f"- **Detection breadth**: {n_det} genes with TPM > 1 "
+                f"- **Detection breadth** (gene-symbol frame): {n_det} genes with TPM > 1 "
                 f"({ctx_signals.get('genes_detected_above_10_tpm', 0)} with TPM > 10, "
-                f"{ctx_signals.get('genes_detected_above_0p5_tpm', 0)} with TPM > 0.5)"
+                f"{ctx_signals.get('genes_detected_above_0p5_tpm', 0)} with TPM > 0.5); "
+                "counted on symbol-collapsed TPM, so it can differ from the run-level "
+                "quantifier detection count."
             )
         top50 = ctx_signals.get("top_50_share_of_total_tpm")
         top2000 = ctx_signals.get("top_2000_share_of_total_tpm")
@@ -9069,7 +9082,7 @@ def _build_target_report(
                 else "not capped"
             )
             lines_out.append(
-                f"| {sym} | {obs:.1f} | {tumor_band_cell(row)} | "
+                f"| {sym} | {render_tpm(obs)} | {tumor_band_cell(row)} | "
                 f"{context_expression_band_cell(row)} | "
                 f"{source['label']} ({source['attr_tumor_fraction']:.0%} tumor bulk fraction) | "
                 f"{cap_status} | {_agents(sym)} |"
@@ -9198,7 +9211,7 @@ def _build_target_report(
                     tumor_source = tumor_band_cell(row)
                     context_cell = context_expression_band_cell(row)
                     lines.append(
-                        f"| {sym} | {obs:.1f} | {tumor_source} | {context_cell} | "
+                        f"| {sym} | {render_tpm(obs)} | {tumor_source} | {context_cell} | "
                         f"{attribution_cell} |"
                     )
                 lines.append("")
@@ -9321,7 +9334,11 @@ def _build_target_report(
                             else "unsupported"
                         )
                     else:
-                        obs_cell = f"{float(expr.get('observed_tpm') or 0.0):.1f}"
+                        # Unify bulk-TPM formatting with the Surface Protein /
+                        # target-landscape tables (render_tpm drops the decimal
+                        # at >=100 TPM) so a gene like EGFR/IGF1R reads the same
+                        # value in every section (#85 minor).
+                        obs_cell = render_tpm(expr.get("observed_tpm") or 0.0)
                         tumor_source_cell = tumor_band_cell(expr)
                         context_cell = context_expression_band_cell(expr)
                         attr_cell = _format_attribution_cell(expr)

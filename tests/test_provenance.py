@@ -94,6 +94,44 @@ def test_provenance_md_walks_the_five_steps():
     assert "FOLH1" in md or "tumor-linked" in md.lower()
 
 
+def test_provenance_composition_uses_finalized_headline_not_decomp_purity():
+    """The decomposition's own tumor fraction (0.28, frozen at fit time) can
+    differ from the finalized/fused headline purity (0.60). The coarse
+    composition must display the headline so 'Fitted fractions: tumor X%'
+    cannot contradict the reported purity (#85.1)."""
+    analysis = {
+        "sample_context": _Ctx(),
+        "purity": {
+            "overall_estimate": 0.60,
+            "overall_lower": 0.45,
+            "overall_upper": 0.75,
+        },
+    }
+    md = build_provenance_md(
+        analysis,
+        _ranges_df(),
+        [_Decomp(purity=0.28)],
+        cancer_code="PRAD",
+        sample_id="sample_X",
+    )
+    # tumor% equals the finalized headline (60%), not the frozen decomp (28%).
+    assert "**tumor 60%**" in md
+    assert "tumor 28%" not in md
+
+
+def test_provenance_composition_falls_back_to_decomp_when_no_headline():
+    """With no finalized purity available, the composition still renders using
+    the decomposition's own tumor fraction (no crash, no rescale)."""
+    analysis = {"sample_context": _Ctx(), "purity": {}}
+    md = build_provenance_md(
+        analysis,
+        _ranges_df(),
+        [_Decomp(purity=0.28)],
+        cancer_code="PRAD",
+    )
+    assert "**tumor 28%**" in md
+
+
 def test_provenance_handles_missing_decomposition():
     analysis = {
         "sample_context": _Ctx(),
