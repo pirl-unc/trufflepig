@@ -4581,6 +4581,72 @@ def _summarize_fit_quality(candidate_trace, signature_stats):
     }
 
 
+def finalize_winner_purity(
+    purity, sample_tpm, cancer_code, *, allow_lineage_override, reference_code=None
+):
+    """Compute the lineage decomposition ONCE for the winning/final cancer type and
+    fold it into ``purity``.
+
+    Candidate ranking runs WITHOUT the decomposition (not used for ranking, expensive
+    per candidate), so the winner's ``purity_result`` carries ``decomposition=None``.
+    This binds the single decomposition for ``cancer_code`` and re-derives the
+    overall/consistency the same way the inline ``analyze_sample`` block did — the
+    seam the report-scope-into-ranking refactor (redesign Phase 4) reuses so the
+    decomposition can be bound to the FINAL code instead of the pre-evidence winner.
+
+    Pure: returns the enriched purity; does not mutate ``analysis``. A no-op (returns
+    the input unchanged) when the decomposition is already present.
+    """
+    if not (
+        isinstance(purity, dict)
+        and (purity.get("components") or {}).get("decomposition") is None
+    ):
+        return purity
+    comps = dict(purity.get("components") or {})
+    # Pass the resolved reference code (the parent cohort for a subtype, e.g. LUAD for
+    # LUAD_EGFR) so the aneuploidy calibration anchors to the SAME reference the rest of
+    # the purity estimate used — not the subtype code, which has no own A_ref or median.
+    dc = _decomposition_purity_component(
+        sample_tpm,
+        cancer_code,
+        allow_lineage_override=allow_lineage_override,
+        reference_code=reference_code or purity.get("reference_cancer_type"),
+    )
+    comps["decomposition"] = dc
+    # Use the GATED estimate (None when gated for lineage) so a gated-out ESTIMATE can't flag.
+    gated_est = (
+        None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")
+    )
+    # Ranking ran _override_collapsed_signature_purity as a no-op (decomposition=None); now the
+    # decomposition residual is available, re-run it so a signature-collapsed headline (wrong
+    # cancer-type call → silent type markers → overall≈0) gets the type-agnostic ESTIMATE+residual
+    # consensus here too.
+    sig_comp = comps.get("signature") or {}
+    lin_comp = comps.get("lineage") or {}
+    overall, overall_lower, overall_upper, integ_src = _override_collapsed_signature_purity(
+        purity.get("overall_estimate"),
+        purity.get("overall_lower"),
+        purity.get("overall_upper"),
+        (comps.get("integration") or {}).get("source"),
+        sig_purity=sig_comp.get("purity"),
+        lineage_purity=lin_comp.get("purity"),
+        estimate_purity=gated_est,
+        decomposition=dc,
+    )
+    if isinstance(comps.get("integration"), dict):
+        comps["integration"] = {**comps["integration"], "source": integ_src}
+    # ranking computed purity_consistency without the decomposition; recompute now it's present
+    # (reconcile against the possibly-overridden overall, not the stale collapsed one).
+    return {
+        **purity,
+        "components": comps,
+        "overall_estimate": overall,
+        "overall_lower": overall_lower,
+        "overall_upper": overall_upper,
+        "purity_consistency": _purity_reconciliation(overall, dc, gated_est),
+    }
+
+
 # -------------------- comprehensive summary --------------------
 
 
@@ -4636,41 +4702,13 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         purity = selected_candidate["purity_result"]
         # Candidate ranking ran WITHOUT the lineage decomposition (not used for ranking, expensive
         # per candidate); compute it once for the winning type so the report still includes it.
-        if isinstance(purity, dict) and (purity.get("components") or {}).get("decomposition") is None:
-            comps = dict(purity.get("components") or {})
-            # Pass the resolved reference code (the parent cohort for a subtype, e.g. LUAD for
-            # LUAD_EGFR) so the aneuploidy calibration anchors to the SAME reference the rest of the
-            # purity estimate used — not the subtype code, which has no own A_ref or median prior.
-            dc = _decomposition_purity_component(sample_tpm, cancer_code,
-                                                 allow_lineage_override=(cancer_type is None),
-                                                 reference_code=purity.get("reference_cancer_type"))
-            comps["decomposition"] = dc
-            # Use the GATED estimate (None when gated for lineage) so a gated-out ESTIMATE can't flag.
-            gated_est = None if comps.get("estimate_gated_for_lineage") else comps.get("estimate_purity")
-            # Ranking ran _override_collapsed_signature_purity as a no-op (decomposition=None); now the
-            # decomposition residual is available, re-run it so a signature-collapsed headline (wrong
-            # cancer-type call → silent type markers → overall≈0) gets the type-agnostic ESTIMATE+residual
-            # consensus here too — otherwise analyze_sample() keeps the collapsed value that only the
-            # direct estimate_tumor_purity(include_decomposition=True) path would have rescued.
-            sig_comp = comps.get("signature") or {}
-            lin_comp = comps.get("lineage") or {}
-            overall, overall_lower, overall_upper, integ_src = _override_collapsed_signature_purity(
-                purity.get("overall_estimate"), purity.get("overall_lower"), purity.get("overall_upper"),
-                (comps.get("integration") or {}).get("source"),
-                sig_purity=sig_comp.get("purity"), lineage_purity=lin_comp.get("purity"),
-                estimate_purity=gated_est, decomposition=dc)
-            if isinstance(comps.get("integration"), dict):
-                comps["integration"] = {**comps["integration"], "source": integ_src}
-            # ranking computed purity_consistency without the decomposition; recompute now it's present
-            # (reconcile against the possibly-overridden overall, not the stale collapsed one).
-            purity = {**purity, "components": comps,
-                      "overall_estimate": overall, "overall_lower": overall_lower,
-                      "overall_upper": overall_upper,
-                      "purity_consistency": _purity_reconciliation(overall, dc, gated_est)}
-            # Propagate the enriched purity back into the candidate trace too: the CLI passes the trace
-            # to decompose_sample, which may adopt selected_candidate["purity_result"] and overwrite
-            # analysis["purity"] — without this, that restores the stale (decomposition=None) version.
-            selected_candidate["purity_result"] = purity
+        purity = finalize_winner_purity(
+            purity, sample_tpm, cancer_code, allow_lineage_override=(cancer_type is None)
+        )
+        # Propagate the enriched purity back into the candidate trace too: the CLI passes the trace
+        # to decompose_sample, which may adopt selected_candidate["purity_result"] and overwrite
+        # analysis["purity"] — without this, that restores the stale (decomposition=None) version.
+        selected_candidate["purity_result"] = purity
     else:
         purity = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_code)
 
