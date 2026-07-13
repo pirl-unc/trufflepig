@@ -123,8 +123,25 @@ def test_upstream_nonconformance_quarantine_is_current():
 def test_target_row_sources_are_present_for_most_curation_rows():
     targets = _target_rows()
     sources = targets["source"].astype(str).str.strip()
+    # Coverage: nearly every target row carries provenance.
     assert sources.ne("").mean() >= 0.95
-    assert sources[sources.ne("")].str.contains("PMID:", regex=False).all()
+    # Well-formedness: every provenance string is either a PMID citation or a
+    # recognized curated-provenance label. pirlygenes uses ``curated_<kind>``
+    # (e.g. ``curated_literature``) when a literature-curated association has no
+    # single anchor PMID, so asserting "every source is a PMID" is an incidental
+    # bundle fact, not the real invariant — it broke the deploy gate the moment the
+    # (dev-ahead) pirlygenes bundle added curated_literature rows while CACHE-green
+    # CI (published bundle) still passed. Assert the traceability invariant instead:
+    # a PMID citation or a curated_<kind> label — robust to the PMID/curated mix
+    # drifting, still rejecting blank-but-nonempty junk.
+    non_empty = sources[sources.ne("")]
+    well_formed = non_empty.str.contains("PMID:", regex=False) | non_empty.str.fullmatch(
+        r"curated_[a-z_]+"
+    )
+    assert well_formed.all(), (
+        "malformed target-row source provenance (not a PMID citation or curated_<kind> label): "
+        + ", ".join(sorted(non_empty[~well_formed].unique())[:10])
+    )
 
 
 def test_withdrawn_disease_specific_rows_are_filtered_from_reports():
