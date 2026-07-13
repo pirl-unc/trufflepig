@@ -2386,10 +2386,11 @@ def _analyze_body(run: AnalyzeRun):
             selected_reference_cancer_type or rna_inferred_cancer_name,
         )
         analysis["report_scope_cancer_type"] = report_scope_cancer_type
-        # (b) Re-route the purity DECOMPOSITION to the EVIDENCE-refined call: analyze_sample computed
-        # it for the pre-evidence ranking winner, so an ATRT scored as LGG had a solid-mode
-        # decomposition; once evidence calls ATRT (embryonal) the reported purity lineage should match.
-        _reroute_decomposition_to_call(analysis, df_expr, report_scope_cancer_type)
+        # Make the reported PURITY consistent with the final evidence-refined call: analyze_sample
+        # bound purity (+ its one decomposition) to the pre-evidence ranking winner, so an ATRT
+        # scored as LGG had a solid-mode decomposition; once evidence calls ATRT (embryonal) the
+        # reported purity lineage should match. No-op when the winner already equals the final call.
+        _finalize_purity_for_final_call(analysis, df_expr, report_scope_cancer_type)
         if analysis_cancer_type:
             analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
         elif fine_scope_inference and fine_scope_inference.get("reference_cancer_type"):
@@ -5454,31 +5455,33 @@ def _set_analysis_purity(analysis, purity, code=None):
             break
 
 
-def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
-    """When the cancer-type EVIDENCE selector refines the call to a DIFFERENT lineage than the
-    pre-evidence ranking winner, recompute the WHOLE purity for the refined call.
+def _finalize_purity_for_final_call(analysis, df_expr, final_code):
+    """Recompute the WHOLE purity for the FINAL evidence-refined cancer type when it differs
+    from the code the purity was originally computed for.
 
-    analyze_sample computed purity for the pre-evidence winner, so EVERYTHING code/lineage-dependent —
+    ``analyze_sample`` binds purity (and its one decomposition, via ``finalize_winner_purity``)
+    to the pre-evidence RANKING WINNER, which runs before the evidence selector. When the
+    selector then refines the call to a DIFFERENT code, everything code/lineage-dependent —
     ``cancer_type``, ``lineage_compartment``, ``estimate_gated_for_lineage``, the gated
-    ``overall_estimate``, integration source, the signature/reference purity, AND the decomposition —
-    reflects the wrong code (an ATRT scored as LGG, or a Sarcoma/Heme rescue still using ESTIMATE).
-    Recomputing the full purity for ``refined_code`` (explicit → trusted, no expression override) makes
-    the entire purity result consistent with the final call. Fires whenever the evidence-refined code
-    differs from the code the purity was computed for; fully fallback-safe.
+    ``overall_estimate``, integration source, the signature/reference purity, AND the
+    decomposition — still describes the pre-evidence code (an ATRT scored as LGG got a
+    solid-mode decomposition; a Sarcoma/Heme rescue still used ESTIMATE). This recomputes the
+    full purity for ``final_code`` (explicit → trusted, no expression override) so the reported
+    purity is consistent with the final call. No-op when they already agree; fully fallback-safe.
 
-    Retained pending redesign-doc Phase 4. This recompute cannot be deleted as an isolated
-    change: ``analyze_sample`` computes the winner's purity BEFORE the evidence selector runs,
-    and its winner-enrichment is a public standalone contract (diagnostic scripts,
-    ``plot_sample_summary``'s no-``analysis`` path, and
-    ``test_analyze_sample_computes_decomposition_once_for_winner`` rely on it). Deleting the
-    reroute requires ``analyze_sample``'s winner to already equal the final code — i.e. folding
-    report-scope selection into the ranking (Phase 4). See the Phase-2 status note in
-    docs/report-belief-consistency-and-friendliness-plan.md.
+    This does NOT feed the cancer-TYPE call (``final_call`` is chosen upstream by the ranker +
+    selector); it only makes the reported PURITY consistent with that call. Eliminating the
+    recompute entirely — computing the decomposition once, directly for the final code — is
+    redesign-doc Phase 4 Stage 4 (fold report-scope selection into the ranking so the winner
+    already equals the final code), which changes what the selector reads and so is gated by the
+    565-sample confusion eval; this function is the intermediate that keeps purity correct until
+    then. Renamed from ``_reroute_decomposition_to_call`` (which misleadingly named a decomposition
+    re-route for a full purity recompute).
     """
     try:
         purity = analysis.get("purity") or {}
         dc = (purity.get("components") or {}).get("decomposition") or {}
-        if not refined_code or not isinstance(dc, dict) or not dc.get("mode"):
+        if not final_code or not isinstance(dc, dict) or not dc.get("mode"):
             return
         # Recompute whenever the evidence-refined call differs from the code the purity was
         # actually computed for (``purity['cancer_type']``). Comparing the decomposition
@@ -5486,18 +5489,18 @@ def _reroute_decomposition_to_call(analysis, df_expr, refined_code):
         # lineage-overridden its mode to the refined lineage, so equal modes can still hide a
         # stale cancer_type / lineage_compartment / ESTIMATE-gating / signature+reference purity
         # (the report would say SARC while every other purity field came from the pre-evidence code).
-        if str(refined_code) == str(purity.get("cancer_type") or ""):
+        if str(final_code) == str(purity.get("cancer_type") or ""):
             return  # purity already computed for the final code → consistent
         from .tumor_purity import estimate_tumor_purity
 
         # full recompute for the refined call → consistent gating / overall / compartment / decomposition
         # (the refined call can be a reference-free rare type; estimate_tumor_purity degrades gracefully)
-        rerouted = estimate_tumor_purity(df_expr, cancer_type=refined_code)
+        rerouted = estimate_tumor_purity(df_expr, cancer_type=final_code)
         # Single source of truth: write analysis['purity'] AND the refined call's candidate_trace row
         # together. ``decompose_sample`` is later handed ``candidate_rows`` and reuses that row's
         # ``purity_result``; left stale it would overwrite the rerouted purity and the report would
-        # lose the refined lineage/gating. (cancer_type isn't set to refined_code yet here → pass it.)
-        _set_analysis_purity(analysis, rerouted, code=refined_code)
+        # lose the refined lineage/gating. (cancer_type isn't set to final_code yet here → pass it.)
+        _set_analysis_purity(analysis, rerouted, code=final_code)
     except Exception:  # noqa: BLE001 — reporting refinement; never break the analysis
         _LOGGER.warning("purity re-route to evidence call failed", exc_info=True)
 

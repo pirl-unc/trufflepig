@@ -316,21 +316,22 @@ def test_purity_reconciliation_guardrail():
     assert _purity_reconciliation(0.6, {"residual_fraction": 0.6}, 0.6) == []   # agreement → no flag
 
 
-def test_purity_rerouted_to_evidence_call_recomputes_full_metadata():
-    # When evidence refines the call to a different lineage, the WHOLE purity is recomputed — not just
-    # the decomposition — so gating (and overall/compartment) match the final lineage.
-    from trufflepig.main import _reroute_decomposition_to_call
+def test_finalize_purity_for_final_call_recomputes_full_metadata():
+    # When evidence refines the call to a different lineage, the WHOLE purity is recomputed for the
+    # final code — not just the decomposition — so gating (and overall/compartment) match the final
+    # lineage. (Renamed from _reroute_decomposition_to_call; behavior unchanged.)
+    from trufflepig.main import _finalize_purity_for_final_call
     from trufflepig.tumor_purity import estimate_tumor_purity
     df = _df("COAD")
     analysis = {"purity": estimate_tumor_purity(df, cancer_type="COAD")}      # solid; ESTIMATE not gated
     assert analysis["purity"]["components"]["decomposition"]["mode"] == "solid"
     assert analysis["purity"]["components"]["estimate_gated_for_lineage"] is False
-    _reroute_decomposition_to_call(analysis, df, "DLBC")                      # evidence refines → heme
+    _finalize_purity_for_final_call(analysis, df, "DLBC")                     # evidence refines → heme
     comps = analysis["purity"]["components"]
     assert comps["decomposition"]["mode"] == "heme"
     assert comps["estimate_gated_for_lineage"] is True                        # full recompute → ESTIMATE now gated
     a2 = {"purity": estimate_tumor_purity(df, cancer_type="COAD")}
-    _reroute_decomposition_to_call(a2, df, "READ")                           # still epithelial → no-op
+    _finalize_purity_for_final_call(a2, df, "READ")                          # still epithelial → no-op
     assert a2["purity"]["components"]["decomposition"]["mode"] == "solid"
 
 

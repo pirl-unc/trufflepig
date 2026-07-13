@@ -107,11 +107,11 @@ def classify_without_hint_with_analysis(df):
     """Run the full no-hint cancer-type pipeline and keep the analysis object.
 
     Mirrors ``main._analyze_body`` with no cancer-type hint: the bulk classifier (``analyze_sample``)
-    → the cancer-type evidence selector → the deconvolved local-reference lineage veto → the purity
-    reroute (so the returned purity is consistent with the final call).
+    → the cancer-type evidence selector → the deconvolved local-reference lineage veto → the final
+    purity finalize (so the returned purity is consistent with the final call).
     """
     from trufflepig.main import (
-        _reroute_decomposition_to_call,
+        _finalize_purity_for_final_call,
         _veto_local_reference_lineage_flip,
     )
     analysis = analyze_sample(df)                                       # no cancer_type → auto-detect
@@ -130,7 +130,7 @@ def classify_without_hint_with_analysis(df):
     final_call = (_veto_local_reference_lineage_flip(analysis, df, evidence_call,
                                                      bulk_classifier_call, selected)
                   or bulk_classifier_call)
-    _reroute_decomposition_to_call(analysis, df, final_call)            # purity consistent with the final call
+    _finalize_purity_for_final_call(analysis, df, final_call)           # purity consistent with the final call
     analysis["cancer_type"] = final_call
     analysis["report_scope_cancer_type"] = final_call
     analysis["reference_cancer_type"] = (
