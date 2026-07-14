@@ -35,36 +35,23 @@ def cancer_lineage_group(code):
     return _onc_ont.cancer_lineage_group(code)
 
 
-# Aggregate codes oncoref carries as first-class registry rows but which trufflepig does NOT classify
-# per-sample: it represents them per-organ (CRC_MSI → COAD_MSI/READ_MSI) or per-site (NET → the
-# individual NET_* cohorts). Dropping them keeps ``resolve_cancer_type`` failing loudly rather than
-# emitting a vague whole-group call that has no dedicated markers/reference of its own.
-_UNSUPPORTED_AGGREGATES = frozenset({"NET", "CRC_MSI"})
-
-
 @lru_cache(maxsize=None)
 def cancer_type_registry():
-    """The cancer-type registry DataFrame — oncoref-canonical, minus the aggregate codes trufflepig
-    represents per-organ (:data:`_UNSUPPORTED_AGGREGATES`).
+    """The oncoref-canonical cancer-type registry DataFrame.
 
-    Since pirlygenes now re-exports oncoref's registry, the two code sets are identical, so this is
-    just oncoref's registry with the per-organ aggregates filtered out. (The historical pirlygenes
-    merge — extra pirlygenes-only codes like ASTB, minus oncoref-only aggregates — is obsolete now
-    that oncoref carries every code, incl. ASTB.)
+    Classification support is described by the registry's typed reference fields. In particular,
+    ``reference_source == "member_union"`` makes grouping codes such as NET and CRC_MSI valid
+    expression-reference targets even though they do not have a single per-sample source cohort.
     """
-    reg = _onc_ont.cancer_type_registry()
-    return reg[~reg["code"].astype(str).isin(_UNSUPPORTED_AGGREGATES)].reset_index(drop=True)
+    return _onc_ont.cancer_type_registry()
 
 
 def resolve_cancer_type(*args, **kwargs):
     """Normalize a free-text / alias cancer label to a **trufflepig-supported** registry code.
 
-    Resolution is validated against :func:`cancer_type_registry` (oncoref's registry minus the
-    per-organ aggregates in :data:`_UNSUPPORTED_AGGREGATES`):
+    Resolution is validated against :func:`cancer_type_registry`:
 
     - oncoref resolving to a SUPPORTED code → returned (the common path).
-    - oncoref resolving to a DROPPED aggregate (NET, CRC_MSI) → NOT returned: it would only fail
-      later in purity/reference lookup, so it fails loudly here instead.
     - oncoref unable to resolve at all → a pirlygenes fallback covers any label that only
       pirlygenes' alias table maps (e.g. curated display aliases oncoref doesn't carry).
 
@@ -81,7 +68,7 @@ def resolve_cancer_type(*args, **kwargs):
             return resolved
         onc_err = ValueError(
             f"{resolved!r} resolved by oncoref but is not a trufflepig-supported code "
-            f"(a per-organ aggregate dropped from the registry; use a specific per-organ code)"
+            f"(the canonical registry has no matching row)"
         )
     try:
         pirly_resolved = _pirlygenes().resolve_cancer_type(*args, **kwargs)

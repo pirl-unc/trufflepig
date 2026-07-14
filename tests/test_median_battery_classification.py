@@ -16,6 +16,7 @@ ranker level is fast (~30s for 33 cohorts); the CLI-level battery in
 import pandas as pd
 import pytest
 
+from trufflepig.cancer_ontology import cancer_type_registry, cancer_type_subtypes_of
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import rank_cancer_type_candidates
 
@@ -23,6 +24,23 @@ _ACCEPTED_SIBLING_TOP1 = {
     "COAD": {"READ"},
     "READ": {"COAD"},
 }
+
+
+def _accepted_top1(code: str) -> set[str]:
+    """Entity-compatible calls for an expression-reference median.
+
+    A ``member_union`` column is a computed group reference rather than a truth
+    sample from one entity. Resolving that median to one of its declared member
+    entities is therefore correct hierarchical behavior.
+    """
+    accepted = set(_ACCEPTED_SIBLING_TOP1.get(code, set()))
+    registry = cancer_type_registry().set_index("code")
+    if (
+        code in registry.index
+        and str(registry.loc[code].get("reference_source") or "") == "member_union"
+    ):
+        accepted.update(cancer_type_subtypes_of(code))
+    return accepted
 
 
 def _all_tcga_codes():
@@ -49,7 +67,7 @@ def test_tcga_cohort_median_classifies_as_itself(code):
     ranked = rank_cancer_type_candidates(df)
     assert ranked, f"{code}: ranker returned no candidates"
     top_code = ranked[0]["code"]
-    assert top_code == code or top_code in _ACCEPTED_SIBLING_TOP1.get(code, set()), (
+    assert top_code == code or top_code in _accepted_top1(code), (
         f"{code} median miscalled as {top_code}. Top 3: "
         + ", ".join(f"{r['code']}(gm={r['support_geomean']:.3f})" for r in ranked[:3])
     )

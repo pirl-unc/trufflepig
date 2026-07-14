@@ -1757,19 +1757,30 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
     supplied_code = (
         report_context_code or constrained_code or str(cancer_code or "").strip()
     )
-    comparison_code = parent_context_code or constrained_code or supplied_code
+    comparison_code = constrained_code or supplied_code
     if parent_context_code:
-        # Only compare at the parent level when the parent is a real expression
-        # cohort (e.g. SARC_OS -> SARC, SARC has a cohort). An *abstract grouping*
-        # parent with no own cohort (e.g. COAD's new CRC parent, which exists only
-        # to group COAD/READ) must not hijack the comparison — keep it on the
-        # supplied code, which is itself the cohort.
         from trufflepig.analyze import expression_reference_options
 
-        if not expression_reference_options(
-            parent_context_code, include_fallback=False
+        explicit_parent_context = str(
+            analysis.get("report_scope_parent_cancer_type")
+            or analysis.get("reference_cancer_type")
+            or ""
+        ).strip()
+        # Prefer the supplied label whenever it has its own typed expression reference. A newly
+        # operational member-union parent (for example CRC above COAD) is useful as a fallback but
+        # must not replace a more specific own-cohort label in the RNA concordance check. Preserve
+        # an explicitly recorded parent analysis scope for fine report labels such as SARC_SYN.
+        supplied_has_direct_reference = bool(
+            expression_reference_options(supplied_code, include_fallback=False)
+        )
+        parent_has_direct_reference = bool(
+            expression_reference_options(parent_context_code, include_fallback=False)
+        )
+        if parent_has_direct_reference and (
+            explicit_parent_context == parent_context_code
+            or not supplied_has_direct_reference
         ):
-            comparison_code = constrained_code or supplied_code
+            comparison_code = parent_context_code
     supplied_label = _cancer_type_context_label(supplied_code)
     comparison_label = _cancer_type_context_label(comparison_code)
     candidate_trace = analysis.get("candidate_trace") or []

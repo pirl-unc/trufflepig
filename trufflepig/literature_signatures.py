@@ -281,14 +281,12 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_merkel_literature",
         "Merkel-cell carcinoma epithelial/neuroendocrine marker program",
     ),
-    # ACINIC (acinic cell carcinoma, salivary) has no direct cohort. Member descent
-    # (oncoref#329) routes effective_expression_reference() to its in-lineage salivary
-    # sibling ADCC (adenoid cystic) rather than the cross-family squamous HNSC, so ADCC
-    # must lead parent_context_codes to satisfy the contract (see the GBC entry below for
-    # the analogous member-vs-family case). ADCC is also the biologically better context.
+    # ACINIC (acinic cell carcinoma, salivary) has no direct cohort. Its SGC parent now has
+    # an oncoref member-union reference, which is the canonical family-level context; ADCC
+    # remains a useful data-bearing salivary comparison and HNSC a broader head/neck context.
     LiteratureSignature(
         "ACINIC",
-        ("ADCC", "HNSC"),
+        ("SGC", "ADCC", "HNSC"),
         ("NR4A3", "ANO1", "AQP5", "SOX10", "BCL6"),
         "PMID:31094928",
         "acinic-cell carcinoma NR4A3/acinar-salivary marker program",
@@ -481,12 +479,10 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "cutaneous squamous cell carcinoma keratinocyte squamous program",
     ),
     LiteratureSignature(
-        # COAD is GBC's current effective reference: reparenting GBC under the BTC
-        # biliary grouping routes its fallback through the carcinoma-gi family to
-        # COAD rather than to its data-bearing sibling CHOL (a fallback-priority
-        # follow-up). CHOL/PAAD remain the biologically-preferred biliary contexts.
+        # GBC has no direct cohort. Its BTC parent now supplies the canonical member-union
+        # biliary reference; CHOL and PAAD remain useful organ-level comparisons.
         "GBC",
-        ("CHOL", "PAAD", "COAD"),
+        ("BTC", "CHOL", "PAAD", "COAD"),
         ("KRT7", "KRT19", "CEACAM5", "MUC1", "ERBB2"),
         "curated_pathology_literature",
         "gallbladder adenocarcinoma biliary epithelial program (KRT7/19, HER2)",

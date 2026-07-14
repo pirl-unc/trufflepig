@@ -84,8 +84,17 @@ def test_every_registry_code_has_ontology_marker_expectations():
     # And no stale ontology entries for codes the registry dropped or renamed.
     stale = sorted(set(ontology) - registry_codes)
     assert not stale, f"ontology entries for codes absent from the registry: {stale}"
-    # Abstract parent / grouping nodes get a placeholder ontology entry but no own
-    # high/low markers — exempt them here too (their child cohorts carry markers).
+    # Abstract parent / grouping nodes and computed member-union references get a
+    # placeholder ontology entry but no own high/low markers; their members carry
+    # the marker programs.
+    member_union_nodes = (
+        set(reg.loc[
+            reg["reference_source"].astype(str).eq("member_union"), "code"
+        ].astype(str))
+        if "reference_source" in reg.columns
+        else set()
+    )
+    exempt |= member_union_nodes
     missing_high = [
         code
         for code, entry in ontology.items()
@@ -127,16 +136,15 @@ def test_ontology_records_direct_reference_and_literature_markers_for_adcc():
 
 
 def test_ontology_records_member_cohort_fallback_for_acinic():
-    # ACINIC has no direct cohort of its own; it now documents a fallback to a
-    # reference-backed salivary MEMBER (ADCC) via its registry parent SGC, rather
-    # than the cross-family HNSC squamous cohort it used before member descent.
+    # ACINIC has no direct cohort of its own; its registry parent SGC now supplies
+    # the typed member-union salivary reference.
     entry = tumor_type_ontology_entry("ACINIC")
 
     assert entry is not None
     assert entry.family == "salivary"
-    assert entry.expression_reference_code == "ADCC"
+    assert entry.expression_reference_code == "SGC"
     assert not entry.expression_reference_direct
-    assert "member cohort" in entry.expression_reference_reason
+    assert entry.expression_reference_reason == "registry parent"
 
 
 def test_ontology_has_subtype_contrast_for_brca_her2():

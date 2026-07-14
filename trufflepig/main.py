@@ -5881,6 +5881,12 @@ def _analysis_input_cancer_type(cancer_type):
             return _registry_parent_analysis_scope(report_scope), report_scope
         raise
 
+    # A typed own-cohort or member-union reference is operational in its own right. Check it before
+    # following the registry parent; otherwise a concrete cohort such as COAD is incorrectly
+    # promoted to its now-operational grouping parent CRC.
+    if _has_pan_cancer_expression_cohort(resolved):
+        return resolved, None
+
     parent = _registry_parent_analysis_scope(resolved)
     if parent:
         return parent, resolved

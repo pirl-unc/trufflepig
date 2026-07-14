@@ -110,6 +110,17 @@ def test_centroid_correlations_empty_on_empty_input():
     assert coarse_lineage_scores({}).empty
 
 
+def test_centroid_correlations_ignore_nonfinite_sample_genes():
+    sample = _bulk_cohort_as_sample("COAD")
+    sample["TSPAN6"] = np.nan
+    sample["TNMD"] = np.inf
+
+    corr = centroid_correlations(sample)
+
+    assert not corr.empty
+    assert corr.notna().all()
+
+
 def test_range_plausibility_abstains_for_unknown_code():
     # a code with no deconvolved reference returns 1.0 (abstain, never invents)
     assert range_plausibility("NOT_A_REAL_CODE", {"TP53": 10.0}) == 1.0

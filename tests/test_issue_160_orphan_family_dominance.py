@@ -17,6 +17,7 @@ otherwise prefer a broad-family competitor.
 import pandas as pd
 import pytest
 
+from trufflepig.cancer_ontology import cancer_type_registry
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import (
     TUMOR_PURITY_PARAMETERS,
@@ -248,9 +249,10 @@ def test_coarse_tcga_context_rescues_orphan_from_family_penalty(
 def test_all_tcga_codes_are_either_family_mapped_or_context_rescuable_orphans():
     """Pin the curation contract: family panels are intentionally partial.
 
-    Codes outside ``_CANCER_FAMILY_BY_CODE`` must still have a primary tissue
-    mapping so Step-0 tissue context can rescue them from the non-family
-    penalty when appropriate.
+    Own-cohort codes outside ``_CANCER_FAMILY_BY_CODE`` must still have a primary
+    tissue mapping so Step-0 tissue context can rescue them from the non-family
+    penalty when appropriate. Computed member-union groups do not represent one
+    anatomical tissue and are exempt.
     """
 
     codes = sorted(
@@ -260,7 +262,17 @@ def test_all_tcga_codes_are_either_family_mapped_or_context_rescuable_orphans():
     )
     orphans = [code for code in codes if code not in _CANCER_FAMILY_BY_CODE]
     assert orphans, "test setup should include orphan-family TCGA codes"
-    missing_tissue = [code for code in orphans if code not in CANCER_TO_TISSUE]
+    registry = cancer_type_registry().set_index("code")
+    missing_tissue = [
+        code
+        for code in orphans
+        if code not in CANCER_TO_TISSUE
+        and (
+            code not in registry.index
+            or str(registry.loc[code].get("reference_source") or "")
+            != "member_union"
+        )
+    ]
     assert not missing_tissue
 
 

@@ -118,11 +118,8 @@ def test_context_separates_nutm_report_label_from_fallback_reference():
 
 def test_context_uses_documented_fallback_when_fine_expression_is_missing():
     # ACINIC (acinic cell carcinoma) has no direct cohort of its own. Via its
-    # registry parent SGC (salivary gland carcinoma) it resolves to a
-    # reference-backed salivary MEMBER — ADCC (adenoid cystic) — an in-lineage
-    # salivary reference, rather than the cross-family HNSC squamous fallback it
-    # used before member descent (a grouping should resolve to its own member
-    # before a family stranger; oncoref#329).
+    # registry parent SGC (salivary gland carcinoma) it resolves to the typed
+    # member-union salivary reference rather than borrowing one child cohort.
     context = cancer_type_context_from_analysis(
         {
             "cancer_type": "ACINIC",
@@ -132,32 +129,22 @@ def test_context_uses_documented_fallback_when_fine_expression_is_missing():
 
     assert context.code_for("report") == "ACINIC"
     assert not context.report_has_expression_ref
-    assert context.code_for("expression") == "ADCC"
-    assert context.best_expression_source_kind == "observed_bulk_reference"
-    assert (
-        context.best_expression_fallback_reason == "registry parent; member cohort"
-    )
+    assert context.code_for("expression") == "SGC"
+    assert context.best_expression_source_kind == "observed_pan_cancer_reference"
+    assert context.best_expression_fallback_reason == "registry parent"
     assert not context.best_expression_direct
 
 
-def test_grouping_resolves_to_reference_backed_member_not_family_stranger():
-    # A grouping with no direct reference of its own must fall back to an in-lineage
-    # MEMBER cohort before any cross-family fallback (BTC->CHOL, SGC->ADCC, and NET
-    # to a well-differentiated NET site atom — never small-cell NEC / SCLC). The
-    # proper fix is a pooled member-union reference upstream (oncoref#329); this
-    # pins the trufflepig member-descent interim.
-    for code, member in (("BTC", "CHOL"), ("SGC", "ADCC")):
+def test_grouping_uses_its_typed_member_union_reference():
+    # Groupings with member-union references are direct classifier targets; they
+    # no longer borrow one child cohort as a temporary stand-in.
+    for code in ("BTC", "SGC", "NET"):
         record = effective_expression_reference(code)
         assert record is not None
-        assert record.reference_code == member
-        assert record.fallback_reason == "member cohort"
-        assert not record.direct
-
-    net = effective_expression_reference("NET")
-    assert net is not None
-    assert net.reference_code.startswith("NET_")  # a well-diff NET member
-    assert net.reference_code != "SCLC"  # not the excluded poorly-diff NE carcinoma
-    assert "member cohort" in net.fallback_reason
+        assert record.reference_code == code
+        assert record.source_kind == "observed_pan_cancer_reference"
+        assert record.fallback_reason == ""
+        assert record.direct
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():
@@ -166,7 +153,7 @@ def test_context_markdown_reports_expression_fallback_without_parent_context():
     lines = "\n".join(context.markdown_lines())
 
     assert "Best expression reference" in lines
-    assert "member cohort" in lines
+    assert "registry parent" in lines
 
 
 def test_expression_reference_options_canonicalize_source_codes():
@@ -317,16 +304,15 @@ def test_expression_reference_options_canonicalize_source_codes():
         # below; the old neuroendocrine-fallback example was retired because the
         # rebuild gave every NE code its own cohort — see NEC_MERKEL.)
         (
-            # ACINIC has no direct cohort; via its registry parent SGC it now
-            # falls back to a reference-backed salivary MEMBER (ADCC, observed
-            # bulk), not the cross-family HNSC squamous cohort (member descent).
+            # ACINIC has no direct cohort; its registry parent SGC supplies a
+            # typed member-union salivary reference.
             "ACINIC",
-            "ADCC",
-            "observed_bulk_reference",
-            "GSE294016_BARTL_2025_SGC",
+            "SGC",
+            "observed_pan_cancer_reference",
+            "LITERATURE_CURATED",
             "ensembl_symbol",
             False,
-            "registry parent; member cohort",
+            "registry parent",
         ),
         (
             # NEC_MERKEL gained its own Merkel-cell cohort in the reference rebuild,
