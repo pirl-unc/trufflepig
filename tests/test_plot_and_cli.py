@@ -1750,7 +1750,10 @@ def test_pan_reference_metadata_includes_normal_tissue_gene_sets():
 
     assert meta["method"] == "panref"
     assert meta["feature_kind"] == "pan_reference_genes"
-    assert meta["n_types"] == 33
+    # The packaged cancer reference is intentionally additive; new qualified
+    # cohorts must not break a normal-tissue metadata contract test.
+    assert meta["n_types"] == sum(bool(genes) for genes in meta["per_type"].values())
+    assert meta["n_types"] >= 33
     assert meta["n_normals"] >= 40
     assert meta["per_type"]["COAD"]
     assert meta["per_normal"]["colon"]

@@ -15,7 +15,9 @@ def _tcga_sample(cancer_code):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
+            # A missing reference cell is an unmeasured/undetected gene, not a NaN TPM in the
+            # synthetic sample. Production sample loading likewise presents finite TPM values.
+            "TPM": ref[f"{cancer_code}_TPM"].astype(float).fillna(0.0),
         }
     )
 
@@ -28,7 +30,7 @@ def _normal_tissue_sample(tissue):
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"{tissue}_nTPM"].astype(float),
+            "TPM": ref[f"{tissue}_nTPM"].astype(float).fillna(0.0),
         }
     )
 

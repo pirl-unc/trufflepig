@@ -4,8 +4,7 @@ Both the oncoref resolution and the pirlygenes fallback are validated against th
 ``cancer_type_registry`` (trufflepig's supported code set), so:
   - supported entities/subtypes resolve,
   - pirlygenes-only codes (ASTB) resolve via the fallback,
-  - oncoref-only aggregates dropped from the merged registry (NET, CRC_MSI) are REJECTED
-    rather than returned to fail later in purity/reference lookup.
+  - typed member-union aggregates (NET, CRC_MSI) resolve as supported references.
 """
 import pytest
 
@@ -25,12 +24,11 @@ def test_pirlygenes_only_code_resolves_via_fallback():
 
 
 @pytest.mark.parametrize("aggregate", ["NET", "CRC_MSI"])
-def test_oncoref_only_aggregates_are_rejected(aggregate):
-    """Aggregates oncoref carries but trufflepig drops (no markers/reference) must NOT be
-    returned — they would only fail later in purity/reference lookup. Reject at resolve time."""
-    assert aggregate not in set(cancer_type_registry()["code"].astype(str))
-    with pytest.raises((ValueError, KeyError)):
-        resolve_cancer_type(aggregate)
+def test_member_union_aggregates_are_supported(aggregate):
+    """Typed member-union references are operational even without a single source cohort."""
+    registry = cancer_type_registry().set_index("code")
+    assert registry.loc[aggregate, "reference_source"] == "member_union"
+    assert resolve_cancer_type(aggregate) == aggregate
 
 
 def test_genuinely_unknown_label_raises():

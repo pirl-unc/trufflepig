@@ -257,3 +257,24 @@ def test_veto_preserves_flip_into_embryonal_lineage(monkeypatch):
 
     assert result == "HEPB"  # NOT reverted — the embryonal rescue is preserved
     assert "cancer_type_evidence_vetoed" not in analysis
+
+
+def test_veto_preserves_learned_cross_compartment_rescue():
+    """Do not generalize the local-reference veto to calibrated learned-expression rescues.
+
+    The 598-sample PR-10 Stage-3 gate found samples where both the broad ranker and
+    ``compartment_call`` shared the same wrong compartment while the learned selector recovered the
+    exact truth (GBM, HNSC, BL, GIST, and osteosarcoma representatives). Treating the two correlated
+    whole-profile errors as a universal lock changed exact calls into cross-lineage misses.
+    """
+    analysis = {"cancer_type_evidence": {"selected": {"code": "GBM"}}}
+    result = tp_main._veto_local_reference_lineage_flip(
+        analysis,
+        pd.DataFrame({"gene_id": ["X"], "tpm": [1.0]}),
+        report_scope_cancer_type="GBM",
+        rna_inferred_cancer_type="SARC_LPS_UNSPEC",
+        selected_scope={"selected_by": "learned_expression_classifier"},
+    )
+
+    assert result == "GBM"
+    assert "cancer_type_evidence_vetoed" not in analysis

@@ -353,7 +353,11 @@ def centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
     if not sample_tpm_by_symbol:
         return pd.Series(dtype=float)
     sample = pd.Series(sample_tpm_by_symbol, dtype=float)
-    sample = np.log1p(sample[sample.index.notna()].clip(lower=0))
+    # Reference-derived pseudo-samples and partially mapped real inputs can contain a small number
+    # of NaN/inf values. One non-finite rank makes ``np.corrcoef`` return NaN for every cohort, so
+    # remove those genes before finding the shared informative space.
+    sample = sample[sample.index.notna()].replace([np.inf, -np.inf], np.nan).dropna()
+    sample = np.log1p(sample.clip(lower=0))
     shared = sample.index.intersection(informative)
     if len(shared) < 200:
         return pd.Series(dtype=float)

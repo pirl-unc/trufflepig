@@ -1111,6 +1111,42 @@ as an optimization goal, not a license to overfit: if the remaining misses are
 biologically indistinguishable siblings, the correct outcome may be a
 documented abstention or parent/family call rather than a forced exact label.
 
+### 2026-07-14 598-sample accuracy gate
+
+The typed-reference and calibrated learned-hierarchy increments were evaluated
+end to end on 598 packaged representatives across 126 cohorts.  The production
+calls were exact for 435 rows and nominally entity-compatible for 540/598
+(90.3%); 595/598 (99.5%) stayed in the expected lineage mode.  Applying the
+canonical recursive entity relation fixes one evaluation-only undercount
+(`COAD_MSI -> CRC`), yielding 541/598 (90.5%) without changing any call.
+
+The three nominal cross-lineage rows are not safe threshold-tuning targets:
+
+- `BRCA_rep02` and `BRCA_Basal_rep02` are the same physical vector,
+  `TCGA-AC-A2QH-01`.  The NCI GDC diagnosis is primary metaplastic breast
+  carcinoma (8575/3), explaining its strong mesenchymal program.  It is a
+  dual-lineage atypical representative, not two independent ordinary breast
+  fixtures (oncoref #368).
+- `RB_rep03` is `THR24_4325_S01` / St. Jude `SJRB032300_D1`, from an artifact
+  built with 0 pass, 0 warn, and 15 fail source samples.  It is retained for
+  audit but is not a qualified benchmark row (oncoref #367).
+
+`scripts/eval_per_sample_confusion.py` therefore prints both the untouched
+artifact gate and a source-qualified gate backed by
+`scripts/data/representative-fixture-adjudications.csv`.  The latter excludes
+the all-QC-fail RB row, counts the duplicated metaplastic source once, and
+accepts its documented epithelial/mesenchymal lineage scope.  With the
+recursive entity correction it is 541/596 (90.8%) entity-compatible and
+596/596 (100%) lineage-compatible.  Every denominator adjustment is printed
+with its upstream issue; none changes production selection.
+
+The remaining 54 qualified cross-entity rows are within the correct lineage.
+The largest actionable clusters are hematologic sibling calls (nine LAML-risk
+representatives spread across CML/MPN/FL/B-ALL), GI siblings (especially
+`COAD_MSS -> READ_MSS`, plus esophageal/gastric/biliary swaps), and forced
+Mullerian/squamous epithelial leaves.  They remain discriminator-panel and
+abstention work, not a reason to relax the lineage safety gate.
+
 ## What should disappear
 
 After the redesign, these should become unnecessary or much smaller:

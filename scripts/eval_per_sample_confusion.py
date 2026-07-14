@@ -7,7 +7,7 @@ level (not just lineage).
 Match levels per sample:
   exact     — final call == truth type
   subtype   — parent↔child (e.g. SCLC vs SCLC_ASCL1, COAD vs CRC)
-  family    — same registry family (e.g. COAD vs READ)
+  sibling   — same immediate registry parent (e.g. COAD vs READ under CRC)
   lineage   — same lineage mode only (solid/mesenchymal/heme/embryonal), different entity
   miss      — different lineage
 
@@ -19,6 +19,7 @@ import multiprocessing as mp
 import os
 import sys
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
@@ -30,6 +31,7 @@ from pirlygenes.expression.accessors import (
     representative_cohort_samples,
 )
 from pirlygenes.gene_sets_cancer import cancer_lineage_group, cancer_type_registry
+from trufflepig.cancer_ontology import cancer_codes_entity_compatible
 from trufflepig.cancer_type_evidence import _primary_tissue_key_for_code
 from trufflepig.expression_decomposition import _group_to_mode
 from trufflepig.cancer_type_signal_matrix import (
@@ -44,6 +46,11 @@ from eval_nohint_validation import full_granularity_analysis, full_granularity_c
 _REGISTRY = {r["code"]: r for r in cancer_type_registry().to_dict("records")}
 _NAME = {code: str(row.get("name") or code) for code, row in _REGISTRY.items()}
 _REG_UPPER = {code.upper(): code for code in _REGISTRY}
+_FIXTURE_ADJUDICATIONS = (
+    Path(__file__).resolve().parent
+    / "data"
+    / "representative-fixture-adjudications.csv"
+)
 
 
 def name(code):
@@ -104,12 +111,152 @@ def match_level(call, truth):
     pc, pt = _parent(cc), _parent(ct)
     if pc and pc == pt:
         return "sibling"
+    # The registry can express entity compatibility through more than one
+    # parent hop (for example COAD_MSI -> COAD -> CRC).  The old one-level
+    # harness under-counted those calls even though the production ontology
+    # explicitly treats them as entity-compatible.
+    if cancer_codes_entity_compatible(cc, ct):
+        return "subtype"
     if _lineage(cc) and _lineage(cc) == _lineage(ct):
         return "lineage"
     oc, ot = _organ(cc), _organ(ct)
     if oc and oc == ot:
         return "organ"
     return "miss"
+
+
+def load_fixture_adjudications(path=None):
+    """Load independent source/QC adjudications for the representative gate.
+
+    These rows never alter a production call.  They only let the evaluation
+    distinguish nominal artifact labels from qualified, source-grouped truth:
+    exact duplicate aliases count once, invalid fixtures are excluded, and a
+    documented dual-lineage tumor can name both acceptable lineage modes.
+    """
+    source = Path(path) if path is not None else _FIXTURE_ADJUDICATIONS
+    if not source.exists():
+        return {}
+    frame = pd.read_csv(source, keep_default_na=False)
+    required = {
+        "representative_id",
+        "source_group_id",
+        "truth_code",
+        "benchmark_eligible",
+        "allowed_lineage_modes",
+        "adjudication",
+        "source_issue",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(
+            f"fixture adjudication file is missing columns: {sorted(missing)}"
+        )
+    out = {}
+    for row in frame.to_dict("records"):
+        representative_id = str(row["representative_id"]).strip()
+        if not representative_id or representative_id in out:
+            raise ValueError(
+                "fixture adjudication representative_id values must be non-empty and unique"
+            )
+        eligible = str(row["benchmark_eligible"]).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        modes = tuple(
+            mode.strip()
+            for mode in str(row["allowed_lineage_modes"]).split(";")
+            if mode.strip()
+        )
+        out[representative_id] = {
+            **row,
+            "benchmark_eligible": eligible,
+            "allowed_lineage_modes": modes,
+        }
+    return out
+
+
+def qualified_gate_summary(results, adjudications=None):
+    """Score qualified representatives once per independent source group.
+
+    Returns raw counts plus the exact excluded/adjudicated rows so a 100% result
+    cannot conceal why its denominator differs from the nominal artifact gate.
+    Group correctness is conservative: every alias in a source group must pass.
+    """
+    adjudications = (
+        load_fixture_adjudications()
+        if adjudications is None
+        else adjudications
+    )
+    groups = collections.defaultdict(list)
+    excluded = []
+    adjudicated = []
+    for truth, sample, call, level in results:
+        row = adjudications.get(sample, {})
+        if row and str(row.get("truth_code") or "") != str(truth):
+            raise ValueError(
+                f"fixture adjudication truth mismatch for {sample}: "
+                f"{row.get('truth_code')} != {truth}"
+            )
+        if row and not bool(row.get("benchmark_eligible")):
+            excluded.append(
+                {
+                    "truth": truth,
+                    "sample": sample,
+                    "call": call,
+                    "adjudication": row.get("adjudication"),
+                    "source_issue": row.get("source_issue"),
+                }
+            )
+            continue
+        allowed_modes = tuple(row.get("allowed_lineage_modes") or ())
+        nominal_lineage_correct = level in {
+            "exact",
+            "subtype",
+            "sibling",
+            "lineage",
+        }
+        lineage_correct = bool(
+            nominal_lineage_correct
+            or (allowed_modes and _lineage(call) in allowed_modes)
+        )
+        if row:
+            adjudicated.append(
+                {
+                    "truth": truth,
+                    "sample": sample,
+                    "call": call,
+                    "nominal_level": level,
+                    "allowed_lineage_modes": list(allowed_modes),
+                    "lineage_correct": lineage_correct,
+                    "adjudication": row.get("adjudication"),
+                    "source_issue": row.get("source_issue"),
+                }
+            )
+        group_id = str(row.get("source_group_id") or sample)
+        groups[group_id].append(
+            {
+                "lineage_correct": lineage_correct,
+                "entity_correct": level in {"exact", "subtype", "sibling"},
+            }
+        )
+
+    lineage_correct = sum(
+        all(member["lineage_correct"] for member in members)
+        for members in groups.values()
+    )
+    entity_correct = sum(
+        all(member["entity_correct"] for member in members)
+        for members in groups.values()
+    )
+    return {
+        "n": len(groups),
+        "lineage_correct": lineage_correct,
+        "entity_correct": entity_correct,
+        "excluded": excluded,
+        "adjudicated": adjudicated,
+        "aliases_collapsed": sum(len(members) - 1 for members in groups.values()),
+    }
 
 
 # data/format failures we tolerate per sample (anything else propagates so genuine bugs surface)
@@ -279,10 +426,44 @@ def main(workers=None, signal_matrix_out=None, signal_summary_out=None):
     n = len(results)
     compatible = levels["exact"] + levels["subtype"] + levels["sibling"]
     print(f"\n==== {n} samples across {len(types)} types ====")
-    for level in ("exact", "subtype", "sibling", "lineage", "miss"):
+    for level in ("exact", "subtype", "sibling", "lineage", "organ", "miss"):
         print(f"  {level:8s}: {levels[level]:4d}  ({100*levels[level]/n:.0f}%)")
     print(f"  entity-correct (exact+subtype+sibling): {compatible}/{n} ({100*compatible/n:.0f}%)")
-    print(f"  lineage-correct (all but miss): {n-levels['miss']}/{n} ({100*(n-levels['miss'])/n:.0f}%)")
+    lineage_compatible = compatible + levels["lineage"]
+    print(
+        "  lineage-correct (same compartment): "
+        f"{lineage_compatible}/{n} ({100*lineage_compatible/n:.0f}%)"
+    )
+
+    qualified = qualified_gate_summary(results)
+    qn = qualified["n"]
+    qentity = qualified["entity_correct"]
+    qlineage = qualified["lineage_correct"]
+    print("\n==== qualified, source-grouped gate ====")
+    print(
+        f"  entity-compatible: {qentity}/{qn} "
+        f"({100*qentity/qn:.1f}%)"
+    )
+    print(
+        f"  lineage-compatible: {qlineage}/{qn} "
+        f"({100*qlineage/qn:.1f}%)"
+    )
+    print(
+        f"  qualification accounting: {len(qualified['excluded'])} excluded, "
+        f"{qualified['aliases_collapsed']} duplicate alias collapsed, "
+        f"{len(qualified['adjudicated'])} adjudicated rows"
+    )
+    for row in qualified["excluded"]:
+        print(
+            f"    excluded {row['sample']}: {row['adjudication']} "
+            f"({row['source_issue']})"
+        )
+    for row in qualified["adjudicated"]:
+        print(
+            f"    adjudicated {row['sample']}: {row['adjudication']} "
+            f"allowed={','.join(row['allowed_lineage_modes'])} "
+            f"({row['source_issue']})"
+        )
 
     # confusion: per truth type, the distribution of final calls (only types with any non-exact call)
     by_type = collections.defaultdict(collections.Counter)
