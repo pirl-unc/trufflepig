@@ -1,0 +1,4 @@
+representative_id,source_group_id,source_sample,truth_code,benchmark_eligible,allowed_lineage_modes,adjudication,source_issue,evidence
+BRCA_rep02,TCGA-AC-A2QH-01,TCGA-AC-A2QH-01,BRCA,true,solid;mesenchymal,metaplastic_dual_lineage,https://github.com/pirl-unc/oncoref/issues/368#issuecomment-4970819812,"Exact source-vector match; NCI GDC diagnosis is primary metaplastic breast carcinoma (8575/3)."
+BRCA_Basal_rep02,TCGA-AC-A2QH-01,TCGA-AC-A2QH-01,BRCA_Basal,true,solid;mesenchymal,metaplastic_dual_lineage,https://github.com/pirl-unc/oncoref/issues/368#issuecomment-4970819812,"Same physical vector as BRCA_rep02; count once and allow the documented metaplastic mesenchymal program."
+RB_rep03,SJ032300,THR24_4325_S01,RB,false,embryonal,all_source_samples_qc_fail,https://github.com/pirl-unc/oncoref/issues/367#issuecomment-4970824892,"Exact source-vector match; artifact was built from 0 pass / 0 warn / 15 fail samples and lacks the expected RB program."
