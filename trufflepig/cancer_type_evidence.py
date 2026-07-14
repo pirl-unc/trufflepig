@@ -118,6 +118,26 @@ _LEARNED_EXPRESSION_MIN_MARGIN = 0.10
 _LEARNED_EXPRESSION_CONTEXT_FREE_MIN_MARGIN = 0.50
 _LEARNED_EXPRESSION_MIN_CONTEXT_SUPPORT = 0.30
 _LEARNED_EXPRESSION_MIN_HIERARCHICAL_CONTEXT = 0.70
+# Final hierarchy adjudication is deliberately stricter than ordinary learned
+# evidence admission.  On the deterministic 3-train/2-test representative
+# split, hierarchy-entity calls at p>=0.97 and margin>=0.50 were 50/50
+# entity-compatible.  Family and compartment agreement make the release gate
+# narrower still.
+_LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_SUPPORT = 0.97
+_LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_MARGIN = 0.50
+_LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_FAMILY_SUPPORT = 0.90
+_LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_COMPARTMENT_SUPPORT = 0.90
+# Cross-lineage arbitration has two independently defensible paths.  The
+# strong-entity path was 79/79 lineage-compatible on the leakage-free holdout
+# at p>=0.85/margin>=0.50.  The lower entity path requires near-unanimous
+# family+compartment votes plus a selection-grade curated marker program; it
+# recovers heterogeneous sibling-distributed cases without memorizing weak
+# all-QC-fail/outlier representatives.
+_LEARNED_HIERARCHY_LINEAGE_STRONG_ENTITY_SUPPORT = 0.85
+_LEARNED_HIERARCHY_LINEAGE_STRONG_ENTITY_MARGIN = 0.50
+_LEARNED_HIERARCHY_LINEAGE_CORROBORATED_ENTITY_SUPPORT = 0.50
+_LEARNED_HIERARCHY_LINEAGE_CORROBORATED_FAMILY_SUPPORT = 0.95
+_LEARNED_HIERARCHY_LINEAGE_CORROBORATED_COMPARTMENT_SUPPORT = 0.95
 _FUSED_EVIDENCE_CONTEXT_FREE_LEARNED_PROBABILITY = 0.97
 _FUSED_EVIDENCE_CONTEXT_FREE_CENTROID_SUPPORT = 0.35
 _FUSED_EVIDENCE_MIN_SCORE = 0.25
@@ -4402,6 +4422,7 @@ def _add_learned_hierarchy_candidate_features(
         supports_by_stage,
         "entity",
     )
+    top_entity_margin = _top_learned_stage_margin(hierarchical_votes, "entity")
     flat_predictions: list[tuple[str, float]] = []
     build_mismatch_repair_sibling_vote = None
     build_mismatch_repair_release_vote = None
@@ -4523,6 +4544,10 @@ def _add_learned_hierarchy_candidate_features(
                     float(top_entity_support),
                     4,
                 ),
+                "learned_expression_top_entity_margin": round(
+                    float(top_entity_margin),
+                    4,
+                ),
                 "learned_expression_family_support": round(
                     float(family_support),
                     4,
@@ -4553,6 +4578,235 @@ def _add_learned_hierarchy_candidate_features(
                 ),
             }
         )
+
+
+@lru_cache(maxsize=1)
+def _learned_hierarchy_entity_contexts() -> frozenset[tuple[str, str, str]]:
+    """Return valid ``(entity, family, compartment)`` paths from the registry.
+
+    Hierarchy stages are trained separately, so their top labels must be
+    checked for semantic coherence before they can arbitrate a final call.  A
+    broad entity such as ``SARC`` can legitimately pair with a child family
+    such as ``SARC_OTHER``; deriving paths from every registry leaf handles
+    that without diagnosis-specific exceptions.
+    """
+
+    try:
+        from .expression_classifier import (
+            _learned_compartment_for_code,
+            _learned_entity_for_code,
+            _learned_family_for_code,
+        )
+    except ImportError:
+        return frozenset()
+    contexts: set[tuple[str, str, str]] = set()
+    for code in _registry_by_code():
+        entity = _clean(_learned_entity_for_code(code))
+        family = _clean(_learned_family_for_code(code))
+        compartment = _clean(_learned_compartment_for_code(code))
+        if entity:
+            contexts.add((entity, family, compartment))
+    return frozenset(contexts)
+
+
+def _learned_hierarchy_path_consistent(
+    entity_code: str,
+    *,
+    family_label: str = "",
+    compartment_label: str = "",
+) -> bool:
+    entity = _clean(entity_code)
+    family = _clean(family_label)
+    compartment = _clean(compartment_label)
+    if not entity:
+        return False
+    return any(
+        path_entity == entity
+        and (not family or path_family == family)
+        and (not compartment or path_compartment == compartment)
+        for path_entity, path_family, path_compartment
+        in _learned_hierarchy_entity_contexts()
+    )
+
+
+def _learned_hierarchy_details(
+    hypotheses: Mapping[str, CancerTypeEvidence],
+    selected: CancerTypeEvidence | None,
+) -> Mapping[str, Any]:
+    rows = ([selected] if selected is not None else []) + list(hypotheses.values())
+    for row in rows:
+        if row is None:
+            continue
+        if _clean(row.details.get("learned_expression_top_entity_label")):
+            return row.details
+    return {}
+
+
+def _adjudicate_selection_with_learned_hierarchy(
+    hypotheses: dict[str, CancerTypeEvidence],
+    selected: CancerTypeEvidence | None,
+    *,
+    sample_tpm_by_symbol: Mapping[str, float] | None = None,
+) -> CancerTypeEvidence | None:
+    """Apply calibrated hierarchy arbitration after ordinary fused selection.
+
+    Two narrow paths are allowed:
+
+    * a high-precision entity refinement with strong, mutually coherent
+      entity/family/compartment votes; and
+    * a lineage-only safety path when the selected and learned entities occupy
+      different lineages but the entity/family stages form a valid hierarchy.
+
+    Definitive molecular selectors and molecular/status annotation codes are
+    never overridden by this expression-only adjudicator.
+    """
+
+    if selected is None or selected.selected_by in _DEFINITIVE_SELECTORS:
+        return selected
+    details = _learned_hierarchy_details(hypotheses, selected)
+    entity_code = _clean(details.get("learned_expression_top_entity_label"))
+    if not entity_code or entity_code not in _registry_by_code():
+        return selected
+    if entity_code == selected.cancer_type:
+        return selected
+    if _orthogonal_axes_that_block_report_label(entity_code):
+        return selected
+
+    entity_support = _safe_float(
+        details.get("learned_expression_top_entity_support")
+    )
+    entity_margin = _safe_float(
+        details.get("learned_expression_top_entity_margin")
+    )
+    family_label = _clean(details.get("learned_expression_top_family_label"))
+    family_support = _safe_float(
+        details.get("learned_expression_top_family_support")
+    )
+    compartment_label = _clean(
+        details.get("learned_expression_top_compartment_label")
+    )
+    compartment_support = _safe_float(
+        details.get("learned_expression_top_compartment_support")
+    )
+    family_consistent = _learned_hierarchy_path_consistent(
+        entity_code,
+        family_label=family_label,
+    )
+    compartment_consistent = _learned_hierarchy_path_consistent(
+        entity_code,
+        compartment_label=compartment_label,
+    )
+
+    try:
+        from .cancer_ontology import cancer_codes_entity_compatible
+    except ImportError:
+        entity_incompatible = entity_code != selected.cancer_type
+    else:
+        entity_incompatible = not cancer_codes_entity_compatible(
+            entity_code,
+            selected.cancer_type,
+        )
+
+    strong_entity_refinement = bool(
+        entity_incompatible
+        and family_consistent
+        and compartment_consistent
+        and entity_support
+        >= _LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_SUPPORT
+        and entity_margin >= _LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_MARGIN
+        and family_support
+        >= _LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_FAMILY_SUPPORT
+        and compartment_support
+        >= _LEARNED_HIERARCHY_ENTITY_ADJUDICATION_MIN_COMPARTMENT_SUPPORT
+    )
+    selected_lineage = _code_lineage_token(selected.cancer_type)
+    entity_lineage = _code_lineage_token(entity_code)
+    lineage_disagreement = bool(
+        selected_lineage
+        and entity_lineage
+        and selected_lineage != entity_lineage
+    )
+    entity_hypothesis = hypotheses.get(entity_code)
+    marker_coherence = (
+        entity_hypothesis.details.get("learned_expression_marker_coherence")
+        if entity_hypothesis is not None
+        else {}
+    )
+    if not marker_coherence and sample_tpm_by_symbol:
+        marker_coherence = _marker_coherence(
+            entity_code,
+            sample_tpm_by_symbol,
+        )
+    marker_corroborated = bool(
+        isinstance(marker_coherence, Mapping)
+        and _marker_coherence_selection_grade(marker_coherence)
+    )
+    strong_lineage_entity = bool(
+        entity_support
+        >= _LEARNED_HIERARCHY_LINEAGE_STRONG_ENTITY_SUPPORT
+        and entity_margin
+        >= _LEARNED_HIERARCHY_LINEAGE_STRONG_ENTITY_MARGIN
+    )
+    corroborated_lineage_entity = bool(
+        compartment_consistent
+        and marker_corroborated
+        and entity_support
+        >= _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_ENTITY_SUPPORT
+        and family_support
+        >= _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_FAMILY_SUPPORT
+        and compartment_support
+        >= _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_COMPARTMENT_SUPPORT
+    )
+    lineage_safety = bool(
+        lineage_disagreement
+        and family_consistent
+        and (strong_lineage_entity or corroborated_lineage_entity)
+    )
+    if not strong_entity_refinement and not lineage_safety:
+        return selected
+
+    candidate = _hypothesis(hypotheses, entity_code)
+    candidate.add_source("learned_expression_classifier")
+    candidate.learned_expression_support = max(
+        candidate.learned_expression_support,
+        entity_support,
+    )
+    candidate.expression_reference_cancer_type = (
+        candidate.expression_reference_cancer_type or entity_code
+    )
+    # Preserve every hierarchy field so the evidence graph and report explain
+    # the adjudication even when the top entity was not already a hypothesis.
+    candidate.details.update(
+        {
+            key: value
+            for key, value in details.items()
+            if str(key).startswith("learned_expression_")
+        }
+    )
+    mode = (
+        "high_precision_entity_refinement"
+        if strong_entity_refinement
+        else "cross_lineage_safety"
+    )
+    candidate.details.update(
+        {
+            "learned_hierarchy_adjudicated": True,
+            "learned_hierarchy_adjudication_mode": mode,
+            "learned_hierarchy_previous_code": selected.cancer_type,
+            "learned_hierarchy_previous_selector": selected.selected_by,
+        }
+    )
+    candidate.basis = (
+        f"learned expression hierarchy adjudicated {selected.cancer_type} to "
+        f"{entity_code} ({mode.replace('_', ' ')})"
+    )
+    candidate.consider_for_report_label(
+        selected_by="learned_expression_classifier",
+        can_select=True,
+        blocking_reasons=(),
+        priority=(4, 1.0 + entity_support + 0.25 * family_support),
+    )
+    return candidate if candidate.can_select_report_label else selected
 
 
 def _add_learned_expression_classifier_features(
@@ -8352,7 +8606,6 @@ def select_report_scope_from_evidence(
         cen=_cen,
     )
 
-    rows = list(hypotheses.values())
     selected = _pick_selected(
         hypotheses,
         cen=_cen,
@@ -8361,6 +8614,12 @@ def select_report_scope_from_evidence(
     )
     if selected is None:
         selected = _fallback_context_selected(hypotheses, analysis)
+    selected = _adjudicate_selection_with_learned_hierarchy(
+        hypotheses,
+        selected,
+        sample_tpm_by_symbol=sample_tpm_by_symbol,
+    )
+    rows = list(hypotheses.values())
 
     primary_context = _top_code(analysis)
     primary_context_support = _candidate_support_by_code(analysis).get(

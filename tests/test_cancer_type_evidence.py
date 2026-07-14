@@ -455,6 +455,245 @@ def test_candidate_wide_hierarchy_support_scores_fused_evidence():
     assert blockers == []
 
 
+def _top_hierarchy_details(
+    entity,
+    *,
+    entity_support,
+    entity_margin,
+    family,
+    family_support,
+    compartment,
+    compartment_support,
+):
+    return {
+        "learned_expression_top_entity_label": entity,
+        "learned_expression_top_entity_support": entity_support,
+        "learned_expression_top_entity_margin": entity_margin,
+        "learned_expression_top_family_label": family,
+        "learned_expression_top_family_support": family_support,
+        "learned_expression_top_compartment_label": compartment,
+        "learned_expression_top_compartment_support": compartment_support,
+    }
+
+
+def test_learned_hierarchy_adjudicator_repairs_coherent_cross_lineage_call():
+    """A marker-corroborated hierarchy can act as a lineage safety net.
+
+    NBL's entity probability is distributed among siblings, but the separately
+    trained family/compartment stages and curated marker program all agree on
+    the embryonal path.  Together they can reject a neuroendocrine MTC fallback
+    without making the moderate entity probability a general-purpose selector.
+    """
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("MTC", "fused_evidence", (3, 2.0, 5))
+    selected.details.update(
+        _top_hierarchy_details(
+            "NBL",
+            entity_support=0.5351,
+            entity_margin=0.0765,
+            family="NBL",
+            family_support=0.9959,
+            compartment="embryonal",
+            compartment_support=0.9976,
+        )
+    )
+    nbl = CancerTypeEvidence(cancer_type="NBL")
+    nbl.details["learned_expression_marker_coherence"] = {
+        "status": "consistent",
+        "detected": 6,
+        "total": 8,
+        "required_for_consistent": 4,
+        "detected_fraction": 0.75,
+    }
+    hypotheses = {selected.cancer_type: selected, "NBL": nbl}
+
+    result = _adjudicate_selection_with_learned_hierarchy(hypotheses, selected)
+
+    assert result.cancer_type == "NBL"
+    assert result.selected_by == "learned_expression_classifier"
+    assert result.details["learned_hierarchy_adjudication_mode"] == "cross_lineage_safety"
+    assert result.details["learned_hierarchy_previous_code"] == "MTC"
+
+
+def test_learned_hierarchy_adjudicator_allows_calibrated_compartment_escape():
+    """A strong held-out-calibrated entity vote can correct a shared compartment bias."""
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC_LPS_UNSPEC", "fused_evidence", (3, 2.0, 5))
+    selected.details.update(
+        _top_hierarchy_details(
+            "GBM",
+            entity_support=0.9826,
+            entity_margin=0.9801,
+            family="cns-glial",
+            family_support=0.9929,
+            # The compartment stage shares the mesenchymal/stromal bias.  The
+            # strong entity path is calibrated to escape it.
+            compartment="mesenchymal",
+            compartment_support=0.9982,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected},
+        selected,
+    )
+
+    assert result.cancer_type == "GBM"
+    assert result.details["learned_hierarchy_adjudication_mode"] == "cross_lineage_safety"
+
+
+def test_learned_hierarchy_adjudicator_withholds_weak_uncorroborated_rb_vote():
+    """Do not memorize the all-QC-fail RB representative to manufacture accuracy."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC_LPS_UNSPEC", "fused_evidence", (3, 2.0, 5))
+    selected.details.update(
+        _top_hierarchy_details(
+            "RB",
+            entity_support=0.2781,
+            entity_margin=0.1331,
+            family="embryonal",
+            family_support=0.4690,
+            compartment="embryonal",
+            compartment_support=0.7632,
+        )
+    )
+    rb = CancerTypeEvidence(cancer_type="RB")
+    rb.details["learned_expression_marker_coherence"] = {
+        "status": "partial",
+        "detected": 1,
+        "total": 7,
+        "required_for_consistent": 4,
+        "detected_fraction": 0.1429,
+    }
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected, "RB": rb},
+        selected,
+    )
+
+    assert result is selected
+
+
+def test_learned_hierarchy_adjudicator_rejects_incoherent_family_path():
+    """Independent hierarchy stages must describe a biologically valid path."""
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("RB", "fused_evidence", (3, 2.0, 5))
+    selected.details.update(
+        _top_hierarchy_details(
+            "MPN",
+            entity_support=0.60,
+            entity_margin=0.30,
+            family="heme-bcell",  # MPN is not a B-cell family entity.
+            family_support=0.80,
+            compartment="heme",
+            compartment_support=0.97,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected},
+        selected,
+    )
+
+    assert result is selected
+
+
+def test_learned_hierarchy_adjudicator_refines_entity_at_calibrated_precision():
+    """A very strong coherent hierarchy can resolve a same-lineage entity error."""
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.details.update(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.985,
+            entity_margin=0.90,
+            family="carcinoma-gi",
+            family_support=0.97,
+            compartment="epithelial",
+            compartment_support=0.99,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected},
+        selected,
+    )
+
+    assert result.cancer_type == "STAD"
+    assert result.details["learned_hierarchy_adjudication_mode"] == (
+        "high_precision_entity_refinement"
+    )
+
+
+def test_learned_hierarchy_entity_refinement_withholds_below_calibrated_support():
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.details.update(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.969,
+            entity_margin=0.90,
+            family="carcinoma-gi",
+            family_support=0.97,
+            compartment="epithelial",
+            compartment_support=0.99,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected},
+        selected,
+    )
+
+    assert result is selected
+
+
+def test_learned_hierarchy_adjudicator_never_overrides_definitive_fusion():
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC_EWS", "direct_fusion", (5, 2.0, 6))
+    selected.details.update(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.999,
+            entity_margin=0.99,
+            family="carcinoma-gi",
+            family_support=0.99,
+            compartment="epithelial",
+            compartment_support=0.99,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {selected.cancer_type: selected},
+        selected,
+    )
+
+    assert result is selected
+
+
 def test_nutm_rna_surrogate_promotes_with_strong_squamous_runner_up():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
