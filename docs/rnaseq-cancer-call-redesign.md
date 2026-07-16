@@ -1147,6 +1147,39 @@ representatives spread across CML/MPN/FL/B-ALL), GI siblings (especially
 Mullerian/squamous epithelial leaves.  They remain discriminator-panel and
 abstention work, not a reason to relax the lineage safety gate.
 
+### 2026-07-15 integrative entity adjudication
+
+The follow-on entity layer does not add per-diagnosis probability cutoffs.
+Instead, it compares the active call and the learned entity candidate across
+six evidence groups:
+
+1. learned full-profile entity probability;
+2. pan-cancer signature support;
+3. whole-profile centroid neighborhood;
+4. curated positive/negative marker programs (one group even when several
+   marker selectors contributed);
+5. exact/deconvolved expression-reference support; and
+6. independent composition-reference support.
+
+A leaf refinement below the already calibrated hierarchy gate requires the
+learned vote plus two non-learned groups and an available-axis majority. This
+prevents correlated subfeatures or one highly confident classifier from being
+counted as independent corroboration.
+
+When the channels split between two registry descendants, the system may
+abstain to their deepest shared reportable ancestor. `COAD*` versus `READ*`
+therefore resolves to `CRC` when the RNA cannot defend an anatomic leaf; it is
+not forced by inventing a small marker margin. Downstream subtype resolution
+must preserve that abstention. Molecular/status predictions are similarly
+rolled up before entity arbitration (`LAML_ELN*` supports `LAML`) so RNA does
+not claim a clinical molecular or risk state.
+
+Every comparison is serialized as `entity_evidence_consensus`, including both
+supports and the preference on each axis, vote counts, the previous call, the
+learned candidate, and any common-ancestor outcome. The 598-sample source-
+qualified gate remains the acceptance test; upstream pirlygenes #266 supplies
+new GI/heme discriminators rather than downstream sample exceptions.
+
 ## What should disappear
 
 After the redesign, these should become unnecessary or much smaller:

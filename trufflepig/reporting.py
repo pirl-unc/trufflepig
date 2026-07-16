@@ -2309,6 +2309,26 @@ def candidate_winning_subtype_for_analysis(analysis):
         )
     ):
         return None
+    if (
+        _clean_text(selected_scope.get("cancer_type")) == active_code
+        and _clean_text(selected_scope.get("selected_by"))
+        == "entity_evidence_consensus"
+    ):
+        # The integrative layer either selected an entity from independent
+        # evidence or intentionally withheld a child because those channels
+        # disagreed. Re-applying the ranker's raw ``winning_subtype`` here
+        # would silently undo that decision in the headline, therapy scope,
+        # and evaluation harness. A later integrative subtype layer may refine
+        # it; the pre-consensus ranker may not.
+        return None
+    if (
+        _clean_text(selected_scope.get("cancer_type")) == active_code
+        and bool(selected_scope.get("learned_hierarchy_adjudicated"))
+    ):
+        # The calibrated hierarchy is also a post-ranker decision. Preserve it
+        # for the same reason: a stale subtype attached to the earlier broad
+        # candidate cannot get a second, unaudited chance to change the entity.
+        return None
 
     return _clean_text(row.get("winning_subtype")) or None
 

@@ -11,6 +11,22 @@ under the merging PR title and the date the breaking change landed on
 
 ## Unreleased — staged cancer-type evidence graph
 
+### Entity uncertainty and parent abstention
+
+- Same-lineage entity arbitration now compares learned full-profile,
+  pan-cancer signature, whole-profile centroid, curated positive/negative
+  marker, exact-reference, and composition-reference evidence as independent
+  groups. A lower-confidence learned leaf can only replace the active call
+  when it wins with at least two non-learned groups; one strong model cannot
+  select a leaf by itself.
+- When credible evidence is split between descendant branches, the call can
+  abstain to their deepest reportable registry parent (for example `CRC` for a
+  COAD-versus-READ conflict). The parent decision and every axis vote are
+  retained in `staged_evidence_graph` and the signal-matrix audit output.
+- Learned molecular/risk labels support their reportable parent entity rather
+  than being emitted as RNA-established status claims (for example an
+  `LAML_ELN*` vote may support `LAML`, never the ELN risk group itself).
+
 ### New surface
 
 - `cancer_type_evidence` now includes a `staged_evidence_graph` with a
