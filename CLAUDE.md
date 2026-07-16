@@ -4,16 +4,18 @@
 
 **Always use `./test.sh`, not raw `pytest`.**
 
-`pyproject.toml` sets `addopts = "-n auto"`, which makes pytest-xdist spawn one
-worker per logical CPU (~10 on the dev machine). Each worker re-imports
-trufflepig + pirlygenes and loads the reference matrices (`pan-cancer-expression`,
-`tcga-deconvolved-expression`, `hpa-cell-type-expression`, `subtype-deconvolved-expression`),
-so peak RSS lands around 1.5 GB per worker — ~15 GB total. On a 32 GB Mac that's
-fine alone, but OOM-bait when other pytest suites or fat IDEs are running.
+Direct and IDE-driven pytest launches default to serial. A repository-root
+pytest guard rejects `-n auto` or any unbudgeted request for more than one
+worker before xdist starts its pool. Each worker re-imports trufflepig +
+pirlygenes and loads the reference matrices (`pan-cancer-expression`,
+`tcga-deconvolved-expression`, `hpa-cell-type-expression`,
+`subtype-deconvolved-expression`). The panic snapshot caught workers at
+6.3–7.4 GB RSS, and a later serial full-suite run reached ~9.6 GB.
 
-`./test.sh` computes `min(cpu_count, available_RAM / 1.5GB)` and passes it as
-`-n` (xdist resolves duplicate `-n` flags to the last one), so it stays under
-memory pressure.
+`./test.sh` reserves at least 8 GB for the OS/apps, budgets at least 12 GB per
+worker, and passes the resulting safe cap as `-n`. Both the wrapper and root
+pytest guard use one per-user lock, so accidental overlapping suites fail
+before a second worker pool starts.
 
 Pass extra pytest args after the script name:
 

@@ -2,10 +2,10 @@
 # Run the trufflepig test suite with a memory- and CPU-aware pytest-xdist
 # worker count.
 #
-# Background: `-n auto` in pyproject.toml spawns one worker per logical
-# core. Each worker loads its own DataFrame state, and running several
-# repos' suites concurrently across the laptop has turned that into a
-# fork bomb that OOMs a 32 GB Mac. We cap the worker count two ways:
+# Background: each xdist worker loads its own DataFrame state, and running
+# multiple suites concurrently across the laptop turned that into a workload
+# that OOMed a 32 GB Mac. Direct/IDE pytest now defaults to serial, while this
+# wrapper enables only the xdist concurrency that current RAM can support:
 #
 #   - CPU reserve: leave 1-2 cores idle so the box stays responsive
 #     (1 core -> 1; 2-3 cores -> cores-1; 4+ cores -> cores-2).
@@ -15,12 +15,12 @@
 #     one from this checkout is already active.  Two independently "safe"
 #     pools can otherwise race on the same pre-launch free-RAM reading.
 #
-# xdist resolves multiple -n flags to the last value, so this overrides
-# any `-n auto` baked into config.
+# A root conftest independently rejects worker counts above this wrapper's
+# approval and takes the same lock for direct/IDE launches.
 #
 # Tunables (env vars):
-#   PER_WORKER_GB    peak per-worker memory budget in GB (default: 12)
-#   RAM_RESERVE_GB   RAM kept for the OS and other apps (default: 8)
+#   PER_WORKER_GB    peak per-worker memory budget in GB (default/minimum: 12)
+#   RAM_RESERVE_GB   RAM kept for the OS and other apps (default/minimum: 8)
 #   TEST_SH_MIN      floor on workers (default: 1)
 #   TEST_SH_MAX      hard ceiling on workers (default: unset)
 #   TEST_SH_ALLOW_CONCURRENT
@@ -37,6 +37,30 @@ TEST_SH_ALLOW_CONCURRENT="${TEST_SH_ALLOW_CONCURRENT:-0}"
 TEST_SH_LOCK_DIR="${TEST_SH_LOCK_DIR:-${TMPDIR:-/tmp}/trufflepig-test-${UID:-user}.lock}"
 
 log() { printf '[test.sh] %s\n' "$*" >&2; }
+
+[[ "$PER_WORKER_GB" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+    log "PER_WORKER_GB must be numeric"; exit 64;
+}
+[[ "$RAM_RESERVE_GB" =~ ^[0-9]+([.][0-9]+)?$ ]] || {
+    log "RAM_RESERVE_GB must be numeric"; exit 64;
+}
+[[ "$TEST_SH_MIN" =~ ^[0-9]+$ ]] || { log "TEST_SH_MIN must be an integer"; exit 64; }
+[[ "$TEST_SH_MAX" =~ ^[0-9]+$ ]] || { log "TEST_SH_MAX must be an integer"; exit 64; }
+[[ "$TEST_SH_ALLOW_CONCURRENT" =~ ^[01]$ ]] || {
+    log "TEST_SH_ALLOW_CONCURRENT must be 0 or 1"; exit 64;
+}
+awk -v value="$PER_WORKER_GB" 'BEGIN { exit !(value >= 12) }' || {
+    log "refusing PER_WORKER_GB=${PER_WORKER_GB}: measured peak requires a minimum of 12 GB"
+    exit 64
+}
+awk -v value="$RAM_RESERVE_GB" 'BEGIN { exit !(value >= 8) }' || {
+    log "refusing RAM_RESERVE_GB=${RAM_RESERVE_GB}: safety reserve must be at least 8 GB"
+    exit 64
+}
+if (( TEST_SH_MIN < 1 )); then
+    log "TEST_SH_MIN must be at least 1"
+    exit 64
+fi
 
 # Serialise local test runs.  This is deliberately a per-user lock rather than
 # a lock inside the checkout: multiple Codex/terminal sessions can launch the
@@ -61,6 +85,7 @@ release_lock() {
 acquire_lock() {
     if [[ "$TEST_SH_ALLOW_CONCURRENT" == "1" ]]; then
         log "concurrency lock disabled by TEST_SH_ALLOW_CONCURRENT=1"
+        export TRUFFLEPIG_TEST_LOCK_BYPASS=1
         return
     fi
 
@@ -95,9 +120,14 @@ acquire_lock() {
 
     printf '%s\n' "$$" > "$TEST_SH_LOCK_DIR/pid"
     LOCK_HELD=1
+    export TRUFFLEPIG_TEST_LOCK_OWNER="$$"
     trap release_lock EXIT INT TERM HUP
 }
 
+export TRUFFLEPIG_TEST_LOCK_DIR="$TEST_SH_LOCK_DIR"
+unset TRUFFLEPIG_TEST_LOCK_OWNER
+unset TRUFFLEPIG_TEST_LOCK_BYPASS
+unset TRUFFLEPIG_XDIST_APPROVED_WORKERS
 acquire_lock
 
 # Pin BLAS / OpenMP threading to 1 per pytest-xdist worker. Without
@@ -209,7 +239,12 @@ fi
 
 if (( CPU_CAP < MEM_CAP )); then WORKERS=$CPU_CAP; else WORKERS=$MEM_CAP; fi
 if (( TEST_SH_MAX > 0 && WORKERS > TEST_SH_MAX )); then WORKERS=$TEST_SH_MAX; fi
-if (( WORKERS < TEST_SH_MIN )); then WORKERS=$TEST_SH_MIN; fi
+if (( TEST_SH_MIN > WORKERS )); then
+    log "refusing TEST_SH_MIN=${TEST_SH_MIN}: current CPU/RAM safety cap is ${WORKERS}"
+    exit 64
+fi
+
+export TRUFFLEPIG_XDIST_APPROVED_WORKERS="$WORKERS"
 
 log "platform=${OS} cpus=${CPUS} cpu_cap=${CPU_CAP} ${mem_note} per_worker=${PER_WORKER_GB}GB"
 log "workers=${WORKERS} → pytest -n ${WORKERS} tests $*"

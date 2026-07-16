@@ -4,18 +4,19 @@
 
 **Always use `./test.sh`, not raw `pytest`.**
 
-`pyproject.toml` sets `addopts = "-n auto"`, which makes pytest-xdist spawn one
-worker per logical CPU (~10 on the dev machine). Each worker re-imports
-trufflepig + pirlygenes and loads the reference matrices (`pan-cancer-expression`,
-`tcga-deconvolved-expression`, `hpa-cell-type-expression`, `subtype-deconvolved-expression`).
-With the current reference bundle, the panic snapshot caught workers at
-**6.3–7.4 GB RSS**, and a subsequent serial full-suite run reached **~9.6 GB**.
-Never assume the historical ~1.5 GB figure is still valid.
+Direct and IDE-driven pytest launches default to serial. A repository-root
+pytest guard rejects `-n auto` or any unbudgeted request for more than one
+worker before xdist starts its pool. Each worker re-imports trufflepig +
+pirlygenes and loads the reference matrices (`pan-cancer-expression`,
+`tcga-deconvolved-expression`, `hpa-cell-type-expression`,
+`subtype-deconvolved-expression`). With the current reference bundle, the panic
+snapshot caught workers at **6.3–7.4 GB RSS**, and a subsequent serial full-suite
+run reached **~9.6 GB**. Never assume the historical ~1.5 GB figure is valid.
 
-`./test.sh` reserves 8 GB for the OS/apps, budgets 12 GB per worker, and passes
-the resulting cap as `-n` (xdist resolves duplicate `-n` flags to the last one).
-It also holds a per-user lock and refuses to start a second local suite while
-one is active; two pools racing on the same free-RAM reading caused a >100 GB
+`./test.sh` reserves at least 8 GB for the OS/apps, budgets at least 12 GB per
+worker, and passes the resulting cap as `-n`. Both the wrapper and root pytest
+guard use one per-user lock and refuse to start a second local suite while one
+is active; two pools racing on the same free-RAM reading caused a >100 GB
 allocation and macOS watchdog panic in July 2026. Do not bypass the lock unless
 an external scheduler is enforcing a combined memory budget.
 

@@ -98,7 +98,9 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto"
+# Keep direct/IDE pytest launches serial.  test.sh is the only supported place
+# that enables xdist, after sizing workers against live RAM and taking the
+# cross-process suite lock.  A root conftest guard rejects unsafe overrides.
 markers = [
     "perf: performance-regression fences",
 ]
