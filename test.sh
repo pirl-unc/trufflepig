@@ -82,6 +82,18 @@ release_lock() {
     LOCK_HELD=0
 }
 
+pid_is_running() {
+    local pid="$1"
+    local error=""
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    # Managed shells may deny even a same-user signal probe. Treat permission
+    # errors as "running"; only ESRCH is evidence that a lock is stale.
+    error=$(kill -0 "$pid" 2>&1 || true)
+    [[ "$error" != *"No such process"* ]]
+}
+
 acquire_lock() {
     if [[ "$TEST_SH_ALLOW_CONCURRENT" == "1" ]]; then
         log "concurrency lock disabled by TEST_SH_ALLOW_CONCURRENT=1"
@@ -103,7 +115,7 @@ acquire_lock() {
             sleep 0.1
         done
 
-        if [[ "$owner" =~ ^[0-9]+$ ]] && kill -0 "$owner" 2>/dev/null; then
+        if [[ "$owner" =~ ^[0-9]+$ ]] && pid_is_running "$owner"; then
             log "refusing concurrent run: test suite pid=${owner} already holds $TEST_SH_LOCK_DIR"
             log "wait for it to finish, or set TEST_SH_ALLOW_CONCURRENT=1 only with an external memory budget"
             exit 75
