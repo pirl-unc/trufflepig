@@ -60,8 +60,10 @@ Two compounding wins:
 2. **OS page-cache sharing across subprocesses.** When N processes
    `mmap` the same file, the kernel keeps one set of pages in memory
    and maps them into each process's virtual address space.
-   The "1.5 GB per worker" cost in `CLAUDE.md` is largely from
-   independent DataFrame copies — mmap+Feather reduces that to one
+   The historical "1.5 GB per worker" estimate is stale: a July 2026
+   macOS panic snapshot measured heavy test workers at 6.3-7.4 GB RSS.
+   Much of that cost comes from independent DataFrame copies; mmap+Feather
+   reduces that to one
    shared backing region plus per-process Python wrapper overhead.
 
 Migration plan:

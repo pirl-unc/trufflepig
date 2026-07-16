@@ -7,13 +7,15 @@
 `pyproject.toml` sets `addopts = "-n auto"`, which makes pytest-xdist spawn one
 worker per logical CPU (~10 on the dev machine). Each worker re-imports
 trufflepig + pirlygenes and loads the reference matrices (`pan-cancer-expression`,
-`tcga-deconvolved-expression`, `hpa-cell-type-expression`, `subtype-deconvolved-expression`),
-so peak RSS lands around 1.5 GB per worker — ~15 GB total. On a 32 GB Mac that's
-fine alone, but OOM-bait when other pytest suites or fat IDEs are running.
+`tcga-deconvolved-expression`, `hpa-cell-type-expression`, `subtype-deconvolved-expression`).
+With the current reference bundle, heavy workers have reached **6.3-7.4 GB RSS**.
+Never assume the historical ~1.5 GB figure is still valid.
 
-`./test.sh` computes `min(cpu_count, available_RAM / 1.5GB)` and passes it as
-`-n` (xdist resolves duplicate `-n` flags to the last one), so it stays under
-memory pressure.
+`./test.sh` reserves 8 GB for the OS/apps, budgets 8 GB per worker, and passes
+the resulting cap as `-n` (xdist resolves duplicate `-n` flags to the last one).
+It also holds a per-user lock and refuses to start a second local suite while
+one is active. Do not bypass the lock unless an external scheduler enforces a
+combined memory budget.
 
 Pass extra pytest args after the script name:
 
