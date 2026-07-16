@@ -427,6 +427,48 @@ def test_subtype_deconvolved_expression_rejects_native_scale_opt_out():
         gsc.subtype_deconvolved_expression(renormalize_to_million=False)
 
 
+def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatch):
+    """Manifest discovery must never materialize the legacy 7+ GB frame."""
+    import oncoref
+    import pandas as pd
+    from pirlygenes.expression import accessors
+
+    expected = pd.DataFrame(
+        {
+            "cancer_code": ["NEC_MERKEL"],
+            "source_cohort": ["GSE235092_MERKEL_2024"],
+            "available": [True],
+            "n_reference_samples": [91],
+            "n_samples": [None],
+            "processing_pipeline": ["fixture"],
+        }
+    )
+
+    def reject_heavy_path(*args, **kwargs):
+        raise AssertionError("heavy cancer-reference frame was loaded")
+
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: expected.copy(),
+    )
+    monkeypatch.setattr(accessors, "_full_canonical_views", reject_heavy_path)
+    monkeypatch.setattr(
+        gsc._pirlygenes,
+        "available_cancer_expression_references",
+        reject_heavy_path,
+    )
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    hit = result[result["cancer_code"] == "NEC_MERKEL"].iloc[0]
+    assert hit["source_cohort"] == "GSE235092_MERKEL_2024"
+    assert hit["n_samples"] == 91
+
+
 def test_cancer_expression_uses_trufflepig_reference_surface(monkeypatch):
     """Legacy helper composes trufflepig's pan-cancer wrapper, not the
     upstream pirlygenes default surface."""

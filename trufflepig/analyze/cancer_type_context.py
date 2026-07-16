@@ -134,33 +134,25 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
         log.warning("observed pan-cancer reference discovery failed: %s", exc)
 
     try:
-        from trufflepig.reference import cancer_reference_expression
+        from trufflepig.reference import cancer_reference_manifest
 
-        observed = cancer_reference_expression(
-            normalize="tpm_clean",
-            format="long",
-            include_provenance=True,
-        )
+        # Discovery only needs (code, cohort) provenance.  Loading the full
+        # long expression table here made every xdist worker materialize ~7 GB
+        # of object-heavy data before returning a ~137-row manifest.
+        observed = cancer_reference_manifest()
         if observed is not None and "cancer_code" in observed.columns:
-            for code, group in observed.groupby("cancer_code"):
-                code_text = _clean(code)
+            for row in observed.to_dict("records"):
+                code_text = _clean(row.get("cancer_code"))
                 if not code_text:
                     continue
-                if "source_cohort" in group.columns:
-                    values = {
-                        _clean(v)
-                        for v in group["source_cohort"].dropna().unique()
-                        if _clean(v)
-                    }
-                else:
-                    values = set()
-                for source in values or {"observed_bulk_reference"}:
-                    add(
-                        code_text,
-                        source_kind="observed_bulk_reference",
-                        source=source,
-                        gene_key="ensembl_symbol",
-                    )
+                add(
+                    code_text,
+                    source_kind="observed_bulk_reference",
+                    source=_clean(row.get("source_cohort"))
+                    or "observed_bulk_reference",
+                    gene_key="ensembl_symbol",
+                    source_code=code_text,
+                )
     except Exception as exc:
         log.warning("observed-bulk reference discovery failed: %s", exc)
 
@@ -267,6 +259,12 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
                 key=lambda record: (
                     record.source_kind != "deconvolved_tumor_reference",
                     record.source_kind,
+                    record.source
+                    != _clean(
+                        registry.get(record.reference_code, {}).get(
+                            "source_cohort"
+                        )
+                    ),
                     record.source,
                 ),
             )

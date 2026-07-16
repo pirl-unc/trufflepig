@@ -475,6 +475,105 @@ def subtype_deconvolved_expression(
     ).copy()
 
 
+@lru_cache(maxsize=1)
+def _cancer_reference_manifest_cached() -> pd.DataFrame:
+    """Small per-(code, cohort) manifest without loading the 7+ GB summary frame.
+
+    Oncoref owns the empirical reference layer and exposes a gene-independent
+    availability table with exactly the fields discovery needs. Pirlygenes'
+    public ``available_cancer_expression_references()`` currently derives the same
+    rows by materializing the full object-heavy cancer-reference summary; the
+    July 2026 macOS panic snapshot measured that path at ~7.4 GB per process.
+
+    Prefer oncoref's public manifest.  The private pirlygenes canonical-view
+    loader is a bounded compatibility bridge for older supported oncoref
+    versions. If both compact paths fail, degrade to registry-declared cohorts;
+    never invoke the multi-gigabyte legacy availability path.
+    """
+    try:
+        import oncoref
+
+        public_accessor = getattr(
+            oncoref, "cancer_reference_expression_availability", None
+        )
+        if not callable(public_accessor):
+            raise AttributeError("oncoref has no reference availability accessor")
+        manifest = public_accessor(normalize="tpm_clean")
+        if "available" in manifest.columns:
+            manifest = manifest[manifest["available"].fillna(False).astype(bool)]
+        if (
+            "n_reference_samples" in manifest.columns
+            and "n_samples" in manifest.columns
+        ):
+            manifest = manifest.copy()
+            n_samples = pd.to_numeric(manifest["n_samples"], errors="coerce")
+            n_reference_samples = pd.to_numeric(
+                manifest["n_reference_samples"], errors="coerce"
+            )
+            manifest["n_samples"] = n_samples.where(
+                n_samples.notna(), n_reference_samples
+            )
+    except Exception:  # noqa: BLE001 - compatibility fallback is intentional
+        try:
+            from pirlygenes.expression import accessors as _expression_accessors
+
+            _, _, manifest = _expression_accessors._full_canonical_views()
+        except Exception:  # noqa: BLE001 - compatibility fallback is intentional
+            manifest = pd.DataFrame(
+                columns=[
+                    "cancer_code",
+                    "source_cohort",
+                    "processing_pipeline",
+                    "n_samples",
+                ]
+            )
+
+    keep = [
+        col
+        for col in (
+            "cancer_code",
+            "source_cohort",
+            "processing_pipeline",
+            "n_samples",
+        )
+        if col in manifest.columns
+    ]
+    if "cancer_code" not in keep:
+        raise ValueError("cancer reference manifest has no cancer_code column")
+    manifest = manifest[keep].copy()
+
+    # Oncoref may trail the simultaneously checked-out pirlygenes registry by a
+    # data release.  Add registry-declared expression-backed cohorts so newly
+    # published sources (for example MBL_G3 / MTC stratifications) remain
+    # discoverable without touching the full expression frame.  Literature/
+    # computed rows are not physical observed-bulk references and must not be
+    # admitted here.
+    try:
+        from .cancer_ontology import cancer_type_registry
+
+        registry = cancer_type_registry()
+        source = registry["source_cohort"].fillna("").astype(str).str.strip()
+        expression_source = (
+            registry["expression_source"].fillna("").astype(str).str.strip().str.lower()
+        )
+        own = registry[
+            ~expression_source.isin({"", "curated", "computed"})
+            & source.ne("")
+            & ~source.eq("LITERATURE_CURATED")
+            & ~source.str.startswith("COMPUTED_")
+        ][["code", "source_cohort"]].rename(columns={"code": "cancer_code"})
+        manifest = pd.concat([manifest, own], ignore_index=True, sort=False)
+    except Exception:  # noqa: BLE001 - availability still works without registry merge
+        pass
+
+    return manifest.drop_duplicates().reset_index(drop=True)
+
+
+def cancer_reference_manifest() -> pd.DataFrame:
+    """Return one lightweight provenance row per observed reference cohort."""
+    return _cancer_reference_manifest_cached().copy()
+
+
 def cancer_reference_expression(
     cancer_types=None,
     genes=None,
