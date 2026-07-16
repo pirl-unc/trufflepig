@@ -3706,13 +3706,14 @@ def _local_expression_reference_panels(
     so a patched underlying frame is not seen otherwise.
     """
     try:
+        from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
+
         from .reference import (
             cancer_reference_expression,
             pan_cancer_expression,
             subtype_deconvolved_expression,
         )
         from .tumor_purity import _compile_excluded_gene_matcher
-        from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
     except ImportError:
         _LOGGER.warning(
             "trufflepig.reference / tumor_purity imports failed; local "
@@ -4786,6 +4787,7 @@ def _entity_evidence_consensus(
     *,
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
+    centroid_confident: bool = False,
 ) -> dict[str, Any]:
     """Compare two entity hypotheses across independent evidence groups.
 
@@ -4800,7 +4802,7 @@ def _entity_evidence_consensus(
             candidate.cancer_type: candidate,
             selected.cancer_type: selected,
         },
-        cen,
+        cen if centroid_confident else None,
     )
     candidate_marker, candidate_coherence = _entity_marker_program_support(
         candidate,
@@ -4922,6 +4924,52 @@ def _entity_evidence_consensus(
     }
 
 
+def _persistent_report_label_blockers(
+    hypothesis: CancerTypeEvidence,
+) -> tuple[str, ...]:
+    """Return vetoes that expression-only adjudication must never clear.
+
+    Ordinary admission blockers can be overcome by genuinely independent RNA
+    evidence.  Explicit molecular negatives and registry-declared orthogonal
+    molecular/status states cannot: they require matching direct evidence, not
+    a stronger expression consensus.  Keep this distinction structural so a
+    later selector cannot accidentally erase a safety decision by calling
+    ``consider_for_report_label(can_select=True)``.
+    """
+
+    if hypothesis.direct_fusion_support > 0:
+        return ()
+    details = hypothesis.details
+    declared_blockers = details.get("hard_report_label_blockers") or ()
+    if isinstance(declared_blockers, str):
+        declared_blockers = (declared_blockers,)
+    blockers = [
+        _clean(reason)
+        for reason in declared_blockers
+        if _clean(reason)
+    ]
+    if details.get("local_reference_explicit_negative_fusion"):
+        conflict = details.get("local_reference_explicit_negative_fusion_details") or {}
+        blockers.append(
+            _fusion_input_missing_expected_driver_reason(conflict)
+            if isinstance(conflict, Mapping)
+            else "fusion-driven expression reference conflicts with supplied fusion evidence"
+        )
+    orthogonal_axes = _orthogonal_axes_that_block_report_label(
+        hypothesis.cancer_type
+    )
+    if orthogonal_axes and not _rare_marker_channel_admitted(hypothesis):
+        axes = ", ".join(
+            sorted({_clean(axis.get("axis")) for axis in orthogonal_axes})
+        )
+        blockers.append(
+            f"{hypothesis.cancer_type} encodes orthogonal molecular/status "
+            f"state ({axes}); direct molecular evidence is required before "
+            "that state can become the report label"
+        )
+    return tuple(dict.fromkeys(blockers))
+
+
 def _lowest_common_registry_ancestor(left: str, right: str) -> str:
     """Deepest shared registry parent, excluding the two input leaves."""
 
@@ -4944,6 +4992,7 @@ def _adjudicate_selection_with_learned_hierarchy(
     *,
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
+    centroid_confident: bool = False,
 ) -> CancerTypeEvidence | None:
     """Apply calibrated hierarchy arbitration after ordinary fused selection.
 
@@ -5060,9 +5109,23 @@ def _adjudicate_selection_with_learned_hierarchy(
         details,
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=cen,
+        centroid_confident=centroid_confident,
     )
+    hard_blockers = _persistent_report_label_blockers(candidate)
+    if hard_blockers:
+        consensus["evidence_decisive_candidate"] = bool(
+            consensus.get("decisive_candidate")
+        )
+        consensus["decisive_candidate"] = False
+        consensus["selection_blocked"] = True
+        consensus["candidate_hard_blockers"] = list(hard_blockers)
+        candidate.details["entity_consensus_hard_blockers"] = list(
+            hard_blockers
+        )
     selected.details["entity_evidence_consensus"] = dict(consensus)
     candidate.details["entity_evidence_consensus"] = dict(consensus)
+    if hard_blockers:
+        return selected
     multi_axis_entity_refinement = bool(
         entity_incompatible
         and not lineage_disagreement
@@ -8781,10 +8844,14 @@ def _add_fused_evidence_features(
     analysis: Mapping[str, Any],
     *,
     cen=None,
+    centroid_confident: bool = False,
 ) -> None:
     if not hypotheses:
         return
-    centroid_supports = _centroid_supports_for_hypotheses(hypotheses, cen)
+    centroid_supports = _centroid_supports_for_hypotheses(
+        hypotheses,
+        cen if centroid_confident else None,
+    )
     scored: list[tuple[float, str, CancerTypeEvidence, list[str]]] = []
     for code, hypothesis in hypotheses.items():
         centroid_support = _safe_float(centroid_supports.get(code))
@@ -8902,7 +8969,7 @@ def select_report_scope_from_evidence(
 ) -> dict[str, Any]:
     """Build cancer-type hypotheses and return the selected report label."""
     try:
-        from .common import build_sample_tpm_by_symbol, build_sample_tpm_by_gene_id
+        from .common import build_sample_tpm_by_gene_id, build_sample_tpm_by_symbol
     except ImportError:
         _LOGGER.warning(
             "trufflepig.common is unavailable; sample TPM lookup will be empty",
@@ -8980,14 +9047,15 @@ def select_report_scope_from_evidence(
         sample_tpm_by_symbol,
     )
 
-    # One whole-profile centroid pass. Fused evidence consumes the centroid as
-    # one channel; the legacy late centroid rerank remains only for non-fused
-    # selectors.
+    # One whole-profile centroid pass.  Correlations become selection evidence
+    # only when the associated compartment call is confident; otherwise they
+    # remain characterization data and cannot be normalized into a vote.
     _cen, _cen_confident = _centroid_and_confidence(sample_tpm_by_symbol)
     _add_fused_evidence_features(
         hypotheses,
         analysis,
         cen=_cen,
+        centroid_confident=_cen_confident,
     )
 
     selected = _pick_selected(
@@ -9003,6 +9071,7 @@ def select_report_scope_from_evidence(
         selected,
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=_cen,
+        centroid_confident=_cen_confident,
     )
     rows = list(hypotheses.values())
 

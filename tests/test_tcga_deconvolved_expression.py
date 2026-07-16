@@ -469,6 +469,47 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     assert hit["n_samples"] == 91
 
 
+def test_cancer_reference_manifest_failure_uses_registry_without_full_views(
+    monkeypatch,
+):
+    """A broken compact manifest must degrade, never materialize expression."""
+    import oncoref
+    import pandas as pd
+    from pirlygenes.expression import accessors
+
+    from trufflepig import cancer_ontology
+
+    heavy_calls = []
+
+    def reject_heavy_path(*args, **kwargs):
+        heavy_calls.append((args, kwargs))
+        raise AssertionError("heavy cancer-reference frame was loaded")
+
+    registry = pd.DataFrame(
+        {
+            "code": ["MPLPS_FIXTURE"],
+            "source_cohort": ["GSE_FIXTURE_MPLPS"],
+            "expression_source": ["GEO"],
+        }
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("corrupt manifest")),
+    )
+    monkeypatch.setattr(accessors, "_full_canonical_views", reject_heavy_path)
+    monkeypatch.setattr(cancer_ontology, "cancer_type_registry", lambda: registry.copy())
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    assert heavy_calls == []
+    hit = result[result["cancer_code"] == "MPLPS_FIXTURE"].iloc[0]
+    assert hit["source_cohort"] == "GSE_FIXTURE_MPLPS"
+
+
 def test_cancer_expression_uses_trufflepig_reference_surface(monkeypatch):
     """Legacy helper composes trufflepig's pan-cancer wrapper, not the
     upstream pirlygenes default surface."""

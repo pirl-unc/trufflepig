@@ -1,5 +1,6 @@
-import pandas as pd
 from types import SimpleNamespace
+
+import pandas as pd
 
 
 def _selectable(code, selected_by, priority):
@@ -763,6 +764,59 @@ def test_entity_consensus_does_not_promote_a_learned_vote_alone():
     assert result["decisive_candidate"] is False
 
 
+def test_entity_consensus_ignores_centroid_when_compartment_is_unconfident():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _entity_evidence_consensus,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    candidate = CancerTypeEvidence(cancer_type="STAD", broad_rna_support=0.80)
+    selected = CancerTypeEvidence(cancer_type="ESCA", broad_rna_support=0.20)
+    weak_centroids = pd.Series({"STAD": 0.10, "ESCA": 0.09})
+
+    unconfident = _entity_evidence_consensus(
+        candidate,
+        selected,
+        details,
+        cen=weak_centroids,
+        centroid_confident=False,
+    )
+    centroid_axis = next(
+        axis
+        for axis in unconfident["axes"]
+        if axis["axis"] == "whole_profile_centroid"
+    )
+
+    assert centroid_axis["available"] is False
+    assert unconfident["candidate_votes"] == 2
+    assert unconfident["candidate_nonlearned_votes"] == 1
+    assert unconfident["decisive_candidate"] is False
+
+    confident = _entity_evidence_consensus(
+        candidate,
+        selected,
+        details,
+        cen=weak_centroids,
+        centroid_confident=True,
+    )
+    assert confident["candidate_votes"] == 3
+    assert confident["candidate_nonlearned_votes"] == 2
+    assert confident["decisive_candidate"] is True
+
+
 def test_learned_hierarchy_uses_multi_axis_consensus_below_single_model_gate():
     from trufflepig.cancer_type_evidence import (
         CancerTypeEvidence,
@@ -814,6 +868,66 @@ def test_learned_hierarchy_uses_multi_axis_consensus_below_single_model_gate():
     assert result.details["learned_hierarchy_adjudication_mode"] == (
         "multi_axis_entity_refinement"
     )
+
+
+def test_multi_axis_consensus_preserves_explicit_negative_fusion_blocker():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.broad_rna_support = 0.20
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.80,
+        fine_reference_support=0.80,
+        can_select_report_label=False,
+        blocking_reasons=("explicit molecular evidence vetoed this label",),
+        label_status="blocked",
+    )
+    candidate.details.update(
+        {
+            "local_reference_explicit_negative_fusion": True,
+            "local_reference_explicit_negative_fusion_details": {
+                "expected_driver": "CLDN18-ARHGAP26",
+                "fusion_record_count": 1,
+            },
+            "entity_evidence_marker_coherence": {
+                "status": "consistent",
+                "detected_fraction": 0.90,
+                "unexpected_low_detected": 0,
+                "total": 10,
+            },
+        }
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "STAD": candidate},
+        selected,
+    )
+
+    assert result is selected
+    assert candidate.can_select_report_label is False
+    assert candidate.label_status == "blocked"
+    assert candidate.blocking_reasons == (
+        "explicit molecular evidence vetoed this label",
+    )
+    assert candidate.details["entity_consensus_hard_blockers"]
 
 
 def test_conflicted_sibling_evidence_abstains_to_registry_parent():
@@ -1109,8 +1223,8 @@ def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call
 def test_structural_sarcoma_composition_yields_to_learned_crc_family(monkeypatch):
     """Smooth-muscle/background composition cannot by itself turn close CRC RNA into SARC."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
     monkeypatch.setattr(
@@ -2650,8 +2764,8 @@ def test_local_sarcoma_reference_beats_ranker_only_winning_subtype(monkeypatch):
 def test_learned_expression_classifier_can_rescue_context_supported_type(monkeypatch):
     """A decisive learned full-profile vote can resolve a context-supported ambiguity."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -2732,8 +2846,8 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
 def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(monkeypatch):
     """A very strong learned hierarchy can beat an unsupported primary-expression attractor."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -2804,8 +2918,8 @@ def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(
 def test_learned_expression_classifier_blocks_background_compartment_flip(monkeypatch):
     """A learned sarcoma-like vote stays contextual in a PFO002-style epithelial case."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -5126,6 +5240,7 @@ def test_subtype_deconvolved_expression_without_subtype_column(monkeypatch):
     ``df[scalar_bool]``.
     """
     import pandas as pd
+
     from trufflepig import cancer_type_evidence as cte
     from trufflepig import reference as ref_module
 

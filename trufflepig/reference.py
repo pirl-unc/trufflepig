@@ -485,10 +485,9 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
     rows by materializing the full object-heavy cancer-reference summary; the
     July 2026 macOS panic snapshot measured that path at ~7.4 GB per process.
 
-    Prefer oncoref's public manifest.  The private pirlygenes canonical-view
-    loader is a bounded compatibility bridge for older supported oncoref
-    versions. If both compact paths fail, degrade to registry-declared cohorts;
-    never invoke the multi-gigabyte legacy availability path.
+    Prefer oncoref's public manifest. If that compact path fails, degrade
+    directly to registry-declared cohorts. Never invoke pirlygenes' private
+    canonical-view loader or the multi-gigabyte legacy availability path.
     """
     try:
         import oncoref
@@ -513,20 +512,15 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             manifest["n_samples"] = n_samples.where(
                 n_samples.notna(), n_reference_samples
             )
-    except Exception:  # noqa: BLE001 - compatibility fallback is intentional
-        try:
-            from pirlygenes.expression import accessors as _expression_accessors
-
-            _, _, manifest = _expression_accessors._full_canonical_views()
-        except Exception:  # noqa: BLE001 - compatibility fallback is intentional
-            manifest = pd.DataFrame(
-                columns=[
-                    "cancer_code",
-                    "source_cohort",
-                    "processing_pipeline",
-                    "n_samples",
-                ]
-            )
+    except Exception:  # noqa: BLE001 - safe registry fallback is intentional
+        manifest = pd.DataFrame(
+            columns=[
+                "cancer_code",
+                "source_cohort",
+                "processing_pipeline",
+                "n_samples",
+            ]
+        )
 
     keep = [
         col
