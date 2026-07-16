@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 90
     # Force a headless matplotlib backend so figure-rendering tests never try to
     # open a display on the runner. TEST_SH_MAX caps pytest-xdist at one worker so
-    # the ~1.5 GB/worker reference matrices can't OOM-kill the runner.
+    # the multi-GB/worker reference matrices can't OOM-kill the runner.
     env:
       MPLBACKEND: Agg
       TEST_SH_MAX: "1"

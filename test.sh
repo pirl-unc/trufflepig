@@ -9,23 +9,103 @@
 #
 #   - CPU reserve: leave 1-2 cores idle so the box stays responsive
 #     (1 core -> 1; 2-3 cores -> cores-1; 4+ cores -> cores-2).
-#   - Memory budget: cap at available_RAM / PER_WORKER_GB.
+#   - Memory budget: reserve RAM for the OS/apps, then cap at the remaining
+#     RAM / PER_WORKER_GB.
+#   - Cross-invocation lock: refuse to start a second local xdist pool while
+#     one from this checkout is already active. Two independently "safe"
+#     pools can otherwise race on the same pre-launch free-RAM reading.
 #
 # xdist resolves multiple -n flags to the last value, so this overrides
 # any `-n auto` baked into config.
 #
 # Tunables (env vars):
-#   PER_WORKER_GB    per-worker memory budget in GB (default: 1.5)
+#   PER_WORKER_GB    peak per-worker memory budget in GB (default: 8)
+#   RAM_RESERVE_GB   RAM kept for the OS and other apps (default: 8)
 #   TEST_SH_MIN      floor on workers (default: 1)
 #   TEST_SH_MAX      hard ceiling on workers (default: unset)
+#   TEST_SH_ALLOW_CONCURRENT
+#                    set to 1 only when the caller coordinates memory itself
+#   TEST_SH_LOCK_DIR override the per-user cross-invocation lock directory
 
 set -eo pipefail
 
-PER_WORKER_GB="${PER_WORKER_GB:-1.5}"
+PER_WORKER_GB="${PER_WORKER_GB:-8}"
+RAM_RESERVE_GB="${RAM_RESERVE_GB:-8}"
 TEST_SH_MIN="${TEST_SH_MIN:-1}"
 TEST_SH_MAX="${TEST_SH_MAX:-0}"
+TEST_SH_ALLOW_CONCURRENT="${TEST_SH_ALLOW_CONCURRENT:-0}"
+TEST_SH_LOCK_DIR="${TEST_SH_LOCK_DIR:-${TMPDIR:-/tmp}/trufflepig-test-${UID:-user}.lock}"
 
 log() { printf '[test.sh] %s\n' "$*" >&2; }
+
+# Serialize local test runs across every worktree for this user. Free-RAM
+# sizing alone cannot prevent two suites from racing on the same initial
+# reading and allocating independent multi-GB reference frames.
+LOCK_HELD=0
+release_lock() {
+    if (( LOCK_HELD == 0 )); then return; fi
+    local owner=""
+    if [[ -r "$TEST_SH_LOCK_DIR/pid" ]]; then
+        owner=$(<"$TEST_SH_LOCK_DIR/pid")
+    fi
+    if [[ "$owner" == "$$" ]]; then
+        rm -f "$TEST_SH_LOCK_DIR/pid"
+        rmdir "$TEST_SH_LOCK_DIR" 2>/dev/null || true
+    fi
+    LOCK_HELD=0
+}
+
+pid_is_running() {
+    local pid="$1"
+    local error=""
+    if kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    # Managed shells may deny even a same-user signal probe. Treat permission
+    # errors as "running"; only ESRCH is evidence that a lock is stale.
+    error=$(kill -0 "$pid" 2>&1 || true)
+    [[ "$error" != *"No such process"* ]]
+}
+
+acquire_lock() {
+    if [[ "$TEST_SH_ALLOW_CONCURRENT" == "1" ]]; then
+        log "concurrency lock disabled by TEST_SH_ALLOW_CONCURRENT=1"
+        return
+    fi
+
+    if ! mkdir "$TEST_SH_LOCK_DIR" 2>/dev/null; then
+        # Give a competing starter time to write its owner immediately after
+        # creating the directory.
+        local owner=""
+        local attempt
+        for attempt in 1 2 3; do
+            if [[ -r "$TEST_SH_LOCK_DIR/pid" ]]; then
+                owner=$(<"$TEST_SH_LOCK_DIR/pid")
+                break
+            fi
+            sleep 0.1
+        done
+
+        if [[ "$owner" =~ ^[0-9]+$ ]] && pid_is_running "$owner"; then
+            log "refusing concurrent run: test suite pid=${owner} already holds $TEST_SH_LOCK_DIR"
+            log "wait for it to finish, or set TEST_SH_ALLOW_CONCURRENT=1 only with an external memory budget"
+            exit 75
+        fi
+
+        rm -f "$TEST_SH_LOCK_DIR/pid"
+        rmdir "$TEST_SH_LOCK_DIR" 2>/dev/null || {
+            log "cannot clear stale test lock: $TEST_SH_LOCK_DIR"
+            exit 75
+        }
+        mkdir "$TEST_SH_LOCK_DIR"
+    fi
+
+    printf '%s\n' "$$" > "$TEST_SH_LOCK_DIR/pid"
+    LOCK_HELD=1
+    trap release_lock EXIT INT TERM HUP
+}
+
+acquire_lock
 
 # Pin BLAS / OpenMP threading to 1 per pytest-xdist worker. Without
 # this, every worker silently parallelises numpy/sklearn ops across
@@ -81,8 +161,14 @@ cpu_cap() {
 # free + inactive + speculative pages are reclaimable on demand and
 # count as headroom for our purposes.
 mac_available_bytes() {
-    local page_size
-    page_size=$(sysctl -n hw.pagesize 2>/dev/null) || return 1
+    local page_size=""
+    # Managed shells may permit vm_stat but deny sysctl. getconf is portable
+    # and works in that environment; retain sysctl only as a fallback.
+    page_size=$(getconf PAGESIZE 2>/dev/null || true)
+    if [[ -z "$page_size" ]]; then
+        page_size=$(sysctl -n hw.pagesize 2>/dev/null || true)
+    fi
+    [[ "$page_size" =~ ^[0-9]+$ ]] || return 1
     vm_stat 2>/dev/null | awk -v ps="$page_size" '
         /Pages free/        { gsub(/\./, "", $3); free     = $3 }
         /Pages inactive/    { gsub(/\./, "", $3); inactive = $3 }
@@ -112,16 +198,19 @@ CPU_CAP=$(cpu_cap "$CPUS")
 
 avail=""
 if avail=$(available_bytes 2>/dev/null) && [[ -n "$avail" ]]; then
-    MEM_CAP=$(awk -v b="$avail" -v g="$PER_WORKER_GB" 'BEGIN {
-        n = int(b / 1024^3 / g)
+    MEM_CAP=$(awk -v b="$avail" -v g="$PER_WORKER_GB" -v r="$RAM_RESERVE_GB" 'BEGIN {
+        usable = b / 1024^3 - r
+        n = int(usable / g)
         if (n < 1) n = 1
         print n
     }')
     AVAIL_GB=$(awk -v b="$avail" 'BEGIN { printf "%.1f", b / 1024^3 }')
-    mem_note="ram_free=${AVAIL_GB}GB mem_cap=${MEM_CAP}"
+    mem_note="ram_available=${AVAIL_GB}GB reserve=${RAM_RESERVE_GB}GB mem_cap=${MEM_CAP}"
 else
-    MEM_CAP=$CPU_CAP
-    mem_note="ram_free=? (probe unavailable) mem_cap=cpu_cap"
+    # A failed probe must fail safe. Falling back to CPU count recreated the
+    # xdist explosion this wrapper exists to prevent in managed shells.
+    MEM_CAP=1
+    mem_note="ram_available=? (probe unavailable) mem_cap=1-safe-fallback"
 fi
 
 if (( CPU_CAP < MEM_CAP )); then WORKERS=$CPU_CAP; else WORKERS=$MEM_CAP; fi
@@ -129,6 +218,7 @@ if (( TEST_SH_MAX > 0 && WORKERS > TEST_SH_MAX )); then WORKERS=$TEST_SH_MAX; fi
 if (( WORKERS < TEST_SH_MIN )); then WORKERS=$TEST_SH_MIN; fi
 
 log "platform=${OS} cpus=${CPUS} cpu_cap=${CPU_CAP} ${mem_note} per_worker=${PER_WORKER_GB}GB"
-log "workers=${WORKERS} → exec pytest -n ${WORKERS} tests $*"
+log "workers=${WORKERS} → pytest -n ${WORKERS} tests $*"
 
-exec pytest -n "$WORKERS" tests "$@"
+# Keep this shell alive so its EXIT trap releases the lock.
+pytest -n "$WORKERS" tests "$@"
