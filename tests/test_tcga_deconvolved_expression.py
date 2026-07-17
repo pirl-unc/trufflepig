@@ -469,6 +469,53 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     assert hit["n_samples"] == 91
 
 
+def test_cancer_reference_manifest_deduplicates_identity_with_rich_metadata(
+    monkeypatch,
+):
+    """Registry overlap must not duplicate an empirical code/cohort row."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    availability = pd.DataFrame(
+        {
+            "cancer_code": ["NEC_MERKEL"],
+            "source_cohort": ["GSE235092_MERKEL_2024"],
+            "available": [True],
+            "n_reference_samples": [91],
+            "n_samples": [None],
+            "processing_pipeline": ["fixture"],
+        }
+    )
+    registry = pd.DataFrame(
+        {
+            "code": ["NEC_MERKEL"],
+            "source_cohort": ["GSE235092_MERKEL_2024"],
+            "expression_source": ["GEO"],
+        }
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: availability.copy(),
+    )
+    monkeypatch.setattr(cancer_ontology, "cancer_type_registry", lambda: registry)
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    rows = result[
+        (result["cancer_code"] == "NEC_MERKEL")
+        & (result["source_cohort"] == "GSE235092_MERKEL_2024")
+    ]
+    assert len(rows) == 1
+    assert rows.iloc[0]["processing_pipeline"] == "fixture"
+    assert rows.iloc[0]["n_samples"] == 91
+
+
 def test_cancer_reference_manifest_failure_uses_registry_without_full_views(
     monkeypatch,
 ):

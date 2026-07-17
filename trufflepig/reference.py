@@ -560,7 +560,47 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
     except Exception:  # noqa: BLE001 - availability still works without registry merge
         pass
 
-    return manifest.drop_duplicates().reset_index(drop=True)
+    # The compact oncoref manifest and the registry intentionally overlap.
+    # Their shared identity is (code, cohort), while pipeline/sample metadata
+    # exists only on the empirical oncoref row. Prefer the most populated row
+    # for each identity instead of full-row deduplication, which retains a
+    # second metadata-null registry row and violates the public contract.
+    identity_columns = ["cancer_code", "source_cohort"]
+    if "source_cohort" not in manifest.columns:
+        manifest["source_cohort"] = pd.NA
+    for column in identity_columns:
+        manifest[column] = manifest[column].astype("string").str.strip()
+    metadata_columns = [
+        column for column in manifest.columns if column not in identity_columns
+    ]
+    metadata_completeness = pd.Series(0, index=manifest.index, dtype="int64")
+    for column in metadata_columns:
+        values = manifest[column]
+        populated = values.notna()
+        if pd.api.types.is_string_dtype(values.dtype) or values.dtype == object:
+            populated &= values.astype("string").str.strip().ne("").fillna(False)
+        metadata_completeness += populated.astype("int64")
+    manifest = manifest.assign(
+        _manifest_metadata_completeness=metadata_completeness,
+        _manifest_original_order=range(len(manifest)),
+    )
+    manifest = (
+        manifest.sort_values(
+            "_manifest_metadata_completeness",
+            ascending=False,
+            kind="stable",
+        )
+        .drop_duplicates(subset=identity_columns, keep="first")
+        .sort_values("_manifest_original_order", kind="stable")
+        .drop(
+            columns=[
+                "_manifest_metadata_completeness",
+                "_manifest_original_order",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+    return manifest
 
 
 def cancer_reference_manifest() -> pd.DataFrame:

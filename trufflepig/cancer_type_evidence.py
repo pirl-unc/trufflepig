@@ -4740,19 +4740,24 @@ def _entity_marker_program_support(
 ) -> tuple[float, Mapping[str, Any]]:
     """Collapse curated positive/negative marker evidence into one axis.
 
-    Contrast, family, rare-marker, and lineage-panel signals are all curated
-    marker programs and therefore are one evidence *group*, not four
-    independent votes.  When no selector attached a score, the ontology sanity
-    panel contributes its detected fraction, discounted by explicit
-    expected-low violations.
+    Contrast, rare-marker, lineage-panel, and raw ontology-coherence signals
+    are all curated marker programs and therefore are one evidence *group*,
+    not four independent votes. ``family_marker_support`` and
+    ``pan_cancer_signature_marker_support`` are intentionally excluded here:
+    the signature ranker can contribute to both, so counting either beside the
+    separate pan-cancer-signature axis would duplicate the same RNA evidence.
+    When no selector attached an independent score, the ontology sanity panel
+    contributes its detected fraction, discounted by explicit expected-low
+    violations.
     """
 
     details = hypothesis.details
     coherence = (
-        details.get("learned_expression_marker_coherence")
+        details.get("learned_hierarchy_entity_marker_coherence")
+        or details.get("entity_evidence_marker_coherence")
+        or details.get("learned_expression_marker_coherence")
         or details.get("pan_cancer_signature_marker_coherence")
         or details.get("local_reference_marker_coherence")
-        or details.get("entity_evidence_marker_coherence")
         or {}
     )
     if not isinstance(coherence, Mapping):
@@ -4765,17 +4770,15 @@ def _entity_marker_program_support(
     total = _safe_int(coherence.get("total"), 0)
     unexpected = _marker_coherence_unexpected_low_count(coherence)
     coherence_support = 0.0
-    if total > 0:
+    if total > 0 and _marker_coherence_positive_complete(coherence):
         coherence_support = _safe_float(coherence.get("detected_fraction")) * (
             1.0 - min(1.0, unexpected / total)
         )
     support = max(
         coherence_support,
         hypothesis.contrast_discriminator_support,
-        hypothesis.family_marker_support,
         hypothesis.rna_marker_support,
         _safe_float(details.get("lineage_panel_score")),
-        _safe_float(details.get("pan_cancer_signature_marker_support")),
     )
     return float(np.clip(support, 0.0, 1.0)), coherence
 
@@ -5093,16 +5096,28 @@ def _adjudicate_selection_with_learned_hierarchy(
     candidate.expression_reference_cancer_type = (
         candidate.expression_reference_cancer_type or entity_code
     )
-    # Preserve every hierarchy field so both the consensus trace and the
+    # Preserve global hierarchy fields so both the consensus trace and the
     # evidence graph remain complete when the learned top entity was not
-    # already a hypothesis.
+    # already a hypothesis. Marker coherence belongs to the code on the row
+    # that supplied ``details`` and must never be transplanted to another
+    # hierarchy candidate.
     candidate.details.update(
         {
             key: value
             for key, value in details.items()
             if str(key).startswith("learned_expression_")
+            and key != "learned_expression_marker_coherence"
         }
     )
+    candidate_marker_coherence: Mapping[str, Any] = {}
+    if sample_tpm_by_symbol:
+        candidate_marker_coherence = _marker_coherence(
+            entity_code,
+            sample_tpm_by_symbol,
+        )
+        candidate.details["learned_hierarchy_entity_marker_coherence"] = dict(
+            candidate_marker_coherence
+        )
     consensus = _entity_evidence_consensus(
         candidate,
         selected,
@@ -5111,6 +5126,11 @@ def _adjudicate_selection_with_learned_hierarchy(
         cen=cen,
         centroid_confident=centroid_confident,
     )
+    credible_learned_candidate = bool(
+        entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
+        and entity_margin >= _LEARNED_EXPRESSION_MIN_MARGIN
+    )
+    consensus["credible_learned_candidate"] = credible_learned_candidate
     hard_blockers = _persistent_report_label_blockers(candidate)
     if hard_blockers:
         consensus["evidence_decisive_candidate"] = bool(
@@ -5134,17 +5154,13 @@ def _adjudicate_selection_with_learned_hierarchy(
         and consensus.get("decisive_candidate")
     )
 
-    entity_hypothesis = candidate
     marker_coherence = (
-        entity_hypothesis.details.get("learned_expression_marker_coherence")
-        if entity_hypothesis is not None
-        else {}
+        candidate_marker_coherence
+        or candidate.details.get("learned_hierarchy_entity_marker_coherence")
+        or candidate.details.get("entity_evidence_marker_coherence")
+        or candidate.details.get("learned_expression_marker_coherence")
+        or {}
     )
-    if not marker_coherence and sample_tpm_by_symbol:
-        marker_coherence = _marker_coherence(
-            entity_code,
-            sample_tpm_by_symbol,
-        )
     marker_corroborated = bool(
         isinstance(marker_coherence, Mapping)
         and _marker_coherence_selection_grade(marker_coherence)
@@ -5177,6 +5193,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         and family_consistent
         and compartment_consistent
         and consensus.get("conflicted")
+        and credible_learned_candidate
         and not strong_entity_refinement
         and not multi_axis_entity_refinement
     ):
