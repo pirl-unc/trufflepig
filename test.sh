@@ -82,18 +82,6 @@ release_lock() {
     LOCK_HELD=0
 }
 
-pid_is_running() {
-    local pid="$1"
-    local error=""
-    if kill -0 "$pid" 2>/dev/null; then
-        return 0
-    fi
-    # Managed shells may deny even a same-user signal probe. Treat permission
-    # errors as "running"; only ESRCH is evidence that a lock is stale.
-    error=$(kill -0 "$pid" 2>&1 || true)
-    [[ "$error" != *"No such process"* ]]
-}
-
 acquire_lock() {
     if [[ "$TEST_SH_ALLOW_CONCURRENT" == "1" ]]; then
         log "concurrency lock disabled by TEST_SH_ALLOW_CONCURRENT=1"
@@ -102,35 +90,27 @@ acquire_lock() {
     fi
 
     if ! mkdir "$TEST_SH_LOCK_DIR" 2>/dev/null; then
-        # The owner file is written immediately after mkdir.  Give a competing
-        # starter a moment to finish that tiny critical section before deciding
-        # whether the directory is stale.
         local owner=""
-        local attempt
-        for attempt in 1 2 3; do
-            if [[ -r "$TEST_SH_LOCK_DIR/pid" ]]; then
-                owner=$(<"$TEST_SH_LOCK_DIR/pid")
-                break
-            fi
-            sleep 0.1
-        done
-
-        if [[ "$owner" =~ ^[0-9]+$ ]] && pid_is_running "$owner"; then
-            log "refusing concurrent run: test suite pid=${owner} already holds $TEST_SH_LOCK_DIR"
-            log "wait for it to finish, or set TEST_SH_ALLOW_CONCURRENT=1 only with an external memory budget"
-            exit 75
+        if [[ -r "$TEST_SH_LOCK_DIR/pid" ]]; then
+            owner=$(<"$TEST_SH_LOCK_DIR/pid")
         fi
-
-        # Stale lock from an interrupted shell or reboot.
-        rm -f "$TEST_SH_LOCK_DIR/pid"
-        rmdir "$TEST_SH_LOCK_DIR" 2>/dev/null || {
-            log "cannot clear stale test lock: $TEST_SH_LOCK_DIR"
-            exit 75
-        }
-        mkdir "$TEST_SH_LOCK_DIR"
+        if [[ "$owner" =~ ^[0-9]+$ ]]; then
+            log "refusing concurrent run: existing test lock records owner pid=${owner} at $TEST_SH_LOCK_DIR"
+        else
+            log "refusing test lock with absent or incomplete owner metadata: $TEST_SH_LOCK_DIR"
+        fi
+        # Never reclaim an existing lock automatically.  An ownerless directory
+        # may belong to a launcher between mkdir and PID publication, and a
+        # stale-lock check/delete sequence can race with a new owner (ABA).
+        log "wait for the active run, or remove $TEST_SH_LOCK_DIR only after confirming no pytest/test.sh process is active"
+        exit 75
     fi
 
-    printf '%s\n' "$$" > "$TEST_SH_LOCK_DIR/pid"
+    if ! printf '%s\n' "$$" > "$TEST_SH_LOCK_DIR/pid"; then
+        rmdir "$TEST_SH_LOCK_DIR" 2>/dev/null || true
+        log "cannot publish test lock owner in $TEST_SH_LOCK_DIR"
+        exit 75
+    fi
     LOCK_HELD=1
     export TRUFFLEPIG_TEST_LOCK_OWNER="$$"
     trap release_lock EXIT INT TERM HUP

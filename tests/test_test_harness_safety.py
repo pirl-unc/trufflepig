@@ -57,6 +57,39 @@ def test_direct_pytest_respects_live_suite_lock(tmp_path):
     assert "refusing concurrent test run" in result.stderr
 
 
+def test_direct_pytest_fails_closed_for_ownerless_lock(tmp_path):
+    """A competing controller may have mkdir'd but not published its PID yet."""
+    lock_dir = tmp_path / "suite.lock"
+    lock_dir.mkdir()
+
+    result = _pytest_probe(
+        "--collect-only",
+        str(__file__),
+        env_updates={"TRUFFLEPIG_TEST_LOCK_DIR": str(lock_dir)},
+    )
+
+    assert result.returncode == 4
+    assert "owner metadata is absent or incomplete" in result.stderr
+    assert lock_dir.is_dir(), "a contender must never reclaim an ownerless lock"
+    assert not (lock_dir / "pid").exists()
+
+
+def test_direct_pytest_does_not_reclaim_a_stale_lock(tmp_path):
+    lock_dir = tmp_path / "suite.lock"
+    lock_dir.mkdir()
+    (lock_dir / "pid").write_text("999999\n", encoding="utf-8")
+
+    result = _pytest_probe(
+        "--collect-only",
+        str(__file__),
+        env_updates={"TRUFFLEPIG_TEST_LOCK_DIR": str(lock_dir)},
+    )
+
+    assert result.returncode == 4
+    assert "recorded owner pid=999999" in result.stderr
+    assert (lock_dir / "pid").read_text(encoding="utf-8").strip() == "999999"
+
+
 def test_wrapper_lock_authorizes_only_its_direct_pytest_child(tmp_path):
     lock_dir = tmp_path / "suite.lock"
     lock_dir.mkdir()
