@@ -4902,11 +4902,12 @@ def _entity_evidence_consensus(
         and axis["preference"] == "candidate"
         for axis in axes
     )
+    available_axis_count = sum(axis["available"] for axis in axes)
     decisive_candidate = bool(
         candidate_has_learned_vote
         and candidate_votes >= _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
         and candidate_nonlearned_votes >= _ENTITY_CONSENSUS_MIN_NONLEARNED_AXES
-        and candidate_votes > selected_votes
+        and candidate_votes * 2 > available_axis_count
         and candidate_advantage > 0
     )
     return {
@@ -4917,6 +4918,7 @@ def _entity_evidence_consensus(
         "candidate_votes": candidate_votes,
         "candidate_nonlearned_votes": candidate_nonlearned_votes,
         "selected_votes": selected_votes,
+        "available_axis_count": available_axis_count,
         "candidate_advantage": round(float(candidate_advantage), 4),
         "decisive_candidate": decisive_candidate,
         "conflicted": bool(candidate_votes > 0 and selected_votes > 0),

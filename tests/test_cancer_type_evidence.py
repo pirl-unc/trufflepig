@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 
 def _selectable(code, selected_by, priority):
@@ -743,6 +744,193 @@ def _add_entity_prediction_vector(details, *predictions):
         }
     ]
     return details
+
+
+def _adjudicate_stad_esca_evidence_scenario(axis_preferences):
+    """Run the final entity adjudicator for one independent-evidence split.
+
+    The learned hierarchy consistently proposes STAD over the currently
+    selected ESCA call.  The caller controls how the five other independent
+    evidence groups vote, tie, or remain unavailable.  This keeps scenario
+    tests at the report-label decision seam instead of testing the internal
+    vote counter in isolation.
+    """
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    def support_pair(preference):
+        if preference == "candidate":
+            return 0.8, 0.2
+        if preference == "selected":
+            return 0.2, 0.8
+        if preference == "tie":
+            return 0.5, 0.5
+        if preference == "unavailable":
+            return 0.0, 0.0
+        raise AssertionError(f"unknown evidence preference: {preference}")
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(cancer_type="STAD")
+
+    candidate.broad_rna_support, selected.broad_rna_support = support_pair(
+        axis_preferences["pan_cancer_signature"]
+    )
+    candidate.rna_marker_support, selected.rna_marker_support = support_pair(
+        axis_preferences["curated_marker_program"]
+    )
+    candidate.fine_reference_support, selected.fine_reference_support = support_pair(
+        axis_preferences["exact_expression_reference"]
+    )
+    (
+        candidate.coarse_composition_support,
+        selected.coarse_composition_support,
+    ) = support_pair(axis_preferences["composition_reference"])
+
+    centroid_preference = axis_preferences["whole_profile_centroid"]
+    if centroid_preference == "candidate":
+        centroid = pd.Series({"STAD": 0.90, "ESCA": 0.80})
+    elif centroid_preference == "selected":
+        centroid = pd.Series({"STAD": 0.80, "ESCA": 0.90})
+    elif centroid_preference == "tie":
+        centroid = pd.Series({"STAD": 0.85, "ESCA": 0.85})
+    elif centroid_preference == "unavailable":
+        centroid = None
+    else:
+        raise AssertionError(
+            f"unknown centroid preference: {centroid_preference}"
+        )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "STAD": candidate},
+        selected,
+        cen=centroid,
+        centroid_confident=centroid is not None,
+    )
+    return result, selected, candidate
+
+
+@pytest.mark.parametrize(
+    (
+        "axis_preferences",
+        "expected_code",
+        "expected_candidate_votes",
+        "expected_selected_votes",
+        "expected_available_axes",
+    ),
+    [
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "tie",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            3,
+            2,
+            6,
+            id="three-two-one-plurality-does-not-promote",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "unavailable",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "STAD",
+            3,
+            2,
+            5,
+            id="three-of-five-available-is-a-majority",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            3,
+            3,
+            6,
+            id="even-split-preserves-selected-leaf",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "candidate",
+            },
+            "STAD",
+            4,
+            2,
+            6,
+            id="four-of-six-majority-promotes",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "unavailable",
+                "curated_marker_program": "unavailable",
+                "exact_expression_reference": "selected",
+                "composition_reference": "unavailable",
+            },
+            "ESCA",
+            2,
+            1,
+            3,
+            id="majority-with-only-two-supporting-groups-is-insufficient",
+        ),
+    ],
+)
+def test_learned_hierarchy_adjudicates_available_axis_majorities(
+    axis_preferences,
+    expected_code,
+    expected_candidate_votes,
+    expected_selected_votes,
+    expected_available_axes,
+):
+    result, selected, candidate = _adjudicate_stad_esca_evidence_scenario(
+        axis_preferences
+    )
+
+    consensus = selected.details["entity_evidence_consensus"]
+    available_axes = sum(axis["available"] for axis in consensus["axes"])
+    assert consensus["candidate_votes"] == expected_candidate_votes
+    assert consensus["selected_votes"] == expected_selected_votes
+    assert available_axes == expected_available_axes
+    assert consensus["available_axis_count"] == expected_available_axes
+    assert result.cancer_type == expected_code
+    if expected_code == "STAD":
+        assert result is candidate
+        assert result.selected_by == "entity_evidence_consensus"
+        assert consensus["decisive_candidate"] is True
+    else:
+        assert result is selected
+        assert consensus["decisive_candidate"] is False
 
 
 def test_entity_consensus_requires_multiple_independent_evidence_groups():
