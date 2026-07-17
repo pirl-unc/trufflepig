@@ -253,13 +253,16 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
+            # Registry subgroup provenance points at a marker source, but the
+            # installed bundle has no physical subgroup clean-TPM artifact.
+            # Fall back to the direct parent tumor reference.
             "MBL_G3",
-            "MBL_G3",
-            "observed_bulk_reference",
-            "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
-            "ensembl_symbol",
-            True,
-            "",
+            "MBL",
+            "deconvolved_tumor_reference",
+            "TREEHOUSE_POLYA_25_01",
+            "symbol_only",
+            False,
+            "registry parent",
         ),
         (
             "SARC_ASPS",
@@ -283,7 +286,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "MTC",
             "MTC",
             "observed_bulk_reference",
-            "GSE32662_PRINGLE_2012_MTC",
+            "GSE32662_PRINGLE_2012",
             "ensembl_symbol",
             True,
             "",

@@ -55,3 +55,58 @@ def test_direct_pytest_respects_live_suite_lock(tmp_path):
     )
     assert result.returncode == 4
     assert "refusing concurrent test run" in result.stderr
+
+
+def test_wrapper_lock_authorizes_only_its_direct_pytest_child(tmp_path):
+    lock_dir = tmp_path / "suite.lock"
+    lock_dir.mkdir()
+    (lock_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+    env_updates = {
+        "TRUFFLEPIG_TEST_LOCK_DIR": str(lock_dir),
+        "TRUFFLEPIG_TEST_LOCK_OWNER": str(os.getpid()),
+        "TRUFFLEPIG_XDIST_APPROVED_WORKERS": "1",
+    }
+
+    direct = _pytest_probe(
+        "-n",
+        "1",
+        "--collect-only",
+        str(__file__),
+        env_updates=env_updates,
+    )
+
+    assert direct.returncode == 0, direct.stderr
+
+    env = os.environ.copy()
+    for name in ("PYTEST_ADDOPTS", "TRUFFLEPIG_TEST_LOCK_BYPASS"):
+        env.pop(name, None)
+    env.update(env_updates)
+    pytest_command = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-n",
+        "1",
+        "--collect-only",
+        str(__file__),
+    ]
+    intermediary = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import subprocess, sys; "
+                "raise SystemExit(subprocess.run(sys.argv[1:]).returncode)"
+            ),
+            *pytest_command,
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert intermediary.returncode == 4
+    assert "refusing concurrent test run" in intermediary.stderr

@@ -111,8 +111,15 @@ def _enforce_suite_lock(config):
             lock_dir.mkdir()
         except FileExistsError:
             owner = _read_owner(lock_dir)
-            # test.sh owns the lock for its child pytest controller.
-            if expected_owner is not None and owner == expected_owner:
+            # test.sh owns the lock only for its DIRECT pytest controller.
+            # Environment variables are inherited by arbitrary descendants; an
+            # inner pytest launched by a test must not reuse this authorization
+            # while the outer worker retains its multi-GB reference frames.
+            if (
+                expected_owner is not None
+                and owner == expected_owner
+                and os.getppid() == expected_owner
+            ):
                 return
             if _pid_is_alive(owner):
                 raise pytest.UsageError(

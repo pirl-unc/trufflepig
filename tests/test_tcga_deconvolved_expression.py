@@ -493,6 +493,8 @@ def test_cancer_reference_manifest_deduplicates_identity_with_rich_metadata(
             "code": ["NEC_MERKEL"],
             "source_cohort": ["GSE235092_MERKEL_2024"],
             "expression_source": ["GEO"],
+            "reference_source": ["own_cohort"],
+            "classification_reference_code": ["NEC_MERKEL"],
         }
     )
     gsc._cancer_reference_manifest_cached.cache_clear()
@@ -516,6 +518,54 @@ def test_cancer_reference_manifest_deduplicates_identity_with_rich_metadata(
     assert rows.iloc[0]["n_samples"] == 91
 
 
+def test_cancer_reference_manifest_excludes_unavailable_parent_routed_cohorts(
+    monkeypatch,
+):
+    """Registry provenance must not resurrect unavailable subtype artifacts."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    subgroup_codes = ["MBL_G3", "MBL_G4", "MBL_SHH", "MBL_WNT"]
+    availability = pd.DataFrame(
+        {
+            "cancer_code": [*subgroup_codes, "NEC_MERKEL"],
+            "source_cohort": [
+                *(["TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS"] * 4),
+                "GSE235092_MERKEL_2024",
+            ],
+            "available": [False, False, False, False, True],
+            "n_reference_samples": [None, None, None, None, 91],
+            "n_samples": [None, None, None, None, None],
+            "processing_pipeline": [None, None, None, None, "fixture"],
+        }
+    )
+    registry = pd.DataFrame(
+        {
+            "code": [*subgroup_codes, "NEC_MERKEL"],
+            "source_cohort": availability["source_cohort"].tolist(),
+            "expression_source": ["Treehouse"] * 4 + ["GEO"],
+            "reference_source": ["parent"] * 4 + ["own_cohort"],
+            "classification_reference_code": ["MBL"] * 4 + ["NEC_MERKEL"],
+        }
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: availability.copy(),
+    )
+    monkeypatch.setattr(cancer_ontology, "cancer_type_registry", lambda: registry)
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    assert not set(result["cancer_code"]).intersection(subgroup_codes)
+    assert result["cancer_code"].tolist() == ["NEC_MERKEL"]
+
+
 def test_cancer_reference_manifest_failure_uses_registry_without_full_views(
     monkeypatch,
 ):
@@ -537,6 +587,8 @@ def test_cancer_reference_manifest_failure_uses_registry_without_full_views(
             "code": ["MPLPS_FIXTURE"],
             "source_cohort": ["GSE_FIXTURE_MPLPS"],
             "expression_source": ["GEO"],
+            "reference_source": ["own_cohort"],
+            "classification_reference_code": ["MPLPS_FIXTURE"],
         }
     )
     gsc._cancer_reference_manifest_cached.cache_clear()

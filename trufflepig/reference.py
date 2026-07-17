@@ -489,6 +489,7 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
     directly to registry-declared cohorts. Never invoke pirlygenes' private
     canonical-view loader or the multi-gigabyte legacy availability path.
     """
+    availability_verified = False
     try:
         import oncoref
 
@@ -512,6 +513,9 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             manifest["n_samples"] = n_samples.where(
                 n_samples.notna(), n_reference_samples
             )
+        if "cancer_code" not in manifest.columns:
+            raise ValueError("cancer reference manifest has no cancer_code column")
+        availability_verified = True
     except Exception:  # noqa: BLE001 - safe registry fallback is intentional
         manifest = pd.DataFrame(
             columns=[
@@ -536,26 +540,72 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
         raise ValueError("cancer reference manifest has no cancer_code column")
     manifest = manifest[keep].copy()
 
-    # Oncoref may trail the simultaneously checked-out pirlygenes registry by a
-    # data release.  Add registry-declared expression-backed cohorts so newly
-    # published sources (for example MBL_G3 / MTC stratifications) remain
-    # discoverable without touching the full expression frame.  Literature/
-    # computed rows are not physical observed-bulk references and must not be
-    # admitted here.
+    # Registry provenance is a safe fallback only for rows that explicitly own
+    # their cohort and classify against themselves. Parent-routed subtype rows
+    # can carry an expression source/cohort for biological provenance without
+    # having a physical clean-TPM artifact of their own (for example the MBL
+    # molecular subgroups). Never advertise those as direct references.
+    #
+    # When oncoref's compact accessor succeeds, it is authoritative for the
+    # installed data bundle: registry rows may enrich/deduplicate only identities
+    # that accessor already verified. When the accessor itself fails, the
+    # explicit own-cohort/self-reference registry contract provides the
+    # lightweight failover requested by discovery without loading expression.
     try:
         from .cancer_ontology import cancer_type_registry
 
         registry = cancer_type_registry()
+        code = registry["code"].fillna("").astype(str).str.strip()
         source = registry["source_cohort"].fillna("").astype(str).str.strip()
         expression_source = (
             registry["expression_source"].fillna("").astype(str).str.strip().str.lower()
+        )
+        reference_source = (
+            registry.get("reference_source", pd.Series("", index=registry.index))
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        classification_reference = (
+            registry.get(
+                "classification_reference_code",
+                pd.Series("", index=registry.index),
+            )
+            .fillna("")
+            .astype(str)
+            .str.strip()
         )
         own = registry[
             ~expression_source.isin({"", "curated", "computed"})
             & source.ne("")
             & ~source.eq("LITERATURE_CURATED")
             & ~source.str.startswith("COMPUTED_")
+            & reference_source.eq("own_cohort")
+            & classification_reference.eq(code)
         ][["code", "source_cohort"]].rename(columns={"code": "cancer_code"})
+        if availability_verified:
+            verified_identities = set()
+            if "source_cohort" in manifest.columns:
+                verified_identities = set(
+                    zip(
+                        manifest["cancer_code"]
+                        .fillna("")
+                        .astype(str)
+                        .str.strip(),
+                        manifest["source_cohort"]
+                        .fillna("")
+                        .astype(str)
+                        .str.strip(),
+                    )
+                )
+            own_identities = zip(
+                own["cancer_code"].fillna("").astype(str).str.strip(),
+                own["source_cohort"].fillna("").astype(str).str.strip(),
+            )
+            own = own[
+                [identity in verified_identities for identity in own_identities]
+            ]
         manifest = pd.concat([manifest, own], ignore_index=True, sort=False)
     except Exception:  # noqa: BLE001 - availability still works without registry merge
         pass
