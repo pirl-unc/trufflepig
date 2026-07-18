@@ -51,9 +51,6 @@ _CANCER_REFERENCE_EMPTY_COLUMNS = [
     "q1",
     "q3",
 ]
-_SARC_HISTOLOGY_REFERENCE_CODES = frozenset({"SARC_DDLPS", "SARC_WDLPS"})
-_STALE_SARC_HISTOLOGY_COHORT = "TREEHOUSE_POLYA_25_01_TCGA_SUBSET"
-_SARC_HISTOLOGY_COHORT = "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY"
 
 
 def _all_source_reference_availability(
@@ -139,17 +136,13 @@ def _all_source_reference_availability(
         provenance_mismatch = reported_source.fillna("").str.strip().ne(
             source_cohort
         )
+        # ``source_cohort`` is a loader identity, not merely a display label.
+        # Keep the exact key whose filtered availability was verified even
+        # when oncoref reports a different default/provenance name.  In
+        # oncoref 1.8.129 this distinction is load-bearing for the DDLPS and
+        # WDLPS Treehouse references: ``...TCGA_SUBSET`` loads expression,
+        # while the reported ``...TCGA_SARC_HISTOLOGY`` alias does not.
         filtered["source_cohort"] = source_cohort
-        stale_sarc_identity = (
-            filtered["cancer_code"]
-            .fillna("")
-            .astype(str)
-            .isin(_SARC_HISTOLOGY_REFERENCE_CODES)
-            & filtered["source_cohort"].eq(_STALE_SARC_HISTOLOGY_COHORT)
-        )
-        filtered.loc[stale_sarc_identity, "source_cohort"] = (
-            _SARC_HISTOLOGY_COHORT
-        )
         # Affected oncoref releases select availability with the requested
         # source but populate provenance from the default source. Identity is
         # still verified; source-specific counts/pipeline are not.
@@ -202,10 +195,6 @@ def _all_source_reference_availability(
         source_value = row.get("source_cohort")
         code = "" if pd.isna(code_value) else str(code_value).strip()
         source = "" if pd.isna(source_value) else str(source_value).strip()
-        if code in _SARC_HISTOLOGY_REFERENCE_CODES and (
-            source == _STALE_SARC_HISTOLOGY_COHORT
-        ):
-            source = _SARC_HISTOLOGY_COHORT
         verified_sources = exact_sources_by_code.get(code, frozenset())
         if source in verified_sources:
             canonical_source = source

@@ -482,10 +482,23 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     ]
 
 
+@pytest.mark.parametrize(
+    "loadable_sarc_source",
+    [
+        "TREEHOUSE_POLYA_25_01_TCGA_SUBSET",
+        "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+    ],
+)
 def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
     monkeypatch,
+    loadable_sarc_source,
 ):
-    """The source-union manifest preserves sibling cohorts for one code."""
+    """The manifest follows the dependency's verified source identity.
+
+    oncoref 1.8.129 loads the generic TCGA subset key while reporting the SARC
+    histology alias; 1.8.130+ loads and reports the canonical histology key.
+    Neither identity is hard-coded here: the exact filtered call decides.
+    """
     import oncoref
     import pandas as pd
 
@@ -493,22 +506,37 @@ def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
 
     selected = pd.DataFrame(
         {
-            "cancer_code": ["SARC_DDLPS", "NET_PANCREAS"],
+            "cancer_code": [
+                "SARC_DDLPS",
+                "SARC_WDLPS",
+                "NET_PANCREAS",
+            ],
             "source_cohort": [
+                "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
                 "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
                 "GSE118014_ALVAREZ_2018",
             ],
-            "available": [True, True],
-            "n_reference_samples": [48, 33],
-            "n_samples": [None, None],
-            "processing_pipeline": ["treehouse", "recount3"],
+            "available": [True, True, True],
+            "n_reference_samples": [48, 8, 33],
+            "n_samples": [None, None, None],
+            "processing_pipeline": ["treehouse", "treehouse", "recount3"],
         }
+    )
+    canonical_sarc_source = "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY"
+    legacy_sarc_source = "TREEHOUSE_POLYA_25_01_TCGA_SUBSET"
+    unloadable_sarc_source = (
+        canonical_sarc_source
+        if loadable_sarc_source == legacy_sarc_source
+        else legacy_sarc_source
     )
     source_codes = {
         "GSE30929_SINGER_2007_LPS": ["SARC_DDLPS"],
         "GSE75885_DELESPAUL_2017": ["SARC_DDLPS"],
-        "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY": ["SARC_DDLPS"],
-        "TREEHOUSE_POLYA_25_01_TCGA_SUBSET": ["SARC_DDLPS"],
+        unloadable_sarc_source: [],
+        loadable_sarc_source: [
+            "SARC_DDLPS",
+            "SARC_WDLPS",
+        ],
         "GSE118014_ALVAREZ_2018": ["NET_PANCREAS"],
         "GSE98894_ALVAREZ_2018_NET": ["NET_PANCREAS"],
     }
@@ -532,6 +560,7 @@ def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
         # provenance still names the code's default/richest source.
         defaults = {
             "SARC_DDLPS": "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+            "SARC_WDLPS": "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
             "NET_PANCREAS": "GSE118014_ALVAREZ_2018",
         }
         return pd.DataFrame(
@@ -576,13 +605,13 @@ def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
     assert identities == {
         ("SARC_DDLPS", "GSE30929_SINGER_2007_LPS"),
         ("SARC_DDLPS", "GSE75885_DELESPAUL_2017"),
-        (
-            "SARC_DDLPS",
-            "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
-        ),
+        ("SARC_DDLPS", loadable_sarc_source),
+        ("SARC_WDLPS", loadable_sarc_source),
         ("NET_PANCREAS", "GSE118014_ALVAREZ_2018"),
         ("NET_PANCREAS", "GSE98894_ALVAREZ_2018_NET"),
     }
+    assert ("SARC_DDLPS", unloadable_sarc_source) not in identities
+    assert ("SARC_WDLPS", unloadable_sarc_source) not in identities
     assert calls == [None, *source_codes]
     nondefault = result[
         result["source_cohort"].isin(
