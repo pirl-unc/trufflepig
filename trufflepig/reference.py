@@ -498,7 +498,15 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
         )
         if not callable(public_accessor):
             raise AttributeError("oncoref has no reference availability accessor")
-        manifest = public_accessor(normalize="tpm_clean")
+        # Keep discovery on the exact view consumed by pirlygenes'
+        # cancer_reference_expression() compatibility accessor.  Oncoref's
+        # default artifact/pass view can contain cohorts (currently the ESS
+        # shards) that the summary_rows_all/all loader cannot return.
+        manifest = public_accessor(
+            normalize="tpm_clean",
+            reference_source="summary_rows_all",
+            sample_qc="all",
+        )
         if "available" in manifest.columns:
             manifest = manifest[manifest["available"].fillna(False).astype(bool)]
         if (

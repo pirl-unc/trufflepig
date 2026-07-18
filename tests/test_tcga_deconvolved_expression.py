@@ -447,11 +447,17 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     def reject_heavy_path(*args, **kwargs):
         raise AssertionError("heavy cancer-reference frame was loaded")
 
+    availability_calls = []
+
+    def compact_availability(**kwargs):
+        availability_calls.append(kwargs)
+        return expected.copy()
+
     gsc._cancer_reference_manifest_cached.cache_clear()
     monkeypatch.setattr(
         oncoref,
         "cancer_reference_expression_availability",
-        lambda **kwargs: expected.copy(),
+        compact_availability,
     )
     monkeypatch.setattr(accessors, "_full_canonical_views", reject_heavy_path)
     monkeypatch.setattr(
@@ -467,6 +473,72 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     hit = result[result["cancer_code"] == "NEC_MERKEL"].iloc[0]
     assert hit["source_cohort"] == "GSE235092_MERKEL_2024"
     assert hit["n_samples"] == 91
+    assert availability_calls == [
+        {
+            "normalize": "tpm_clean",
+            "reference_source": "summary_rows_all",
+            "sample_qc": "all",
+        }
+    ]
+
+
+def test_cancer_reference_manifest_excludes_artifact_only_cohorts(monkeypatch):
+    """Discovery must advertise only cohorts the expression accessor can load."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    def availability(*, normalize, reference_source, sample_qc):
+        assert normalize == "tpm_clean"
+        if (reference_source, sample_qc) == ("artifact", "pass"):
+            available = [True, True, True]
+        else:
+            assert (reference_source, sample_qc) == ("summary_rows_all", "all")
+            available = [False, False, True]
+        return pd.DataFrame(
+            {
+                "cancer_code": ["SARC_ESS_HG", "SARC_ESS_LG", "NEC_MERKEL"],
+                "source_cohort": [
+                    "GSE85383_YOSHIDA_2017_ESS",
+                    "GSE85383_YOSHIDA_2017_ESS",
+                    "GSE235092_MERKEL_2024",
+                ],
+                "available": available,
+                "n_reference_samples": [4, 9, 91],
+            }
+        )
+
+    registry = pd.DataFrame(
+        {
+            "code": ["SARC_ESS_HG", "SARC_ESS_LG", "NEC_MERKEL"],
+            "source_cohort": [
+                "GSE85383_YOSHIDA_2017_ESS",
+                "GSE85383_YOSHIDA_2017_ESS",
+                "GSE235092_MERKEL_2024",
+            ],
+            "expression_source": ["GEO", "GEO", "GEO"],
+            "reference_source": ["own_cohort", "own_cohort", "own_cohort"],
+            "classification_reference_code": [
+                "SARC_ESS_HG",
+                "SARC_ESS_LG",
+                "NEC_MERKEL",
+            ],
+        }
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        availability,
+    )
+    monkeypatch.setattr(cancer_ontology, "cancer_type_registry", lambda: registry)
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    assert result["cancer_code"].tolist() == ["NEC_MERKEL"]
 
 
 def test_cancer_reference_manifest_deduplicates_identity_with_rich_metadata(

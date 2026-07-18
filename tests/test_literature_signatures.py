@@ -1,7 +1,6 @@
 import re
 
 import pandas as pd
-
 from pirlygenes.gene_sets_cancer import cancer_type_registry
 
 from trufflepig.analyze import effective_expression_reference, expression_reference_options
@@ -15,7 +14,6 @@ from trufflepig.rare_inference import (
     infer_rare_cancer_marker_hypotheses_from_rna,
     rare_cancer_rna_surrogate_rules_df,
 )
-
 
 # A ``source`` field is a ``;``-separated list of citation tokens, each of which
 # must be a well-formed PubMed/PMC id or a curated-label. This is a *format*
@@ -85,7 +83,16 @@ def test_all_codes_without_direct_expression_reference_have_literature_signature
         if "ontology_level" in reg.columns
         else set()
     )
-    for code in reg["code"].dropna().astype(str):
+    # Non-classification entities can remain explicit in the ontology while
+    # deliberately lacking both a direct RNA cohort and a surrogate signature.
+    # SARC_MPLPS is the first real example: oncoref records the WHO entity and
+    # its expression-data gap, but intentionally prevents RNA-only selection.
+    classification_target = (
+        reg["is_classification_target"].fillna(True).astype(bool)
+        if "is_classification_target" in reg.columns
+        else pd.Series(True, index=reg.index)
+    )
+    for code in reg.loc[classification_target, "code"].dropna().astype(str):
         if code in parent_nodes or code in aggregate_or_subtype:
             continue
         if code.endswith("_UNCLASSIFIED"):
