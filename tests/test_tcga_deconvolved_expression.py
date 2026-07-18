@@ -593,6 +593,124 @@ def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
     assert nondefault["processing_pipeline"].isna().all()
 
 
+def test_cancer_reference_manifest_reconciles_unloadable_default_aliases(
+    monkeypatch,
+):
+    """Only exact-source identities may survive a successful expansion."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    defaults = pd.DataFrame(
+        {
+            "cancer_code": ["MTC", "MBL_G3", "COAD", "NEC_MERKEL"],
+            "source_cohort": [
+                "GSE32662_PRINGLE_2012",
+                "MBL_G3",
+                "TREEHOUSE_POLYA_25_01",
+                "GSE235092_MERKEL_2024",
+            ],
+            "available": [True, True, True, True],
+            "n_reference_samples": [52, 31, 290, 91],
+            "n_samples": [None, None, None, None],
+            "processing_pipeline": [
+                "geo",
+                "treehouse",
+                "treehouse",
+                "geo",
+            ],
+        }
+    )
+    exact_sources = {
+        "GSE32662_PRINGLE_2012_MTC": "MTC",
+        "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS": "MBL_G3",
+        "TREEHOUSE_POLYA_25_01_TCGA_SUBSET": "COAD",
+        # Intentionally absent from cohort_registry below: a valid source
+        # reported only by the unfiltered availability view must verify itself.
+        "GSE235092_MERKEL_2024": "NEC_MERKEL",
+    }
+
+    def availability(
+        *, normalize, reference_source, sample_qc, source_cohort=None
+    ):
+        assert (normalize, reference_source, sample_qc) == (
+            "tpm_clean",
+            "summary_rows_all",
+            "all",
+        )
+        if source_cohort is None:
+            return defaults.copy()
+        code = exact_sources.get(source_cohort)
+        if code is None:
+            return pd.DataFrame(columns=defaults.columns)
+        # The filter verifies availability but affected oncoref releases still
+        # report the unfiltered alias in provenance.
+        default = defaults.loc[defaults["cancer_code"].eq(code)].iloc[0]
+        return pd.DataFrame(
+            {
+                "cancer_code": [code],
+                "source_cohort": [default["source_cohort"]],
+                "available": [True],
+                "n_reference_samples": [default["n_reference_samples"]],
+                "n_samples": [None],
+                "processing_pipeline": [default["processing_pipeline"]],
+            }
+        )
+
+    cohort_registry = pd.DataFrame(
+        {
+            "cohort_id": [
+                source
+                for source in exact_sources
+                if source != "GSE235092_MERKEL_2024"
+            ]
+        }
+    )
+    empty_registry = pd.DataFrame(
+        columns=[
+            "code",
+            "source_cohort",
+            "expression_source",
+            "reference_source",
+            "classification_reference_code",
+        ]
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        availability,
+    )
+    monkeypatch.setattr(oncoref, "cohort_registry_df", lambda: cohort_registry)
+    monkeypatch.setattr(
+        cancer_ontology,
+        "cancer_type_registry",
+        lambda: empty_registry,
+    )
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    identities = set(zip(result["cancer_code"], result["source_cohort"]))
+    assert identities == {
+        ("MTC", "GSE32662_PRINGLE_2012_MTC"),
+        ("MBL_G3", "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS"),
+        ("COAD", "TREEHOUSE_POLYA_25_01_TCGA_SUBSET"),
+        ("NEC_MERKEL", "GSE235092_MERKEL_2024"),
+    }
+    assert set(result["source_cohort"]).isdisjoint(
+        {"GSE32662_PRINGLE_2012", "MBL_G3", "TREEHOUSE_POLYA_25_01"}
+    )
+    assert result.set_index("cancer_code")["n_samples"].to_dict() == {
+        "MTC": 52,
+        "MBL_G3": 31,
+        "COAD": 290,
+        "NEC_MERKEL": 91,
+    }
+
+
 def test_cancer_reference_manifest_excludes_artifact_only_cohorts(monkeypatch):
     """Discovery must advertise only cohorts the expression accessor can load."""
     import oncoref

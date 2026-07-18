@@ -83,7 +83,7 @@ def _all_source_reference_availability(
         cohort_registry = cohort_registry_accessor()
         if "cohort_id" not in cohort_registry.columns:
             return default_manifest
-        source_cohorts = (
+        registered_source_cohorts = (
             cohort_registry["cohort_id"]
             .dropna()
             .astype(str)
@@ -92,10 +92,26 @@ def _all_source_reference_availability(
             .drop_duplicates()
             .tolist()
         )
+        default_source_cohorts = (
+            default_manifest["source_cohort"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .loc[lambda values: values.ne("")]
+            .drop_duplicates()
+            .tolist()
+            if "source_cohort" in default_manifest.columns
+            else []
+        )
+        source_cohorts = list(
+            dict.fromkeys(
+                [*registered_source_cohorts, *default_source_cohorts]
+            )
+        )
     except Exception:  # noqa: BLE001 - retain the verified default view
         return default_manifest
 
-    source_manifests: list[pd.DataFrame] = [default_manifest]
+    source_manifests: list[pd.DataFrame] = []
     for source_cohort in source_cohorts:
         try:
             filtered = public_accessor(
@@ -146,6 +162,15 @@ def _all_source_reference_availability(
                 filtered.loc[provenance_mismatch, column] = pd.NA
         source_manifests.append(filtered)
 
+    # Exact-source expansion is authoritative when it yields rows.  The
+    # unfiltered oncoref 1.8.129 view can report compatibility/default aliases
+    # that the expression loader cannot consume (for example MTC without its
+    # ``_MTC`` cohort suffix).  Retain a default row only when its identity is
+    # already verified or when the code has exactly one verified source, in
+    # which case the canonical identity is unambiguous and its richer default
+    # metadata can be preserved.
+    if not source_manifests:
+        return default_manifest
     columns = list(
         dict.fromkeys(
             column
@@ -158,7 +183,55 @@ def _all_source_reference_availability(
         for source_manifest in source_manifests
         for record in source_manifest.to_dict("records")
     ]
-    return pd.DataFrame.from_records(records, columns=columns)
+    exact_manifest = pd.DataFrame.from_records(records, columns=columns)
+    exact_sources_by_code = (
+        exact_manifest[["cancer_code", "source_cohort"]]
+        .dropna()
+        .astype(str)
+        .groupby("cancer_code")["source_cohort"]
+        .agg(lambda values: frozenset(values))
+        .to_dict()
+    )
+    if not {"cancer_code", "source_cohort"}.issubset(default_manifest.columns):
+        return exact_manifest
+
+    reconciled_defaults = default_manifest.copy()
+    keep_default = pd.Series(False, index=reconciled_defaults.index)
+    for index, row in reconciled_defaults.iterrows():
+        code_value = row.get("cancer_code")
+        source_value = row.get("source_cohort")
+        code = "" if pd.isna(code_value) else str(code_value).strip()
+        source = "" if pd.isna(source_value) else str(source_value).strip()
+        if code in _SARC_HISTOLOGY_REFERENCE_CODES and (
+            source == _STALE_SARC_HISTOLOGY_COHORT
+        ):
+            source = _SARC_HISTOLOGY_COHORT
+        verified_sources = exact_sources_by_code.get(code, frozenset())
+        if source in verified_sources:
+            canonical_source = source
+        elif len(verified_sources) == 1:
+            canonical_source = next(iter(verified_sources))
+        else:
+            continue
+        reconciled_defaults.at[index, "source_cohort"] = canonical_source
+        keep_default.at[index] = True
+
+    reconciled_defaults = reconciled_defaults.loc[keep_default]
+    combined = [reconciled_defaults, exact_manifest]
+    combined_columns = list(
+        dict.fromkeys(
+            column for frame in combined for column in frame.columns
+        )
+    )
+    combined_records = [
+        record
+        for frame in combined
+        for record in frame.to_dict("records")
+    ]
+    return pd.DataFrame.from_records(
+        combined_records,
+        columns=combined_columns,
+    )
 
 
 def _parse_pan_value_column(col: str) -> tuple[str, int] | None:
