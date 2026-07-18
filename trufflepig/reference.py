@@ -584,6 +584,45 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             .astype(str)
             .str.strip()
         )
+
+        # Older compact availability tables used compatibility aliases as the
+        # cohort identity for a few single-source codes (for example MBL_G3 or
+        # GSE32662_PRINGLE_2012), while the expression accessor and registry
+        # expose the full cohort IDs.  Reconcile only unambiguous one-source
+        # codes already verified by availability; never create a row or guess
+        # among multi-cohort references.
+        if availability_verified and "source_cohort" in manifest.columns:
+            registry_sources = pd.DataFrame(
+                {"cancer_code": code, "source_cohort": source}
+            )[
+                ~expression_source.isin({"", "curated", "computed"})
+                & source.ne("")
+                & ~source.eq("LITERATURE_CURATED")
+                & ~source.str.startswith("COMPUTED_")
+            ].drop_duplicates()
+            manifest_source_counts = manifest.groupby("cancer_code")[
+                "source_cohort"
+            ].nunique(dropna=True)
+            registry_source_counts = registry_sources.groupby("cancer_code")[
+                "source_cohort"
+            ].nunique(dropna=True)
+            unambiguous_codes = set(
+                manifest_source_counts[manifest_source_counts.eq(1)].index
+            ).intersection(
+                registry_source_counts[registry_source_counts.eq(1)].index
+            )
+            canonical_source = (
+                registry_sources[
+                    registry_sources["cancer_code"].isin(unambiguous_codes)
+                ]
+                .set_index("cancer_code")["source_cohort"]
+                .to_dict()
+            )
+            rewrite = manifest["cancer_code"].isin(canonical_source)
+            manifest.loc[rewrite, "source_cohort"] = manifest.loc[
+                rewrite, "cancer_code"
+            ].map(canonical_source)
+
         own = registry[
             ~expression_source.isin({"", "curated", "computed"})
             & source.ne("")

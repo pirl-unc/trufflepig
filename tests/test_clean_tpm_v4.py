@@ -49,7 +49,7 @@ def test_v4_mode_still_rejects_technical_dominant_raw_input():
     [
         ("MM", "MMRF_COMMPASS"),
         ("ADCC", "GSE294016_BARTL_2025_SGC"),
-        ("MTC", "GSE32662_PRINGLE_2012"),
+        ("MTC", "GSE32662_PRINGLE_2012_MTC"),
         ("NET_LUNG", "DRMETRICS_ALCALA_2019_LNEN"),
         ("SARC_ASPS", "TREEHOUSE_POLYA_25_01"),
         ("CLL", "CLLMAP_2022"),

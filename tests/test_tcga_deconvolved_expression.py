@@ -541,6 +541,61 @@ def test_cancer_reference_manifest_excludes_artifact_only_cohorts(monkeypatch):
     assert result["cancer_code"].tolist() == ["NEC_MERKEL"]
 
 
+def test_cancer_reference_manifest_canonicalizes_single_source_cohort_aliases(
+    monkeypatch,
+):
+    """Discovery and expression loading must expose the same cohort identity."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    availability = pd.DataFrame(
+        {
+            "cancer_code": ["MBL_G3", "MTC"],
+            "source_cohort": ["MBL_G3", "GSE32662_PRINGLE_2012"],
+            "available": [True, True],
+            "n_reference_samples": [31, 52],
+            "n_samples": [None, None],
+            "processing_pipeline": ["fixture", "fixture"],
+        }
+    )
+    registry = pd.DataFrame(
+        {
+            "code": ["MBL_G3", "MTC"],
+            "source_cohort": [
+                "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
+                "GSE32662_PRINGLE_2012_MTC",
+            ],
+            "expression_source": ["Treehouse", "GEO"],
+            "reference_source": ["parent", "own_cohort"],
+            "classification_reference_code": ["MBL", "MTC"],
+        }
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: availability.copy(),
+    )
+    monkeypatch.setattr(cancer_ontology, "cancer_type_registry", lambda: registry)
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    by_code = result.set_index("cancer_code")
+    assert (
+        by_code.loc["MBL_G3", "source_cohort"]
+        == "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS"
+    )
+    assert (
+        by_code.loc["MTC", "source_cohort"] == "GSE32662_PRINGLE_2012_MTC"
+    )
+    assert int(by_code.loc["MBL_G3", "n_samples"]) == 31
+    assert int(by_code.loc["MTC", "n_samples"]) == 52
+
+
 def test_cancer_reference_manifest_deduplicates_identity_with_rich_metadata(
     monkeypatch,
 ):
