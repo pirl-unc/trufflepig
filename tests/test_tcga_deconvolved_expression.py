@@ -482,6 +482,117 @@ def test_cancer_reference_manifest_uses_gene_independent_availability(monkeypatc
     ]
 
 
+def test_cancer_reference_manifest_enumerates_every_loadable_source_cohort(
+    monkeypatch,
+):
+    """The source-union manifest preserves sibling cohorts for one code."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    selected = pd.DataFrame(
+        {
+            "cancer_code": ["SARC_DDLPS", "NET_PANCREAS"],
+            "source_cohort": [
+                "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+                "GSE118014_ALVAREZ_2018",
+            ],
+            "available": [True, True],
+            "n_reference_samples": [48, 33],
+            "n_samples": [None, None],
+            "processing_pipeline": ["treehouse", "recount3"],
+        }
+    )
+    source_codes = {
+        "GSE30929_SINGER_2007_LPS": ["SARC_DDLPS"],
+        "GSE75885_DELESPAUL_2017": ["SARC_DDLPS"],
+        "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY": ["SARC_DDLPS"],
+        "TREEHOUSE_POLYA_25_01_TCGA_SUBSET": ["SARC_DDLPS"],
+        "GSE118014_ALVAREZ_2018": ["NET_PANCREAS"],
+        "GSE98894_ALVAREZ_2018_NET": ["NET_PANCREAS"],
+    }
+    calls = []
+
+    def availability(
+        *, normalize, reference_source, sample_qc, source_cohort=None
+    ):
+        assert (normalize, reference_source, sample_qc) == (
+            "tpm_clean",
+            "summary_rows_all",
+            "all",
+        )
+        calls.append(source_cohort)
+        if source_cohort is None:
+            return selected.copy()
+        codes = source_codes.get(source_cohort, [])
+        if not codes:
+            return pd.DataFrame(columns=selected.columns)
+        # Model oncoref 1.8.129: availability is filtered correctly, but
+        # provenance still names the code's default/richest source.
+        defaults = {
+            "SARC_DDLPS": "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+            "NET_PANCREAS": "GSE118014_ALVAREZ_2018",
+        }
+        return pd.DataFrame(
+            {
+                "cancer_code": codes,
+                "source_cohort": [defaults[code] for code in codes],
+                "available": [True] * len(codes),
+                "n_reference_samples": [999] * len(codes),
+                "n_samples": [999] * len(codes),
+                "processing_pipeline": ["wrong-source"] * len(codes),
+            }
+        )
+
+    cohort_registry = pd.DataFrame({"cohort_id": list(source_codes)})
+    empty_registry = pd.DataFrame(
+        columns=[
+            "code",
+            "source_cohort",
+            "expression_source",
+            "reference_source",
+            "classification_reference_code",
+        ]
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        availability,
+    )
+    monkeypatch.setattr(oncoref, "cohort_registry_df", lambda: cohort_registry)
+    monkeypatch.setattr(
+        cancer_ontology,
+        "cancer_type_registry",
+        lambda: empty_registry,
+    )
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    identities = set(zip(result["cancer_code"], result["source_cohort"]))
+    assert identities == {
+        ("SARC_DDLPS", "GSE30929_SINGER_2007_LPS"),
+        ("SARC_DDLPS", "GSE75885_DELESPAUL_2017"),
+        (
+            "SARC_DDLPS",
+            "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+        ),
+        ("NET_PANCREAS", "GSE118014_ALVAREZ_2018"),
+        ("NET_PANCREAS", "GSE98894_ALVAREZ_2018_NET"),
+    }
+    assert calls == [None, *source_codes]
+    nondefault = result[
+        result["source_cohort"].isin(
+            ["GSE30929_SINGER_2007_LPS", "GSE98894_ALVAREZ_2018_NET"]
+        )
+    ]
+    assert nondefault["n_samples"].isna().all()
+    assert nondefault["processing_pipeline"].isna().all()
+
+
 def test_cancer_reference_manifest_excludes_artifact_only_cohorts(monkeypatch):
     """Discovery must advertise only cohorts the expression accessor can load."""
     import oncoref

@@ -10,6 +10,7 @@ keeps symbol-level deconvolved references behind explicit accessors.
 from __future__ import annotations
 
 from functools import lru_cache
+from inspect import signature
 
 import pandas as pd
 import pirlygenes as _pirlygenes
@@ -50,6 +51,114 @@ _CANCER_REFERENCE_EMPTY_COLUMNS = [
     "q1",
     "q3",
 ]
+_SARC_HISTOLOGY_REFERENCE_CODES = frozenset({"SARC_DDLPS", "SARC_WDLPS"})
+_STALE_SARC_HISTOLOGY_COHORT = "TREEHOUSE_POLYA_25_01_TCGA_SUBSET"
+_SARC_HISTOLOGY_COHORT = "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY"
+
+
+def _all_source_reference_availability(
+    oncoref,
+    public_accessor,
+    default_manifest: pd.DataFrame,
+) -> pd.DataFrame:
+    """Expand oncoref's one-source-per-code view through exact source filters.
+
+    ``summary_rows_all`` can load several source cohorts for one cancer code,
+    while the availability accessor currently returns only one provenance row
+    per code (oncoref#393). The public cohort registry gives us the finite set
+    of source identities, and the availability accessor can cheaply verify each
+    one without loading expression values.
+
+    oncoref 1.8.129 applies ``source_cohort`` to availability but reports the
+    unfiltered default source in the provenance columns. Treat the requested
+    cohort as authoritative only for rows that the filtered call marks
+    available, and discard metadata that belongs to the mismatched source.
+    """
+    try:
+        if "source_cohort" not in signature(public_accessor).parameters:
+            return default_manifest
+        cohort_registry_accessor = getattr(oncoref, "cohort_registry_df", None)
+        if not callable(cohort_registry_accessor):
+            return default_manifest
+        cohort_registry = cohort_registry_accessor()
+        if "cohort_id" not in cohort_registry.columns:
+            return default_manifest
+        source_cohorts = (
+            cohort_registry["cohort_id"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .loc[lambda values: values.ne("")]
+            .drop_duplicates()
+            .tolist()
+        )
+    except Exception:  # noqa: BLE001 - retain the verified default view
+        return default_manifest
+
+    source_manifests: list[pd.DataFrame] = [default_manifest]
+    for source_cohort in source_cohorts:
+        try:
+            filtered = public_accessor(
+                normalize="tpm_clean",
+                reference_source="summary_rows_all",
+                sample_qc="all",
+                source_cohort=source_cohort,
+            )
+        except Exception:  # noqa: BLE001 - one bad source must not hide the rest
+            continue
+        if "cancer_code" not in filtered.columns:
+            continue
+        if "available" in filtered.columns:
+            filtered = filtered[
+                filtered["available"].fillna(False).astype(bool)
+            ]
+        if filtered.empty:
+            continue
+
+        filtered = filtered.copy()
+        reported_source = filtered.get(
+            "source_cohort",
+            pd.Series(pd.NA, index=filtered.index, dtype="string"),
+        ).astype("string")
+        provenance_mismatch = reported_source.fillna("").str.strip().ne(
+            source_cohort
+        )
+        filtered["source_cohort"] = source_cohort
+        stale_sarc_identity = (
+            filtered["cancer_code"]
+            .fillna("")
+            .astype(str)
+            .isin(_SARC_HISTOLOGY_REFERENCE_CODES)
+            & filtered["source_cohort"].eq(_STALE_SARC_HISTOLOGY_COHORT)
+        )
+        filtered.loc[stale_sarc_identity, "source_cohort"] = (
+            _SARC_HISTOLOGY_COHORT
+        )
+        # Affected oncoref releases select availability with the requested
+        # source but populate provenance from the default source. Identity is
+        # still verified; source-specific counts/pipeline are not.
+        for column in (
+            "n_reference_samples",
+            "n_samples",
+            "processing_pipeline",
+        ):
+            if column in filtered.columns:
+                filtered.loc[provenance_mismatch, column] = pd.NA
+        source_manifests.append(filtered)
+
+    columns = list(
+        dict.fromkeys(
+            column
+            for source_manifest in source_manifests
+            for column in source_manifest.columns
+        )
+    )
+    records = [
+        record
+        for source_manifest in source_manifests
+        for record in source_manifest.to_dict("records")
+    ]
+    return pd.DataFrame.from_records(records, columns=columns)
 
 
 def _parse_pan_value_column(col: str) -> tuple[str, int] | None:
@@ -480,7 +589,7 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
     """Small per-(code, cohort) manifest without loading the 7+ GB summary frame.
 
     Oncoref owns the empirical reference layer and exposes a gene-independent
-    availability table with exactly the fields discovery needs. Pirlygenes'
+    availability table with the fields discovery needs. Pirlygenes'
     public ``available_cancer_expression_references()`` currently derives the same
     rows by materializing the full object-heavy cancer-reference summary; the
     July 2026 macOS panic snapshot measured that path at ~7.4 GB per process.
@@ -506,6 +615,11 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             normalize="tpm_clean",
             reference_source="summary_rows_all",
             sample_qc="all",
+        )
+        manifest = _all_source_reference_availability(
+            oncoref,
+            public_accessor,
+            manifest,
         )
         if "available" in manifest.columns:
             manifest = manifest[manifest["available"].fillna(False).astype(bool)]

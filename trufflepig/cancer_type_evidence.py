@@ -946,10 +946,22 @@ def _hypothesis_evidence_channels(
             for axis in entity_consensus.get("axes") or []
             if isinstance(axis, Mapping)
         )
-        supporting_axes = max(
-            _safe_int(entity_consensus.get("candidate_votes")),
-            _safe_int(entity_consensus.get("selected_votes")),
-        )
+        candidate_votes = _safe_int(entity_consensus.get("candidate_votes"))
+        selected_votes = _safe_int(entity_consensus.get("selected_votes"))
+        if hypothesis.cancer_type == entity_consensus.get("candidate_code"):
+            supporting_axes = candidate_votes
+        elif hypothesis.cancer_type == entity_consensus.get("selected_code"):
+            supporting_axes = selected_votes
+        elif (
+            hypothesis.details.get("entity_consensus_adjudication_mode")
+            == "common_ancestor_abstention"
+        ):
+            # The parent is a neutral abstention rather than either leaf. Its
+            # support reflects the smaller opposing bloc that made the leaf
+            # conflict material, not the winning leaf's vote count.
+            supporting_axes = min(candidate_votes, selected_votes)
+        else:
+            supporting_axes = 0
         add(
             channel="entity_evidence_consensus",
             stage=_decision_stage_for_hypothesis(hypothesis),

@@ -836,6 +836,20 @@ def _adjudicate_stad_esca_evidence_scenario(axis_preferences):
     [
         pytest.param(
             {
+                "pan_cancer_signature": "selected",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "selected",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            1,
+            5,
+            6,
+            id="losing-candidate-retains-only-its-own-vote",
+        ),
+        pytest.param(
+            {
                 "pan_cancer_signature": "candidate",
                 "whole_profile_centroid": "tie",
                 "curated_marker_program": "candidate",
@@ -913,6 +927,8 @@ def test_learned_hierarchy_adjudicates_available_axis_majorities(
     expected_selected_votes,
     expected_available_axes,
 ):
+    from trufflepig.cancer_type_evidence import _hypothesis_evidence_channels
+
     result, selected, candidate = _adjudicate_stad_esca_evidence_scenario(
         axis_preferences
     )
@@ -923,6 +939,19 @@ def test_learned_hierarchy_adjudicates_available_axis_majorities(
     assert consensus["selected_votes"] == expected_selected_votes
     assert available_axes == expected_available_axes
     assert consensus["available_axis_count"] == expected_available_axes
+    for hypothesis, expected_votes in (
+        (candidate, expected_candidate_votes),
+        (selected, expected_selected_votes),
+    ):
+        consensus_channel = next(
+            row
+            for row in _hypothesis_evidence_channels(hypothesis)
+            if row["channel"] == "entity_evidence_consensus"
+        )
+        assert consensus_channel["support"] == round(
+            expected_votes / expected_available_axes,
+            4,
+        )
     assert result.cancer_type == expected_code
     if expected_code == "STAD":
         assert result is candidate
