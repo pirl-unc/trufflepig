@@ -10,7 +10,6 @@ keeps symbol-level deconvolved references behind explicit accessors.
 from __future__ import annotations
 
 from functools import lru_cache
-from inspect import signature
 
 import pandas as pd
 import pirlygenes as _pirlygenes
@@ -53,173 +52,52 @@ _CANCER_REFERENCE_EMPTY_COLUMNS = [
 ]
 
 
-def _all_source_reference_availability(
-    oncoref,
-    public_accessor,
-    default_manifest: pd.DataFrame,
-) -> pd.DataFrame:
-    """Expand oncoref's one-source-per-code view through exact source filters.
+def _artifact_reference_manifest(oncoref) -> pd.DataFrame:
+    """Return the compact manifest for the artifact-backed expression view.
 
-    ``summary_rows_all`` can load several source cohorts for one cancer code,
-    while the availability accessor currently returns only one provenance row
-    per code (oncoref#393). The public cohort registry gives us the finite set
-    of source identities, and the availability accessor can cheaply verify each
-    one without loading expression values.
+    The summary-row availability API is gene-independent but not lightweight:
+    oncoref 1.8.132 builds it by materializing the roughly five-million-row
+    reference summary.  Artifact build metadata is a small CSV emitted beside
+    the percentile shards and contains the exact source identity and sample
+    count served by ``reference_source="artifact"``.
 
-    oncoref 1.8.129 applies ``source_cohort`` to availability but reports the
-    unfiltered default source in the provenance columns. Treat the requested
-    cohort as authoritative only for rows that the filtered call marks
-    available, and discard metadata that belongs to the mismatched source.
+    Current bundles require one metadata row per percentile shard.  Older
+    supported bundles that lack the sidecar fall back to artifact availability,
+    whose implementation enumerates shard filenames and never touches the
+    summary expression frame.
     """
-    try:
-        if "source_cohort" not in signature(public_accessor).parameters:
-            return default_manifest
-        cohort_registry_accessor = getattr(oncoref, "cohort_registry_df", None)
-        if not callable(cohort_registry_accessor):
-            return default_manifest
-        cohort_registry = cohort_registry_accessor()
-        if "cohort_id" not in cohort_registry.columns:
-            return default_manifest
-        registered_source_cohorts = (
-            cohort_registry["cohort_id"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .loc[lambda values: values.ne("")]
-            .drop_duplicates()
-            .tolist()
-        )
-        default_source_cohorts = (
-            default_manifest["source_cohort"]
-            .dropna()
-            .astype(str)
-            .str.strip()
-            .loc[lambda values: values.ne("")]
-            .drop_duplicates()
-            .tolist()
-            if "source_cohort" in default_manifest.columns
-            else []
-        )
-        source_cohorts = list(
-            dict.fromkeys(
-                [*registered_source_cohorts, *default_source_cohorts]
-            )
-        )
-    except Exception:  # noqa: BLE001 - retain the verified default view
-        return default_manifest
-
-    source_manifests: list[pd.DataFrame] = []
-    for source_cohort in source_cohorts:
-        try:
-            filtered = public_accessor(
-                normalize="tpm_clean",
-                reference_source="summary_rows_all",
-                sample_qc="all",
-                source_cohort=source_cohort,
-            )
-        except Exception:  # noqa: BLE001 - one bad source must not hide the rest
-            continue
-        if "cancer_code" not in filtered.columns:
-            continue
-        if "available" in filtered.columns:
-            filtered = filtered[
-                filtered["available"].fillna(False).astype(bool)
-            ]
-        if filtered.empty:
-            continue
-
-        filtered = filtered.copy()
-        reported_source = filtered.get(
-            "source_cohort",
-            pd.Series(pd.NA, index=filtered.index, dtype="string"),
-        ).astype("string")
-        provenance_mismatch = reported_source.fillna("").str.strip().ne(
-            source_cohort
-        )
-        # ``source_cohort`` is a loader identity, not merely a display label.
-        # Keep the exact key whose filtered availability was verified even
-        # when oncoref reports a different default/provenance name.  In
-        # oncoref 1.8.129 this distinction is load-bearing for the DDLPS and
-        # WDLPS Treehouse references: ``...TCGA_SUBSET`` loads expression,
-        # while the reported ``...TCGA_SARC_HISTOLOGY`` alias does not.
-        filtered["source_cohort"] = source_cohort
-        # Affected oncoref releases select availability with the requested
-        # source but populate provenance from the default source. Identity is
-        # still verified; source-specific counts/pipeline are not.
-        for column in (
-            "n_reference_samples",
-            "n_samples",
-            "processing_pipeline",
-        ):
-            if column in filtered.columns:
-                filtered.loc[provenance_mismatch, column] = pd.NA
-        source_manifests.append(filtered)
-
-    # Exact-source expansion is authoritative when it yields rows.  The
-    # unfiltered oncoref 1.8.129 view can report compatibility/default aliases
-    # that the expression loader cannot consume (for example MTC without its
-    # ``_MTC`` cohort suffix).  Retain a default row only when its identity is
-    # already verified or when the code has exactly one verified source, in
-    # which case the canonical identity is unambiguous and its richer default
-    # metadata can be preserved.
-    if not source_manifests:
-        return default_manifest
-    columns = list(
-        dict.fromkeys(
-            column
-            for source_manifest in source_manifests
-            for column in source_manifest.columns
-        )
+    metadata_accessor = getattr(
+        oncoref, "expression_artifact_build_metadata", None
     )
-    records = [
-        record
-        for source_manifest in source_manifests
-        for record in source_manifest.to_dict("records")
-    ]
-    exact_manifest = pd.DataFrame.from_records(records, columns=columns)
-    exact_sources_by_code = (
-        exact_manifest[["cancer_code", "source_cohort"]]
-        .dropna()
-        .astype(str)
-        .groupby("cancer_code")["source_cohort"]
-        .agg(lambda values: frozenset(values))
-        .to_dict()
-    )
-    if not {"cancer_code", "source_cohort"}.issubset(default_manifest.columns):
-        return exact_manifest
+    shard_accessor = getattr(oncoref, "available_percentile_cohorts", None)
+    if callable(metadata_accessor) and callable(shard_accessor):
+        metadata = metadata_accessor(auto_fetch=False, on_missing="empty")
+        available_codes = frozenset(str(code) for code in shard_accessor())
+        if {"cancer_code", "source_cohort"}.issubset(metadata.columns):
+            manifest = metadata[
+                metadata["cancer_code"].astype(str).isin(available_codes)
+            ].copy()
+            metadata_codes = frozenset(manifest["cancer_code"].astype(str))
+            if metadata_codes == available_codes:
+                if "n_cohort_samples" in manifest.columns:
+                    manifest["n_samples"] = pd.to_numeric(
+                        manifest["n_cohort_samples"], errors="coerce"
+                    )
+                manifest["available"] = True
+                return manifest
 
-    reconciled_defaults = default_manifest.copy()
-    keep_default = pd.Series(False, index=reconciled_defaults.index)
-    for index, row in reconciled_defaults.iterrows():
-        code_value = row.get("cancer_code")
-        source_value = row.get("source_cohort")
-        code = "" if pd.isna(code_value) else str(code_value).strip()
-        source = "" if pd.isna(source_value) else str(source_value).strip()
-        verified_sources = exact_sources_by_code.get(code, frozenset())
-        if source in verified_sources:
-            canonical_source = source
-        elif len(verified_sources) == 1:
-            canonical_source = next(iter(verified_sources))
-        else:
-            continue
-        reconciled_defaults.at[index, "source_cohort"] = canonical_source
-        keep_default.at[index] = True
-
-    reconciled_defaults = reconciled_defaults.loc[keep_default]
-    combined = [reconciled_defaults, exact_manifest]
-    combined_columns = list(
-        dict.fromkeys(
-            column for frame in combined for column in frame.columns
-        )
+    availability_accessor = getattr(
+        oncoref, "cancer_reference_expression_availability", None
     )
-    combined_records = [
-        record
-        for frame in combined
-        for record in frame.to_dict("records")
-    ]
-    return pd.DataFrame.from_records(
-        combined_records,
-        columns=combined_columns,
+    if not callable(availability_accessor):
+        raise AttributeError("oncoref has no artifact manifest accessor")
+    # ``sample_qc='artifact'`` is not accepted by the availability API in
+    # oncoref 1.8.x.  Availability under ``pass`` still means the percentile
+    # shard exists; trufflepig reads that shard under its recorded build policy.
+    return availability_accessor(
+        normalize="tpm_clean",
+        reference_source="artifact",
+        sample_qc="pass",
     )
 
 
@@ -648,41 +526,18 @@ def subtype_deconvolved_expression(
 
 @lru_cache(maxsize=1)
 def _cancer_reference_manifest_cached() -> pd.DataFrame:
-    """Small per-(code, cohort) manifest without loading the 7+ GB summary frame.
+    """Small artifact manifest without loading the 7+ GB summary frame.
 
-    Oncoref owns the empirical reference layer and exposes a gene-independent
-    availability table with the fields discovery needs. Pirlygenes'
-    public ``available_cancer_expression_references()`` currently derives the same
-    rows by materializing the full object-heavy cancer-reference summary; the
-    July 2026 macOS panic snapshot measured that path at ~7.4 GB per process.
-
-    Prefer oncoref's public manifest. If that compact path fails, degrade
-    directly to registry-declared cohorts. Never invoke pirlygenes' private
-    canonical-view loader or the multi-gigabyte legacy availability path.
+    Oncoref's artifact build metadata and shard listing are the authoritative
+    discovery surface for the artifact-backed expression accessor below. If
+    those compact paths fail, degrade directly to registry-declared cohorts.
+    Never invoke summary-row availability or pirlygenes' full canonical views.
     """
     availability_verified = False
     try:
         import oncoref
 
-        public_accessor = getattr(
-            oncoref, "cancer_reference_expression_availability", None
-        )
-        if not callable(public_accessor):
-            raise AttributeError("oncoref has no reference availability accessor")
-        # Keep discovery on the exact view consumed by pirlygenes'
-        # cancer_reference_expression() compatibility accessor.  Oncoref's
-        # default artifact/pass view can contain cohorts (currently the ESS
-        # shards) that the summary_rows_all/all loader cannot return.
-        manifest = public_accessor(
-            normalize="tpm_clean",
-            reference_source="summary_rows_all",
-            sample_qc="all",
-        )
-        manifest = _all_source_reference_availability(
-            oncoref,
-            public_accessor,
-            manifest,
-        )
+        manifest = _artifact_reference_manifest(oncoref)
         if "available" in manifest.columns:
             manifest = manifest[manifest["available"].fillna(False).astype(bool)]
         if (
@@ -730,11 +585,11 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
     # having a physical clean-TPM artifact of their own (for example the MBL
     # molecular subgroups). Never advertise those as direct references.
     #
-    # When oncoref's compact accessor succeeds, it is authoritative for the
-    # installed data bundle: registry rows may enrich/deduplicate only identities
-    # that accessor already verified. When the accessor itself fails, the
-    # explicit own-cohort/self-reference registry contract provides the
-    # lightweight failover requested by discovery without loading expression.
+    # When oncoref's compact accessor succeeds, it is the complete authority for
+    # the installed data bundle.  Do not merge registry aliases into verified
+    # loader identities. When the accessor itself fails, the explicit
+    # own-cohort/self-reference registry contract provides the lightweight
+    # failover requested by discovery without loading expression.
     try:
         from .cancer_ontology import cancer_type_registry
 
@@ -761,44 +616,6 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             .str.strip()
         )
 
-        # Older compact availability tables used compatibility aliases as the
-        # cohort identity for a few single-source codes (for example MBL_G3 or
-        # GSE32662_PRINGLE_2012), while the expression accessor and registry
-        # expose the full cohort IDs.  Reconcile only unambiguous one-source
-        # codes already verified by availability; never create a row or guess
-        # among multi-cohort references.
-        if availability_verified and "source_cohort" in manifest.columns:
-            registry_sources = pd.DataFrame(
-                {"cancer_code": code, "source_cohort": source}
-            )[
-                ~expression_source.isin({"", "curated", "computed"})
-                & source.ne("")
-                & ~source.eq("LITERATURE_CURATED")
-                & ~source.str.startswith("COMPUTED_")
-            ].drop_duplicates()
-            manifest_source_counts = manifest.groupby("cancer_code")[
-                "source_cohort"
-            ].nunique(dropna=True)
-            registry_source_counts = registry_sources.groupby("cancer_code")[
-                "source_cohort"
-            ].nunique(dropna=True)
-            unambiguous_codes = set(
-                manifest_source_counts[manifest_source_counts.eq(1)].index
-            ).intersection(
-                registry_source_counts[registry_source_counts.eq(1)].index
-            )
-            canonical_source = (
-                registry_sources[
-                    registry_sources["cancer_code"].isin(unambiguous_codes)
-                ]
-                .set_index("cancer_code")["source_cohort"]
-                .to_dict()
-            )
-            rewrite = manifest["cancer_code"].isin(canonical_source)
-            manifest.loc[rewrite, "source_cohort"] = manifest.loc[
-                rewrite, "cancer_code"
-            ].map(canonical_source)
-
         own = registry[
             ~expression_source.isin({"", "curated", "computed"})
             & source.ne("")
@@ -807,37 +624,14 @@ def _cancer_reference_manifest_cached() -> pd.DataFrame:
             & reference_source.eq("own_cohort")
             & classification_reference.eq(code)
         ][["code", "source_cohort"]].rename(columns={"code": "cancer_code"})
-        if availability_verified:
-            verified_identities = set()
-            if "source_cohort" in manifest.columns:
-                verified_identities = set(
-                    zip(
-                        manifest["cancer_code"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip(),
-                        manifest["source_cohort"]
-                        .fillna("")
-                        .astype(str)
-                        .str.strip(),
-                    )
-                )
-            own_identities = zip(
-                own["cancer_code"].fillna("").astype(str).str.strip(),
-                own["source_cohort"].fillna("").astype(str).str.strip(),
-            )
-            own = own[
-                [identity in verified_identities for identity in own_identities]
-            ]
-        manifest = pd.concat([manifest, own], ignore_index=True, sort=False)
+        if not availability_verified:
+            manifest = pd.concat([manifest, own], ignore_index=True, sort=False)
     except Exception:  # noqa: BLE001 - availability still works without registry merge
         pass
 
-    # The compact oncoref manifest and the registry intentionally overlap.
-    # Their shared identity is (code, cohort), while pipeline/sample metadata
-    # exists only on the empirical oncoref row. Prefer the most populated row
-    # for each identity instead of full-row deduplication, which retains a
-    # second metadata-null registry row and violates the public contract.
+    # The public identity is (code, cohort). Prefer the most populated row for
+    # each identity so both artifact metadata and registry fallback remain
+    # one-row-per-loader-target even if an upstream table repeats an identity.
     identity_columns = ["cancer_code", "source_cohort"]
     if "source_cohort" not in manifest.columns:
         manifest["source_cohort"] = pd.NA
@@ -889,14 +683,17 @@ def cancer_reference_expression(
     format: str = "long",
     include_provenance: bool = True,
 ) -> pd.DataFrame:
-    """Observed non-TCGA tumor expression references from pirlygenes.
+    """Observed tumor references from oncoref's compact artifact shards.
 
     This is distinct from trufflepig's deconvolved tumor-cell references.
-    The default view is observed cohort clean TPM, source-preserving, and
-    suitable for expression matching or fallback priors when no deconvolved
-    tumor reference exists.
+    Each code is served from its shipped percentile artifact under the QC
+    policy recorded when that artifact was built. This is suitable for
+    expression matching or fallback priors when no deconvolved tumor reference
+    exists, and avoids materializing the multi-gigabyte source-union summary.
     """
-    accessor = getattr(_pirlygenes, "cancer_reference_expression", None)
+    import oncoref
+
+    accessor = getattr(oncoref, "cancer_reference_expression", None)
     if accessor is None:
         if format == "long":
             return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
@@ -908,6 +705,12 @@ def cancer_reference_expression(
         normalize=normalize,
         format=format,
         include_provenance=include_provenance,
+        on_missing="empty",
+        auto_fetch=False,
+        sample_qc="artifact",
+        reference_source="artifact",
+        gene_id_style="pirlygenes",
+        gene_universe="pirlygenes",
     ).copy()
     modes = (
         {str(mode).lower() for mode in normalize}

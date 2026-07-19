@@ -253,16 +253,16 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
-            # The compatibility loader serves subgroup summary rows even when
-            # there is no standalone artifact shard. Discovery uses that same
-            # source view, so the subtype is a direct observed-bulk reference.
+            # There is no standalone subgroup artifact. The typed MBL parent
+            # supplies the closest physical deconvolved reference instead of
+            # advertising summary-only provenance as a direct loader target.
             "MBL_G3",
-            "MBL_G3",
-            "observed_bulk_reference",
-            "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
-            "ensembl_symbol",
-            True,
-            "",
+            "MBL",
+            "deconvolved_tumor_reference",
+            "TREEHOUSE_POLYA_25_01",
+            "symbol_only",
+            False,
+            "registry parent",
         ),
         (
             "SARC_ASPS",
@@ -286,7 +286,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "MTC",
             "MTC",
             "observed_bulk_reference",
-            "GSE32662_PRINGLE_2012_MTC",
+            "GSE32662_PRINGLE_2012",
             "ensembl_symbol",
             True,
             "",
