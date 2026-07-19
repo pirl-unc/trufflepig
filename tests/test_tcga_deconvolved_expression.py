@@ -852,67 +852,66 @@ def test_cancer_reference_expression_uses_artifact_view(monkeypatch):
     ]
 
 
-def test_cancer_reference_expression_uses_recorded_qc_for_raw_modes(monkeypatch):
-    """Raw and raw-log summaries use the sample set that built each artifact."""
+def test_cancer_reference_expression_reads_bounded_raw_qc_shards(
+    monkeypatch,
+    tmp_path,
+):
+    """Raw and raw-log QC use requested source shards once, never source matrices."""
     import oncoref
+    import oncoref.expression as oncoref_expression
     import pandas as pd
 
-    expression_calls = []
+    availability_calls = []
 
-    def artifact_availability(**kwargs):
+    def raw_availability(**kwargs):
+        availability_calls.append(kwargs)
         assert kwargs == {
             "cancer_types": ["ACC", "MTC"],
-            "normalize": "tpm_clean",
-            "sample_qc": "pass",
-            "reference_source": "artifact",
+            "normalize": "tpm_raw",
+            "sample_qc": "all",
+            "reference_source": "summary_rows_all",
+            "all_sources": True,
         }
         return pd.DataFrame(
             {
                 "cancer_code": ["ACC", "MTC"],
+                "source_cohort": ["SHARED_SOURCE", "SHARED_SOURCE"],
                 "available": [True, True],
+                "n_reference_genes": [1, 1],
+                "n_reference_samples": [10, 20],
             }
         )
 
-    def build_metadata(**kwargs):
-        assert kwargs == {"auto_fetch": False, "on_missing": "empty"}
-        return pd.DataFrame(
-            {
-                "cancer_code": ["ACC", "MTC"],
-                "sample_qc": ["pass", "pass"],
-                "sample_qc_effective": ["pass", "pass_or_warn"],
-            }
-        )
-
-    def artifact_expression(**kwargs):
-        expression_calls.append(kwargs)
-        codes = kwargs["cancer_types"]
-        return pd.DataFrame(
-            {
-                "Ensembl_Gene_ID": ["ENSG00000148773"] * len(codes),
-                "Symbol": ["MKI67"] * len(codes),
-                "cancer_code": codes,
-                "source_cohort": [f"{code}_SOURCE" for code in codes],
-                "normalization": ["tpm_raw"] * len(codes),
-                "expression": [3.0 if code == "ACC" else 7.0 for code in codes],
-                "q1": [1.0] * len(codes),
-                "q3": [9.0] * len(codes),
-            }
-        )
+    pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG00000148773", "ENSG00000148773"],
+            "Symbol": ["MKI67", "MKI67"],
+            "cancer_code": ["ACC", "MTC"],
+            "source_cohort": ["SHARED_SOURCE", "SHARED_SOURCE"],
+            "TPM_median": [3.0, 7.0],
+            "TPM_q1": [1.0, 2.0],
+            "TPM_q3": [5.0, 9.0],
+            "n_samples": [10, 20],
+            "n_detected": [10, 20],
+        }
+    ).to_csv(tmp_path / "SHARED_SOURCE.csv.gz", index=False)
 
     monkeypatch.setattr(
         oncoref,
         "cancer_reference_expression_availability",
-        artifact_availability,
+        raw_availability,
     )
     monkeypatch.setattr(
-        oncoref,
-        "expression_artifact_build_metadata",
-        build_metadata,
+        oncoref_expression,
+        "_bundle_subdir",
+        lambda *args, **kwargs: tmp_path,
     )
     monkeypatch.setattr(
         oncoref,
         "cancer_reference_expression",
-        artifact_expression,
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("raw QC tried to use the artifact/source-matrix accessor")
+        ),
     )
 
     result = gsc.cancer_reference_expression(
@@ -921,12 +920,9 @@ def test_cancer_reference_expression_uses_recorded_qc_for_raw_modes(monkeypatch)
         normalize=["tpm", "tpm_log1p"],
     )
 
-    assert [call["sample_qc"] for call in expression_calls] == [
-        "pass",
-        "pass_or_warn",
-    ]
-    assert all(call["reference_source"] == "artifact" for call in expression_calls)
-    assert all(call["normalize"] == "tpm_raw" for call in expression_calls)
+    assert len(availability_calls) == 1
+    assert result.attrs["reference_backend"] == "oncoref_bounded_summary_shards"
+    assert result.attrs["sample_qc"] == "all"
     assert set(result["normalization"]) == {"TPM", "TPM_log1p"}
     for code in ("ACC", "MTC"):
         rows = result[result["cancer_code"].eq(code)].set_index("normalization")
@@ -969,7 +965,10 @@ def test_real_cancer_reference_expression_exposes_raw_and_clean_modes(monkeypatc
         "TPM_clean_log1p",
         "TPM_clean_biological",
     }
-    assert set(result["source_cohort"]) == {"GSE32662_PRINGLE_2012"}
+    assert set(result["source_cohort"]) == {
+        "GSE32662_PRINGLE_2012",
+        "GSE32662_PRINGLE_2012_MTC",
+    }
     values = result.set_index("normalization")
     for column in ("expression", "q1", "q3"):
         assert values.loc["TPM_log1p", column] == pytest.approx(
@@ -1007,6 +1006,47 @@ def test_real_cancer_reference_expression_mixed_modes_wide():
         np.log1p(row["MTC_TPM_clean"]),
         rel=1e-3,
     )
+
+
+def test_real_raw_qc_preserves_source_cohorts_and_wide_selects_richest(monkeypatch):
+    """Long QC stays source-specific; source-less wide output is deterministic."""
+    import oncoref.expression as oncoref_expression
+
+    monkeypatch.setattr(
+        oncoref_expression,
+        "_reference_summary_frame",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("summary expression frame was loaded")
+        ),
+    )
+    long = gsc.cancer_reference_expression(
+        cancer_types=["SARC_DDLPS"],
+        genes=["MDM2"],
+        normalize="tpm",
+    )
+    assert set(long["source_cohort"]) == {
+        "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY",
+        "GSE75885_DELESPAUL_2017",
+        "GSE30929_SINGER_2007_LPS",
+    }
+    assert long.attrs["sample_qc"] == "all"
+
+    wide = gsc.cancer_reference_expression(
+        cancer_types=["SARC_DDLPS"],
+        genes=["MDM2"],
+        normalize="tpm",
+        format="wide",
+    )
+    richest = long.loc[
+        long["source_cohort"].eq("TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY"),
+        "expression",
+    ].iloc[0]
+    assert wide.columns.tolist() == [
+        "Ensembl_Gene_ID",
+        "Symbol",
+        "SARC_DDLPS_TPM",
+    ]
+    assert wide.loc[0, "SARC_DDLPS_TPM"] == pytest.approx(richest)
 
 
 def test_real_cancer_reference_manifest_matches_artifact_sidecar(monkeypatch):

@@ -712,7 +712,29 @@ _CANCER_REFERENCE_BACKEND_WIDE_SUFFIXES = {
     "tpm_clean_log1p": "TPM_clean_log1p",
     "tpm_clean_biological": "TPM_clean_biological",
 }
-_CANCER_REFERENCE_SAMPLE_QC_POLICIES = {"all", "pass", "pass_or_warn"}
+_RAW_REFERENCE_SUMMARY_DATASET = "cancer-reference-expression"
+_RAW_REFERENCE_VALUE_COLUMNS = {
+    "TPM_median": "expression",
+    "TPM_q1": "q1",
+    "TPM_q3": "q3",
+}
+_RAW_REFERENCE_SHARD_COLUMNS = {
+    "Ensembl_Gene_ID",
+    "Symbol",
+    "cancer_code",
+    "source_cohort",
+    "source_project",
+    "source_version",
+    "TPM_median",
+    "TPM_q1",
+    "TPM_q3",
+    "n_samples",
+    "n_detected",
+    "processing_pipeline",
+    "notes",
+    "tumor_origin",
+    "metastasis_site",
+}
 
 
 def _cancer_reference_modes(normalize) -> list[str]:
@@ -737,57 +759,187 @@ def _cancer_reference_modes(normalize) -> list[str]:
     return modes
 
 
-def _artifact_raw_qc_groups(oncoref, cancer_types) -> list[tuple[str, list[str]]]:
-    """Group artifact codes by the sample-QC policy used to build clean TPM.
+def _raw_reference_shard_path(root, *, cancer_code: str, source_cohort: str):
+    """Resolve one source-summary shard without opening the union artifact."""
+    candidates = (
+        root / f"{source_cohort}.csv.gz",
+        root / f"{source_cohort}__{cancer_code}.csv.gz",
+    )
+    return next((path for path in candidates if path.is_file()), None)
 
-    Raw TPM is recomputed from the source matrix, while clean TPM is read from
-    a percentile shard. Using each shard's recorded effective policy keeps the
-    raw and clean summaries on the same sample set. It also supports proxy
-    cohorts such as MTC, whose artifact legitimately fell back from ``pass`` to
-    ``pass_or_warn``.
+
+def _bounded_raw_reference_expression(
+    oncoref,
+    *,
+    cancer_types,
+    genes,
+    format: str,
+    include_provenance: bool,
+) -> pd.DataFrame:
+    """Read raw TPM QC summaries from only the requested per-source shards.
+
+    Oncoref's public source-union expression accessor currently materializes a
+    roughly five-million-row frame before applying code/gene filters. Its
+    compact availability accessor identifies the exact per-source CSV shards,
+    so use that table as an index and read only those bounded files. These raw
+    summaries intentionally use all source samples: they are the forensic QC
+    companion to artifact-QC clean TPM, not another downstream analysis view.
     """
+    import oncoref.expression as oncoref_expression
+
     availability = oncoref.cancer_reference_expression_availability(
         cancer_types=cancer_types,
-        normalize="tpm_clean",
-        sample_qc="pass",
-        reference_source="artifact",
+        normalize="tpm_raw",
+        sample_qc="all",
+        reference_source="summary_rows_all",
+        all_sources=True,
     )
-    if "available" in availability.columns:
-        availability = availability[
-            availability["available"].fillna(False).astype(bool)
+    available = availability
+    if "available" in available.columns:
+        available = available[available["available"].fillna(False).astype(bool)]
+    required_identity = {"cancer_code", "source_cohort"}
+    if not required_identity.issubset(available.columns) or available.empty:
+        out = _combine_cancer_reference_parts([], format=format)
+        out.attrs["availability"] = availability.to_dict("records")
+        out.attrs["missing_requests"] = availability.to_dict("records")
+        out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+        return out
+
+    # Wide output cannot encode source identity. Match oncoref's documented
+    # richest-source selection policy, while long raw QC retains every source.
+    if format == "wide":
+        sort_columns = [
+            column
+            for column in ("n_reference_genes", "n_reference_samples")
+            if column in available.columns
         ]
-    codes = list(
-        dict.fromkeys(
-            availability.get("cancer_code", pd.Series(dtype="string"))
-            .dropna()
-            .astype(str)
+        if sort_columns:
+            available = available.sort_values(
+                sort_columns,
+                ascending=[False] * len(sort_columns),
+                kind="stable",
+            )
+        available = available.drop_duplicates(subset=["cancer_code"], keep="first")
+
+    root = oncoref_expression._bundle_subdir(  # noqa: SLF001 - no public bounded reader
+        _RAW_REFERENCE_SUMMARY_DATASET,
+        auto_fetch=True,
+    )
+    pairs_by_path: dict[object, set[tuple[str, str]]] = {}
+    for row in available.itertuples(index=False):
+        code = str(row.cancer_code)
+        source = str(row.source_cohort)
+        path = _raw_reference_shard_path(
+            root,
+            cancer_code=code,
+            source_cohort=source,
         )
-    )
+        if path is not None:
+            pairs_by_path.setdefault(path, set()).add((code, source))
 
-    metadata_accessor = getattr(
-        oncoref, "expression_artifact_build_metadata", None
-    )
-    metadata = (
-        metadata_accessor(auto_fetch=False, on_missing="empty")
-        if callable(metadata_accessor)
-        else pd.DataFrame(columns=["cancer_code", "sample_qc_effective"])
-    )
-    effective_by_code: dict[str, str] = {}
-    if "cancer_code" in metadata.columns:
-        for row in metadata.to_dict("records"):
-            code = str(row.get("cancer_code", ""))
-            policy = str(row.get("sample_qc_effective", "")).lower()
-            if policy not in _CANCER_REFERENCE_SAMPLE_QC_POLICIES:
-                policy = str(row.get("sample_qc", "pass")).lower()
-            if policy not in _CANCER_REFERENCE_SAMPLE_QC_POLICIES:
-                policy = "pass"
-            if code:
-                effective_by_code[code] = policy
+    raw_parts: list[pd.DataFrame] = []
+    for path, wanted_pairs in pairs_by_path.items():
+        frame = pd.read_csv(
+            path,
+            usecols=lambda column: column in _RAW_REFERENCE_SHARD_COLUMNS,
+            low_memory=False,
+        )
+        pair_index = pd.MultiIndex.from_frame(
+            frame[["cancer_code", "source_cohort"]].astype(str)
+        )
+        frame = frame.loc[pair_index.isin(wanted_pairs)].copy()
+        if frame.empty:
+            continue
+        frame = frame.loc[oncoref_expression._gene_filter_mask(frame, genes)].copy()
+        if frame.empty:
+            continue
+        frame = oncoref_expression._apply_artifact_gene_universe(
+            frame,
+            product="cancer_reference_expression",
+            cancer_codes=sorted({code for code, _source in wanted_pairs}),
+            gene_universe="pirlygenes",
+            include_gene_universe_flags=False,
+        )
+        frame = oncoref_expression._apply_gene_id_style(
+            frame,
+            product="cohort_gene_percentiles",
+            cancer_codes=sorted({code for code, _source in wanted_pairs}),
+            gene_id_style="pirlygenes",
+            alias_expand_remaps=True,
+        )
+        raw_parts.append(frame)
 
-    grouped: dict[str, list[str]] = {}
-    for code in codes:
-        grouped.setdefault(effective_by_code.get(code, "pass"), []).append(code)
-    return list(grouped.items())
+    if raw_parts:
+        raw = pd.concat(raw_parts, ignore_index=True, sort=False)
+    else:
+        raw = pd.DataFrame(
+            columns=[
+                "Ensembl_Gene_ID",
+                "Symbol",
+                "cancer_code",
+                "source_cohort",
+                *_RAW_REFERENCE_VALUE_COLUMNS,
+            ]
+        )
+
+    # The availability artifact carries scale/QC provenance not repeated in
+    # every expression row. Merge only missing fields to keep one source of
+    # truth and avoid suffixing columns already present in the shard.
+    identity = ["cancer_code", "source_cohort"]
+    metadata_columns = [
+        column
+        for column in availability.columns
+        if column not in raw.columns
+        and column not in {"requested_code", "request_kind", "normalization", "available"}
+    ]
+    if not raw.empty and metadata_columns:
+        metadata = available[[*identity, *metadata_columns]].drop_duplicates(identity)
+        raw = raw.merge(metadata, on=identity, how="left", validate="many_to_one")
+
+    raw = raw.rename(columns=_RAW_REFERENCE_VALUE_COLUMNS)
+    raw["normalization"] = "tpm_raw"
+    if format == "long":
+        core = [
+            "Ensembl_Gene_ID",
+            "Symbol",
+            "cancer_code",
+            "normalization",
+            "expression",
+            "q1",
+            "q3",
+        ]
+        source_identity = [
+            column
+            for column in ("source_cohort", "n_reference_samples", "n_samples", "n_detected")
+            if column in raw.columns
+        ]
+        provenance = (
+            [column for column in raw.columns if column not in {*core, *source_identity}]
+            if include_provenance
+            else []
+        )
+        out = raw[[*core[:-3], *source_identity, *provenance, *core[-3:]]].copy()
+    else:
+        value = raw[["Ensembl_Gene_ID", "Symbol", "cancer_code", "expression"]].copy()
+        value["_column"] = value["cancer_code"].astype(str) + "_TPM_raw"
+        out = value.pivot_table(
+            index=["Ensembl_Gene_ID", "Symbol"],
+            columns="_column",
+            values="expression",
+            aggfunc="first",
+            sort=False,
+        ).reset_index()
+        out.columns.name = None
+
+    out.attrs["availability"] = availability.to_dict("records")
+    out.attrs["missing_requests"] = availability.loc[
+        ~availability.get("available", pd.Series(True, index=availability.index))
+        .fillna(False)
+        .astype(bool)
+    ].to_dict("records")
+    out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+    out.attrs["sample_qc"] = "all"
+    return out
 
 
 def _adapt_cancer_reference_mode(
@@ -833,7 +985,9 @@ def _adapt_cancer_reference_mode(
     if mode == "tpm_log1p":
         transforms.append("tpm_log1p derived with numpy.log1p from raw TPM")
     attrs["compatibility_transforms"] = list(dict.fromkeys(transforms))
-    attrs["reference_backend"] = "oncoref_artifact"
+    attrs["reference_backend"] = frame.attrs.get(
+        "reference_backend", "oncoref_artifact"
+    )
     out.attrs = attrs
     return out
 
@@ -886,7 +1040,15 @@ def _combine_cancer_reference_parts(
             for transform in part.attrs.get("compatibility_transforms", [])
         )
     )
-    attrs["reference_backend"] = "oncoref_artifact"
+    backends = list(
+        dict.fromkeys(
+            str(part.attrs.get("reference_backend", "oncoref_artifact"))
+            for part in parts
+        )
+    )
+    attrs["reference_backend"] = (
+        backends[0] if len(backends) == 1 else "+".join(backends)
+    )
     out.attrs = attrs
     return out
 
@@ -902,12 +1064,12 @@ def cancer_reference_expression(
     """Observed tumor references from oncoref's bounded artifact paths.
 
     This is distinct from trufflepig's deconvolved tumor-cell references.
-    Clean and log-clean modes read the shipped percentile artifact. Raw TPM is
-    recomputed from the same artifact cohort's source matrix under the exact
-    sample-QC policy recorded at build time, and raw log1p is derived after the
-    linear cohort summary. Thus callers can inspect raw values for QC and use
-    clean/log-clean values downstream without materializing the multi-gigabyte
-    source-union summary.
+    Clean and log-clean modes read the shipped artifact-QC percentile shards.
+    Raw TPM reads the shipped all-sample per-source summaries for forensic QC,
+    and raw log1p is derived after the linear cohort summary. Thus callers can
+    inspect raw values and use clean/log-clean values downstream without
+    materializing the multi-gigabyte source-union frame or downloading the
+    roughly 21 GB collection of per-sample source matrices.
     """
     import oncoref
 
@@ -942,19 +1104,12 @@ def cancer_reference_expression(
         backend_mode = _CANCER_REFERENCE_BACKEND_MODES[mode]
         if mode in {"tpm", "tpm_log1p"}:
             if raw_backend is None:
-                groups = _artifact_raw_qc_groups(oncoref, cancer_types)
-                mode_parts = [
-                    accessor(
-                        cancer_types=codes,
-                        normalize=backend_mode,
-                        sample_qc=sample_qc,
-                        **common_kwargs,
-                    )
-                    for sample_qc, codes in groups
-                ]
-                raw_backend = _combine_cancer_reference_parts(
-                    mode_parts,
+                raw_backend = _bounded_raw_reference_expression(
+                    oncoref,
+                    cancer_types=cancer_types,
+                    genes=genes,
                     format=format,
+                    include_provenance=include_provenance,
                 )
             parts.append(
                 _adapt_cancer_reference_mode(
