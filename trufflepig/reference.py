@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import numpy as np
 import pandas as pd
 import pirlygenes as _pirlygenes
 from pirlygenes.expression.qc import TECHNICAL_FRACTION
@@ -675,6 +676,221 @@ def cancer_reference_manifest() -> pd.DataFrame:
     return _cancer_reference_manifest_cached().copy()
 
 
+_CANCER_REFERENCE_MODE_ALIASES = {
+    "tpm": "tpm",
+    "tpm_raw": "tpm",
+    "raw_tpm": "tpm",
+    "tpm_clean": "tpm_clean",
+    "clean_tpm": "tpm_clean",
+    "tpm_log1p": "tpm_log1p",
+    "tpm_raw_log1p": "tpm_log1p",
+    "raw_tpm_log1p": "tpm_log1p",
+    "tpm_clean_log1p": "tpm_clean_log1p",
+    "clean_tpm_log1p": "tpm_clean_log1p",
+    "tpm_clean_biological": "tpm_clean_biological",
+    "clean_tpm_biological": "tpm_clean_biological",
+    "biological_clean_tpm": "tpm_clean_biological",
+}
+_CANCER_REFERENCE_MODE_LABELS = {
+    "tpm": "TPM",
+    "tpm_clean": "TPM_clean",
+    "tpm_log1p": "TPM_log1p",
+    "tpm_clean_log1p": "TPM_clean_log1p",
+    "tpm_clean_biological": "TPM_clean_biological",
+}
+_CANCER_REFERENCE_BACKEND_MODES = {
+    "tpm": "tpm_raw",
+    "tpm_clean": "tpm_clean",
+    "tpm_log1p": "tpm_raw",
+    "tpm_clean_log1p": "tpm_clean_log1p",
+    "tpm_clean_biological": "tpm_clean_biological",
+}
+_CANCER_REFERENCE_BACKEND_WIDE_SUFFIXES = {
+    "tpm": "TPM_raw",
+    "tpm_clean": "TPM_clean",
+    "tpm_log1p": "TPM_raw",
+    "tpm_clean_log1p": "TPM_clean_log1p",
+    "tpm_clean_biological": "TPM_clean_biological",
+}
+_CANCER_REFERENCE_SAMPLE_QC_POLICIES = {"all", "pass", "pass_or_warn"}
+
+
+def _cancer_reference_modes(normalize) -> list[str]:
+    requested = [normalize] if isinstance(normalize, str) else list(normalize)
+    modes: list[str] = []
+    invalid: list[str] = []
+    for value in requested:
+        if not isinstance(value, str):
+            invalid.append(repr(value))
+            continue
+        mode = _CANCER_REFERENCE_MODE_ALIASES.get(value.lower())
+        if mode is None:
+            invalid.append(repr(value))
+        elif mode not in modes:
+            modes.append(mode)
+    if invalid:
+        supported = ", ".join(sorted(_CANCER_REFERENCE_MODE_ALIASES))
+        raise ValueError(
+            f"unsupported cancer-reference normalization(s): {invalid}; "
+            f"supported: {supported}"
+        )
+    return modes
+
+
+def _artifact_raw_qc_groups(oncoref, cancer_types) -> list[tuple[str, list[str]]]:
+    """Group artifact codes by the sample-QC policy used to build clean TPM.
+
+    Raw TPM is recomputed from the source matrix, while clean TPM is read from
+    a percentile shard. Using each shard's recorded effective policy keeps the
+    raw and clean summaries on the same sample set. It also supports proxy
+    cohorts such as MTC, whose artifact legitimately fell back from ``pass`` to
+    ``pass_or_warn``.
+    """
+    availability = oncoref.cancer_reference_expression_availability(
+        cancer_types=cancer_types,
+        normalize="tpm_clean",
+        sample_qc="pass",
+        reference_source="artifact",
+    )
+    if "available" in availability.columns:
+        availability = availability[
+            availability["available"].fillna(False).astype(bool)
+        ]
+    codes = list(
+        dict.fromkeys(
+            availability.get("cancer_code", pd.Series(dtype="string"))
+            .dropna()
+            .astype(str)
+        )
+    )
+
+    metadata_accessor = getattr(
+        oncoref, "expression_artifact_build_metadata", None
+    )
+    metadata = (
+        metadata_accessor(auto_fetch=False, on_missing="empty")
+        if callable(metadata_accessor)
+        else pd.DataFrame(columns=["cancer_code", "sample_qc_effective"])
+    )
+    effective_by_code: dict[str, str] = {}
+    if "cancer_code" in metadata.columns:
+        for row in metadata.to_dict("records"):
+            code = str(row.get("cancer_code", ""))
+            policy = str(row.get("sample_qc_effective", "")).lower()
+            if policy not in _CANCER_REFERENCE_SAMPLE_QC_POLICIES:
+                policy = str(row.get("sample_qc", "pass")).lower()
+            if policy not in _CANCER_REFERENCE_SAMPLE_QC_POLICIES:
+                policy = "pass"
+            if code:
+                effective_by_code[code] = policy
+
+    grouped: dict[str, list[str]] = {}
+    for code in codes:
+        grouped.setdefault(effective_by_code.get(code, "pass"), []).append(code)
+    return list(grouped.items())
+
+
+def _adapt_cancer_reference_mode(
+    frame: pd.DataFrame,
+    *,
+    mode: str,
+    format: str,
+) -> pd.DataFrame:
+    """Restore pirlygenes-compatible labels and derive raw log1p safely."""
+    out = frame.copy()
+    label = _CANCER_REFERENCE_MODE_LABELS[mode]
+    if format == "long":
+        if mode == "tpm_log1p":
+            for column in ("expression", "q1", "q3"):
+                if column in out.columns:
+                    out[column] = np.log1p(
+                        pd.to_numeric(out[column], errors="coerce")
+                    )
+        if "normalization" in out.columns:
+            out["normalization"] = label
+    else:
+        backend_suffix = _CANCER_REFERENCE_BACKEND_WIDE_SUFFIXES[mode]
+        renamed = {}
+        for column in out.columns:
+            suffix = f"_{backend_suffix}"
+            if not str(column).endswith(suffix):
+                continue
+            if mode == "tpm_log1p":
+                out[column] = np.log1p(
+                    pd.to_numeric(out[column], errors="coerce")
+                )
+            renamed[column] = f"{str(column)[: -len(suffix)]}_{label}"
+        out = out.rename(columns=renamed)
+
+    attrs = dict(frame.attrs)
+    for attr_name in ("availability", "missing_requests"):
+        if attr_name in attrs:
+            attrs[attr_name] = [
+                {**record, "normalization": label}
+                for record in attrs[attr_name]
+            ]
+    transforms = list(attrs.get("compatibility_transforms", []))
+    if mode == "tpm_log1p":
+        transforms.append("tpm_log1p derived with numpy.log1p from raw TPM")
+    attrs["compatibility_transforms"] = list(dict.fromkeys(transforms))
+    attrs["reference_backend"] = "oncoref_artifact"
+    out.attrs = attrs
+    return out
+
+
+def _combine_cancer_reference_parts(
+    parts: list[pd.DataFrame],
+    *,
+    format: str,
+) -> pd.DataFrame:
+    if not parts:
+        if format == "long":
+            return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
+        return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
+
+    if format == "long":
+        out = pd.concat(parts, ignore_index=True, sort=False)
+    else:
+        identifier_parts = [
+            part[[column for column in ("Ensembl_Gene_ID", "Symbol") if column in part]]
+            for part in parts
+        ]
+        identifiers = pd.concat(identifier_parts, ignore_index=True).drop_duplicates(
+            subset=["Ensembl_Gene_ID"]
+        )
+        out = identifiers
+        for part in parts:
+            values = part.drop(columns=["Symbol"], errors="ignore")
+            values = values.drop_duplicates(subset=["Ensembl_Gene_ID"])
+            value_columns = [
+                column for column in values.columns if column != "Ensembl_Gene_ID"
+            ]
+            out = out.merge(
+                values[["Ensembl_Gene_ID", *value_columns]],
+                on="Ensembl_Gene_ID",
+                how="outer",
+                sort=False,
+            )
+
+    attrs = dict(parts[0].attrs)
+    for attr_name in ("availability", "missing_requests"):
+        attrs[attr_name] = [
+            record
+            for part in parts
+            for record in part.attrs.get(attr_name, [])
+        ]
+    attrs["compatibility_transforms"] = list(
+        dict.fromkeys(
+            transform
+            for part in parts
+            for transform in part.attrs.get("compatibility_transforms", [])
+        )
+    )
+    attrs["reference_backend"] = "oncoref_artifact"
+    out.attrs = attrs
+    return out
+
+
 def cancer_reference_expression(
     cancer_types=None,
     genes=None,
@@ -683,41 +899,83 @@ def cancer_reference_expression(
     format: str = "long",
     include_provenance: bool = True,
 ) -> pd.DataFrame:
-    """Observed tumor references from oncoref's compact artifact shards.
+    """Observed tumor references from oncoref's bounded artifact paths.
 
     This is distinct from trufflepig's deconvolved tumor-cell references.
-    Each code is served from its shipped percentile artifact under the QC
-    policy recorded when that artifact was built. This is suitable for
-    expression matching or fallback priors when no deconvolved tumor reference
-    exists, and avoids materializing the multi-gigabyte source-union summary.
+    Clean and log-clean modes read the shipped percentile artifact. Raw TPM is
+    recomputed from the same artifact cohort's source matrix under the exact
+    sample-QC policy recorded at build time, and raw log1p is derived after the
+    linear cohort summary. Thus callers can inspect raw values for QC and use
+    clean/log-clean values downstream without materializing the multi-gigabyte
+    source-union summary.
     """
     import oncoref
 
+    if format not in {"long", "wide"}:
+        raise ValueError("format must be 'long' or 'wide'")
+    modes = _cancer_reference_modes(normalize)
+    cancer_types = (
+        cancer_types
+        if cancer_types is None or isinstance(cancer_types, str)
+        else list(cancer_types)
+    )
+    genes = genes if genes is None or isinstance(genes, str) else list(genes)
     accessor = getattr(oncoref, "cancer_reference_expression", None)
     if accessor is None:
         if format == "long":
             return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
         return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
 
-    df = accessor(
-        cancer_types=cancer_types,
-        genes=genes,
-        normalize=normalize,
-        format=format,
-        include_provenance=include_provenance,
-        on_missing="empty",
-        auto_fetch=False,
-        sample_qc="artifact",
-        reference_source="artifact",
-        gene_id_style="pirlygenes",
-        gene_universe="pirlygenes",
-    ).copy()
-    modes = (
-        {str(mode).lower() for mode in normalize}
-        if isinstance(normalize, (list, tuple, set))
-        else {str(normalize).lower()}
-    )
-    clean_requested = bool(modes & {"tpm_clean", "clean_tpm"})
+    common_kwargs = {
+        "genes": genes,
+        "format": format,
+        "include_provenance": include_provenance,
+        "on_missing": "empty",
+        "auto_fetch": False,
+        "reference_source": "artifact",
+        "gene_id_style": "pirlygenes",
+        "gene_universe": "pirlygenes",
+    }
+    parts: list[pd.DataFrame] = []
+    raw_backend: pd.DataFrame | None = None
+    for mode in modes:
+        backend_mode = _CANCER_REFERENCE_BACKEND_MODES[mode]
+        if mode in {"tpm", "tpm_log1p"}:
+            if raw_backend is None:
+                groups = _artifact_raw_qc_groups(oncoref, cancer_types)
+                mode_parts = [
+                    accessor(
+                        cancer_types=codes,
+                        normalize=backend_mode,
+                        sample_qc=sample_qc,
+                        **common_kwargs,
+                    )
+                    for sample_qc, codes in groups
+                ]
+                raw_backend = _combine_cancer_reference_parts(
+                    mode_parts,
+                    format=format,
+                )
+            parts.append(
+                _adapt_cancer_reference_mode(
+                    raw_backend,
+                    mode=mode,
+                    format=format,
+                )
+            )
+        else:
+            frame = accessor(
+                cancer_types=cancer_types,
+                normalize=backend_mode,
+                sample_qc="artifact",
+                **common_kwargs,
+            )
+            parts.append(
+                _adapt_cancer_reference_mode(frame, mode=mode, format=format)
+            )
+
+    df = _combine_cancer_reference_parts(parts, format=format)
+    clean_requested = "tpm_clean" in modes
     if clean_requested and not df.empty:
         if format == "long":
             clean_rows = (
