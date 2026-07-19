@@ -72,8 +72,12 @@ def _artifact_reference_manifest(oncoref) -> pd.DataFrame:
     )
     shard_accessor = getattr(oncoref, "available_percentile_cohorts", None)
     if callable(metadata_accessor) and callable(shard_accessor):
-        metadata = metadata_accessor(auto_fetch=False, on_missing="empty")
+        # Enumerating shards ensures the released bundle is present. Reading
+        # optional metadata first on a cold install returns an empty frame;
+        # caching the ensuing compatibility fallback then permanently omits
+        # valid direct cohorts such as NBL, MTC, and SARC_MYXLPS in that process.
         available_codes = frozenset(str(code) for code in shard_accessor())
+        metadata = metadata_accessor(auto_fetch=False, on_missing="empty")
         if {"cancer_code", "source_cohort"}.issubset(metadata.columns):
             manifest = metadata[
                 metadata["cancer_code"].astype(str).isin(available_codes)

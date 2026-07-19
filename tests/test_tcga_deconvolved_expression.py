@@ -512,6 +512,80 @@ def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
     assert result.loc[0, "n_samples"] == 91
 
 
+def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
+    monkeypatch,
+):
+    """Cold discovery must not cache the pre-bundle compatibility fallback."""
+    import oncoref
+    import pandas as pd
+
+    from trufflepig import cancer_ontology
+
+    bundle_ready = False
+
+    def available_shards():
+        nonlocal bundle_ready
+        bundle_ready = True
+        return ["NBL", "MTC", "SARC_MYXLPS"]
+
+    def build_metadata(**kwargs):
+        assert bundle_ready, "metadata was read before the shard bundle was present"
+        assert kwargs == {"auto_fetch": False, "on_missing": "empty"}
+        return pd.DataFrame(
+            {
+                "cancer_code": ["NBL", "MTC", "SARC_MYXLPS"],
+                "source_cohort": [
+                    "TARGET_NBL_2018",
+                    "GSE32662_PRINGLE_2012",
+                    "GSE30929_SINGER_2007_LPS",
+                ],
+                "n_cohort_samples": [155, 49, 28],
+            }
+        )
+
+    empty_registry = pd.DataFrame(
+        columns=[
+            "code",
+            "source_cohort",
+            "expression_source",
+            "reference_source",
+            "classification_reference_code",
+        ]
+    )
+    gsc._cancer_reference_manifest_cached.cache_clear()
+    monkeypatch.setattr(oncoref, "available_percentile_cohorts", available_shards)
+    monkeypatch.setattr(
+        oncoref,
+        "expression_artifact_build_metadata",
+        build_metadata,
+    )
+    monkeypatch.setattr(
+        oncoref,
+        "cancer_reference_expression_availability",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("complete post-fetch metadata should avoid fallback")
+        ),
+    )
+    monkeypatch.setattr(
+        cancer_ontology,
+        "cancer_type_registry",
+        lambda: empty_registry,
+    )
+    try:
+        result = gsc.cancer_reference_manifest()
+    finally:
+        gsc._cancer_reference_manifest_cached.cache_clear()
+
+    assert result[["cancer_code", "source_cohort"]].to_dict("records") == [
+        {"cancer_code": "NBL", "source_cohort": "TARGET_NBL_2018"},
+        {"cancer_code": "MTC", "source_cohort": "GSE32662_PRINGLE_2012"},
+        {
+            "cancer_code": "SARC_MYXLPS",
+            "source_cohort": "GSE30929_SINGER_2007_LPS",
+        },
+    ]
+
+
 def test_cancer_reference_manifest_requires_a_matching_artifact_shard(monkeypatch):
     """Stale build metadata must not advertise an artifact that is absent."""
     import oncoref
