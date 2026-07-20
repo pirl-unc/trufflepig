@@ -251,7 +251,6 @@ def _fit_combo(df_sample, template_name, cancer_type, purity, normalization, wei
         prop_error = float("nan")
 
     # Ig attribution: how much Ig TPM leaks into tumor?
-    sym_set = {str(s) for s in filt_symbols}
     ig_indices = [i for i, s in enumerate(filt_symbols) if str(s) in IG_GENES]
     ig_obs_tpm = 0.0
     ig_tme_tpm = 0.0

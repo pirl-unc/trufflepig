@@ -27,8 +27,8 @@ def test_zero_expression_gene_is_not_marked_as_support():
     assert "Sample supports?" in table  # the new column exists
     # Gene high in the subtype reference but ~0 in the sample: positive Δlog2 but
     # NOT supporting (sample is closer to the competitor).
-    absent_row = next(l for l in lines if l.startswith("| GENE_ABSENT "))
+    absent_row = next(line for line in lines if line.startswith("| GENE_ABSENT "))
     assert "+" in absent_row and absent_row.rstrip().endswith("✗ |")
     # Gene the sample actually expresses concordantly with the subtype: supports.
-    present_row = next(l for l in lines if l.startswith("| GENE_PRESENT "))
+    present_row = next(line for line in lines if line.startswith("| GENE_PRESENT "))
     assert present_row.rstrip().endswith("✓ |")

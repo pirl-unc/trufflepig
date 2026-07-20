@@ -10,14 +10,13 @@ nothing lives in memory, so a server restart doesn't lose anything.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import subprocess
 import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator, Iterator
 

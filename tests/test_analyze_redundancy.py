@@ -19,12 +19,8 @@ that the advisory output-dir lock refuses concurrent runs.
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 
 # -----------------------------------------------------------------
@@ -37,7 +33,6 @@ def test_plot_sample_summary_accepts_precomputed_analysis(tmp_path):
     import matplotlib
 
     matplotlib.use("Agg")
-    import numpy as np
     import pandas as pd
 
     from trufflepig import tumor_purity as tp

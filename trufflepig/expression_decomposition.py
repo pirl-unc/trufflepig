@@ -395,7 +395,8 @@ def _heme_immune(sample, signatures, space, type_code):
     if type_mapped is not None:
         malignant, source = type_mapped, "type-map"
     elif any(v is not None for v in scores.values()):
-        malignant = max(scores, key=lambda s: _rank_score(scores[s])); source = "dominant-marker"
+        malignant = max(scores, key=lambda s: _rank_score(scores[s]))
+        source = "dominant-marker"
     else:                                                   # no sub-lineage markers present → can't tell
         malignant, source = None, "indeterminate"
     # when indeterminate, subtract NO sub-lineage (keep all immune as tumor) rather than guessing one
@@ -419,7 +420,8 @@ def _subtract_keys(mode, sample, signatures, space, type_code, met_sites):
         if any(c in primary for c in _code_candidates(type_code)):
             skipped_mets.append(site)                     # don't subtract a primary's own organ
             continue
-        keys.append(site); applied_mets.append(site)
+        keys.append(site)
+        applied_mets.append(site)
     if met_sites:
         info = {**info, "met_sites_subtracted": applied_mets, "met_sites_skipped_as_primary": skipped_mets,
                 "met_sites_unknown": unknown_mets}

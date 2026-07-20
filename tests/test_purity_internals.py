@@ -7,11 +7,9 @@ _combine_purity_estimates (all branches), _signature_conflicts_with_lineage,
 _summarize_gene_level_purity edge cases, _lineage_purity_estimates basics.
 """
 
-import numpy as np
 import pytest
 
 from trufflepig.tumor_purity import (
-    TUMOR_PURITY_PARAMETERS,
     _combine_purity_estimates,
     _compile_excluded_gene_matcher,
     _override_collapsed_signature_purity,
@@ -302,7 +300,6 @@ def test_signature_conflict_returns_false_when_missing():
 
 def test_signature_conflict_detects_low_sig_high_lineage():
     """Low signature + low stability + high lineage → conflict."""
-    params = TUMOR_PURITY_PARAMETERS["purity_combination"]
     # sig well below lineage * ratio, stability below floor
     result = _signature_conflicts_with_lineage(
         sig_purity=0.10,

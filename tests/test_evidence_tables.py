@@ -21,10 +21,8 @@ review on PR #30:
 
 from __future__ import annotations
 
-import math
 
 import pandas as pd
-import pytest
 
 import trufflepig.evidence_tables as et_mod
 from trufflepig.evidence_tables import (

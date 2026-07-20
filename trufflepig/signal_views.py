@@ -153,7 +153,7 @@ def reason_over_views(name, views) -> SignalViews:
 
     flags = []
     cz, wp = presence.get("cohort_z"), presence.get("within_pct")
-    cp, lg = presence.get("cohort_pct"), presence.get("log1p")
+    cp = presence.get("cohort_pct")
     if cz is not None and wp is not None and cz - wp >= 0.4:
         flags.append("high vs background but not dominant in-sample — admixture / low purity")
     if wp is not None and cp is not None and wp - cp >= 0.4:

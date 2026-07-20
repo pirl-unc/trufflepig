@@ -4030,19 +4030,9 @@ def rank_cancer_type_candidates(
     max_family_score = max(hard_family_scores.values(), default=0.0)
     sorted_family_scores = sorted(hard_family_scores.values(), reverse=True)
     top_family_score = sorted_family_scores[0] if sorted_family_scores else 0.0
-    second_family_score = (
-        sorted_family_scores[1] if len(sorted_family_scores) > 1 else 0.0
-    )
     family_presence = float(
         np.clip(top_family_score / family_params["presence_scale"], 0.0, 1.0)
     )
-    family_specificity = 0.0
-    if top_family_score > 0:
-        family_specificity = float(
-            np.clip(
-                (top_family_score - second_family_score) / top_family_score, 0.0, 1.0
-            )
-        )
     ranked_families = sorted(
         family_scores.items(),
         key=lambda item: (-item[1], item[0]),

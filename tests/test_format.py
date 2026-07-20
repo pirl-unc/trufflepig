@@ -1,6 +1,5 @@
 """Tests for the number-formatting helpers (#120)."""
 
-import math
 
 from trufflepig.format import (
     render_fold,

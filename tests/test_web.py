@@ -371,7 +371,7 @@ def test_atomic_run_json_write_survives_partial_failure(tmp_path):
 
 def test_reconcile_orphaned_runs_relabels_stuck_running(tmp_path):
     """Stuck `running` status from a prior server gets relabelled on startup."""
-    from trufflepig.web.runs import RunStore, _atomic_write_json
+    from trufflepig.web.runs import _atomic_write_json
 
     runs_root = tmp_path / "runs"
     runs_root.mkdir()

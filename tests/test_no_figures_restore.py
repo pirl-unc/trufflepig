@@ -27,7 +27,10 @@ def test_noop_plot_restore_queue_drains_after_analyze_exit():
     # ``--no-figures`` is set: pick a real plot_* function from
     # main.py's globals and save it.
     original = main_mod.plot_sample_summary
-    sentinel = lambda *_a, **_k: None
+
+    def sentinel(*_args, **_kwargs):
+        return None
+
     queue.append((main_mod.__dict__, "plot_sample_summary", original))
     main_mod.__dict__["plot_sample_summary"] = sentinel
     assert main_mod.plot_sample_summary is sentinel

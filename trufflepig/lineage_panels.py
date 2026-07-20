@@ -36,11 +36,10 @@ section at the bottom for the integration sketch.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from functools import lru_cache
 from typing import Any, Mapping
 
-import numpy as np
 
 
 # ---------- core types ----------

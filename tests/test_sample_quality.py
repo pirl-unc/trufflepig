@@ -8,7 +8,6 @@ from trufflepig.sample_quality import (
     _TME_MARKERS,
 )
 from trufflepig.reference import pan_cancer_expression
-from trufflepig.decomposition.signature import _load_hpa_cell_types
 
 
 def _tcga_sample(cancer_code):
