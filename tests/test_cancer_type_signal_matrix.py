@@ -86,6 +86,21 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
                         "support": 0.90,
                         "details": {"learned_stage": "compartment"},
                     },
+                    {
+                        "candidate_code": "CESC",
+                        "code": "CESC",
+                        "channel": "entity_evidence_consensus",
+                        "stage": "coarse_type",
+                        "role": "independent_axis_entity_adjudication",
+                        "status": "informative",
+                        "support": 0.67,
+                        "details": {
+                            "candidate_code": "CESC",
+                            "selected_code": "BLCA",
+                            "candidate_votes": 2,
+                            "selected_votes": 1,
+                        },
+                    },
                 ]
             },
         },
@@ -139,6 +154,13 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     assert row["signal_rows"] == len(matrix)
     assert row["pan_cancer_top"] == "HEPB"
     assert row["lineage_panel_top"] == ""
+    assert row["entity_consensus_candidate"] == "CESC"
+    assert row["entity_consensus_previous"] == "BLCA"
+    assert row["entity_consensus_decision"] == (
+        "independent_axis_entity_adjudication"
+    )
+    assert row["entity_consensus_candidate_votes"] == 2
+    assert row["entity_consensus_selected_votes"] == 1
     assert row["background_site"] == "liver"
     assert row["decomposition_top"] == "BLCA"
 

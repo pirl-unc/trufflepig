@@ -1,6 +1,5 @@
-from pirlygenes.gene_sets_cancer import cancer_type_registry
-
 import pytest
+from pirlygenes.gene_sets_cancer import cancer_type_registry
 
 import trufflepig.analyze.cancer_type_context as context_module
 from trufflepig import reference as reference_module
@@ -254,13 +253,16 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
+            # There is no standalone subgroup artifact. The typed MBL parent
+            # supplies the closest physical deconvolved reference instead of
+            # advertising summary-only provenance as a direct loader target.
             "MBL_G3",
-            "MBL_G3",
-            "observed_bulk_reference",
-            "TREEHOUSE_POLYA_25_01_MBL_SUBGROUP_MARKERS",
-            "ensembl_symbol",
-            True,
-            "",
+            "MBL",
+            "deconvolved_tumor_reference",
+            "TREEHOUSE_POLYA_25_01",
+            "symbol_only",
+            False,
+            "registry parent",
         ),
         (
             "SARC_ASPS",
@@ -284,7 +286,7 @@ def test_expression_reference_options_canonicalize_source_codes():
             "MTC",
             "MTC",
             "observed_bulk_reference",
-            "GSE32662_PRINGLE_2012_MTC",
+            "GSE32662_PRINGLE_2012",
             "ensembl_symbol",
             True,
             "",
@@ -410,6 +412,34 @@ def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkey
     assert records["NET_LUNG"].reference_code == "NET_LUNG"
     assert any(record.source_code == "BRCA_Her2" for record in her2_records)
     assert any(record.source_code == "LUAD_KRAS_STK11" for record in stk11_records)
+
+
+def test_reference_discovery_does_not_materialize_full_observed_bulk(monkeypatch):
+    """Reference availability comes from the lightweight provenance artifact.
+
+    Calling cancer_reference_expression without a code filter materializes the
+    full object-heavy table (~7.4 GB in pirlygenes 5.23), which is catastrophic
+    when xdist repeats it per worker.
+    """
+
+    def reject_full_frame(*args, **kwargs):
+        raise AssertionError("full observed-bulk expression frame was loaded")
+
+    context_module._direct_expression_reference_records.cache_clear()
+    monkeypatch.setattr(
+        reference_module,
+        "cancer_reference_expression",
+        reject_full_frame,
+    )
+    try:
+        record = context_module.effective_expression_reference("NEC_MERKEL")
+    finally:
+        context_module._direct_expression_reference_records.cache_clear()
+
+    assert record is not None
+    assert record.reference_code == "NEC_MERKEL"
+    assert record.source_kind == "observed_bulk_reference"
+    assert record.source == "GSE235092_MERKEL_2024"
 
 
 def test_every_registry_code_has_an_effective_expression_reference():

@@ -49,7 +49,7 @@ def test_v4_mode_still_rejects_technical_dominant_raw_input():
     [
         ("MM", "MMRF_COMMPASS"),
         ("ADCC", "GSE294016_BARTL_2025_SGC"),
-        ("MTC", "GSE32662_PRINGLE_2012_MTC"),
+        ("MTC", "GSE32662_PRINGLE_2012"),
         ("NET_LUNG", "DRMETRICS_ALCALA_2019_LNEN"),
         ("SARC_ASPS", "TREEHOUSE_POLYA_25_01"),
         ("CLL", "CLLMAP_2022"),
@@ -73,8 +73,8 @@ def test_normalize_to_reference_space_conforms_v4_to_fixed_fraction():
     specific fraction here — that's pirlygenes' contract."""
     from trufflepig.clean_tpm import (
         normalize_to_reference_space,
-        technical_rna_mask,
         resolve_gene_columns,
+        technical_rna_mask,
     )
 
     df = pd.DataFrame(

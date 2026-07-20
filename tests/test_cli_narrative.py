@@ -8,7 +8,6 @@ _candidate_label_options.
 """
 
 from types import SimpleNamespace
-import pytest
 
 from trufflepig.main import (
     compose_disease_state_narrative,
@@ -22,7 +21,6 @@ from trufflepig.main import (
     _primary_tissues_for_analysis,
     _prioritize_report_compatible_decomposition,
     _summarize_sample_call,
-    _CORE_ISG_SURFACE,
 )
 
 

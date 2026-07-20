@@ -82,6 +82,11 @@ SIGNAL_SAMPLE_SUMMARY_COLUMNS = [
     "fused_top_score",
     "fused_top_blocked",
     "fused_top_blocker",
+    "entity_consensus_candidate",
+    "entity_consensus_previous",
+    "entity_consensus_decision",
+    "entity_consensus_candidate_votes",
+    "entity_consensus_selected_votes",
     "lineage_panel_top",
     "lineage_panel_support",
     "lineage_panel_status",
@@ -645,6 +650,16 @@ def build_signal_sample_summary(matrix: pd.DataFrame) -> pd.DataFrame:
             fused_top is not None
             and (bool(fused_top.get("is_blocked")) or bool(fused_blocker))
         )
+        entity_consensus = _top_supported_row(
+            sub,
+            sub["signal_source"] == "entity_evidence_consensus",
+            include_blocked=True,
+        )
+        entity_consensus_details = (
+            _parse_details(entity_consensus.get("details"))
+            if entity_consensus is not None
+            else {}
+        )
 
         lineage_panel = _top_supported_row(
             sub,
@@ -695,6 +710,23 @@ def build_signal_sample_summary(matrix: pd.DataFrame) -> pd.DataFrame:
                 "fused_top_score": _safe_float(fused_top.get("support")) if fused_top is not None else None,
                 "fused_top_blocked": fused_top_blocked,
                 "fused_top_blocker": fused_blocker,
+                "entity_consensus_candidate": _clean(
+                    entity_consensus_details.get("candidate_code")
+                ),
+                "entity_consensus_previous": _clean(
+                    entity_consensus_details.get("selected_code")
+                ),
+                "entity_consensus_decision": _clean(
+                    entity_consensus.get("role")
+                )
+                if entity_consensus is not None
+                else "",
+                "entity_consensus_candidate_votes": _safe_float(
+                    entity_consensus_details.get("candidate_votes")
+                ),
+                "entity_consensus_selected_votes": _safe_float(
+                    entity_consensus_details.get("selected_votes")
+                ),
                 "lineage_panel_top": _clean(lineage_panel.get("predicted_code")) if lineage_panel is not None else "",
                 "lineage_panel_support": _safe_float(lineage_panel.get("support")) if lineage_panel is not None else None,
                 "lineage_panel_status": _clean(lineage_panel.get("status")) if lineage_panel is not None else "",

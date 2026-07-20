@@ -60,7 +60,6 @@ def build_provenance_md(
     chain from raw TPMs to conservative tumor-inferred expression.
     """
     sample_context = analysis.get("sample_context")
-    purity = analysis.get("purity") or {}
     lines: List[str] = []
     sample_id = _display_sample_id(sample_id)
     header_id = f": {sample_id}" if sample_id else ""

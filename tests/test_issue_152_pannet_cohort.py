@@ -10,7 +10,6 @@ The registry entry was already present in v4.38.0 as
 real-data promotion.
 """
 
-import pandas as pd
 
 from pirlygenes.gene_sets_cancer import (
     cancer_type_registry,

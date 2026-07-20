@@ -70,7 +70,26 @@ def test_test_script_refuses_a_live_cross_worktree_lock(tmp_path):
     assert not args_path.exists()
 
 
-def test_test_script_recovers_a_stale_lock(tmp_path):
+def test_test_script_fails_closed_for_an_ownerless_lock(tmp_path):
+    env, lock_dir, args_path = _environment(tmp_path)
+    lock_dir.mkdir()
+
+    result = subprocess.run(
+        ["bash", str(TEST_SCRIPT), "-q"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 75
+    assert "absent or incomplete owner metadata" in result.stderr
+    assert lock_dir.is_dir()
+    assert not args_path.exists()
+
+
+def test_test_script_does_not_reclaim_a_stale_lock(tmp_path):
     env, lock_dir, args_path = _environment(tmp_path)
     lock_dir.mkdir()
     (lock_dir / "pid").write_text("999999\n")
@@ -84,6 +103,8 @@ def test_test_script_recovers_a_stale_lock(tmp_path):
         check=False,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert args_path.read_text().strip() == "-n 1 tests -q"
-    assert not lock_dir.exists()
+    assert result.returncode == 75
+    assert "existing test lock records owner pid=999999" in result.stderr
+    assert lock_dir.is_dir()
+    assert (lock_dir / "pid").read_text().strip() == "999999"
+    assert not args_path.exists()

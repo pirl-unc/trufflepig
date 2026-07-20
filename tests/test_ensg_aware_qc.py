@@ -13,10 +13,8 @@ Pins:
 """
 
 import pandas as pd
-import pytest
 from oncoref.normalization import housekeeping_reference_profile
 
-from oncoref.normalization import housekeeping_reference_profile
 
 from trufflepig.expression_qc import classify_gene_qc
 from trufflepig.expression_normalize import (

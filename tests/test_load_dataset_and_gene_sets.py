@@ -127,8 +127,12 @@ def test_cta_filtered_and_evidence():
     assert all_names
     assert expressed_names < filtered_names  # expressed is strict subset of filtered
     assert filtered_names < all_names  # filtered is strict subset of unfiltered
+    assert expressed_ids < filtered_ids
+    assert filtered_ids < all_ids
     assert expressed_names & never_expr_names == set()  # no overlap
     assert expressed_names | never_expr_names == filtered_names  # partition
+    assert expressed_ids & never_expr_ids == set()
+    assert expressed_ids | never_expr_ids == filtered_ids
     assert filtered_names | excluded_names == all_names  # partition
     assert filtered_names & excluded_names == set()  # no overlap
 

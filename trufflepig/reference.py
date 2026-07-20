@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+import numpy as np
 import pandas as pd
 import pirlygenes as _pirlygenes
 from pirlygenes.expression.qc import TECHNICAL_FRACTION
+from pirlygenes.gene_names import get_alias_as_list, get_reverse_alias_as_list
 
 from ._data import TRUFFLEPIG_DATA_DIR
 from .clean_tpm import assert_clean_tpm
@@ -37,6 +39,8 @@ _SUBTYPE_GROUP_COLS = ("cancer_code", "subtype")
 _CANCER_REFERENCE_EMPTY_COLUMNS = [
     "Ensembl_Gene_ID",
     "Symbol",
+    "Proteoform_ID",
+    "Member_Ensembl_Gene_IDs",
     "cancer_code",
     "source_cohort",
     "source_project",
@@ -50,6 +54,58 @@ _CANCER_REFERENCE_EMPTY_COLUMNS = [
     "q1",
     "q3",
 ]
+
+
+def _artifact_reference_manifest(oncoref) -> pd.DataFrame:
+    """Return loader identities enriched with optional artifact sample counts."""
+    manifest = oncoref.cancer_reference_expression_availability(
+        normalize="tpm_clean",
+        reference_source="artifact",
+        sample_qc="artifact",
+    )
+    if not {"cancer_code", "source_cohort"}.issubset(manifest.columns):
+        raise ValueError("artifact availability lacks loader identity columns")
+
+    # Availability both ensures the bundle and defines the loader contract.
+    # Metadata can enrich it, but must never replace source_cohort aliases.
+    try:
+        metadata = oncoref.expression_artifact_build_metadata(
+            auto_fetch=False,
+            on_missing="empty",
+        )
+    except Exception:  # noqa: BLE001 - metadata is optional enrichment
+        return manifest
+    if "cancer_code" not in metadata.columns or metadata.empty:
+        return manifest
+
+    enrichment = pd.DataFrame({"cancer_code": metadata["cancer_code"].astype(str)})
+    if "n_cohort_samples" in metadata.columns:
+        enrichment["_metadata_n_samples"] = pd.to_numeric(
+            metadata["n_cohort_samples"], errors="coerce"
+        )
+    if "processing_pipeline" in metadata.columns:
+        enrichment["_metadata_processing_pipeline"] = metadata[
+            "processing_pipeline"
+        ]
+    enrichment = enrichment.drop_duplicates("cancer_code", keep="first")
+    manifest = manifest.copy()
+    manifest["cancer_code"] = manifest["cancer_code"].astype(str)
+    manifest = manifest.merge(
+        enrichment,
+        on="cancer_code",
+        how="left",
+        validate="many_to_one",
+    )
+    for target, source in (
+        ("n_samples", "_metadata_n_samples"),
+        ("processing_pipeline", "_metadata_processing_pipeline"),
+    ):
+        if source not in manifest.columns:
+            continue
+        current = manifest.get(target, pd.Series(pd.NA, index=manifest.index))
+        manifest[target] = manifest[source].where(manifest[source].notna(), current)
+        manifest = manifest.drop(columns=source)
+    return manifest
 
 
 def _parse_pan_value_column(col: str) -> tuple[str, int] | None:
@@ -475,6 +531,599 @@ def subtype_deconvolved_expression(
     ).copy()
 
 
+@lru_cache(maxsize=1)
+def _cancer_reference_manifest_cached() -> pd.DataFrame:
+    """Small artifact manifest without loading the 7+ GB summary frame.
+
+    Oncoref's artifact build metadata and shard listing are the authoritative
+    discovery surface for the artifact-backed expression accessor below. If
+    those compact paths fail, degrade directly to registry-declared cohorts.
+    Never invoke summary-row availability or pirlygenes' full canonical views.
+    """
+    availability_verified = False
+    try:
+        import oncoref
+
+        manifest = _artifact_reference_manifest(oncoref)
+        if "available" in manifest.columns:
+            manifest = manifest[manifest["available"].fillna(False).astype(bool)]
+        if (
+            "n_reference_samples" in manifest.columns
+            and "n_samples" in manifest.columns
+        ):
+            manifest = manifest.copy()
+            n_samples = pd.to_numeric(manifest["n_samples"], errors="coerce")
+            n_reference_samples = pd.to_numeric(
+                manifest["n_reference_samples"], errors="coerce"
+            )
+            manifest["n_samples"] = n_samples.where(
+                n_samples.notna(), n_reference_samples
+            )
+        if "cancer_code" not in manifest.columns:
+            raise ValueError("cancer reference manifest has no cancer_code column")
+        availability_verified = True
+    except Exception:  # noqa: BLE001 - safe registry fallback is intentional
+        manifest = pd.DataFrame(
+            columns=[
+                "cancer_code",
+                "source_cohort",
+                "processing_pipeline",
+                "n_samples",
+            ]
+        )
+
+    keep = [
+        col
+        for col in (
+            "cancer_code",
+            "source_cohort",
+            "processing_pipeline",
+            "n_samples",
+        )
+        if col in manifest.columns
+    ]
+    if "cancer_code" not in keep:
+        raise ValueError("cancer reference manifest has no cancer_code column")
+    manifest = manifest[keep].copy()
+
+    # Registry provenance is a safe fallback only for rows that explicitly own
+    # their cohort and classify against themselves. Parent-routed subtype rows
+    # can carry an expression source/cohort for biological provenance without
+    # having a physical clean-TPM artifact of their own (for example the MBL
+    # molecular subgroups). Never advertise those as direct references.
+    #
+    # When oncoref's compact accessor succeeds, it is the complete authority for
+    # the installed data bundle.  Do not merge registry aliases into verified
+    # loader identities. When the accessor itself fails, the explicit
+    # own-cohort/self-reference registry contract provides the lightweight
+    # failover requested by discovery without loading expression.
+    try:
+        from .cancer_ontology import cancer_type_registry
+
+        registry = cancer_type_registry()
+        code = registry["code"].fillna("").astype(str).str.strip()
+        source = registry["source_cohort"].fillna("").astype(str).str.strip()
+        expression_source = (
+            registry["expression_source"].fillna("").astype(str).str.strip().str.lower()
+        )
+        reference_source = (
+            registry.get("reference_source", pd.Series("", index=registry.index))
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .str.lower()
+        )
+        classification_reference = (
+            registry.get(
+                "classification_reference_code",
+                pd.Series("", index=registry.index),
+            )
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+
+        own = registry[
+            ~expression_source.isin({"", "curated", "computed"})
+            & source.ne("")
+            & ~source.eq("LITERATURE_CURATED")
+            & ~source.str.startswith("COMPUTED_")
+            & reference_source.eq("own_cohort")
+            & classification_reference.eq(code)
+        ][["code", "source_cohort"]].rename(columns={"code": "cancer_code"})
+        if not availability_verified:
+            manifest = pd.concat([manifest, own], ignore_index=True, sort=False)
+    except Exception:  # noqa: BLE001 - availability still works without registry merge
+        pass
+
+    # The public identity is (code, cohort). Prefer the most populated row for
+    # each identity so both artifact metadata and registry fallback remain
+    # one-row-per-loader-target even if an upstream table repeats an identity.
+    identity_columns = ["cancer_code", "source_cohort"]
+    if "source_cohort" not in manifest.columns:
+        manifest["source_cohort"] = pd.NA
+    for column in identity_columns:
+        manifest[column] = manifest[column].astype("string").str.strip()
+    metadata_columns = [
+        column for column in manifest.columns if column not in identity_columns
+    ]
+    metadata_completeness = pd.Series(0, index=manifest.index, dtype="int64")
+    for column in metadata_columns:
+        values = manifest[column]
+        populated = values.notna()
+        if pd.api.types.is_string_dtype(values.dtype) or values.dtype == object:
+            populated &= values.astype("string").str.strip().ne("").fillna(False)
+        metadata_completeness += populated.astype("int64")
+    manifest = manifest.assign(
+        _manifest_metadata_completeness=metadata_completeness,
+        _manifest_original_order=range(len(manifest)),
+    )
+    manifest = (
+        manifest.sort_values(
+            "_manifest_metadata_completeness",
+            ascending=False,
+            kind="stable",
+        )
+        .drop_duplicates(subset=identity_columns, keep="first")
+        .sort_values("_manifest_original_order", kind="stable")
+        .drop(
+            columns=[
+                "_manifest_metadata_completeness",
+                "_manifest_original_order",
+            ]
+        )
+        .reset_index(drop=True)
+    )
+    return manifest
+
+
+def cancer_reference_manifest() -> pd.DataFrame:
+    """Return one lightweight provenance row per observed reference cohort."""
+    return _cancer_reference_manifest_cached().copy()
+
+
+_CANCER_REFERENCE_MODE_ALIASES = {
+    "tpm": "tpm",
+    "tpm_raw": "tpm",
+    "raw_tpm": "tpm",
+    "tpm_clean": "tpm_clean",
+    "clean_tpm": "tpm_clean",
+    "tpm_log1p": "tpm_log1p",
+    "log1p_tpm": "tpm_log1p",
+    "tpm_raw_log1p": "tpm_log1p",
+    "raw_tpm_log1p": "tpm_log1p",
+    "log1p_raw_tpm": "tpm_log1p",
+    "tpm_clean_log1p": "tpm_clean_log1p",
+    "clean_tpm_log1p": "tpm_clean_log1p",
+    "log1p_clean_tpm": "tpm_clean_log1p",
+    "tpm_clean_biological": "tpm_clean_biological",
+    "clean_tpm_biological": "tpm_clean_biological",
+    "biological_clean_tpm": "tpm_clean_biological",
+}
+_CANCER_REFERENCE_MODE_LABELS = {
+    "tpm": "TPM",
+    "tpm_clean": "TPM_clean",
+    "tpm_log1p": "TPM_log1p",
+    "tpm_clean_log1p": "TPM_clean_log1p",
+    "tpm_clean_biological": "TPM_clean_biological",
+}
+_CANCER_REFERENCE_BACKEND_MODES = {
+    "tpm": "tpm_raw",
+    "tpm_clean": "tpm_clean",
+    "tpm_log1p": "tpm_raw",
+    "tpm_clean_log1p": "tpm_clean_log1p",
+    "tpm_clean_biological": "tpm_clean_biological",
+}
+_CANCER_REFERENCE_BACKEND_WIDE_SUFFIXES = {
+    "tpm": "TPM_raw",
+    "tpm_clean": "TPM_clean",
+    "tpm_log1p": "TPM_raw",
+    "tpm_clean_log1p": "TPM_clean_log1p",
+    "tpm_clean_biological": "TPM_clean_biological",
+}
+_RAW_REFERENCE_SUMMARY_DATASET = "cancer-reference-expression"
+_RAW_REFERENCE_VALUE_COLUMNS = {
+    "TPM_median": "expression",
+    "TPM_q1": "q1",
+    "TPM_q3": "q3",
+}
+_RAW_REFERENCE_SHARD_COLUMNS = {
+    "Ensembl_Gene_ID",
+    "Symbol",
+    "cancer_code",
+    "source_cohort",
+    "source_project",
+    "source_version",
+    "TPM_median",
+    "TPM_q1",
+    "TPM_q3",
+    "n_samples",
+    "n_detected",
+    "processing_pipeline",
+    "notes",
+    "tumor_origin",
+    "metastasis_site",
+}
+
+
+def _cancer_reference_modes(normalize) -> list[str]:
+    requested = [normalize] if isinstance(normalize, str) else list(normalize)
+    modes: list[str] = []
+    invalid: list[str] = []
+    for value in requested:
+        if not isinstance(value, str):
+            invalid.append(repr(value))
+            continue
+        mode = _CANCER_REFERENCE_MODE_ALIASES.get(value.lower())
+        if mode is None:
+            invalid.append(repr(value))
+        elif mode not in modes:
+            modes.append(mode)
+    if invalid:
+        supported = ", ".join(sorted(_CANCER_REFERENCE_MODE_ALIASES))
+        raise ValueError(
+            f"unsupported cancer-reference normalization(s): {invalid}; "
+            f"supported: {supported}"
+        )
+    return modes
+
+
+def _cancer_reference_genes(genes) -> list[str] | None:
+    """Restore pirlygenes' case-, whitespace-, and alias-tolerant filters."""
+    if genes is None:
+        return None
+    requested = [genes] if isinstance(genes, str) else list(genes)
+    expanded: list[str] = []
+    for gene in requested:
+        token = str(gene).strip().upper()
+        for candidate in (
+            token,
+            *get_alias_as_list(token),
+            *get_reverse_alias_as_list(token),
+        ):
+            normalized = str(candidate).strip().upper()
+            if normalized and normalized not in expanded:
+                expanded.append(normalized)
+    return expanded
+
+
+def _raw_reference_shard_path(root, *, cancer_code: str, source_cohort: str):
+    """Resolve one source-summary shard without opening the union artifact."""
+    candidates = (
+        root / f"{source_cohort}.csv.gz",
+        root / f"{source_cohort}__{cancer_code}.csv.gz",
+    )
+    return next((path for path in candidates if path.is_file()), None)
+
+
+def _bounded_raw_reference_expression(
+    oncoref,
+    *,
+    cancer_types,
+    genes,
+    format: str,
+    include_provenance: bool,
+) -> pd.DataFrame:
+    """Read raw TPM QC summaries from only the requested per-source shards.
+
+    Oncoref's public source-union expression accessor currently materializes a
+    roughly five-million-row frame before applying code/gene filters. Its
+    compact availability accessor identifies the exact per-source CSV shards,
+    so use that table as an index and read only those bounded files. These raw
+    summaries intentionally use all source samples: they are the forensic QC
+    companion to artifact-QC clean TPM, not another downstream analysis view.
+    """
+    import oncoref.expression as oncoref_expression
+
+    availability = oncoref.cancer_reference_expression_availability(
+        cancer_types=cancer_types,
+        normalize="tpm_raw",
+        sample_qc="all",
+        reference_source="summary_rows_all",
+        all_sources=True,
+    )
+    available = availability
+    if "available" in available.columns:
+        available = available[available["available"].fillna(False).astype(bool)]
+    required_identity = {"cancer_code", "source_cohort"}
+    if not required_identity.issubset(available.columns) or available.empty:
+        out = _combine_cancer_reference_parts([], format=format)
+        out.attrs["availability"] = availability.to_dict("records")
+        out.attrs["missing_requests"] = availability.to_dict("records")
+        out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+        out.attrs["reference_source"] = "summary_rows_all"
+        out.attrs["sample_qc"] = "all"
+        return out
+
+    # Wide output cannot encode source identity. Match oncoref's documented
+    # richest-source selection policy, while long raw QC retains every source.
+    if format == "wide":
+        sort_columns = [
+            column
+            for column in ("n_reference_genes", "n_reference_samples")
+            if column in available.columns
+        ]
+        if sort_columns:
+            available = available.sort_values(
+                sort_columns,
+                ascending=[False] * len(sort_columns),
+                kind="stable",
+            )
+        available = available.drop_duplicates(subset=["cancer_code"], keep="first")
+
+    root = oncoref_expression._bundle_subdir(  # noqa: SLF001 - no public bounded reader
+        _RAW_REFERENCE_SUMMARY_DATASET,
+        auto_fetch=True,
+    )
+    pairs_by_path: dict[object, set[tuple[str, str]]] = {}
+    for row in available.itertuples(index=False):
+        code = str(row.cancer_code)
+        source = str(row.source_cohort)
+        path = _raw_reference_shard_path(
+            root,
+            cancer_code=code,
+            source_cohort=source,
+        )
+        if path is not None:
+            pairs_by_path.setdefault(path, set()).add((code, source))
+
+    raw_parts: list[pd.DataFrame] = []
+    for path, wanted_pairs in pairs_by_path.items():
+        frame = pd.read_csv(
+            path,
+            usecols=lambda column: column in _RAW_REFERENCE_SHARD_COLUMNS,
+            low_memory=False,
+        )
+        pair_index = pd.MultiIndex.from_frame(
+            frame[["cancer_code", "source_cohort"]].astype(str)
+        )
+        frame = frame.loc[pair_index.isin(wanted_pairs)].copy()
+        if frame.empty:
+            continue
+        frame = frame.loc[oncoref_expression._gene_filter_mask(frame, genes)].copy()
+        if frame.empty:
+            continue
+        frame = oncoref_expression._apply_artifact_gene_universe(
+            frame,
+            product="cancer_reference_expression",
+            cancer_codes=sorted({code for code, _source in wanted_pairs}),
+            gene_universe="pirlygenes",
+            include_gene_universe_flags=False,
+        )
+        frame = oncoref_expression._apply_gene_id_style(
+            frame,
+            product="cohort_gene_percentiles",
+            cancer_codes=sorted({code for code, _source in wanted_pairs}),
+            gene_id_style="pirlygenes",
+            alias_expand_remaps=True,
+        )
+        frame = oncoref_expression._annotate_reference_proteoform_bridge(
+            frame,
+            kind="cdna",
+            identity_style="pirlygenes",
+        )
+        raw_parts.append(frame)
+
+    if raw_parts:
+        raw = pd.concat(raw_parts, ignore_index=True, sort=False)
+    else:
+        raw = pd.DataFrame(
+            columns=[
+                "Ensembl_Gene_ID",
+                "Symbol",
+                "Proteoform_ID",
+                "Member_Ensembl_Gene_IDs",
+                "cancer_code",
+                "source_cohort",
+                *_RAW_REFERENCE_VALUE_COLUMNS,
+            ]
+        )
+
+    # The availability artifact carries scale/QC provenance not repeated in
+    # every expression row. Merge only missing fields to keep one source of
+    # truth and avoid suffixing columns already present in the shard.
+    identity = ["cancer_code", "source_cohort"]
+    metadata_columns = [
+        column
+        for column in availability.columns
+        if column not in raw.columns
+        and column not in {"requested_code", "request_kind", "normalization", "available"}
+    ]
+    if not raw.empty and metadata_columns:
+        metadata = available[[*identity, *metadata_columns]].drop_duplicates(identity)
+        raw = raw.merge(metadata, on=identity, how="left", validate="many_to_one")
+
+    raw = raw.rename(columns=_RAW_REFERENCE_VALUE_COLUMNS)
+    raw["normalization"] = "tpm_raw"
+    if format == "long":
+        core = [
+            "Ensembl_Gene_ID",
+            "Symbol",
+            "Proteoform_ID",
+            "Member_Ensembl_Gene_IDs",
+            "cancer_code",
+            "normalization",
+            "expression",
+            "q1",
+            "q3",
+        ]
+        source_identity = [
+            column
+            for column in ("source_cohort", "n_reference_samples", "n_samples", "n_detected")
+            if column in raw.columns
+        ]
+        provenance = (
+            [column for column in raw.columns if column not in {*core, *source_identity}]
+            if include_provenance
+            else []
+        )
+        out = raw[[*core[:-3], *source_identity, *provenance, *core[-3:]]].copy()
+    else:
+        value = raw[["Ensembl_Gene_ID", "Symbol", "cancer_code", "expression"]].copy()
+        value["_column"] = value["cancer_code"].astype(str) + "_TPM_raw"
+        out = value.pivot_table(
+            index=["Ensembl_Gene_ID", "Symbol"],
+            columns="_column",
+            values="expression",
+            aggfunc="first",
+            sort=False,
+        ).reset_index()
+        out.columns.name = None
+        expected = [
+            f"{code}_TPM_raw"
+            for code in dict.fromkeys(available["cancer_code"].astype(str))
+        ]
+        for column in expected:
+            if column not in out.columns:
+                out[column] = np.nan
+        out = out[["Ensembl_Gene_ID", "Symbol", *expected]]
+
+    out.attrs["availability"] = availability.to_dict("records")
+    out.attrs["missing_requests"] = availability.loc[
+        ~availability.get("available", pd.Series(True, index=availability.index))
+        .fillna(False)
+        .astype(bool)
+    ].to_dict("records")
+    out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+    out.attrs["reference_source"] = "summary_rows_all"
+    out.attrs["sample_qc"] = "all"
+    return out
+
+
+def _adapt_cancer_reference_mode(
+    frame: pd.DataFrame,
+    *,
+    mode: str,
+    format: str,
+) -> pd.DataFrame:
+    """Restore pirlygenes-compatible labels and derive raw log1p safely."""
+    out = frame.copy()
+    label = _CANCER_REFERENCE_MODE_LABELS[mode]
+    if format == "long":
+        if mode == "tpm_log1p":
+            for column in ("expression", "q1", "q3"):
+                if column in out.columns:
+                    out[column] = np.log1p(
+                        pd.to_numeric(out[column], errors="coerce")
+                    )
+        if "normalization" in out.columns:
+            out["normalization"] = label
+    else:
+        backend_suffix = _CANCER_REFERENCE_BACKEND_WIDE_SUFFIXES[mode]
+        renamed = {}
+        for column in out.columns:
+            suffix = f"_{backend_suffix}"
+            if not str(column).endswith(suffix):
+                continue
+            if mode == "tpm_log1p":
+                out[column] = np.log1p(
+                    pd.to_numeric(out[column], errors="coerce")
+                )
+            renamed[column] = f"{str(column)[: -len(suffix)]}_{label}"
+        out = out.rename(columns=renamed)
+
+    attrs = dict(frame.attrs)
+    for attr_name in ("availability", "missing_requests"):
+        if attr_name in attrs:
+            attrs[attr_name] = [
+                {**record, "normalization": label}
+                for record in attrs[attr_name]
+            ]
+    transforms = list(attrs.get("compatibility_transforms", []))
+    if mode == "tpm_log1p":
+        transforms.append("tpm_log1p derived with numpy.log1p from raw TPM")
+    attrs["compatibility_transforms"] = list(dict.fromkeys(transforms))
+    attrs["reference_backend"] = frame.attrs.get(
+        "reference_backend", "oncoref_artifact"
+    )
+    out.attrs = attrs
+    return out
+
+
+def _combine_cancer_reference_parts(
+    parts: list[pd.DataFrame],
+    *,
+    format: str,
+    labels: list[str] | None = None,
+) -> pd.DataFrame:
+    if not parts:
+        if format == "long":
+            return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
+        return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
+
+    if format == "long":
+        out = pd.concat(parts, ignore_index=True, sort=False)
+    else:
+        identifier_parts = [
+            part[[column for column in ("Ensembl_Gene_ID", "Symbol") if column in part]]
+            for part in parts
+        ]
+        identifiers = pd.concat(identifier_parts, ignore_index=True).drop_duplicates(
+            subset=["Ensembl_Gene_ID"]
+        )
+        out = identifiers
+        for part in parts:
+            values = part.drop(columns=["Symbol"], errors="ignore")
+            values = values.drop_duplicates(subset=["Ensembl_Gene_ID"])
+            value_columns = [
+                column for column in values.columns if column != "Ensembl_Gene_ID"
+            ]
+            out = out.merge(
+                values[["Ensembl_Gene_ID", *value_columns]],
+                on="Ensembl_Gene_ID",
+                how="outer",
+                sort=False,
+            )
+
+    attrs = dict(parts[0].attrs) if len(parts) == 1 else {}
+    for attr_name in ("availability", "missing_requests"):
+        records = [
+            record
+            for part in parts
+            for record in part.attrs.get(attr_name, [])
+        ]
+        attrs[attr_name] = sorted(
+            records,
+            key=lambda record: (
+                str(record.get("normalization", "")),
+                str(record.get("cancer_code", "")),
+                str(record.get("source_cohort", "")),
+            ),
+        )
+    attrs["compatibility_transforms"] = sorted(
+        {
+            transform
+            for part in parts
+            for transform in part.attrs.get("compatibility_transforms", [])
+        }
+    )
+
+    route_attrs = (
+        "reference_backend",
+        "reference_source",
+        "sample_qc",
+        "artifact_sample_qc",
+        "expression_unit",
+    )
+    provenance = {}
+    for label, part in zip(labels or [""] * len(parts), parts):
+        provenance[label] = {
+            key: part.attrs[key]
+            for key in route_attrs
+            if key in part.attrs and pd.notna(part.attrs[key])
+        }
+    attrs["normalization_provenance"] = {
+        label: provenance[label] for label in sorted(provenance)
+    }
+    for key in route_attrs:
+        values = {details.get(key) for details in provenance.values()}
+        if len(values) == 1 and None not in values:
+            attrs[key] = values.pop()
+
+    out.attrs = attrs
+    return out
+
+
 def cancer_reference_expression(
     cancer_types=None,
     genes=None,
@@ -483,32 +1132,84 @@ def cancer_reference_expression(
     format: str = "long",
     include_provenance: bool = True,
 ) -> pd.DataFrame:
-    """Observed non-TCGA tumor expression references from pirlygenes.
+    """Observed tumor references from oncoref's bounded artifact paths.
 
     This is distinct from trufflepig's deconvolved tumor-cell references.
-    The default view is observed cohort clean TPM, source-preserving, and
-    suitable for expression matching or fallback priors when no deconvolved
-    tumor reference exists.
+    Clean and log-clean modes read the shipped artifact-QC percentile shards.
+    Raw TPM reads the shipped all-sample per-source summaries for forensic QC,
+    and raw log1p is derived after the linear cohort summary. Thus callers can
+    inspect raw values and use clean/log-clean values downstream without
+    materializing the multi-gigabyte source-union frame or downloading the
+    roughly 21 GB collection of per-sample source matrices.
+
+    ``df.attrs["normalization_provenance"]`` records the backend, source view,
+    and QC policy for each returned normalization. Mixed raw/clean results omit
+    conflicting top-level route attributes rather than implying one shared QC.
     """
-    accessor = getattr(_pirlygenes, "cancer_reference_expression", None)
+    import oncoref
+
+    if format not in {"long", "wide"}:
+        raise ValueError("format must be 'long' or 'wide'")
+    modes = _cancer_reference_modes(normalize)
+    cancer_types = (
+        cancer_types
+        if cancer_types is None or isinstance(cancer_types, str)
+        else list(cancer_types)
+    )
+    genes = _cancer_reference_genes(genes)
+    accessor = getattr(oncoref, "cancer_reference_expression", None)
     if accessor is None:
         if format == "long":
             return pd.DataFrame(columns=_CANCER_REFERENCE_EMPTY_COLUMNS)
         return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
 
-    df = accessor(
-        cancer_types=cancer_types,
-        genes=genes,
-        normalize=normalize,
+    common_kwargs = {
+        "genes": genes,
+        "format": format,
+        "include_provenance": include_provenance,
+        "on_missing": "empty",
+        "auto_fetch": False,
+        "reference_source": "artifact",
+        "gene_id_style": "pirlygenes",
+        "gene_universe": "pirlygenes",
+    }
+    parts: list[pd.DataFrame] = []
+    raw_backend: pd.DataFrame | None = None
+    for mode in modes:
+        backend_mode = _CANCER_REFERENCE_BACKEND_MODES[mode]
+        if mode in {"tpm", "tpm_log1p"}:
+            if raw_backend is None:
+                raw_backend = _bounded_raw_reference_expression(
+                    oncoref,
+                    cancer_types=cancer_types,
+                    genes=genes,
+                    format=format,
+                    include_provenance=include_provenance,
+                )
+            parts.append(
+                _adapt_cancer_reference_mode(
+                    raw_backend,
+                    mode=mode,
+                    format=format,
+                )
+            )
+        else:
+            frame = accessor(
+                cancer_types=cancer_types,
+                normalize=backend_mode,
+                sample_qc="artifact",
+                **common_kwargs,
+            )
+            parts.append(
+                _adapt_cancer_reference_mode(frame, mode=mode, format=format)
+            )
+
+    df = _combine_cancer_reference_parts(
+        parts,
         format=format,
-        include_provenance=include_provenance,
-    ).copy()
-    modes = (
-        {str(mode).lower() for mode in normalize}
-        if isinstance(normalize, (list, tuple, set))
-        else {str(normalize).lower()}
+        labels=[_CANCER_REFERENCE_MODE_LABELS[mode] for mode in modes],
     )
-    clean_requested = bool(modes & {"tpm_clean", "clean_tpm"})
+    clean_requested = "tpm_clean" in modes
     if clean_requested and not df.empty:
         if format == "long":
             clean_rows = (

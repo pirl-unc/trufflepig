@@ -28,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 _SELECTED_BY_TIEBREAK_RANK: dict[str, int] = {
     "direct_fusion": 6,
     "fused_evidence": 5,
+    "entity_evidence_consensus": 5,
     "fine_reference": 5,
     "local_expression_reference": 4,
     "lineage_panel": 4,
@@ -138,6 +139,14 @@ _LEARNED_HIERARCHY_LINEAGE_STRONG_ENTITY_MARGIN = 0.50
 _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_ENTITY_SUPPORT = 0.50
 _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_FAMILY_SUPPORT = 0.95
 _LEARNED_HIERARCHY_LINEAGE_CORROBORATED_COMPARTMENT_SUPPORT = 0.95
+# Entity refinement below the calibrated single-model path is deliberately a
+# consensus rule, not another probability threshold.  A learned entity vote
+# must be joined by two independent evidence groups and win a majority of the
+# available groups.  This structural requirement applies uniformly to every
+# cancer type and keeps one unusually confident model from manufacturing a
+# leaf call on its own.
+_ENTITY_CONSENSUS_MIN_SUPPORTING_AXES = 3
+_ENTITY_CONSENSUS_MIN_NONLEARNED_AXES = 2
 _FUSED_EVIDENCE_CONTEXT_FREE_LEARNED_PROBABILITY = 0.97
 _FUSED_EVIDENCE_CONTEXT_FREE_CENTROID_SUPPORT = 0.35
 _FUSED_EVIDENCE_MIN_SCORE = 0.25
@@ -759,6 +768,7 @@ def _selection_method_label(selected_by: str) -> str:
         "broad_rna_subtype": "pan_cancer_signature_subtype",
         "pan_cancer_signature_subtype": "pan_cancer_signature_subtype",
         "learned_expression_classifier": "learned_expression_classifier",
+        "entity_evidence_consensus": "entity_evidence_consensus",
         "contrast_discriminator": "contrast_discriminator",
         "rare_marker": "rna_marker_with_expression_context",
         "direct_fusion": "direct_fusion",
@@ -785,6 +795,7 @@ def _decision_stage_for_selector(selected_by: str) -> str:
         "broad_rna_subtype",
         "pan_cancer_signature_subtype",
         "learned_expression_classifier",
+        "entity_evidence_consensus",
         "rare_marker",
         "contrast_discriminator",
     }:
@@ -805,6 +816,11 @@ def _decision_stage_for_hypothesis(
     if hypothesis is None:
         return "unselected"
     if hypothesis.details.get("local_reference_status_child_code"):
+        return "coarse_type"
+    if (
+        hypothesis.details.get("entity_consensus_adjudication_mode")
+        == "common_ancestor_abstention"
+    ):
         return "coarse_type"
     return _decision_stage_for_selector(hypothesis.selected_by)
 
@@ -923,6 +939,44 @@ def _hypothesis_evidence_channels(
             ),
         },
     )
+    entity_consensus = hypothesis.details.get("entity_evidence_consensus") or {}
+    if isinstance(entity_consensus, Mapping) and entity_consensus:
+        available_axes = sum(
+            bool(axis.get("available"))
+            for axis in entity_consensus.get("axes") or []
+            if isinstance(axis, Mapping)
+        )
+        candidate_votes = _safe_int(entity_consensus.get("candidate_votes"))
+        selected_votes = _safe_int(entity_consensus.get("selected_votes"))
+        if hypothesis.cancer_type == entity_consensus.get("candidate_code"):
+            supporting_axes = candidate_votes
+        elif hypothesis.cancer_type == entity_consensus.get("selected_code"):
+            supporting_axes = selected_votes
+        elif (
+            hypothesis.details.get("entity_consensus_adjudication_mode")
+            == "common_ancestor_abstention"
+        ):
+            # The parent is a neutral abstention rather than either leaf. Its
+            # support reflects the smaller opposing bloc that made the leaf
+            # conflict material, not the winning leaf's vote count.
+            supporting_axes = min(candidate_votes, selected_votes)
+        else:
+            supporting_axes = 0
+        add(
+            channel="entity_evidence_consensus",
+            stage=_decision_stage_for_hypothesis(hypothesis),
+            role=(
+                "common_ancestor_abstention"
+                if hypothesis.details.get("entity_consensus_adjudication_mode")
+                == "common_ancestor_abstention"
+                else "independent_axis_entity_adjudication"
+            ),
+            support=(
+                supporting_axes / available_axes if available_axes else 0.0
+            ),
+            selector="entity_evidence_consensus",
+            details=entity_consensus,
+        )
     add(
         channel="lineage_panel",
         stage="exact_subtype",
@@ -3664,13 +3718,14 @@ def _local_expression_reference_panels(
     so a patched underlying frame is not seen otherwise.
     """
     try:
+        from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
+
         from .reference import (
             cancer_reference_expression,
             pan_cancer_expression,
             subtype_deconvolved_expression,
         )
         from .tumor_purity import _compile_excluded_gene_matcher
-        from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
     except ImportError:
         _LOGGER.warning(
             "trufflepig.reference / tumor_purity imports failed; local "
@@ -4642,20 +4697,334 @@ def _learned_hierarchy_details(
     return {}
 
 
+def _learned_entity_support_for_code(
+    details: Mapping[str, Any],
+    code: str,
+) -> float:
+    """Return the hierarchy-entity probability assigned to ``code``.
+
+    The hierarchy vote is global sample evidence copied onto candidate rows.
+    Reading the full prediction vector here lets the consensus compare the
+    learned model's support for the proposed entity with its support for the
+    current production call instead of treating the top label as a binary
+    oracle.
+    """
+
+    votes = (
+        details.get("learned_expression_hierarchy_votes")
+        or details.get("learned_expression_hierarchical_votes")
+        or []
+    )
+    supports: dict[str, float] = {}
+    for vote in votes:
+        if not isinstance(vote, Mapping) or _clean(vote.get("stage")) != "entity":
+            continue
+        for item in vote.get("top_predictions") or []:
+            if not isinstance(item, Mapping):
+                continue
+            label = _clean(item.get("label") or item.get("code"))
+            if label:
+                supports[label] = max(
+                    supports.get(label, 0.0),
+                    _safe_float(item.get("probability")),
+                )
+    if not supports:
+        top_label = _clean(details.get("learned_expression_top_entity_label"))
+        if top_label:
+            supports[top_label] = _safe_float(
+                details.get("learned_expression_top_entity_support")
+            )
+    support, _label = _context_support_for_code_or_parent(code, supports)
+    descendant_support = max(
+        (
+            _safe_float(value)
+            for label, value in supports.items()
+            if _code_has_registry_ancestor(label, code)
+        ),
+        default=0.0,
+    )
+    return float(max(support, descendant_support))
+
+
+def _entity_marker_program_support(
+    hypothesis: CancerTypeEvidence,
+    sample_tpm_by_symbol: Mapping[str, float] | None,
+) -> tuple[float, Mapping[str, Any]]:
+    """Collapse curated positive/negative marker evidence into one axis.
+
+    Contrast, rare-marker, lineage-panel, and raw ontology-coherence signals
+    are all curated marker programs and therefore are one evidence *group*,
+    not four independent votes. ``family_marker_support`` and
+    ``pan_cancer_signature_marker_support`` are intentionally excluded here:
+    the signature ranker can contribute to both, so counting either beside the
+    separate pan-cancer-signature axis would duplicate the same RNA evidence.
+    When no selector attached an independent score, the ontology sanity panel
+    contributes its detected fraction, discounted by explicit expected-low
+    violations.
+    """
+
+    details = hypothesis.details
+    coherence = (
+        details.get("learned_hierarchy_entity_marker_coherence")
+        or details.get("entity_evidence_marker_coherence")
+        or details.get("learned_expression_marker_coherence")
+        or details.get("pan_cancer_signature_marker_coherence")
+        or details.get("local_reference_marker_coherence")
+        or {}
+    )
+    if not isinstance(coherence, Mapping):
+        coherence = {}
+    if not coherence and sample_tpm_by_symbol:
+        coherence = _marker_coherence(
+            hypothesis.cancer_type,
+            sample_tpm_by_symbol,
+        )
+    total = _safe_int(coherence.get("total"), 0)
+    unexpected = _marker_coherence_unexpected_low_count(coherence)
+    coherence_support = 0.0
+    if total > 0 and _marker_coherence_positive_complete(coherence):
+        coherence_support = _safe_float(coherence.get("detected_fraction")) * (
+            1.0 - min(1.0, unexpected / total)
+        )
+    support = max(
+        coherence_support,
+        hypothesis.contrast_discriminator_support,
+        hypothesis.rna_marker_support,
+        _safe_float(details.get("lineage_panel_score")),
+    )
+    return float(np.clip(support, 0.0, 1.0)), coherence
+
+
+def _entity_evidence_consensus(
+    candidate: CancerTypeEvidence,
+    selected: CancerTypeEvidence,
+    hierarchy_details: Mapping[str, Any],
+    *,
+    sample_tpm_by_symbol: Mapping[str, float] | None = None,
+    cen=None,
+    centroid_confident: bool = False,
+) -> dict[str, Any]:
+    """Compare two entity hypotheses across independent evidence groups.
+
+    Each group gets one vote, regardless of how many correlated subfeatures it
+    contains.  The decision is intentionally relative: it asks which entity is
+    better supported by the same axis in this sample.  No cancer-code-specific
+    constants or sample exceptions are involved.
+    """
+
+    centroid_supports = _centroid_supports_for_hypotheses(
+        {
+            candidate.cancer_type: candidate,
+            selected.cancer_type: selected,
+        },
+        cen if centroid_confident else None,
+    )
+    candidate_marker, candidate_coherence = _entity_marker_program_support(
+        candidate,
+        sample_tpm_by_symbol,
+    )
+    selected_marker, selected_coherence = _entity_marker_program_support(
+        selected,
+        sample_tpm_by_symbol,
+    )
+    if candidate_coherence:
+        candidate.details["entity_evidence_marker_coherence"] = dict(
+            candidate_coherence
+        )
+    if selected_coherence:
+        selected.details["entity_evidence_marker_coherence"] = dict(
+            selected_coherence
+        )
+
+    raw_axes = {
+        "learned_full_profile": (
+            _learned_entity_support_for_code(
+                hierarchy_details,
+                candidate.cancer_type,
+            ),
+            _learned_entity_support_for_code(
+                hierarchy_details,
+                selected.cancer_type,
+            ),
+        ),
+        "pan_cancer_signature": (
+            candidate.broad_rna_support,
+            selected.broad_rna_support,
+        ),
+        "whole_profile_centroid": (
+            _safe_float(centroid_supports.get(candidate.cancer_type)),
+            _safe_float(centroid_supports.get(selected.cancer_type)),
+        ),
+        "curated_marker_program": (candidate_marker, selected_marker),
+        "exact_expression_reference": (
+            candidate.fine_reference_support,
+            selected.fine_reference_support,
+        ),
+        "composition_reference": (
+            candidate.coarse_composition_support,
+            selected.coarse_composition_support,
+        ),
+    }
+    axes: list[dict[str, Any]] = []
+    candidate_votes = 0
+    selected_votes = 0
+    candidate_nonlearned_votes = 0
+    candidate_advantage = 0.0
+    for axis, (candidate_value, selected_value) in raw_axes.items():
+        candidate_support = float(np.clip(_safe_float(candidate_value), 0.0, 1.0))
+        selected_support = float(np.clip(_safe_float(selected_value), 0.0, 1.0))
+        available = bool(candidate_support > 0 or selected_support > 0)
+        preference = "abstain"
+        relative_advantage = 0.0
+        if available and not np.isclose(
+            candidate_support,
+            selected_support,
+            rtol=1e-6,
+            atol=1e-6,
+        ):
+            scale = max(candidate_support, selected_support)
+            relative_advantage = (
+                (candidate_support - selected_support) / scale if scale > 0 else 0.0
+            )
+            if relative_advantage > 0:
+                preference = "candidate"
+                candidate_votes += 1
+                if axis != "learned_full_profile":
+                    candidate_nonlearned_votes += 1
+            else:
+                preference = "selected"
+                selected_votes += 1
+            candidate_advantage += float(relative_advantage)
+        axes.append(
+            {
+                "axis": axis,
+                "candidate_support": round(candidate_support, 4),
+                "selected_support": round(selected_support, 4),
+                "relative_candidate_advantage": round(
+                    float(relative_advantage),
+                    4,
+                ),
+                "preference": preference,
+                "available": available,
+            }
+        )
+
+    candidate_has_learned_vote = any(
+        axis["axis"] == "learned_full_profile"
+        and axis["preference"] == "candidate"
+        for axis in axes
+    )
+    available_axis_count = sum(axis["available"] for axis in axes)
+    decisive_candidate = bool(
+        candidate_has_learned_vote
+        and candidate_votes >= _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
+        and candidate_nonlearned_votes >= _ENTITY_CONSENSUS_MIN_NONLEARNED_AXES
+        and candidate_votes * 2 > available_axis_count
+        and candidate_advantage > 0
+    )
+    return {
+        "schema_version": 1,
+        "candidate_code": candidate.cancer_type,
+        "selected_code": selected.cancer_type,
+        "axes": axes,
+        "candidate_votes": candidate_votes,
+        "candidate_nonlearned_votes": candidate_nonlearned_votes,
+        "selected_votes": selected_votes,
+        "available_axis_count": available_axis_count,
+        "candidate_advantage": round(float(candidate_advantage), 4),
+        "decisive_candidate": decisive_candidate,
+        "conflicted": bool(candidate_votes > 0 and selected_votes > 0),
+        "decision_rule": (
+            "learned entity plus at least two independent evidence groups; "
+            "candidate must win the available-axis majority"
+        ),
+    }
+
+
+def _persistent_report_label_blockers(
+    hypothesis: CancerTypeEvidence,
+) -> tuple[str, ...]:
+    """Return vetoes that expression-only adjudication must never clear.
+
+    Ordinary admission blockers can be overcome by genuinely independent RNA
+    evidence.  Explicit molecular negatives and registry-declared orthogonal
+    molecular/status states cannot: they require matching direct evidence, not
+    a stronger expression consensus.  Keep this distinction structural so a
+    later selector cannot accidentally erase a safety decision by calling
+    ``consider_for_report_label(can_select=True)``.
+    """
+
+    if hypothesis.direct_fusion_support > 0:
+        return ()
+    details = hypothesis.details
+    declared_blockers = details.get("hard_report_label_blockers") or ()
+    if isinstance(declared_blockers, str):
+        declared_blockers = (declared_blockers,)
+    blockers = [
+        _clean(reason)
+        for reason in declared_blockers
+        if _clean(reason)
+    ]
+    if details.get("local_reference_explicit_negative_fusion"):
+        conflict = details.get("local_reference_explicit_negative_fusion_details") or {}
+        blockers.append(
+            _fusion_input_missing_expected_driver_reason(conflict)
+            if isinstance(conflict, Mapping)
+            else "fusion-driven expression reference conflicts with supplied fusion evidence"
+        )
+    orthogonal_axes = _orthogonal_axes_that_block_report_label(
+        hypothesis.cancer_type
+    )
+    if orthogonal_axes and not _rare_marker_channel_admitted(hypothesis):
+        axes = ", ".join(
+            sorted({_clean(axis.get("axis")) for axis in orthogonal_axes})
+        )
+        blockers.append(
+            f"{hypothesis.cancer_type} encodes orthogonal molecular/status "
+            f"state ({axes}); direct molecular evidence is required before "
+            "that state can become the report label"
+        )
+    return tuple(dict.fromkeys(blockers))
+
+
+def _lowest_common_registry_ancestor(left: str, right: str) -> str:
+    """Deepest shared registry parent, excluding the two input leaves."""
+
+    left_code = _clean(left)
+    right_code = _clean(right)
+    if not left_code or not right_code or left_code == right_code:
+        return ""
+    right_path = {right_code, *_registry_parent_chain(right_code)}
+    for code in (left_code, *_registry_parent_chain(left_code)):
+        if code in right_path and code not in {left_code, right_code}:
+            row = _registry_row_for_code(code)
+            if _safe_bool(row.get("is_classification_target"), default=True):
+                return code
+    return ""
+
+
 def _adjudicate_selection_with_learned_hierarchy(
     hypotheses: dict[str, CancerTypeEvidence],
     selected: CancerTypeEvidence | None,
     *,
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
+    cen=None,
+    centroid_confident: bool = False,
 ) -> CancerTypeEvidence | None:
     """Apply calibrated hierarchy arbitration after ordinary fused selection.
 
-    Two narrow paths are allowed:
+    Three narrow paths are allowed:
 
     * a high-precision entity refinement with strong, mutually coherent
       entity/family/compartment votes; and
+    * a multi-axis entity refinement when the learned vote and at least two
+      independent evidence groups converge; and
     * a lineage-only safety path when the selected and learned entities occupy
       different lineages but the entity/family stages form a valid hierarchy.
+
+    When same-lineage evidence is genuinely split between two descendant
+    branches, the selector may abstain to their deepest shared registry parent.
+    That preserves the defensible entity scope without fabricating a leaf.
 
     Definitive molecular selectors and molecular/status annotation codes are
     never overridden by this expression-only adjudicator.
@@ -4664,12 +5033,18 @@ def _adjudicate_selection_with_learned_hierarchy(
     if selected is None or selected.selected_by in _DEFINITIVE_SELECTORS:
         return selected
     details = _learned_hierarchy_details(hypotheses, selected)
-    entity_code = _clean(details.get("learned_expression_top_entity_label"))
-    if not entity_code or entity_code not in _registry_by_code():
+    learned_entity_code = _clean(
+        details.get("learned_expression_top_entity_label")
+    )
+    if not learned_entity_code or learned_entity_code not in _registry_by_code():
+        return selected
+    entity_code = learned_entity_code
+    while entity_code and _orthogonal_axes_that_block_report_label(entity_code):
+        parents = _registry_parent_chain(entity_code)
+        entity_code = parents[0] if parents else ""
+    if not entity_code:
         return selected
     if entity_code == selected.cancer_type:
-        return selected
-    if _orthogonal_axes_that_block_report_label(entity_code):
         return selected
 
     entity_support = _safe_float(
@@ -4726,17 +5101,80 @@ def _adjudicate_selection_with_learned_hierarchy(
         and entity_lineage
         and selected_lineage != entity_lineage
     )
-    entity_hypothesis = hypotheses.get(entity_code)
-    marker_coherence = (
-        entity_hypothesis.details.get("learned_expression_marker_coherence")
-        if entity_hypothesis is not None
-        else {}
+    candidate = _hypothesis(hypotheses, entity_code)
+    candidate.add_source("learned_expression_classifier")
+    candidate.learned_expression_support = max(
+        candidate.learned_expression_support,
+        entity_support,
     )
-    if not marker_coherence and sample_tpm_by_symbol:
-        marker_coherence = _marker_coherence(
+    candidate.expression_reference_cancer_type = (
+        candidate.expression_reference_cancer_type or entity_code
+    )
+    # Preserve global hierarchy fields so both the consensus trace and the
+    # evidence graph remain complete when the learned top entity was not
+    # already a hypothesis. Marker coherence belongs to the code on the row
+    # that supplied ``details`` and must never be transplanted to another
+    # hierarchy candidate.
+    candidate.details.update(
+        {
+            key: value
+            for key, value in details.items()
+            if str(key).startswith("learned_expression_")
+            and key != "learned_expression_marker_coherence"
+        }
+    )
+    candidate_marker_coherence: Mapping[str, Any] = {}
+    if sample_tpm_by_symbol:
+        candidate_marker_coherence = _marker_coherence(
             entity_code,
             sample_tpm_by_symbol,
         )
+        candidate.details["learned_hierarchy_entity_marker_coherence"] = dict(
+            candidate_marker_coherence
+        )
+    consensus = _entity_evidence_consensus(
+        candidate,
+        selected,
+        details,
+        sample_tpm_by_symbol=sample_tpm_by_symbol,
+        cen=cen,
+        centroid_confident=centroid_confident,
+    )
+    credible_learned_candidate = bool(
+        entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
+        and entity_margin >= _LEARNED_EXPRESSION_MIN_MARGIN
+    )
+    consensus["credible_learned_candidate"] = credible_learned_candidate
+    hard_blockers = _persistent_report_label_blockers(candidate)
+    if hard_blockers:
+        consensus["evidence_decisive_candidate"] = bool(
+            consensus.get("decisive_candidate")
+        )
+        consensus["decisive_candidate"] = False
+        consensus["selection_blocked"] = True
+        consensus["candidate_hard_blockers"] = list(hard_blockers)
+        candidate.details["entity_consensus_hard_blockers"] = list(
+            hard_blockers
+        )
+    selected.details["entity_evidence_consensus"] = dict(consensus)
+    candidate.details["entity_evidence_consensus"] = dict(consensus)
+    if hard_blockers:
+        return selected
+    multi_axis_entity_refinement = bool(
+        entity_incompatible
+        and not lineage_disagreement
+        and family_consistent
+        and compartment_consistent
+        and consensus.get("decisive_candidate")
+    )
+
+    marker_coherence = (
+        candidate_marker_coherence
+        or candidate.details.get("learned_hierarchy_entity_marker_coherence")
+        or candidate.details.get("entity_evidence_marker_coherence")
+        or candidate.details.get("learned_expression_marker_coherence")
+        or {}
+    )
     marker_corroborated = bool(
         isinstance(marker_coherence, Mapping)
         and _marker_coherence_selection_grade(marker_coherence)
@@ -4762,31 +5200,67 @@ def _adjudicate_selection_with_learned_hierarchy(
         and family_consistent
         and (strong_lineage_entity or corroborated_lineage_entity)
     )
-    if not strong_entity_refinement and not lineage_safety:
+    common_ancestor = ""
+    if (
+        entity_incompatible
+        and not lineage_disagreement
+        and family_consistent
+        and compartment_consistent
+        and consensus.get("conflicted")
+        and credible_learned_candidate
+        and not strong_entity_refinement
+        and not multi_axis_entity_refinement
+    ):
+        common_ancestor = _lowest_common_registry_ancestor(
+            entity_code,
+            selected.cancer_type,
+        )
+    if common_ancestor:
+        parent = _hypothesis(hypotheses, common_ancestor)
+        parent.add_source("entity_evidence_consensus")
+        parent.expression_reference_cancer_type = common_ancestor
+        parent.reference_cancer_type = common_ancestor
+        parent.details.update(
+            {
+                "entity_evidence_consensus": dict(consensus),
+                "entity_consensus_adjudicated": True,
+                "entity_consensus_adjudication_mode": (
+                    "common_ancestor_abstention"
+                ),
+                "entity_consensus_previous_code": selected.cancer_type,
+                "entity_consensus_learned_code": entity_code,
+                "entity_consensus_learned_raw_code": learned_entity_code,
+                "entity_consensus_common_ancestor": common_ancestor,
+            }
+        )
+        parent.basis = (
+            f"independent RNA evidence disagreed between {selected.cancer_type} "
+            f"and {entity_code}; report scope abstained to their shared "
+            f"registry parent {common_ancestor}"
+        )
+        parent.consider_for_report_label(
+            selected_by="entity_evidence_consensus",
+            can_select=True,
+            blocking_reasons=(),
+            priority=(4, 1.0 + abs(_safe_float(consensus.get("candidate_advantage")))),
+        )
+        return parent if parent.can_select_report_label else selected
+
+    if (
+        not strong_entity_refinement
+        and not multi_axis_entity_refinement
+        and not lineage_safety
+    ):
         return selected
 
-    candidate = _hypothesis(hypotheses, entity_code)
-    candidate.add_source("learned_expression_classifier")
-    candidate.learned_expression_support = max(
-        candidate.learned_expression_support,
-        entity_support,
-    )
-    candidate.expression_reference_cancer_type = (
-        candidate.expression_reference_cancer_type or entity_code
-    )
-    # Preserve every hierarchy field so the evidence graph and report explain
-    # the adjudication even when the top entity was not already a hypothesis.
-    candidate.details.update(
-        {
-            key: value
-            for key, value in details.items()
-            if str(key).startswith("learned_expression_")
-        }
-    )
     mode = (
         "high_precision_entity_refinement"
         if strong_entity_refinement
-        else "cross_lineage_safety"
+        else (
+            "multi_axis_entity_refinement"
+            if multi_axis_entity_refinement
+            else "cross_lineage_safety"
+        )
     )
     candidate.details.update(
         {
@@ -4801,7 +5275,11 @@ def _adjudicate_selection_with_learned_hierarchy(
         f"{entity_code} ({mode.replace('_', ' ')})"
     )
     candidate.consider_for_report_label(
-        selected_by="learned_expression_classifier",
+        selected_by=(
+            "entity_evidence_consensus"
+            if multi_axis_entity_refinement
+            else "learned_expression_classifier"
+        ),
         can_select=True,
         blocking_reasons=(),
         priority=(4, 1.0 + entity_support + 0.25 * family_support),
@@ -8397,10 +8875,14 @@ def _add_fused_evidence_features(
     analysis: Mapping[str, Any],
     *,
     cen=None,
+    centroid_confident: bool = False,
 ) -> None:
     if not hypotheses:
         return
-    centroid_supports = _centroid_supports_for_hypotheses(hypotheses, cen)
+    centroid_supports = _centroid_supports_for_hypotheses(
+        hypotheses,
+        cen if centroid_confident else None,
+    )
     scored: list[tuple[float, str, CancerTypeEvidence, list[str]]] = []
     for code, hypothesis in hypotheses.items():
         centroid_support = _safe_float(centroid_supports.get(code))
@@ -8518,7 +9000,7 @@ def select_report_scope_from_evidence(
 ) -> dict[str, Any]:
     """Build cancer-type hypotheses and return the selected report label."""
     try:
-        from .common import build_sample_tpm_by_symbol, build_sample_tpm_by_gene_id
+        from .common import build_sample_tpm_by_gene_id, build_sample_tpm_by_symbol
     except ImportError:
         _LOGGER.warning(
             "trufflepig.common is unavailable; sample TPM lookup will be empty",
@@ -8596,14 +9078,15 @@ def select_report_scope_from_evidence(
         sample_tpm_by_symbol,
     )
 
-    # One whole-profile centroid pass. Fused evidence consumes the centroid as
-    # one channel; the legacy late centroid rerank remains only for non-fused
-    # selectors.
+    # One whole-profile centroid pass.  Correlations become selection evidence
+    # only when the associated compartment call is confident; otherwise they
+    # remain characterization data and cannot be normalized into a vote.
     _cen, _cen_confident = _centroid_and_confidence(sample_tpm_by_symbol)
     _add_fused_evidence_features(
         hypotheses,
         analysis,
         cen=_cen,
+        centroid_confident=_cen_confident,
     )
 
     selected = _pick_selected(
@@ -8618,6 +9101,8 @@ def select_report_scope_from_evidence(
         hypotheses,
         selected,
         sample_tpm_by_symbol=sample_tpm_by_symbol,
+        cen=_cen,
+        centroid_confident=_cen_confident,
     )
     rows = list(hypotheses.values())
 

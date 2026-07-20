@@ -724,6 +724,76 @@ def test_learned_compartment_parent_call_does_not_inherit_trace_subtype():
     assert candidate_winning_subtype_for_analysis(analysis) is None
 
 
+def test_consensus_parent_abstention_does_not_inherit_trace_subtype():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    analysis = {
+        "cancer_type": "CRC",
+        "candidate_trace": [
+            {"code": "CRC", "winning_subtype": "READ_MSS"},
+            {"code": "COAD_MSS"},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "CRC",
+                "selected_by": "entity_evidence_consensus",
+                "entity_consensus_adjudication_mode": (
+                    "common_ancestor_abstention"
+                ),
+            }
+        },
+    }
+
+    assert candidate_winning_subtype_for_analysis(analysis) is None
+
+
+def test_consensus_entity_refinement_does_not_inherit_old_ranker_subtype():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    analysis = {
+        "cancer_type": "COAD",
+        "candidate_trace": [
+            {"code": "COAD", "winning_subtype": "READ"},
+            {"code": "READ"},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "COAD",
+                "selected_by": "entity_evidence_consensus",
+                "learned_hierarchy_adjudication_mode": (
+                    "multi_axis_entity_refinement"
+                ),
+            }
+        },
+    }
+
+    assert candidate_winning_subtype_for_analysis(analysis) is None
+
+
+def test_hierarchy_entity_refinement_does_not_inherit_old_ranker_subtype():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    analysis = {
+        "cancer_type": "LAML",
+        "candidate_trace": [
+            {"code": "LAML", "winning_subtype": "CML"},
+            {"code": "CML"},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "LAML",
+                "selected_by": "learned_expression_classifier",
+                "learned_hierarchy_adjudicated": True,
+                "learned_hierarchy_adjudication_mode": (
+                    "high_precision_entity_refinement"
+                ),
+            }
+        },
+    }
+
+    assert candidate_winning_subtype_for_analysis(analysis) is None
+
+
 def test_brief_lusc_with_high_prame_mage_does_not_flag_nutm():
     """Pin the squamous-vs-NUTM correctness case: a LUSC sample with
     high PRAME + MAGEA3 (typical of LUSC) but silent NUTM1 should NOT

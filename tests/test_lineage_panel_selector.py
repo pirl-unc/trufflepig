@@ -425,47 +425,114 @@ def test_gate_allows_same_code_reinforcement():
     )
 
 
-def test_gate_blocks_cross_code_same_family_when_broad_confident():
-    """Regression for TCGA-D7-6524-01 (STAD→PAAD): broad confidently
-    called STAD, but the PAAD lineage panel scored high enough to
-    propose PAAD. STAD and PAAD are both ``carcinoma-gi`` family,
-    so the old same-family gate let it through. The same-code gate
-    blocks it: PAAD ≠ STAD, broad isn't explicitly weak → no
-    promotion.
-    """
-    hyps: dict = {}
+def test_gate_blocks_cross_code_same_family_when_broad_confident(monkeypatch):
+    """Regression for the real TCGA-D7-6524-01 STAD→PAAD incident.
 
-    # Sample with strong pancreatic ductal markers (PAAD panel will
-    # likely score high) but broad called STAD.
+    The marker TPMs below come from that sample in the TCGA RSEM matrix
+    (``2**log2(TPM + 0.001) - 0.001``).  Its PAAD ductal program is real and
+    strong: all five positive markers and all three negative-marker checks
+    pass.  The panel evaluator is pinned to that observed result here because
+    this test owns the *promotion gate*, not the independently tested panel
+    score/margin calibration.  Returning the PAAD evidence as a clear winner
+    guarantees that calibration drift cannot skip the safety assertion again.
+
+    The calibrated broad call is confident STAD (with READ and COAD next; see
+    ``docs/calibration-baseline.json``).  Even with PAAD retained in the broad
+    beam and a decisive PAAD panel, a confident cross-code call must be noted as
+    evidence rather than promoted to the report label.
+    """
+    from trufflepig import lineage_panels
+
     sample = {
-        "KRT19": 600.0,
-        "MUC1": 400.0,
-        "EPCAM": 300.0,
-        "CDH1": 200.0,
-        "CFTR": 50.0,
-        "ALB": 5.0,
-        "AFP": 1.0,
-        "ACTB": 200.0,
-        "GAPDH": 200.0,
+        "KRT19": 1100.389459,
+        "MUC1": 558.106854,
+        "CLDN18": 286.461002,
+        "AGR2": 1521.205295,
+        "S100P": 659.943297,
+        "ALB": 0.0,
+        "AFP": 0.0,
+        "CDX2": 26.359397,
     }
+    sample_by_gene_id = {
+        "ENSG00000171345": sample["KRT19"],
+        "ENSG00000185499": sample["MUC1"],
+        "ENSG00000066405": sample["CLDN18"],
+        "ENSG00000106541": sample["AGR2"],
+        "ENSG00000163993": sample["S100P"],
+        "ENSG00000163631": sample["ALB"],
+        "ENSG00000081051": sample["AFP"],
+        "ENSG00000165556": sample["CDX2"],
+    }
+    observed_paad_evidence = lineage_panels.PanelEvidence(
+        panel_name="PAAD_DUCTAL",
+        parent_cohort="PAAD",
+        obligate_passed=True,
+        obligate_failures=(),
+        high_hits=(
+            ("KRT19", sample["KRT19"], 1575.477769),
+            ("MUC1", sample["MUC1"], 824.21409),
+            ("CLDN18", sample["CLDN18"], 59.884901),
+            ("AGR2", sample["AGR2"], 447.326444),
+            ("S100P", sample["S100P"], 586.764946),
+        ),
+        high_misses=(),
+        low_passes=(
+            ("ALB", sample["ALB"], 5.0),
+            ("AFP", sample["AFP"], 5.0),
+            ("CDX2", sample["CDX2"], 30.0),
+        ),
+        low_violations=(),
+        score=1.0,
+        rationale=(
+            "PAAD_DUCTAL: 5/5 required markers in cohort range "
+            "(KRT19=1100, MUC1=558, CLDN18=286, AGR2=1521); "
+            "3/3 negative markers below threshold"
+        ),
+    )
+
+    def evaluate_observed_paad(_panels, observed_gene_ids, _sample_hk_median):
+        assert observed_gene_ids == sample_by_gene_id
+        return (observed_paad_evidence,)
+
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        evaluate_observed_paad,
+    )
     analysis = {
         "candidate_trace": [
-            {"code": "STAD", "family_label": "carcinoma-gi", "support_score": 0.9},
-            {"code": "PAAD", "family_label": "carcinoma-gi", "support_score": 0.7},
-            {"code": "COAD", "family_label": "carcinoma-gi", "support_score": 0.5},
+            {"code": "STAD"},
+            {"code": "READ"},
+            {"code": "COAD"},
+            {"code": "PAAD"},
+            {"code": "LUAD"},
         ],
     }
-    cte._add_lineage_panel_features(hyps, sample, analysis)
-    paad = hyps.get("PAAD")
-    if paad is None:
-        pytest.skip("PAAD panel did not fire — cannot exercise the gate")
-    public = paad.public_dict() or {}
-    if "lineage_panel" not in set(public.get("evidence_sources", [])):
-        pytest.skip("PAAD has no lineage_panel evidence — gate not exercised")
-    assert public.get("can_select_report_label") is False, (
-        "Cross-cancer-within-family panel promotion survived when "
-        "broad was confident — STAD → PAAD regression is back."
+    hyps: dict = {}
+
+    summary = cte._add_lineage_panel_features(
+        hyps,
+        sample,
+        analysis,
+        sample_tpm_by_gene_id=sample_by_gene_id,
     )
+
+    assert summary is not None
+    assert summary["top_panel"] == "PAAD_DUCTAL"
+    assert summary["top_score"] == 1.0
+    assert summary["promotion"]["promoted"] is False
+    assert summary["promotion"]["code"] == "PAAD"
+    assert summary["promotion"]["blockers"]
+    paad = hyps["PAAD"]
+    public = paad.public_dict() or {}
+    assert "lineage_panel" in set(public.get("evidence_sources", []))
+    assert public.get("can_select_report_label") is False, (
+        "A decisive PAAD program overrode the confident STAD call for "
+        "TCGA-D7-6524-01."
+    )
+    blocked = " ".join(public.get("blocking_reasons") or []).lower()
+    assert "first-pass top-1 (stad) differs" in blocked
+    assert "panel parent_cohort (paad)" in blocked
 
 
 def test_gate_allows_cross_family_when_broad_explicitly_weak():
@@ -599,8 +666,8 @@ def test_main_propagates_lineage_panel_evidence_to_analysis_dict(monkeypatch):
     so analysis-parameters.json carries the verdict without
     consumers having to dig into cancer_type_evidence themselves.
     """
-    from trufflepig import main
     import trufflepig.cancer_type_evidence as _cte
+    from trufflepig import main
 
     fake_summary = {
         "top_panel": "BRCA_BASAL",
@@ -646,11 +713,11 @@ def test_id_path_and_symbol_path_produce_equivalent_scores():
     for the same sample. Pin equivalence so a future change to one
     path can't silently drift from the other.
     """
+    from trufflepig.common import panel_symbols_to_gene_ids
     from trufflepig.lineage_panels import (
         LINEAGE_PANELS,
         evaluate_panels,
     )
-    from trufflepig.common import panel_symbols_to_gene_ids
 
     sample_by_symbol = dict(_HCC1395_SAMPLE)
 

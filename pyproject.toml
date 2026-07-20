@@ -22,7 +22,9 @@ dependencies = [
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    "oncoref>=1.8.113,<2",
+    # >=1.8.136: compact all-source availability lets raw TPM read only the
+    # requested per-source shards instead of materializing the 5M-row union.
+    "oncoref>=1.8.136,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
     # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype
@@ -75,6 +77,7 @@ test = [
     "pytest",
     "pytest-cov",
     "pytest-xdist",
+    "ruff>=0.12,<1",
     "httpx",
     "fastapi>=0.100",
     "python-multipart>=0.0.6",
@@ -93,12 +96,17 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = ["E501"]
+# Keep the initial baseline focused on correctness and ordinary Python style.
+# Import ordering predates Ruff adoption and can be normalized separately;
+# several modules also intentionally defer imports until after runtime setup.
+select = ["E", "F", "W"]
+ignore = ["E402", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-n auto"
+# Keep direct/IDE pytest launches serial.  test.sh is the only supported place
+# that enables xdist, after sizing workers against live RAM and taking the
+# cross-process suite lock.  A root conftest guard rejects unsafe overrides.
 markers = [
     "perf: performance-regression fences",
 ]

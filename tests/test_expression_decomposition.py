@@ -6,13 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trufflepig import expression_decomposition as ed
 from trufflepig.expression_decomposition import (
     decompose_expression,
     resolve_mode,
     signature_score,
     restricted_marker_burden,
-    bulk_aneuploidy_amplitude,
     _group_to_mode,
 )
 
@@ -103,7 +101,8 @@ def test_decompose_mode_nnls_subtracts_only_non_tumor_synthetic(monkeypatch):
     genes = ["EPI1", "IMM1", "STR1", "PRO1"]
 
     def tmpl(on):
-        s = pd.Series(0.0, index=genes); s[on] = 1.0
+        s = pd.Series(0.0, index=genes)
+        s[on] = 1.0
         return s / s.sum() * 1e6
 
     templates = {"immune": tmpl("IMM1"), "stromal": tmpl("STR1"), "epithelial": tmpl("EPI1")}

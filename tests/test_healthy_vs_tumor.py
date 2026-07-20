@@ -7,9 +7,7 @@ the coarse cancer_hint fall where expected.
 Does NOT depend on external cohort files so CI can run offline.
 """
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.healthy_vs_tumor import (

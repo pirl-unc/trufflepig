@@ -8,7 +8,6 @@ that ``high confidence`` misleads the reader — it is not "very
 certain", it is "the estimator had no spread to bound it with".
 """
 
-import pytest
 
 from trufflepig.main import _ci_confidence_tier
 from trufflepig.confidence import ConfidenceTier, compute_purity_confidence

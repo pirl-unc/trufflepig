@@ -6,11 +6,8 @@ sample. These tests pin the root-cause fixes so a future refactor
 can't silently regress them.
 """
 
-import math
 
-import numpy as np
 import pandas as pd
-import pytest
 
 from trufflepig.main import (
     _classify_lineage_calibration_genes,

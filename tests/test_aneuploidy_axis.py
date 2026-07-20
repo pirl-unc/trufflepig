@@ -1,6 +1,4 @@
 """Tests for the cheap chromosome-arm aneuploidy axis."""
-import numpy as np
-import pytest
 
 from trufflepig import aneuploidy_axis as ax
 from trufflepig.aneuploidy_axis import aneuploidy_score, gene_arm_map

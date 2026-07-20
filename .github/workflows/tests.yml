@@ -39,6 +39,9 @@ jobs:
           # trufflepig dependency); the [test] extra adds pytest/xdist/httpx/etc.
           pip install -e ".[test]"
 
+      - name: Run lint checks
+        run: bash lint.sh
+
       - name: Resolve pirlygenes data-bundle version
         id: pirlygenes-data
         # The bundle lives in a DATA_VERSION-stamped dir (bundled_data/v{DATA_VERSION}),

@@ -1,5 +1,7 @@
-import pandas as pd
 from types import SimpleNamespace
+
+import pandas as pd
+import pytest
 
 
 def _selectable(code, selected_by, priority):
@@ -519,6 +521,67 @@ def test_learned_hierarchy_adjudicator_repairs_coherent_cross_lineage_call():
     assert result.details["learned_hierarchy_previous_code"] == "MTC"
 
 
+def test_learned_hierarchy_recomputes_marker_coherence_for_candidate(monkeypatch):
+    """A selected row's marker program must not corroborate another entity."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("MTC", "fused_evidence", (3, 2.0, 5))
+    selected.details.update(
+        _top_hierarchy_details(
+            "NBL",
+            entity_support=0.5351,
+            entity_margin=0.0765,
+            family="NBL",
+            family_support=0.9959,
+            compartment="embryonal",
+            compartment_support=0.9976,
+        )
+    )
+    selected.details["learned_expression_marker_coherence"] = {
+        "status": "consistent",
+        "detected": 6,
+        "total": 8,
+        "required_for_consistent": 4,
+        "detected_fraction": 0.75,
+    }
+    candidate = CancerTypeEvidence(cancer_type="NBL")
+    queried_codes = []
+
+    def marker_coherence(code, sample_tpm_by_symbol):
+        queried_codes.append(code)
+        if code == "NBL":
+            return {
+                "status": "inconsistent",
+                "detected": 1,
+                "total": 8,
+                "required_for_consistent": 4,
+                "detected_fraction": 0.125,
+            }
+        return selected.details["learned_expression_marker_coherence"]
+
+    monkeypatch.setattr(evidence, "_marker_coherence", marker_coherence)
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"MTC": selected, "NBL": candidate},
+        selected,
+        sample_tpm_by_symbol={"PHOX2B": 1.0},
+    )
+
+    assert result is selected
+    assert "NBL" in queried_codes
+    assert candidate.details["learned_hierarchy_entity_marker_coherence"] == {
+        "status": "inconsistent",
+        "detected": 1,
+        "total": 8,
+        "required_for_consistent": 4,
+        "detected_fraction": 0.125,
+    }
+
+
 def test_learned_hierarchy_adjudicator_allows_calibrated_compartment_escape():
     """A strong held-out-calibrated entity vote can correct a shared compartment bias."""
     from trufflepig.cancer_type_evidence import (
@@ -666,6 +729,660 @@ def test_learned_hierarchy_entity_refinement_withholds_below_calibrated_support(
     )
 
     assert result is selected
+
+
+def _add_entity_prediction_vector(details, *predictions):
+    details["learned_expression_hierarchy_votes"] = [
+        {
+            "stage": "entity",
+            "label": predictions[0][0],
+            "probability": predictions[0][1],
+            "top_predictions": [
+                {"label": label, "probability": probability}
+                for label, probability in predictions
+            ],
+        }
+    ]
+    return details
+
+
+def _adjudicate_stad_esca_evidence_scenario(axis_preferences):
+    """Run the final entity adjudicator for one independent-evidence split.
+
+    The learned hierarchy consistently proposes STAD over the currently
+    selected ESCA call.  The caller controls how the five other independent
+    evidence groups vote, tie, or remain unavailable.  This keeps scenario
+    tests at the report-label decision seam instead of testing the internal
+    vote counter in isolation.
+    """
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    def support_pair(preference):
+        if preference == "candidate":
+            return 0.8, 0.2
+        if preference == "selected":
+            return 0.2, 0.8
+        if preference == "tie":
+            return 0.5, 0.5
+        if preference == "unavailable":
+            return 0.0, 0.0
+        raise AssertionError(f"unknown evidence preference: {preference}")
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(cancer_type="STAD")
+
+    candidate.broad_rna_support, selected.broad_rna_support = support_pair(
+        axis_preferences["pan_cancer_signature"]
+    )
+    candidate.rna_marker_support, selected.rna_marker_support = support_pair(
+        axis_preferences["curated_marker_program"]
+    )
+    candidate.fine_reference_support, selected.fine_reference_support = support_pair(
+        axis_preferences["exact_expression_reference"]
+    )
+    (
+        candidate.coarse_composition_support,
+        selected.coarse_composition_support,
+    ) = support_pair(axis_preferences["composition_reference"])
+
+    centroid_preference = axis_preferences["whole_profile_centroid"]
+    if centroid_preference == "candidate":
+        centroid = pd.Series({"STAD": 0.90, "ESCA": 0.80})
+    elif centroid_preference == "selected":
+        centroid = pd.Series({"STAD": 0.80, "ESCA": 0.90})
+    elif centroid_preference == "tie":
+        centroid = pd.Series({"STAD": 0.85, "ESCA": 0.85})
+    elif centroid_preference == "unavailable":
+        centroid = None
+    else:
+        raise AssertionError(
+            f"unknown centroid preference: {centroid_preference}"
+        )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "STAD": candidate},
+        selected,
+        cen=centroid,
+        centroid_confident=centroid is not None,
+    )
+    return result, selected, candidate
+
+
+@pytest.mark.parametrize(
+    (
+        "axis_preferences",
+        "expected_code",
+        "expected_candidate_votes",
+        "expected_selected_votes",
+        "expected_available_axes",
+    ),
+    [
+        pytest.param(
+            {
+                "pan_cancer_signature": "selected",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "selected",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            1,
+            5,
+            6,
+            id="losing-candidate-retains-only-its-own-vote",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "tie",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            3,
+            2,
+            6,
+            id="three-two-one-plurality-does-not-promote",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "unavailable",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "STAD",
+            3,
+            2,
+            5,
+            id="three-of-five-available-is-a-majority",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "selected",
+            },
+            "ESCA",
+            3,
+            3,
+            6,
+            id="even-split-preserves-selected-leaf",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "selected",
+                "curated_marker_program": "candidate",
+                "exact_expression_reference": "selected",
+                "composition_reference": "candidate",
+            },
+            "STAD",
+            4,
+            2,
+            6,
+            id="four-of-six-majority-promotes",
+        ),
+        pytest.param(
+            {
+                "pan_cancer_signature": "candidate",
+                "whole_profile_centroid": "unavailable",
+                "curated_marker_program": "unavailable",
+                "exact_expression_reference": "selected",
+                "composition_reference": "unavailable",
+            },
+            "ESCA",
+            2,
+            1,
+            3,
+            id="majority-with-only-two-supporting-groups-is-insufficient",
+        ),
+    ],
+)
+def test_learned_hierarchy_adjudicates_available_axis_majorities(
+    axis_preferences,
+    expected_code,
+    expected_candidate_votes,
+    expected_selected_votes,
+    expected_available_axes,
+):
+    from trufflepig.cancer_type_evidence import _hypothesis_evidence_channels
+
+    result, selected, candidate = _adjudicate_stad_esca_evidence_scenario(
+        axis_preferences
+    )
+
+    consensus = selected.details["entity_evidence_consensus"]
+    available_axes = sum(axis["available"] for axis in consensus["axes"])
+    assert consensus["candidate_votes"] == expected_candidate_votes
+    assert consensus["selected_votes"] == expected_selected_votes
+    assert available_axes == expected_available_axes
+    assert consensus["available_axis_count"] == expected_available_axes
+    for hypothesis, expected_votes in (
+        (candidate, expected_candidate_votes),
+        (selected, expected_selected_votes),
+    ):
+        consensus_channel = next(
+            row
+            for row in _hypothesis_evidence_channels(hypothesis)
+            if row["channel"] == "entity_evidence_consensus"
+        )
+        assert consensus_channel["support"] == round(
+            expected_votes / expected_available_axes,
+            4,
+        )
+    assert result.cancer_type == expected_code
+    if expected_code == "STAD":
+        assert result is candidate
+        assert result.selected_by == "entity_evidence_consensus"
+        assert consensus["decisive_candidate"] is True
+    else:
+        assert result is selected
+        assert consensus["decisive_candidate"] is False
+
+
+def test_entity_consensus_requires_multiple_independent_evidence_groups():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _entity_evidence_consensus,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    candidate = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.85,
+        fine_reference_support=0.80,
+    )
+    selected = CancerTypeEvidence(
+        cancer_type="ESCA",
+        broad_rna_support=0.45,
+        fine_reference_support=0.20,
+    )
+    candidate.details["entity_evidence_marker_coherence"] = {
+        "status": "consistent",
+        "detected": 9,
+        "detected_fraction": 0.90,
+        "required_for_consistent": 5,
+        "unexpected_low_detected": 0,
+        "total": 10,
+    }
+    selected.details["entity_evidence_marker_coherence"] = {
+        "status": "partial",
+        "detected": 3,
+        "detected_fraction": 0.30,
+        "required_for_consistent": 5,
+        "unexpected_low_detected": 1,
+        "total": 10,
+    }
+
+    result = _entity_evidence_consensus(candidate, selected, details)
+
+    assert result["decisive_candidate"] is True
+    assert result["candidate_votes"] == 4
+    assert result["candidate_nonlearned_votes"] == 3
+
+
+def test_entity_consensus_does_not_promote_a_learned_vote_alone():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _entity_evidence_consensus,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.99,
+            entity_margin=0.98,
+            family="carcinoma-gi",
+            family_support=0.99,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.99),
+        ("ESCA", 0.01),
+    )
+
+    result = _entity_evidence_consensus(
+        CancerTypeEvidence(cancer_type="STAD"),
+        CancerTypeEvidence(cancer_type="ESCA"),
+        details,
+    )
+
+    assert result["candidate_votes"] == 1
+    assert result["candidate_nonlearned_votes"] == 0
+    assert result["decisive_candidate"] is False
+
+
+def test_entity_consensus_does_not_double_count_signature_derived_marker_score():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _entity_evidence_consensus,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    candidate = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.80,
+        family_marker_support=0.95,
+    )
+    selected = CancerTypeEvidence(
+        cancer_type="ESCA",
+        broad_rna_support=0.20,
+        family_marker_support=0.30,
+    )
+    shared_coherence = {
+        "status": "consistent",
+        "detected": 8,
+        "detected_fraction": 0.80,
+        "required_for_consistent": 5,
+        "unexpected_low_detected": 0,
+        "total": 10,
+    }
+    candidate.details.update(
+        {
+            "pan_cancer_signature_marker_coherence": dict(shared_coherence),
+            "pan_cancer_signature_marker_support": 0.95,
+        }
+    )
+    selected.details.update(
+        {
+            "pan_cancer_signature_marker_coherence": dict(shared_coherence),
+            "pan_cancer_signature_marker_support": 0.30,
+        }
+    )
+
+    result = _entity_evidence_consensus(candidate, selected, details)
+    marker_axis = next(
+        axis
+        for axis in result["axes"]
+        if axis["axis"] == "curated_marker_program"
+    )
+
+    assert marker_axis["preference"] == "abstain"
+    assert marker_axis["candidate_support"] == 0.8
+    assert marker_axis["selected_support"] == 0.8
+    assert result["candidate_votes"] == 2
+    assert result["candidate_nonlearned_votes"] == 1
+    assert result["decisive_candidate"] is False
+
+
+def test_entity_consensus_ignores_centroid_when_compartment_is_unconfident():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _entity_evidence_consensus,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    candidate = CancerTypeEvidence(cancer_type="STAD", broad_rna_support=0.80)
+    selected = CancerTypeEvidence(cancer_type="ESCA", broad_rna_support=0.20)
+    weak_centroids = pd.Series({"STAD": 0.10, "ESCA": 0.09})
+
+    unconfident = _entity_evidence_consensus(
+        candidate,
+        selected,
+        details,
+        cen=weak_centroids,
+        centroid_confident=False,
+    )
+    centroid_axis = next(
+        axis
+        for axis in unconfident["axes"]
+        if axis["axis"] == "whole_profile_centroid"
+    )
+
+    assert centroid_axis["available"] is False
+    assert unconfident["candidate_votes"] == 2
+    assert unconfident["candidate_nonlearned_votes"] == 1
+    assert unconfident["decisive_candidate"] is False
+
+    confident = _entity_evidence_consensus(
+        candidate,
+        selected,
+        details,
+        cen=weak_centroids,
+        centroid_confident=True,
+    )
+    assert confident["candidate_votes"] == 3
+    assert confident["candidate_nonlearned_votes"] == 2
+    assert confident["decisive_candidate"] is True
+
+
+def test_learned_hierarchy_uses_multi_axis_consensus_below_single_model_gate():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.broad_rna_support = 0.45
+    selected.fine_reference_support = 0.20
+    selected.details["entity_evidence_marker_coherence"] = {
+        "status": "partial",
+        "detected_fraction": 0.30,
+        "unexpected_low_detected": 1,
+        "total": 10,
+    }
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.85,
+        fine_reference_support=0.80,
+    )
+    candidate.details["entity_evidence_marker_coherence"] = {
+        "status": "consistent",
+        "detected_fraction": 0.90,
+        "unexpected_low_detected": 0,
+        "total": 10,
+    }
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "STAD": candidate},
+        selected,
+    )
+
+    assert result is candidate
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.details["learned_hierarchy_adjudication_mode"] == (
+        "multi_axis_entity_refinement"
+    )
+
+
+def test_multi_axis_consensus_preserves_explicit_negative_fusion_blocker():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("ESCA", "local_expression_reference", (3, 2.0, 4))
+    selected.broad_rna_support = 0.20
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.95,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("STAD", 0.80),
+        ("ESCA", 0.20),
+    )
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.80,
+        fine_reference_support=0.80,
+        can_select_report_label=False,
+        blocking_reasons=("explicit molecular evidence vetoed this label",),
+        label_status="blocked",
+    )
+    candidate.details.update(
+        {
+            "local_reference_explicit_negative_fusion": True,
+            "local_reference_explicit_negative_fusion_details": {
+                "expected_driver": "CLDN18-ARHGAP26",
+                "fusion_record_count": 1,
+            },
+            "entity_evidence_marker_coherence": {
+                "status": "consistent",
+                "detected_fraction": 0.90,
+                "unexpected_low_detected": 0,
+                "total": 10,
+            },
+        }
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "STAD": candidate},
+        selected,
+    )
+
+    assert result is selected
+    assert candidate.can_select_report_label is False
+    assert candidate.label_status == "blocked"
+    assert candidate.blocking_reasons == (
+        "explicit molecular evidence vetoed this label",
+    )
+    assert candidate.details["entity_consensus_hard_blockers"]
+
+
+def test_conflicted_sibling_evidence_abstains_to_registry_parent():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("READ_MSS", "local_expression_reference", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.fine_reference_support = 0.90
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "COAD_MSS",
+            entity_support=0.75,
+            entity_margin=0.55,
+            family="CRC",
+            family_support=0.99,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("COAD_MSS", 0.75),
+        ("READ_MSS", 0.20),
+    )
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(cancer_type="COAD_MSS")
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"READ_MSS": selected, "COAD_MSS": candidate},
+        selected,
+    )
+
+    assert result.cancer_type == "CRC"
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.details["entity_consensus_adjudication_mode"] == (
+        "common_ancestor_abstention"
+    )
+    assert result.details["entity_consensus_previous_code"] == "READ_MSS"
+    assert result.details["entity_consensus_learned_code"] == "COAD"
+    assert result.details["entity_consensus_learned_raw_code"] == "COAD_MSS"
+
+
+def test_negligible_learned_sibling_preference_does_not_trigger_parent_abstention():
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("READ_MSS", "local_expression_reference", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.fine_reference_support = 0.90
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "COAD_MSS",
+            entity_support=0.010,
+            entity_margin=0.001,
+            family="CRC",
+            family_support=0.99,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("COAD_MSS", 0.010),
+        ("READ_MSS", 0.009),
+    )
+    selected.details.update(details)
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"READ_MSS": selected, "COAD_MSS": CancerTypeEvidence("COAD_MSS")},
+        selected,
+    )
+
+    assert result is selected
+    consensus = selected.details["entity_evidence_consensus"]
+    assert consensus["conflicted"] is True
+    assert consensus["credible_learned_candidate"] is False
+
+
+def test_learned_status_vote_supports_parent_entity_not_status_claim():
+    from trufflepig.cancer_type_evidence import (
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("CML", "local_expression_reference", (3, 2.0, 4))
+    selected.details.update(
+        _top_hierarchy_details(
+            "LAML_ELNadv",
+            entity_support=0.99,
+            entity_margin=0.98,
+            family="LAML",
+            family_support=0.99,
+            compartment="heme",
+            compartment_support=0.99,
+        )
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"CML": selected},
+        selected,
+    )
+
+    assert result.cancer_type == "LAML"
+    assert result.cancer_type != "LAML_ELNadv"
+    assert result.details["learned_expression_top_entity_label"] == (
+        "LAML_ELNadv"
+    )
+    assert result.details["learned_hierarchy_adjudication_mode"] == (
+        "high_precision_entity_refinement"
+    )
 
 
 def test_learned_hierarchy_adjudicator_never_overrides_definitive_fusion():
@@ -888,8 +1605,8 @@ def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call
 def test_structural_sarcoma_composition_yields_to_learned_crc_family(monkeypatch):
     """Smooth-muscle/background composition cannot by itself turn close CRC RNA into SARC."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
     monkeypatch.setattr(
@@ -2429,8 +3146,8 @@ def test_local_sarcoma_reference_beats_ranker_only_winning_subtype(monkeypatch):
 def test_learned_expression_classifier_can_rescue_context_supported_type(monkeypatch):
     """A decisive learned full-profile vote can resolve a context-supported ambiguity."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -2511,8 +3228,8 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
 def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(monkeypatch):
     """A very strong learned hierarchy can beat an unsupported primary-expression attractor."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -2583,8 +3300,8 @@ def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(
 def test_learned_expression_classifier_blocks_background_compartment_flip(monkeypatch):
     """A learned sarcoma-like vote stays contextual in a PFO002-style epithelial case."""
     import trufflepig.cancer_type_evidence as evidence
-    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
     import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     monkeypatch.setattr(
         classifier,
@@ -4905,6 +5622,7 @@ def test_subtype_deconvolved_expression_without_subtype_column(monkeypatch):
     ``df[scalar_bool]``.
     """
     import pandas as pd
+
     from trufflepig import cancer_type_evidence as cte
     from trufflepig import reference as ref_module
 

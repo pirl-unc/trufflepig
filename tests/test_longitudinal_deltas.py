@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from trufflepig.analyze.comparison import (
-    AnalyzeSummaryRecord,
     build_analyze_comparison_markdown,
     compute_longitudinal_delta_sets,
     load_analyze_summary_record,
@@ -20,8 +19,6 @@ from trufflepig.analyze.comparison import (
 from trufflepig.analyze.deltas import (
     LongitudinalDelta,
     LongitudinalDeltaSet,
-    ResponseAxisState,
-    TargetShortlistEntry,
     compute_pairwise_deltas,
     parse_response_axes,
     parse_target_shortlist,
@@ -265,7 +262,6 @@ def test_write_deltas_json_rejects_nan(tmp_path):
     values upstream; this is the JSON-serializer-level backstop."""
     import math
 
-    from trufflepig.analyze.deltas import LongitudinalDelta, LongitudinalDeltaSet
 
     bad = LongitudinalDeltaSet(
         before_sample="A",

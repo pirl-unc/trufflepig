@@ -8,8 +8,9 @@ LUAD × mutation class, SCLC × ASCL1/NEUROD1/POU2F3/YAP1, etc.).
 
 from pirlygenes.gene_sets_cancer import (
     cancer_type_registry,
-    cancer_types_in_family,
     cancer_types_by_tissue,
+    cancer_types_in_family,
+    cohort_registry_df,
 )
 
 # trufflepig's subtype enumeration is transitive (flattens oncoref's intermediate
@@ -216,11 +217,11 @@ def test_source_cohort_values_are_canonical():
     """source_cohort should only take values from the canonical cohort
     vocabulary — rejects typos like 'TCGA_BRCA' vs 'TREEHOUSE_POLYA_25_01'.
 
-    The canonical vocabulary is pirlygenes' own expression-reference manifest
-    (``available_cancer_expression_references``) so the allowlist tracks the
-    dependency instead of drifting as new cohorts are added. A handful of
+    The canonical vocabulary is pirlygenes' cohort registry, which covers both
+    expression-reference shards and computed/curated cohorts without loading
+    the multi-gigabyte expression summary. A handful of
     non-expression values (curated literature, the pan-cancer Xena matrix,
-    blank) are not in that manifest and are allowed explicitly.
+    blank) are allowed explicitly.
 
     A registry cohort may also be a *stratification* of a canonical base —
     ``<base>_<stratification>`` (e.g. ``TREEHOUSE_POLYA_25_01`` →
@@ -232,13 +233,9 @@ def test_source_cohort_values_are_canonical():
     trufflepig's CI on upstream data lag. A typo in the *base* still matches no
     canonical prefix and is caught.
     """
-    import pirlygenes as _pirlygenes
-
     df = cancer_type_registry()
     canonical = set(
-        _pirlygenes.available_cancer_expression_references()["source_cohort"]
-        .fillna("")
-        .astype(str)
+        cohort_registry_df()["cohort_id"].fillna("").astype(str)
     )
     valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
     canonical_bases = {c for c in canonical if c}

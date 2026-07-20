@@ -29,8 +29,8 @@ from .plot_strip import default_gene_sets
 # with trufflepig modules that imported them from plot_scatter.
 from trufflepig.cancer_ontology import resolve_cancer_type  # noqa: E402
 from pirlygenes.gene_sets_cancer import (
-    CANCER_TYPE_NAMES, # noqa: E402
-    CANCER_TYPE_ALIASES,
+    CANCER_TYPE_ALIASES as CANCER_TYPE_ALIASES,  # re-exported through trufflepig.plot
+    CANCER_TYPE_NAMES,  # noqa: E402
 )
 
 
