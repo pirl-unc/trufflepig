@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import pirlygenes as _pirlygenes
 from pirlygenes.expression.qc import TECHNICAL_FRACTION
+from pirlygenes.gene_names import get_alias_as_list, get_reverse_alias_as_list
 
 from ._data import TRUFFLEPIG_DATA_DIR
 from .clean_tpm import assert_clean_tpm
@@ -38,6 +39,8 @@ _SUBTYPE_GROUP_COLS = ("cancer_code", "subtype")
 _CANCER_REFERENCE_EMPTY_COLUMNS = [
     "Ensembl_Gene_ID",
     "Symbol",
+    "Proteoform_ID",
+    "Member_Ensembl_Gene_IDs",
     "cancer_code",
     "source_cohort",
     "source_project",
@@ -96,13 +99,12 @@ def _artifact_reference_manifest(oncoref) -> pd.DataFrame:
     )
     if not callable(availability_accessor):
         raise AttributeError("oncoref has no artifact manifest accessor")
-    # ``sample_qc='artifact'`` is not accepted by the availability API in
-    # oncoref 1.8.x.  Availability under ``pass`` still means the percentile
-    # shard exists; trufflepig reads that shard under its recorded build policy.
+    # The fallback must ask about the shipped artifact's recorded QC policy.
+    # A pass-only query incorrectly hides pass-or-warn artifacts such as MTC.
     return availability_accessor(
         normalize="tpm_clean",
         reference_source="artifact",
-        sample_qc="pass",
+        sample_qc="artifact",
     )
 
 
@@ -687,10 +689,13 @@ _CANCER_REFERENCE_MODE_ALIASES = {
     "tpm_clean": "tpm_clean",
     "clean_tpm": "tpm_clean",
     "tpm_log1p": "tpm_log1p",
+    "log1p_tpm": "tpm_log1p",
     "tpm_raw_log1p": "tpm_log1p",
     "raw_tpm_log1p": "tpm_log1p",
+    "log1p_raw_tpm": "tpm_log1p",
     "tpm_clean_log1p": "tpm_clean_log1p",
     "clean_tpm_log1p": "tpm_clean_log1p",
+    "log1p_clean_tpm": "tpm_clean_log1p",
     "tpm_clean_biological": "tpm_clean_biological",
     "clean_tpm_biological": "tpm_clean_biological",
     "biological_clean_tpm": "tpm_clean_biological",
@@ -761,6 +766,25 @@ def _cancer_reference_modes(normalize) -> list[str]:
             f"supported: {supported}"
         )
     return modes
+
+
+def _cancer_reference_genes(genes) -> list[str] | None:
+    """Restore pirlygenes' case-, whitespace-, and alias-tolerant filters."""
+    if genes is None:
+        return None
+    requested = [genes] if isinstance(genes, str) else list(genes)
+    expanded: list[str] = []
+    for gene in requested:
+        token = str(gene).strip().upper()
+        for candidate in (
+            token,
+            *get_alias_as_list(token),
+            *get_reverse_alias_as_list(token),
+        ):
+            normalized = str(candidate).strip().upper()
+            if normalized and normalized not in expanded:
+                expanded.append(normalized)
+    return expanded
 
 
 def _raw_reference_shard_path(root, *, cancer_code: str, source_cohort: str):
@@ -871,6 +895,11 @@ def _bounded_raw_reference_expression(
             gene_id_style="pirlygenes",
             alias_expand_remaps=True,
         )
+        frame = oncoref_expression._annotate_reference_proteoform_bridge(
+            frame,
+            kind="cdna",
+            identity_style="pirlygenes",
+        )
         raw_parts.append(frame)
 
     if raw_parts:
@@ -880,6 +909,8 @@ def _bounded_raw_reference_expression(
             columns=[
                 "Ensembl_Gene_ID",
                 "Symbol",
+                "Proteoform_ID",
+                "Member_Ensembl_Gene_IDs",
                 "cancer_code",
                 "source_cohort",
                 *_RAW_REFERENCE_VALUE_COLUMNS,
@@ -906,6 +937,8 @@ def _bounded_raw_reference_expression(
         core = [
             "Ensembl_Gene_ID",
             "Symbol",
+            "Proteoform_ID",
+            "Member_Ensembl_Gene_IDs",
             "cancer_code",
             "normalization",
             "expression",
@@ -1085,7 +1118,7 @@ def cancer_reference_expression(
         if cancer_types is None or isinstance(cancer_types, str)
         else list(cancer_types)
     )
-    genes = genes if genes is None or isinstance(genes, str) else list(genes)
+    genes = _cancer_reference_genes(genes)
     accessor = getattr(oncoref, "cancer_reference_expression", None)
     if accessor is None:
         if format == "long":

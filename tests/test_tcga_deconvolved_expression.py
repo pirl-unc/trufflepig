@@ -705,7 +705,7 @@ def test_cancer_reference_manifest_falls_back_to_artifact_availability(
         {
             "normalize": "tpm_clean",
             "reference_source": "artifact",
-            "sample_qc": "pass",
+            "sample_qc": "artifact",
         }
     ]
     assert set(result["cancer_code"]) == {"SARC_ESS_HG", "NEC_MERKEL"}
@@ -905,14 +905,14 @@ def test_cancer_reference_expression_uses_artifact_view(monkeypatch):
 
     result = gsc.cancer_reference_expression(
         cancer_types=["NEC_MERKEL"],
-        genes=["MKI67"],
+        genes=[" mki67 ", "B7-H3"],
     )
 
     assert result.empty
     assert calls == [
         {
             "cancer_types": ["NEC_MERKEL"],
-            "genes": ["MKI67"],
+            "genes": ["MKI67", "B7-H3", "CD276"],
             "normalize": "tpm_clean",
             "format": "long",
             "include_provenance": True,
@@ -990,7 +990,7 @@ def test_cancer_reference_expression_reads_bounded_raw_qc_shards(
 
     result = gsc.cancer_reference_expression(
         cancer_types=["ACC", "MTC"],
-        genes=["MKI67"],
+        genes=[" mki67 "],
         normalize=["tpm", "tpm_log1p"],
     )
 
@@ -998,6 +998,8 @@ def test_cancer_reference_expression_reads_bounded_raw_qc_shards(
     assert result.attrs["reference_backend"] == "oncoref_bounded_summary_shards"
     assert result.attrs["sample_qc"] == "all"
     assert set(result["normalization"]) == {"TPM", "TPM_log1p"}
+    assert {"Proteoform_ID", "Member_Ensembl_Gene_IDs"}.issubset(result.columns)
+    assert result[["Proteoform_ID", "Member_Ensembl_Gene_IDs"]].notna().all().all()
     for code in ("ACC", "MTC"):
         rows = result[result["cancer_code"].eq(code)].set_index("normalization")
         assert rows.loc["TPM_log1p", "expression"] == pytest.approx(
@@ -1020,15 +1022,15 @@ def test_real_cancer_reference_expression_exposes_raw_and_clean_modes(monkeypatc
     # Exercise the compatibility aliases as well as every distinct value space.
     modes = [
         "raw_tpm",
-        "raw_tpm_log1p",
+        "log1p_raw_tpm",
         "clean_tpm",
-        "clean_tpm_log1p",
+        "log1p_clean_tpm",
         "biological_clean_tpm",
     ]
 
     result = gsc.cancer_reference_expression(
         cancer_types=["MTC"],
-        genes=["MKI67"],
+        genes=[" mki67 "],
         normalize=modes,
     )
 
@@ -1043,6 +1045,7 @@ def test_real_cancer_reference_expression_exposes_raw_and_clean_modes(monkeypatc
         "GSE32662_PRINGLE_2012",
         "GSE32662_PRINGLE_2012_MTC",
     }
+    assert result[["Proteoform_ID", "Member_Ensembl_Gene_IDs"]].notna().all().all()
     values = result.set_index("normalization")
     for column in ("expression", "q1", "q3"):
         assert values.loc["TPM_log1p", column] == pytest.approx(
@@ -1062,7 +1065,7 @@ def test_real_cancer_reference_expression_mixed_modes_wide():
     result = gsc.cancer_reference_expression(
         cancer_types=["MTC"],
         genes=["MKI67"],
-        normalize=["tpm", "tpm_log1p", "tpm_clean", "tpm_clean_log1p"],
+        normalize=["tpm", "log1p_tpm", "tpm_clean", "tpm_clean_log1p"],
         format="wide",
     )
 
