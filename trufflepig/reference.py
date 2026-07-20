@@ -57,55 +57,55 @@ _CANCER_REFERENCE_EMPTY_COLUMNS = [
 
 
 def _artifact_reference_manifest(oncoref) -> pd.DataFrame:
-    """Return the compact manifest for the artifact-backed expression view.
-
-    The summary-row availability API is gene-independent but not lightweight:
-    oncoref 1.8.132 builds it by materializing the roughly five-million-row
-    reference summary.  Artifact build metadata is a small CSV emitted beside
-    the percentile shards and contains the exact source identity and sample
-    count served by ``reference_source="artifact"``.
-
-    Current bundles require one metadata row per percentile shard.  Older
-    supported bundles that lack the sidecar fall back to artifact availability,
-    whose implementation enumerates shard filenames and never touches the
-    summary expression frame.
-    """
-    metadata_accessor = getattr(
-        oncoref, "expression_artifact_build_metadata", None
-    )
-    shard_accessor = getattr(oncoref, "available_percentile_cohorts", None)
-    if callable(metadata_accessor) and callable(shard_accessor):
-        # Enumerating shards ensures the released bundle is present. Reading
-        # optional metadata first on a cold install returns an empty frame;
-        # caching the ensuing compatibility fallback then permanently omits
-        # valid direct cohorts such as NBL, MTC, and SARC_MYXLPS in that process.
-        available_codes = frozenset(str(code) for code in shard_accessor())
-        metadata = metadata_accessor(auto_fetch=False, on_missing="empty")
-        if {"cancer_code", "source_cohort"}.issubset(metadata.columns):
-            manifest = metadata[
-                metadata["cancer_code"].astype(str).isin(available_codes)
-            ].copy()
-            metadata_codes = frozenset(manifest["cancer_code"].astype(str))
-            if metadata_codes == available_codes:
-                if "n_cohort_samples" in manifest.columns:
-                    manifest["n_samples"] = pd.to_numeric(
-                        manifest["n_cohort_samples"], errors="coerce"
-                    )
-                manifest["available"] = True
-                return manifest
-
-    availability_accessor = getattr(
-        oncoref, "cancer_reference_expression_availability", None
-    )
-    if not callable(availability_accessor):
-        raise AttributeError("oncoref has no artifact manifest accessor")
-    # The fallback must ask about the shipped artifact's recorded QC policy.
-    # A pass-only query incorrectly hides pass-or-warn artifacts such as MTC.
-    return availability_accessor(
+    """Return loader identities enriched with optional artifact sample counts."""
+    manifest = oncoref.cancer_reference_expression_availability(
         normalize="tpm_clean",
         reference_source="artifact",
         sample_qc="artifact",
     )
+    if not {"cancer_code", "source_cohort"}.issubset(manifest.columns):
+        raise ValueError("artifact availability lacks loader identity columns")
+
+    # Availability both ensures the bundle and defines the loader contract.
+    # Metadata can enrich it, but must never replace source_cohort aliases.
+    try:
+        metadata = oncoref.expression_artifact_build_metadata(
+            auto_fetch=False,
+            on_missing="empty",
+        )
+    except Exception:  # noqa: BLE001 - metadata is optional enrichment
+        return manifest
+    if "cancer_code" not in metadata.columns or metadata.empty:
+        return manifest
+
+    enrichment = pd.DataFrame({"cancer_code": metadata["cancer_code"].astype(str)})
+    if "n_cohort_samples" in metadata.columns:
+        enrichment["_metadata_n_samples"] = pd.to_numeric(
+            metadata["n_cohort_samples"], errors="coerce"
+        )
+    if "processing_pipeline" in metadata.columns:
+        enrichment["_metadata_processing_pipeline"] = metadata[
+            "processing_pipeline"
+        ]
+    enrichment = enrichment.drop_duplicates("cancer_code", keep="first")
+    manifest = manifest.copy()
+    manifest["cancer_code"] = manifest["cancer_code"].astype(str)
+    manifest = manifest.merge(
+        enrichment,
+        on="cancer_code",
+        how="left",
+        validate="many_to_one",
+    )
+    for target, source in (
+        ("n_samples", "_metadata_n_samples"),
+        ("processing_pipeline", "_metadata_processing_pipeline"),
+    ):
+        if source not in manifest.columns:
+            continue
+        current = manifest.get(target, pd.Series(pd.NA, index=manifest.index))
+        manifest[target] = manifest[source].where(manifest[source].notna(), current)
+        manifest = manifest.drop(columns=source)
+    return manifest
 
 
 def _parse_pan_value_column(col: str) -> tuple[str, int] | None:
@@ -831,6 +831,8 @@ def _bounded_raw_reference_expression(
         out.attrs["availability"] = availability.to_dict("records")
         out.attrs["missing_requests"] = availability.to_dict("records")
         out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+        out.attrs["reference_source"] = "summary_rows_all"
+        out.attrs["sample_qc"] = "all"
         return out
 
     # Wide output cannot encode source identity. Match oncoref's documented
@@ -967,6 +969,14 @@ def _bounded_raw_reference_expression(
             sort=False,
         ).reset_index()
         out.columns.name = None
+        expected = [
+            f"{code}_TPM_raw"
+            for code in dict.fromkeys(available["cancer_code"].astype(str))
+        ]
+        for column in expected:
+            if column not in out.columns:
+                out[column] = np.nan
+        out = out[["Ensembl_Gene_ID", "Symbol", *expected]]
 
     out.attrs["availability"] = availability.to_dict("records")
     out.attrs["missing_requests"] = availability.loc[
@@ -975,6 +985,7 @@ def _bounded_raw_reference_expression(
         .astype(bool)
     ].to_dict("records")
     out.attrs["reference_backend"] = "oncoref_bounded_summary_shards"
+    out.attrs["reference_source"] = "summary_rows_all"
     out.attrs["sample_qc"] = "all"
     return out
 
@@ -1033,6 +1044,7 @@ def _combine_cancer_reference_parts(
     parts: list[pd.DataFrame],
     *,
     format: str,
+    labels: list[str] | None = None,
 ) -> pd.DataFrame:
     if not parts:
         if format == "long":
@@ -1063,29 +1075,51 @@ def _combine_cancer_reference_parts(
                 sort=False,
             )
 
-    attrs = dict(parts[0].attrs)
+    attrs = dict(parts[0].attrs) if len(parts) == 1 else {}
     for attr_name in ("availability", "missing_requests"):
-        attrs[attr_name] = [
+        records = [
             record
             for part in parts
             for record in part.attrs.get(attr_name, [])
         ]
-    attrs["compatibility_transforms"] = list(
-        dict.fromkeys(
+        attrs[attr_name] = sorted(
+            records,
+            key=lambda record: (
+                str(record.get("normalization", "")),
+                str(record.get("cancer_code", "")),
+                str(record.get("source_cohort", "")),
+            ),
+        )
+    attrs["compatibility_transforms"] = sorted(
+        {
             transform
             for part in parts
             for transform in part.attrs.get("compatibility_transforms", [])
-        )
+        }
     )
-    backends = list(
-        dict.fromkeys(
-            str(part.attrs.get("reference_backend", "oncoref_artifact"))
-            for part in parts
-        )
+
+    route_attrs = (
+        "reference_backend",
+        "reference_source",
+        "sample_qc",
+        "artifact_sample_qc",
+        "expression_unit",
     )
-    attrs["reference_backend"] = (
-        backends[0] if len(backends) == 1 else "+".join(backends)
-    )
+    provenance = {}
+    for label, part in zip(labels or [""] * len(parts), parts):
+        provenance[label] = {
+            key: part.attrs[key]
+            for key in route_attrs
+            if key in part.attrs and pd.notna(part.attrs[key])
+        }
+    attrs["normalization_provenance"] = {
+        label: provenance[label] for label in sorted(provenance)
+    }
+    for key in route_attrs:
+        values = {details.get(key) for details in provenance.values()}
+        if len(values) == 1 and None not in values:
+            attrs[key] = values.pop()
+
     out.attrs = attrs
     return out
 
@@ -1107,6 +1141,10 @@ def cancer_reference_expression(
     inspect raw values and use clean/log-clean values downstream without
     materializing the multi-gigabyte source-union frame or downloading the
     roughly 21 GB collection of per-sample source matrices.
+
+    ``df.attrs["normalization_provenance"]`` records the backend, source view,
+    and QC policy for each returned normalization. Mixed raw/clean results omit
+    conflicting top-level route attributes rather than implying one shared QC.
     """
     import oncoref
 
@@ -1166,7 +1204,11 @@ def cancer_reference_expression(
                 _adapt_cancer_reference_mode(frame, mode=mode, format=format)
             )
 
-    df = _combine_cancer_reference_parts(parts, format=format)
+    df = _combine_cancer_reference_parts(
+        parts,
+        format=format,
+        labels=[_CANCER_REFERENCE_MODE_LABELS[mode] for mode in modes],
+    )
     clean_requested = "tpm_clean" in modes
     if clean_requested and not df.empty:
         if format == "long":

@@ -428,10 +428,10 @@ def test_subtype_deconvolved_expression_rejects_native_scale_opt_out():
         gsc.subtype_deconvolved_expression(renormalize_to_million=False)
 
 
-def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
+def test_cancer_reference_manifest_uses_loader_identity_and_metadata_counts(
     monkeypatch,
 ):
-    """Manifest discovery must never materialize the reference-summary frame."""
+    """Loader provenance wins while compact build counts remain available."""
     import oncoref
     import oncoref.expression as oncoref_expression
     import pandas as pd
@@ -442,16 +442,28 @@ def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
     metadata = pd.DataFrame(
         {
             "cancer_code": ["NEC_MERKEL"],
-            "source_cohort": ["GSE235092_MERKEL_2024"],
+            "source_cohort": ["STALE_METADATA_ALIAS"],
             "n_cohort_samples": [91],
             "processing_pipeline": ["fixture"],
         }
     )
     metadata_calls = []
+    availability_calls = []
 
     def compact_metadata(**kwargs):
         metadata_calls.append(kwargs)
         return metadata.copy()
+
+    def compact_availability(**kwargs):
+        availability_calls.append(kwargs)
+        return pd.DataFrame(
+            {
+                "cancer_code": ["NEC_MERKEL"],
+                "source_cohort": ["GSE235092_MERKEL_2024"],
+                "available": [True],
+                "n_reference_samples": [92],
+            }
+        )
 
     def reject_heavy_path(*args, **kwargs):
         raise AssertionError("summary expression frame was loaded")
@@ -473,13 +485,8 @@ def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
     )
     monkeypatch.setattr(
         oncoref,
-        "available_percentile_cohorts",
-        lambda: ["NEC_MERKEL"],
-    )
-    monkeypatch.setattr(
-        oncoref,
         "cancer_reference_expression_availability",
-        reject_heavy_path,
+        compact_availability,
     )
     monkeypatch.setattr(
         oncoref_expression,
@@ -503,6 +510,13 @@ def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
         gsc._cancer_reference_manifest_cached.cache_clear()
 
     assert metadata_calls == [{"auto_fetch": False, "on_missing": "empty"}]
+    assert availability_calls == [
+        {
+            "normalize": "tpm_clean",
+            "reference_source": "artifact",
+            "sample_qc": "artifact",
+        }
+    ]
     assert result[["cancer_code", "source_cohort"]].to_dict("records") == [
         {
             "cancer_code": "NEC_MERKEL",
@@ -510,9 +524,10 @@ def test_cancer_reference_manifest_uses_artifact_metadata_without_summary(
         }
     ]
     assert result.loc[0, "n_samples"] == 91
+    assert result.loc[0, "processing_pipeline"] == "fixture"
 
 
-def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
+def test_cancer_reference_manifest_reads_availability_before_optional_metadata(
     monkeypatch,
 ):
     """Cold discovery must not cache the pre-bundle compatibility fallback."""
@@ -523,14 +538,25 @@ def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
 
     bundle_ready = False
 
-    def available_shards():
-        nonlocal bundle_ready
-        bundle_ready = True
-        return ["NBL", "MTC", "SARC_MYXLPS"]
-
     def build_metadata(**kwargs):
         assert bundle_ready, "metadata was read before the shard bundle was present"
         assert kwargs == {"auto_fetch": False, "on_missing": "empty"}
+        return pd.DataFrame(
+            {
+                "cancer_code": ["NBL", "MTC", "SARC_MYXLPS"],
+                "source_cohort": ["STALE_NBL", "STALE_MTC", "STALE_MYXLPS"],
+                "n_cohort_samples": [155, 49, 28],
+            }
+        )
+
+    def artifact_availability(**kwargs):
+        nonlocal bundle_ready
+        bundle_ready = True
+        assert kwargs == {
+            "normalize": "tpm_clean",
+            "reference_source": "artifact",
+            "sample_qc": "artifact",
+        }
         return pd.DataFrame(
             {
                 "cancer_code": ["NBL", "MTC", "SARC_MYXLPS"],
@@ -539,7 +565,7 @@ def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
                     "GSE32662_PRINGLE_2012",
                     "GSE30929_SINGER_2007_LPS",
                 ],
-                "n_cohort_samples": [155, 49, 28],
+                "available": [True, True, True],
             }
         )
 
@@ -553,7 +579,6 @@ def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
         ]
     )
     gsc._cancer_reference_manifest_cached.cache_clear()
-    monkeypatch.setattr(oncoref, "available_percentile_cohorts", available_shards)
     monkeypatch.setattr(
         oncoref,
         "expression_artifact_build_metadata",
@@ -562,9 +587,7 @@ def test_cancer_reference_manifest_fetches_shards_before_optional_metadata(
     monkeypatch.setattr(
         oncoref,
         "cancer_reference_expression_availability",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("complete post-fetch metadata should avoid fallback")
-        ),
+        artifact_availability,
     )
     monkeypatch.setattr(
         cancer_ontology,
@@ -617,14 +640,13 @@ def test_cancer_reference_manifest_requires_a_matching_artifact_shard(monkeypatc
     )
     monkeypatch.setattr(
         oncoref,
-        "available_percentile_cohorts",
-        lambda: ["NEC_MERKEL"],
-    )
-    monkeypatch.setattr(
-        oncoref,
         "cancer_reference_expression_availability",
-        lambda **kwargs: (_ for _ in ()).throw(
-            AssertionError("complete metadata should not need availability")
+        lambda **kwargs: pd.DataFrame(
+            {
+                "cancer_code": ["NEC_MERKEL"],
+                "source_cohort": ["GSE235092_MERKEL_2024"],
+                "available": [True],
+            }
         ),
     )
     monkeypatch.setattr(
@@ -683,11 +705,6 @@ def test_cancer_reference_manifest_falls_back_to_artifact_availability(
     )
     monkeypatch.setattr(
         oncoref,
-        "available_percentile_cohorts",
-        lambda: ["SARC_ESS_HG", "NEC_MERKEL"],
-    )
-    monkeypatch.setattr(
-        oncoref,
         "cancer_reference_expression_availability",
         artifact_availability,
     )
@@ -723,16 +740,14 @@ def test_cancer_reference_manifest_preserves_verified_loader_identity(
     metadata = pd.DataFrame(
         {
             "cancer_code": ["SARC_WDLPS"],
-            "source_cohort": ["TREEHOUSE_POLYA_25_01_TCGA_SUBSET"],
+            "source_cohort": ["METADATA_ALIAS"],
             "n_cohort_samples": [8],
         }
     )
     registry = pd.DataFrame(
         {
             "code": ["SARC_WDLPS"],
-            "source_cohort": [
-                "TREEHOUSE_POLYA_25_01_TCGA_SARC_HISTOLOGY"
-            ],
+            "source_cohort": ["REGISTRY_ALIAS"],
             "expression_source": ["Treehouse"],
             "reference_source": ["own_cohort"],
             "classification_reference_code": ["SARC_WDLPS"],
@@ -746,8 +761,14 @@ def test_cancer_reference_manifest_preserves_verified_loader_identity(
     )
     monkeypatch.setattr(
         oncoref,
-        "available_percentile_cohorts",
-        lambda: ["SARC_WDLPS"],
+        "cancer_reference_expression_availability",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "cancer_code": ["SARC_WDLPS"],
+                "source_cohort": ["VERIFIED_LOADER_IDENTITY"],
+                "available": [True],
+            }
+        ),
     )
     monkeypatch.setattr(
         cancer_ontology,
@@ -762,7 +783,7 @@ def test_cancer_reference_manifest_preserves_verified_loader_identity(
     assert result[["cancer_code", "source_cohort"]].to_dict("records") == [
         {
             "cancer_code": "SARC_WDLPS",
-            "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_SUBSET",
+            "source_cohort": "VERIFIED_LOADER_IDENTITY",
         }
     ]
 
@@ -803,8 +824,14 @@ def test_cancer_reference_manifest_excludes_unavailable_parent_routes(
     )
     monkeypatch.setattr(
         oncoref,
-        "available_percentile_cohorts",
-        lambda: ["NEC_MERKEL"],
+        "cancer_reference_expression_availability",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "cancer_code": ["NEC_MERKEL"],
+                "source_cohort": ["GSE235092_MERKEL_2024"],
+                "available": [True],
+            }
+        ),
     )
     monkeypatch.setattr(
         cancer_ontology,
@@ -1085,6 +1112,59 @@ def test_real_cancer_reference_expression_mixed_modes_wide():
     )
 
 
+def test_real_mixed_wide_preserves_requested_columns_for_empty_gene_filter():
+    """Availability defines the public schema even when no gene rows match."""
+    result = gsc.cancer_reference_expression(
+        cancer_types=["MTC"],
+        genes=["NOT_A_REAL_GENE"],
+        normalize=["tpm", "tpm_clean"],
+        format="wide",
+    )
+
+    assert result.empty
+    assert result.columns.tolist() == [
+        "Ensembl_Gene_ID",
+        "Symbol",
+        "MTC_TPM",
+        "MTC_TPM_clean",
+    ]
+
+
+def test_real_mixed_mode_provenance_is_order_independent():
+    """Mixed raw/clean metadata describes each mode instead of the first one."""
+    forward = gsc.cancer_reference_expression(
+        cancer_types=["MTC"],
+        genes=["MKI67"],
+        normalize=["tpm", "tpm_clean"],
+        format="wide",
+    )
+    reverse = gsc.cancer_reference_expression(
+        cancer_types=["MTC"],
+        genes=["MKI67"],
+        normalize=["tpm_clean", "tpm"],
+        format="wide",
+    )
+
+    assert forward.attrs["normalization_provenance"] == reverse.attrs[
+        "normalization_provenance"
+    ]
+    provenance = forward.attrs["normalization_provenance"]
+    assert provenance["TPM"] == {
+        "reference_backend": "oncoref_bounded_summary_shards",
+        "reference_source": "summary_rows_all",
+        "sample_qc": "all",
+    }
+    assert provenance["TPM_clean"]["reference_backend"] == "oncoref_artifact"
+    assert provenance["TPM_clean"]["reference_source"] == "artifact"
+    assert provenance["TPM_clean"]["sample_qc"] == "artifact"
+    for attr_name in ("reference_backend", "reference_source", "sample_qc"):
+        assert attr_name not in forward.attrs
+        assert attr_name not in reverse.attrs
+    assert [row["normalization"] for row in forward.attrs["availability"]] == [
+        row["normalization"] for row in reverse.attrs["availability"]
+    ]
+
+
 def test_real_raw_qc_preserves_source_cohorts_and_wide_selects_richest(monkeypatch):
     """Long QC stays source-specific; source-less wide output is deterministic."""
     import oncoref.expression as oncoref_expression
@@ -1126,24 +1206,24 @@ def test_real_raw_qc_preserves_source_cohorts_and_wide_selects_richest(monkeypat
     assert wide.loc[0, "SARC_DDLPS_TPM"] == pytest.approx(richest)
 
 
-def test_real_cancer_reference_manifest_matches_artifact_sidecar(monkeypatch):
-    """The installed bundle advertises exactly its compact artifact identities."""
+def test_real_cancer_reference_manifest_matches_loader_availability(monkeypatch):
+    """The manifest publishes the compact artifact loader's exact identities."""
     import oncoref
     import oncoref.expression as oncoref_expression
 
     def reject_summary(*args, **kwargs):
         raise AssertionError("summary expression frame was loaded")
 
-    metadata = oncoref.expression_artifact_build_metadata(
-        auto_fetch=False,
-        on_missing="empty",
+    availability = oncoref.cancer_reference_expression_availability(
+        normalize="tpm_clean",
+        reference_source="artifact",
+        sample_qc="artifact",
     )
-    available_codes = set(oncoref.available_percentile_cohorts())
-    available = metadata["cancer_code"].astype(str).isin(available_codes)
+    available = availability["available"].fillna(False).astype(bool)
     expected = set(
         zip(
-            metadata.loc[available, "cancer_code"].astype(str),
-            metadata.loc[available, "source_cohort"].astype(str),
+            availability.loc[available, "cancer_code"].astype(str),
+            availability.loc[available, "source_cohort"].astype(str),
         )
     )
 
@@ -1168,7 +1248,7 @@ def test_real_cancer_reference_manifest_matches_artifact_sidecar(monkeypatch):
     assert len(result) == len(expected)
 
 
-@pytest.mark.parametrize("code", ["MTC", "SARC_WDLPS", "SARC_ESS_HG"])
+@pytest.mark.parametrize("code", ["LUAD", "MTC", "SARC_WDLPS", "SARC_ESS_HG"])
 def test_manifest_source_identity_matches_loaded_artifact(code):
     """Every advertised source identity must be returned by its expression shard."""
     manifest = gsc.cancer_reference_manifest()
