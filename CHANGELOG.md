@@ -4,12 +4,11 @@ This file records user-facing CLI and library changes that are not
 inferable from a diff. Internal refactors and bug-fixes go in commit
 messages, not here.
 
-The format is loosely based on [Keep a Changelog](https://keepachangelog.com/),
-but this project does not version-tag releases yet — entries are grouped
-under the merging PR title and the date the breaking change landed on
-`main`.
+The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
+Shipped entries are grouped under their release version; work not yet assigned
+to a release remains grouped under its merging PR.
 
-## Unreleased — staged cancer-type evidence graph
+## 1.22.0 — 2026-07-20 — staged cancer-type evidence graph
 
 ### Entity uncertainty and parent abstention
 
