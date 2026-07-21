@@ -2661,7 +2661,16 @@ def _add_contrast_discriminator_features(
                 1.0,
             )
         )
-        hypothesis = _hypothesis(hypotheses, winner_code)
+        # A parent-level contrast agreeing with an active child is explanatory
+        # evidence for that child, not a competing report-label hypothesis. If
+        # it were placed on a new parent row, later hierarchy/centroid fusion
+        # could broaden the already-more-specific child call to its parent.
+        evidence_code = (
+            top_code
+            if same_top and _code_has_registry_ancestor(top_code, winner_code)
+            else winner_code
+        )
+        hypothesis = _hypothesis(hypotheses, evidence_code)
         hypothesis.add_source("contrast_discriminator")
         hypothesis.expression_reference_cancer_type = (
             hypothesis.expression_reference_cancer_type or winner_code

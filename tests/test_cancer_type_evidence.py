@@ -5902,12 +5902,105 @@ def test_parent_contrast_support_does_not_demote_an_agreeing_child(monkeypatch):
     )
 
     assert result["selected"]["cancer_type"] == "STAD_EBV"
-    parent = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
-    assert "contrast_discriminator" in parent["evidence_sources"]
-    assert parent["contrast_discriminator_context_match_code"] == "STAD_EBV"
-    ambiguity = parent["contrast_discriminator_active_ambiguity"]
+    child = next(
+        row for row in result["evidence"] if row["cancer_type"] == "STAD_EBV"
+    )
+    assert "contrast_discriminator" in child["evidence_sources"]
+    assert child["contrast_discriminator_context_match_code"] == "STAD_EBV"
+    assert all(
+        "contrast_discriminator" not in row["evidence_sources"]
+        for row in result["evidence"]
+        if row["cancer_type"] == "STAD"
+    )
+    ambiguity = child["contrast_discriminator_active_ambiguity"]
     assert ambiguity["same_top"] is True
     assert ambiguity["active_for_report_label"] is False
+
+
+def test_agreeing_parent_contrast_survives_hierarchy_centroid_fusion_on_child(
+    monkeypatch,
+):
+    """Downstream whole-profile support cannot broaden an agreeing child call."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _stad_chol_contrast_rows,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series({"STAD": 0.91}), True),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_pan_cancer_signature_marker_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_expression_classifier_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_local_expression_reference_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_lineage_panel_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
+
+    def add_parent_compatible_hierarchy(hypotheses, _sample):
+        for hypothesis in hypotheses.values():
+            hypothesis.details.update(
+                {
+                    "learned_expression_hierarchy_support": 0.90,
+                    "learned_expression_entity_support": 0.90,
+                    "learned_expression_entity_label": "STAD",
+                    "learned_expression_family_support": 0.95,
+                    "learned_expression_family_label": "carcinoma-gi",
+                    "learned_expression_compartment_support": 0.98,
+                    "learned_expression_compartment_label": "epithelial",
+                }
+            )
+
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_hierarchy_candidate_features",
+        add_parent_compatible_hierarchy,
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CDX2": 80.0,
+                "CLDN18": 100.0,
+                "GKN1": 60.0,
+                "KRT19": 0.1,
+                "EPCAM": 0.1,
+                "KRT7": 0.1,
+                "SOX9": 0.1,
+                "HNF1B": 0.1,
+            }
+        ),
+        _analysis(("STAD_EBV", 1.0)),
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD_EBV"
+    assert result["selected"]["fused_evidence_centroid_support"] == 1.0
+    assert result["selected"]["learned_expression_hierarchy_support"] == 0.9
+    assert "contrast_discriminator" in result["selected"]["evidence_sources"]
+    assert all(
+        "contrast_discriminator" not in row["evidence_sources"]
+        for row in result["evidence"]
+        if row["cancer_type"] == "STAD"
+    )
 
 
 def test_parent_contrast_stays_nonselecting_for_an_unrelated_top_context(monkeypatch):
