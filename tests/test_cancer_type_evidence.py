@@ -5788,6 +5788,46 @@ def _laml_cml_contrast_rows():
     return tuple(rows)
 
 
+def _crc_stad_contrast_rows():
+    """A valid but non-strong parent contrast for consensus safety tests."""
+    rows = []
+    for favors, primary, supporting in (
+        ("CRC", ("KRT20",), ("CDH17",)),
+        ("STAD", ("CLDN18",), ("GKN1",)),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "CRC_vs_STAD",
+                    "type_a": "CRC",
+                    "type_b": "STAD",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "curated-parent-contrast",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
+def _stad_program_expression():
+    return _expression_frame(
+        {
+            "CLDN18": 100.0,
+            "GKN1": 60.0,
+            "CDX2": 40.0,
+            "MUC5AC": 30.0,
+            "MUC6": 20.0,
+            "TFF1": 25.0,
+            "KRT20": 0.1,
+            "CDH17": 0.1,
+        }
+    )
+
+
 def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch):
     """A stable parent panel applies when the ranker reports a registry child."""
     import trufflepig.cancer_type_evidence as evidence
@@ -5943,6 +5983,73 @@ def test_parent_contrast_resolves_heme_entity_without_inventing_risk_group(monke
     assert result["selected"]["contrast_discriminator_context_match_code"] == "CML"
     assert result["selected"]["contrast_discriminator_top_participant"] == "CML"
     assert result["selected"]["cancer_type"] != "LAML_ELNadv"
+
+
+def test_parent_contrast_preserves_normalized_broad_coarse_consensus(monkeypatch):
+    """Matching child/parent contexts retain the existing consensus veto."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _crc_stad_contrast_rows,
+    )
+    analysis = _analysis(("COAD_MSI", 1.0))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("COAD_TPM", 0.9), ("STAD_TPM", 0.8)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _stad_program_expression(),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "COAD_MSI"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["contrast_discriminator_context_code"] == "CRC"
+    assert stad["contrast_discriminator_context_match_code"] == "COAD_MSI"
+    assert stad["contrast_discriminator_consensus_context"] == "CRC"
+    assert stad["contrast_discriminator_strong_signal"] is False
+    assert stad["label_decision"]["status"] == "blocked"
+    assert any(
+        "coarse reference matching both support CRC" in reason
+        for reason in stad["blocking_reasons"]
+    )
+
+
+def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
+    """An equally strong opposite coarse match cannot win by code spelling."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _crc_stad_contrast_rows,
+    )
+    analysis = _analysis(("COAD_MSI", 1.0))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("STAD_TPM", 0.9)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _stad_program_expression(),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD"
+    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["contrast_discriminator_context_code"] == "CRC"
+    assert (
+        result["selected"]["contrast_discriminator_context_match_code"]
+        == "COAD_MSI"
+    )
+    ambiguity = result["selected"]["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["context_is_top"] is True
+    assert ambiguity["active_for_report_label"] is True
 
 
 def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(monkeypatch):

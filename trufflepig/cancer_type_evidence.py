@@ -2399,11 +2399,32 @@ def _contrast_context_code(
         candidates.append((participant, support, matched_code))
     participant, support, matched_code = max(
         candidates,
-        key=lambda item: (item[1], item[0]),
+        key=lambda item: (item[1], item[0] == top_participant, item[0]),
     )
     if support <= 0:
         return "", 0.0, "", top_participant
     return participant, float(support), matched_code, top_participant
+
+
+def _contrast_consensus_context(
+    analysis: Mapping[str, Any],
+    type_a: str,
+    type_b: str,
+) -> str:
+    """Return shared broad/coarse support at the contrast-participant level."""
+    broad_participant = _contrast_participant_for_code(
+        _top_code(analysis),
+        type_a,
+        type_b,
+    )
+    coarse_participant = _contrast_participant_for_code(
+        _top_coarse_reference_code(analysis),
+        type_a,
+        type_b,
+    )
+    if broad_participant and broad_participant == coarse_participant:
+        return broad_participant
+    return ""
 
 
 def _contrast_active_ambiguity(
@@ -2477,7 +2498,6 @@ def _add_contrast_discriminator_features(
         else ""
     )
     broad_uncertain = fit_label in {"weak", "ambiguous"}
-    consensus_context = _broad_coarse_consensus_context(analysis)
 
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
@@ -2489,6 +2509,11 @@ def _add_contrast_discriminator_features(
         type_b = _clean(first.get("type_b")).upper()
         if type_a not in registry or type_b not in registry:
             continue
+        consensus_context = _contrast_consensus_context(
+            analysis,
+            type_a,
+            type_b,
+        )
         (
             context_code,
             context_support,
@@ -2675,6 +2700,7 @@ def _add_contrast_discriminator_features(
                 "contrast_discriminator_margin": round(float(margin), 4),
                 "contrast_discriminator_strong_signal": bool(strong_signal),
                 "contrast_discriminator_broad_fit_label": fit_label,
+                "contrast_discriminator_consensus_context": consensus_context,
                 "contrast_discriminator_active_ambiguity": active_ambiguity,
                 "contrast_discriminator_sources": winner_signal.get("sources") or [],
                 "contrast_discriminator_support_types": (
