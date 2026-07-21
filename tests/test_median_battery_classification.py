@@ -50,13 +50,15 @@ def _all_tcga_codes():
 
 def _cohort_median_sample(code: str) -> pd.DataFrame:
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    cohort_tpm = pd.to_numeric(ref[f"{code}_TPM"], errors="coerce")
+    observed = cohort_tpm.notna()
     return pd.DataFrame(
         {
-            "ensembl_gene_id": ref["Ensembl_Gene_ID"],
-            "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"{code}_TPM"].astype(float),
+            "ensembl_gene_id": ref.loc[observed, "Ensembl_Gene_ID"],
+            "gene_symbol": ref.loc[observed, "Symbol"],
+            "TPM": cohort_tpm.loc[observed],
         }
-    )
+    ).reset_index(drop=True)
 
 
 # Parametrize over every TCGA code so pytest reports each cohort

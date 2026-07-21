@@ -777,8 +777,9 @@ def build_signal_matrix_summary_markdown(
         for sample, sub in df.groupby("sample", sort=True):
             final_call = _first_clean(sub["final_call"])
             selected_by = _first_clean(sub["selected_by"])
+            support = pd.to_numeric(sub["support"], errors="coerce").fillna(0.0)
             strong = sub[
-                (sub["support"].fillna(0).astype(float) >= 0.5)
+                (support >= 0.5)
                 & (sub["entity_agrees_final"] == False)  # noqa: E712
                 & (sub["is_context_only"] != True)  # noqa: E712
                 & (sub["is_blocked"] != True)  # noqa: E712
@@ -802,7 +803,9 @@ def build_signal_matrix_summary_markdown(
     lines.append("| Signal | Top prediction | Layer | Status | Support | Agreement | Details |")
     lines.append("|---|---|---|---|---:|---|---|")
     ranked = (
-        df.assign(_support=df["support"].fillna(-1).astype(float))
+        df.assign(
+            _support=pd.to_numeric(df["support"], errors="coerce").fillna(-1.0)
+        )
         .sort_values(["selects_report_label", "_support"], ascending=[False, False], kind="stable")
         .head(max_rows)
     )
@@ -845,7 +848,7 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
         return pd.DataFrame()
 
     df = matrix.copy()
-    df["_support"] = df["support"].fillna(0.0).astype(float)
+    df["_support"] = pd.to_numeric(df["support"], errors="coerce").fillna(0.0)
     df["_support_low"] = df["_support"]
     df["_support_high"] = df["_support"]
     df["_selected"] = df["selects_report_label"].fillna(False).astype(bool)

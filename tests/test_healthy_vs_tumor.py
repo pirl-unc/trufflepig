@@ -36,7 +36,10 @@ def test_backcompat_alias_points_to_new_class():
 
 def test_backcompat_function_dispatches_to_new_impl():
     ref = _ref()
-    sample = ref["BRCA_TPM"].astype(float).to_dict()
+    # The combined normal/cancer reference is a union gene space. BRCA has no
+    # value for a small set of late/immune-receptor loci; those are unavailable
+    # reference cells, not NaN sample TPMs, so omit them from the synthetic sample.
+    sample = ref["BRCA_TPM"].dropna().astype(float).to_dict()
     for g in _PROLIFERATION_PANEL:
         sample[g] = 300.0
     r_old = assess_healthy_vs_tumor(_as_df(sample))

@@ -8,6 +8,14 @@ import pirlygenes.gene_ids as gene_ids_mod
 import trufflepig.load_expression as le
 
 
+# These unit fixtures intentionally contain only the one to four rows needed to
+# exercise parsing and schema behavior. The dedicated sparse-input test below
+# asserts the production warning; suppress it elsewhere in this fixture module.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:Expression input .* has only .* rows.*:UserWarning"
+)
+
+
 def test_empty_expression_file_raises_clear_error(tmp_path):
     """A header-only / empty expression file must fail loud at the load boundary
     with an actionable message — not surface later as a confusing

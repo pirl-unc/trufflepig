@@ -29,6 +29,29 @@ def _make_settings(tmp_path: Path) -> WebSettings:
     )
 
 
+def _post_sample(
+    client: TestClient,
+    sample_path: Path,
+    *,
+    filename: str | None = None,
+    content_type: str = "text/plain",
+    data: dict[str, str] | None = None,
+):
+    """Submit one multipart sample while deterministically closing its stream."""
+    with sample_path.open("rb") as sample_file:
+        return client.post(
+            "/api/run",
+            files={
+                "sample": (
+                    filename or sample_path.name,
+                    sample_file,
+                    content_type,
+                )
+            },
+            data=data or {},
+        )
+
+
 def _stub_runner_factory(workspace_writer):
     """Return a runner suitable for ``RunStore.submit_*(runner=...)``.
 
@@ -121,9 +144,11 @@ def test_submit_analyze_run_lifecycle(tmp_path, monkeypatch):
     sample = tmp_path / "sample.tsv"
     sample.write_text("gene_id\tTPM\nENSG0000\t12\n")
 
-    res = client.post(
-        "/api/run",
-        files={"sample": ("sample.tsv", sample.open("rb"), "text/tab-separated-values")},
+    res = _post_sample(
+        client,
+        sample,
+        filename="sample.tsv",
+        content_type="text/tab-separated-values",
         data={"cancer_type": "BLCA", "title": "BLCA sample"},
     )
     assert res.status_code == 200, res.text
@@ -181,9 +206,10 @@ def test_submit_compare_run(tmp_path, monkeypatch):
 
     ids = []
     for label in ("a", "b"):
-        res = client.post(
-            "/api/run",
-            files={"sample": (f"{label}.tsv", sample.open("rb"), "text/plain")},
+        res = _post_sample(
+            client,
+            sample,
+            filename=f"{label}.tsv",
             data={"title": label},
         )
         ids.append(res.json()["run_id"])
@@ -247,9 +273,10 @@ def test_upload_filename_traversal_is_neutralized(tmp_path, monkeypatch):
 
     sample = tmp_path / "src"
     sample.write_text("x\n")
-    res = client.post(
-        "/api/run",
-        files={"sample": ("../../etc/passwd", sample.open("rb"), "text/plain")},
+    res = _post_sample(
+        client,
+        sample,
+        filename="../../etc/passwd",
     )
     assert res.status_code == 200, res.text
 
@@ -271,9 +298,10 @@ def test_upload_size_limit_aborts_oversized_payload(tmp_path, monkeypatch):
 
     big = tmp_path / "big.tsv"
     big.write_bytes(b"A" * 1024)
-    res = client.post(
-        "/api/run",
-        files={"sample": ("big.tsv", big.open("rb"), "text/plain")},
+    res = _post_sample(
+        client,
+        big,
+        filename="big.tsv",
     )
     assert res.status_code == 413
     # No file left behind under uploads_root.
@@ -290,9 +318,10 @@ def test_flag_injection_in_cancer_type_is_rejected(tmp_path, monkeypatch):
 
     sample = tmp_path / "x.tsv"
     sample.write_text("x\n")
-    res = client.post(
-        "/api/run",
-        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
+    res = _post_sample(
+        client,
+        sample,
+        filename="x.tsv",
         data={"cancer_type": "--force"},
     )
     assert res.status_code == 400
@@ -320,10 +349,7 @@ def test_markdown_html_in_source_is_escaped(tmp_path, monkeypatch):
     client = TestClient(app)
     sample = tmp_path / "x.tsv"
     sample.write_text("x\n")
-    rid = client.post(
-        "/api/run",
-        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
-    ).json()["run_id"]
+    rid = _post_sample(client, sample, filename="x.tsv").json()["run_id"]
 
     page = client.get(f"/api/runs/{rid}/report/summary").text
     assert "<script>" not in page
@@ -347,9 +373,10 @@ def test_run_title_is_html_escaped_in_report_page(tmp_path, monkeypatch):
 
     sample = tmp_path / "x.tsv"
     sample.write_text("x\n")
-    res = client.post(
-        "/api/run",
-        files={"sample": ("x.tsv", sample.open("rb"), "text/plain")},
+    res = _post_sample(
+        client,
+        sample,
+        filename="x.tsv",
         data={"title": "<script>alert('xss')</script>"},
     )
     rid = res.json()["run_id"]
@@ -409,9 +436,10 @@ def test_stream_endpoint_emits_events(tmp_path, monkeypatch):
 
     sample = tmp_path / "sample.tsv"
     sample.write_text("x\n")
-    res = client.post(
-        "/api/run",
-        files={"sample": ("sample.tsv", sample.open("rb"), "text/plain")},
+    res = _post_sample(
+        client,
+        sample,
+        filename="sample.tsv",
         data={"title": "stream-test"},
     )
     run_id = res.json()["run_id"]
