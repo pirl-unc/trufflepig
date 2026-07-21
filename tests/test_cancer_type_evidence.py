@@ -5813,6 +5813,31 @@ def _crc_stad_contrast_rows():
     return tuple(rows)
 
 
+def _brca_sarc_epith_contrast_rows():
+    """A cross-lineage parent contrast with a basal breast child context."""
+    rows = []
+    for favors, primary, supporting in (
+        ("BRCA", ("ESR1", "FOXA1"), ("GATA3",)),
+        ("SARC_EPITH", ("KRT8", "KRT18"), ("EPCAM", "CD34", "SMARCB1")),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "BRCA_vs_SARC_EPITH",
+                    "type_a": "BRCA",
+                    "type_b": "SARC_EPITH",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "curated-parent-contrast",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
 def _stad_program_expression():
     return _expression_frame(
         {
@@ -5869,6 +5894,63 @@ def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch)
     assert ambiguity["active_for_report_label"] is True
     assert ambiguity["top_code"] == "STAD_EBV"
     assert ambiguity["top_participant"] == "STAD"
+
+
+def test_parent_contrast_uses_coherent_child_program_before_cross_code_promotion(
+    monkeypatch,
+):
+    """A coherent subtype is not rejected for lacking its parent's markers."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _brca_sarc_epith_contrast_rows,
+    )
+    analysis = _analysis(("BRCA_Basal", 1.0))
+    analysis["fit_quality"] = {"label": "focused"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                # Coherent basal-like breast program, with the luminal parent
+                # program appropriately absent.
+                "KRT5": 60.0,
+                "KRT14": 50.0,
+                "KRT17": 45.0,
+                "KRT6B": 40.0,
+                "FOXC1": 35.0,
+                # A strong opposing contrast program must still not relabel a
+                # focused, coherent child diagnosis merely because BRCA's
+                # luminal markers are absent.
+                "KRT8": 60.0,
+                "KRT18": 60.0,
+                "EPCAM": 50.0,
+                "CD34": 40.0,
+                "SMARCB1": 20.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA_Basal"
+    sarcoma = next(
+        row for row in result["evidence"] if row["cancer_type"] == "SARC_EPITH"
+    )
+    assert sarcoma["contrast_discriminator_context_code"] == "BRCA"
+    assert sarcoma["contrast_discriminator_context_match_code"] == "BRCA_Basal"
+    assert (
+        sarcoma["contrast_discriminator_context_marker_coherence_code"]
+        == "BRCA_Basal"
+    )
+    assert sarcoma["contrast_discriminator_context_marker_coherence"]["status"] == (
+        "consistent"
+    )
+    ambiguity = sarcoma["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["context_marker_incoherent"] is False
+    assert ambiguity["active_for_report_label"] is False
+    assert sarcoma["label_decision"]["status"] == "blocked"
 
 
 def test_parent_contrast_support_does_not_demote_an_agreeing_child(monkeypatch):

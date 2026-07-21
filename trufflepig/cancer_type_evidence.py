@@ -2577,7 +2577,15 @@ def _add_contrast_discriminator_features(
         )
         strong_signal = _contrast_signal_is_strong(winner_signal, margin)
         marker_coherence = _marker_coherence(winner_code, sample_tpm_by_symbol)
-        context_marker_coherence = _marker_coherence(context_code, sample_tpm_by_symbol)
+        # A parent contrast can be activated by a more specific registry child
+        # (for example BRCA_Basal participating in BRCA_vs_SARC_EPITH). Judge
+        # whether the active diagnosis is coherent on that matched child, not
+        # on the broader participant's potentially different marker program.
+        context_marker_coherence_code = context_match_code or context_code
+        context_marker_coherence = _marker_coherence(
+            context_marker_coherence_code,
+            sample_tpm_by_symbol,
+        )
         context_marker_incoherent = bool(
             context_marker_coherence
             and not _marker_coherence_selection_grade(context_marker_coherence)
@@ -2696,6 +2704,9 @@ def _add_contrast_discriminator_features(
                 "contrast_discriminator": contrast,
                 "contrast_discriminator_context_code": context_code,
                 "contrast_discriminator_context_match_code": context_match_code,
+                "contrast_discriminator_context_marker_coherence_code": (
+                    context_marker_coherence_code
+                ),
                 "contrast_discriminator_top_participant": top_participant,
                 "contrast_discriminator_context_support": round(
                     float(context_support),
