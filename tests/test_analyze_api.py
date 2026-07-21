@@ -332,6 +332,7 @@ def test_context_roles_make_hint_outputs_consistent_for_nutm():
     analysis = {
         "cancer_type": "NUTM",
         "report_scope_cancer_type": "NUTM",
+        "report_scope_parent_cancer_type": "LUSC",
         "reference_cancer_type": "LUSC",
     }
     context = cancer_type_context_from_analysis(
@@ -345,6 +346,7 @@ def test_context_roles_make_hint_outputs_consistent_for_nutm():
     assert analysis["fallback_expression_reference_cancer_type"] == "LUSC"
     assert analysis["expression_reference_cancer_type"] == "NUTM"
     assert analysis["expression_reference_role"] == "report_label_exact"
+    assert "report_scope_parent_cancer_type" not in analysis
 
 
 def test_context_roles_never_propagate_a_sibling_subtype():
@@ -354,7 +356,9 @@ def test_context_roles_never_propagate_a_sibling_subtype():
     analysis = {
         "cancer_type": "BRCA_Basal",
         "report_scope_cancer_type": "BRCA_Basal",
+        "report_scope_parent_cancer_type": "BRCA_HER2",
         "reference_cancer_type": "BRCA_HER2",
+        "reference_cancer_name": "HER2-enriched",
         "expression_reference_cancer_type": "BRCA_HER2",
     }
     context = cancer_type_context_from_analysis(analysis)
@@ -362,6 +366,8 @@ def test_context_roles_never_propagate_a_sibling_subtype():
     _apply_cancer_type_context_roles(analysis, context)
 
     assert analysis["reference_cancer_type"] == "BRCA"
+    assert analysis["reference_cancer_name"] == "Breast Invasive Carcinoma"
+    assert analysis["report_scope_parent_cancer_type"] == "BRCA"
     assert analysis["expression_reference_cancer_type"] == "BRCA_Basal"
     assert analysis["expression_reference_role"] == "report_label_exact"
     assert analysis["requested_reference_cancer_type"] == "BRCA_HER2"

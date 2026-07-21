@@ -5726,6 +5726,7 @@ def _apply_cancer_type_context_roles(analysis, cancer_type_context):
         or cancer_type_context.code_for("cohort")
         or report_code
     )
+    parent_code = cancer_type_context.code_for("parent")
     expression_code = (
         cancer_type_context.code_for("expression")
         or reference_code
@@ -5747,7 +5748,15 @@ def _apply_cancer_type_context_roles(analysis, cancer_type_context):
         )
     if reference_code:
         analysis["reference_cancer_type"] = reference_code
+        analysis["reference_cancer_name"] = cancer_code_display_name(
+            reference_code,
+            reference_code,
+        )
         analysis["fallback_expression_reference_cancer_type"] = reference_code
+    if parent_code:
+        analysis["report_scope_parent_cancer_type"] = parent_code
+    else:
+        analysis.pop("report_scope_parent_cancer_type", None)
     if expression_code:
         analysis["expression_reference_cancer_type"] = expression_code
     if expression_code == report_code and expression_code == reference_code:

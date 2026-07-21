@@ -1768,11 +1768,11 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
     if parent_context_code:
         from trufflepig.analyze import expression_reference_options
 
-        explicit_parent_context = str(
-            analysis.get("report_scope_parent_cancer_type")
-            or analysis.get("reference_cancer_type")
-            or ""
-        ).strip()
+        explicit_parent_context = (
+            cancer_type_context.code_for("reference")
+            if cancer_type_context.requested_reference_code
+            else ""
+        )
         # Prefer the supplied label whenever it has its own typed expression reference. A newly
         # operational member-union parent (for example CRC above COAD) is useful as a fallback but
         # must not replace a more specific own-cohort label in the RNA concordance check. Preserve
