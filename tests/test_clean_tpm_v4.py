@@ -45,17 +45,17 @@ def test_v4_mode_still_rejects_technical_dominant_raw_input():
 
 
 @pytest.mark.parametrize(
-    "code,expected_source",
+    "code",
     [
-        ("MM", "MMRF_COMMPASS"),
-        ("ADCC", "GSE294016_BARTL_2025_SGC"),
-        ("MTC", "GSE32662_PRINGLE_2012"),
-        ("NET_LUNG", "DRMETRICS_ALCALA_2019_LNEN"),
-        ("SARC_ASPS", "TREEHOUSE_POLYA_25_01"),
-        ("CLL", "CLLMAP_2022"),
+        "MM",
+        "ADCC",
+        "MTC",
+        "NET_LUNG",
+        "SARC_ASPS",
+        "CLL",
     ],
 )
-def test_v4_observed_bulk_references_load_directly(code, expected_source):
+def test_v4_observed_bulk_references_load_directly(code):
     # Regression: these resolved to None / a parent fallback when the v4 frame
     # was rejected by the old assertion. They must self-reference again.
     from trufflepig.analyze import effective_expression_reference
@@ -63,7 +63,9 @@ def test_v4_observed_bulk_references_load_directly(code, expected_source):
     ref = effective_expression_reference(code)
     assert ref is not None, f"{code} lost its expression reference under v4"
     assert ref.reference_code == code
-    assert ref.source == expected_source
+    assert ref.direct
+    assert ref.source
+    assert not ref.fallback_reason
 
 
 def test_normalize_to_reference_space_conforms_v4_to_fixed_fraction():

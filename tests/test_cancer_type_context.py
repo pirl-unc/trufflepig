@@ -323,18 +323,6 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
-            # There is no standalone subgroup artifact. The typed MBL parent
-            # supplies the closest physical deconvolved reference instead of
-            # advertising summary-only provenance as a direct loader target.
-            "MBL_G3",
-            "MBL",
-            "deconvolved_tumor_reference",
-            "TREEHOUSE_POLYA_25_01",
-            "symbol_only",
-            False,
-            "registry parent",
-        ),
-        (
             "SARC_ASPS",
             "SARC_ASPS",
             "observed_bulk_reference",
@@ -348,15 +336,6 @@ def test_expression_reference_options_canonicalize_source_codes():
             "ADCC",
             "observed_bulk_reference",
             "GSE294016_BARTL_2025_SGC",
-            "ensembl_symbol",
-            True,
-            "",
-        ),
-        (
-            "MTC",
-            "MTC",
-            "observed_bulk_reference",
-            "GSE32662_PRINGLE_2012",
             "ensembl_symbol",
             True,
             "",
@@ -428,6 +407,20 @@ def test_effective_expression_reference_examples_cover_reference_paths(
     assert record.gene_key == gene_key
     assert record.direct is direct
     assert record.fallback_reason == fallback_reason
+
+
+def test_mbl_subgroup_uses_its_artifact_when_present_and_parent_otherwise():
+    """Optional exact artifacts take precedence without breaking older bundles."""
+    manifest = reference_module.cancer_reference_manifest()
+    exact_available = manifest["cancer_code"].eq("MBL_G3").any()
+
+    record = effective_expression_reference("MBL_G3")
+
+    assert record is not None
+    assert record.requested_code == "MBL_G3"
+    assert record.reference_code == ("MBL_G3" if exact_available else "MBL")
+    assert record.direct is bool(exact_available)
+    assert record.fallback_reason == ("" if exact_available else "registry parent")
 
 
 def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkeypatch):

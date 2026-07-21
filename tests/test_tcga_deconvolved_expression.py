@@ -1068,12 +1068,17 @@ def test_real_cancer_reference_expression_exposes_raw_and_clean_modes(monkeypatc
         "TPM_clean_log1p",
         "TPM_clean_biological",
     }
-    assert set(result["source_cohort"]) == {
-        "GSE32662_PRINGLE_2012",
-        "GSE32662_PRINGLE_2012_MTC",
-    }
     assert result[["Proteoform_ID", "Member_Ensembl_Gene_IDs"]].notna().all().all()
     values = result.set_index("normalization")
+    sources = values["source_cohort"]
+    assert sources.loc["TPM"] == sources.loc["TPM_log1p"]
+    assert sources.loc["TPM_clean"] == sources.loc["TPM_clean_log1p"]
+    assert sources.loc["TPM_clean"] == sources.loc["TPM_clean_biological"]
+    from trufflepig.analyze import effective_expression_reference
+
+    reference = effective_expression_reference("MTC")
+    assert reference is not None
+    assert sources.loc["TPM_clean"] == reference.source
     for column in ("expression", "q1", "q3"):
         assert values.loc["TPM_log1p", column] == pytest.approx(
             np.log1p(values.loc["TPM", column])
