@@ -347,6 +347,50 @@ def test_context_roles_make_hint_outputs_consistent_for_nutm():
     assert analysis["expression_reference_role"] == "report_label_exact"
 
 
+def test_context_roles_never_propagate_a_sibling_subtype():
+    from trufflepig.analyze import cancer_type_context_from_analysis
+    from trufflepig.main import _apply_cancer_type_context_roles
+
+    analysis = {
+        "cancer_type": "BRCA_Basal",
+        "report_scope_cancer_type": "BRCA_Basal",
+        "reference_cancer_type": "BRCA_HER2",
+        "expression_reference_cancer_type": "BRCA_HER2",
+    }
+    context = cancer_type_context_from_analysis(analysis)
+
+    _apply_cancer_type_context_roles(analysis, context)
+
+    assert analysis["reference_cancer_type"] == "BRCA"
+    assert analysis["expression_reference_cancer_type"] == "BRCA_Basal"
+    assert analysis["expression_reference_role"] == "report_label_exact"
+    assert analysis["requested_reference_cancer_type"] == "BRCA_HER2"
+    assert analysis["requested_expression_reference_cancer_type"] == "BRCA_HER2"
+    assert analysis["excluded_sibling_cancer_type_contexts"] == ["BRCA_HER2"]
+    assert analysis["cancer_type_tree_roles"] == {
+        "report": {
+            "code": "BRCA_Basal",
+            "role": "diagnosis",
+            "relationship": "same",
+        },
+        "reference": {
+            "code": "BRCA",
+            "role": "analysis_context",
+            "relationship": "ancestor",
+        },
+        "expression": {
+            "code": "BRCA_Basal",
+            "role": "expression_reference",
+            "relationship": "same",
+        },
+        "excluded_siblings": ["BRCA_HER2"],
+    }
+    final_context = cancer_type_context_from_analysis(analysis)
+    assert final_context.excluded_sibling_codes == ("BRCA_HER2",)
+    assert final_context.code_for("reference") == "BRCA"
+    assert final_context.code_for("expression") == "BRCA_Basal"
+
+
 def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
     from pirlygenes.gene_sets_cancer import rare_cancer_rna_surrogate_rules_df
 

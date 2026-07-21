@@ -701,6 +701,26 @@ def test_forced_cancer_type_does_not_inherit_unrelated_subtype():
     assert "leiomyosarcoma" not in summary.lower(), summary
 
 
+def test_report_subtype_can_refine_parent_but_cannot_jump_to_sibling():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    parent = {
+        "cancer_type": "BRCA",
+        "candidate_trace": [
+            {"code": "BRCA", "winning_subtype": "BRCA_Basal"},
+        ],
+    }
+    sibling = {
+        "cancer_type": "BRCA_Basal",
+        "candidate_trace": [
+            {"code": "BRCA_Basal", "winning_subtype": "BRCA_HER2"},
+        ],
+    }
+
+    assert candidate_winning_subtype_for_analysis(parent) == "BRCA_Basal"
+    assert candidate_winning_subtype_for_analysis(sibling) is None
+
+
 def test_learned_compartment_parent_call_does_not_inherit_trace_subtype():
     from trufflepig.reporting import candidate_winning_subtype_for_analysis
 

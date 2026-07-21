@@ -60,6 +60,67 @@ def _registry_records() -> dict[str, dict[str, Any]]:
         return {}
 
 
+def registry_ancestor_codes(code: str | None) -> tuple[str, ...]:
+    """Return registry ancestors from immediate parent to root."""
+    code_text = _clean(code)
+    records = _registry_records()
+    if not code_text or code_text not in records:
+        return ()
+    ancestors: list[str] = []
+    seen = {code_text}
+    parent = _clean(records[code_text].get("parent_code"))
+    while parent and parent not in seen:
+        ancestors.append(parent)
+        seen.add(parent)
+        parent = _clean(records.get(parent, {}).get("parent_code"))
+    return tuple(ancestors)
+
+
+def cancer_type_tree_relationship(
+    report_code: str | None,
+    other_code: str | None,
+) -> str:
+    """Describe ``other_code`` relative to the active report node."""
+    report = _clean(report_code)
+    other = _clean(other_code)
+    if not report or not other:
+        return "unknown"
+    if report == other:
+        return "same"
+    records = _registry_records()
+    if report not in records or other not in records:
+        return "unknown"
+    report_ancestors = registry_ancestor_codes(report)
+    other_ancestors = registry_ancestor_codes(other)
+    if other in report_ancestors:
+        return "ancestor"
+    if report in other_ancestors:
+        return "descendant"
+    if set(report_ancestors).intersection(other_ancestors):
+        return "sibling"
+    return "independent"
+
+
+def nearest_common_ancestor(
+    left_code: str | None,
+    right_code: str | None,
+) -> str:
+    """Return the nearest shared registry node, preferring ``left_code``'s path."""
+    left = _clean(left_code)
+    right = _clean(right_code)
+    if not left or not right:
+        return ""
+    right_path = {right, *registry_ancestor_codes(right)}
+    return next(
+        (
+            code
+            for code in (left, *registry_ancestor_codes(left))
+            if code in right_path
+        ),
+        "",
+    )
+
+
 @lru_cache(maxsize=1)
 def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenceRecord, ...]]:
     records_by_code: dict[str, list[ExpressionReferenceRecord]] = {}
@@ -239,6 +300,53 @@ def _direct_expression_reference_records() -> dict[str, tuple[ExpressionReferenc
     except Exception as exc:
         log.warning("subtype deconvolved reference discovery failed: %s", exc)
 
+    # Some loadable grouping nodes are computed member unions rather than
+    # physical cohorts, so the compact leaf manifest cannot name them directly.
+    # Discover only unresolved union nodes through oncoref's lightweight
+    # artifact index. This keeps the active code at the shared parent (for
+    # example THYM_EPITHELIAL) instead of borrowing one child as if it were the
+    # requested entity, and does not materialize expression values.
+    member_union_codes = sorted(
+        code
+        for code, row in registry.items()
+        if _clean(row.get("reference_source")) == "member_union"
+        and not records_by_code.get(code)
+    )
+    if member_union_codes:
+        try:
+            import oncoref
+
+            availability = oncoref.cancer_reference_expression_availability(
+                cancer_types=member_union_codes,
+                normalize="tpm_clean",
+                reference_source="artifact",
+                sample_qc="artifact",
+            )
+            if "available" in availability.columns:
+                availability = availability[
+                    availability["available"].fillna(False).astype(bool)
+                ]
+            for code, group in availability.groupby("requested_code"):
+                code_text = _clean(code)
+                if not code_text or records_by_code.get(code_text):
+                    continue
+                sources = sorted(
+                    {
+                        _clean(source)
+                        for source in group.get("source_cohort", ())
+                        if _clean(source)
+                    }
+                )
+                add(
+                    code_text,
+                    source_kind="computed_member_union_reference",
+                    source=" + ".join(sources) or "artifact member union",
+                    gene_key="ensembl_symbol",
+                    source_code=code_text,
+                )
+        except Exception as exc:
+            log.warning("member-union reference discovery failed: %s", exc)
+
     out: dict[str, tuple[ExpressionReferenceRecord, ...]] = {}
     for code, records in records_by_code.items():
         unique = {}
@@ -310,8 +418,6 @@ _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "neuroendocrine": ("SCLC", "NET_PANCREAS", "LUAD"),
     "salivary": ("HNSC",),
     "sarcoma": ("SARC",),
-    # Thymic epithelial tumours (THYMCA thymic carcinoma) -> the THYM cohort.
-    "thymic": ("THYM",),
 }
 
 
@@ -402,17 +508,30 @@ def expression_reference_options(
     direct = _direct_expression_reference_records().get(code_text, ())
     if direct or not include_fallback:
         return direct
-    return _expression_reference_options_with_fallback(code_text, visited=frozenset())
+    return _expression_reference_options_with_fallback(
+        code_text,
+        requested_code=code_text,
+        visited=frozenset(),
+    )
 
 
 def _expression_reference_options_with_fallback(
     code_text: str,
     *,
+    requested_code: str,
     visited: frozenset[str],
 ) -> tuple[ExpressionReferenceRecord, ...]:
     direct = _direct_expression_reference_records().get(code_text, ())
     if direct:
-        return direct
+        return tuple(
+            record
+            for record in direct
+            if cancer_type_tree_relationship(
+                requested_code,
+                record.reference_code,
+            )
+            != "sibling"
+        )
     if code_text in visited:
         return ()
     visited = visited | {code_text}
@@ -420,16 +539,27 @@ def _expression_reference_options_with_fallback(
         if candidate in visited:
             continue
         records = _direct_expression_reference_records().get(candidate, ())
+        if records:
+            records = tuple(
+                record
+                for record in records
+                if cancer_type_tree_relationship(
+                    requested_code,
+                    record.reference_code,
+                )
+                != "sibling"
+            )
         if not records:
             records = _expression_reference_options_with_fallback(
                 candidate,
+                requested_code=requested_code,
                 visited=visited,
             )
         if records:
             return tuple(
                 replace(
                     record,
-                    requested_code=code_text,
+                    requested_code=requested_code,
                     direct=False,
                     fallback_reason=(
                         f"{reason}; {record.fallback_reason}"
@@ -490,6 +620,11 @@ class CancerTypeContext:
     supplied_code: str = ""
     source: str = ""
     relationship: str = "same"
+    requested_reference_code: str = ""
+    requested_expression_code: str = ""
+    reference_relationship: str = "same"
+    expression_relationship: str = "same"
+    excluded_sibling_codes: tuple[str, ...] = ()
     report_has_expression_ref: bool = False
     reference_has_expression_ref: bool = False
     fine_expression_sources: tuple[str, ...] = ()
@@ -549,17 +684,27 @@ class CancerTypeContext:
         data["fallback_expression_code"] = self.reference_code
         data["best_expression_label"] = cancer_type_context_label(self.best_expression_code)
         data["fallback_expression_label"] = cancer_type_context_label(self.reference_code)
+        data["report_role"] = "diagnosis"
+        data["reference_role"] = f"{self.reference_relationship}_analysis_context"
+        data["expression_role"] = f"{self.expression_relationship}_expression_reference"
         return data
 
     def markdown_lines(self) -> list[str]:
         if not self.report_code:
             return []
-        lines = [f"- **Report label**: {cancer_type_context_label(self.report_code)}."]
+        report_label = cancer_type_context_label(self.report_code)
+        lines = [f"- **Report label (diagnosis node)**: {report_label}."]
         if self.uses_distinct_reference:
+            relation = (
+                "ancestor"
+                if self.reference_relationship == "ancestor"
+                else "independent"
+            )
             lines.append(
                 f"- **Fallback expression/reference context**: "
-                f"{cancer_type_context_label(self.reference_code)} is used when "
-                "a step needs a coarse cohort reference."
+                f"{cancer_type_context_label(self.reference_code)} is the {relation} "
+                "analysis context used only when a step needs a broader cohort; "
+                f"it does not replace the report diagnosis {report_label}."
             )
         else:
             if (
@@ -579,7 +724,8 @@ class CancerTypeContext:
         if self.parent_code:
             lines.append(
                 f"- **Hierarchy**: {cancer_type_context_label(self.report_code)} is modeled "
-                f"as a refined label under {cancer_type_context_label(self.parent_code)}."
+                f"as a refined label under {cancer_type_context_label(self.parent_code)}; "
+                "both codes are on the same registry branch."
             )
         if self.best_expression_code:
             if self.best_expression_code == self.report_code:
@@ -594,12 +740,32 @@ class CancerTypeContext:
                     if self.best_expression_fallback_reason
                     else ""
                 )
-                lines.append(
-                    f"- **Best expression reference**: falls back to "
-                    f"{cancer_type_context_label(self.best_expression_code)}"
-                    f"{fallback_reason} because an exact expression cohort is not "
-                    "available for the report label."
+                expression_label = cancer_type_context_label(
+                    self.best_expression_code
                 )
+                if self.expression_relationship == "descendant":
+                    lines.append(
+                        f"- **Best expression reference (descendant only)**: "
+                        f"{expression_label}{fallback_reason} supplies expression "
+                        f"context but does not refine the report diagnosis {report_label}."
+                    )
+                else:
+                    lines.append(
+                        f"- **Best expression reference**: falls back to "
+                        f"{expression_label}{fallback_reason} because an exact "
+                        "expression cohort is not available for the report label; "
+                        f"the diagnosis remains {report_label}."
+                    )
+        if self.excluded_sibling_codes:
+            excluded = ", ".join(
+                cancer_type_context_label(code)
+                for code in self.excluded_sibling_codes
+            )
+            lines.append(
+                f"- **Sibling isolation**: {excluded} was considered as competing "
+                "evidence but is not used as a report, reference, or expression "
+                f"context; active interpretation stays on the {report_label} branch."
+            )
         if self.fine_expression_available and self.uses_distinct_reference:
             lines.append(
                 "- **Context caveat**: subtype-aware modules prefer the fine-grained "
@@ -615,16 +781,57 @@ def cancer_type_context_from_analysis(
     report_code = _clean(
         analysis.get("report_scope_cancer_type") or analysis.get("cancer_type")
     )
-    parent_code = _clean(analysis.get("report_scope_parent_cancer_type"))
+    requested_parent_code = _clean(analysis.get("report_scope_parent_cancer_type"))
     registry_parent = registry_parent_code(report_code)
-    if not parent_code and registry_parent:
-        parent_code = registry_parent
-    reference_code = _clean(
-        analysis.get("reference_cancer_type")
+    parent_code = (
+        requested_parent_code
+        if cancer_type_tree_relationship(report_code, requested_parent_code)
+        == "ancestor"
+        else registry_parent
+    )
+    requested_reference_code = _clean(
+        analysis.get("requested_reference_cancer_type")
+        or analysis.get("reference_cancer_type")
         or analysis.get("report_scope_parent_cancer_type")
     )
+    requested_expression_code = _clean(
+        analysis.get("requested_expression_reference_cancer_type")
+        or analysis.get("expression_reference_cancer_type")
+    )
+    reference_code = requested_reference_code
     if not reference_code:
         reference_code = parent_code or report_code
+
+    excluded_values = analysis.get("excluded_sibling_cancer_type_contexts") or ()
+    if isinstance(excluded_values, str):
+        excluded_values = (excluded_values,)
+    excluded_sibling_codes = {
+        _clean(code)
+        for code in excluded_values
+        if _clean(code)
+    }
+    reference_relationship = cancer_type_tree_relationship(
+        report_code,
+        reference_code,
+    )
+    if reference_relationship == "sibling":
+        excluded_sibling_codes.add(reference_code)
+        reference_code = (
+            nearest_common_ancestor(report_code, reference_code)
+            or parent_code
+            or report_code
+        )
+    elif reference_relationship == "descendant":
+        # A descendant can provide a fine expression cohort, but it cannot be
+        # called the broad/coarse reference for its parent diagnosis.
+        requested_expression_code = requested_expression_code or reference_code
+        reference_code = report_code
+
+    if (
+        cancer_type_tree_relationship(report_code, requested_expression_code)
+        == "sibling"
+    ):
+        excluded_sibling_codes.add(requested_expression_code)
 
     report_direct_options = expression_reference_options(
         report_code, include_fallback=False
@@ -638,25 +845,54 @@ def cancer_type_context_from_analysis(
     )
     report_effective = effective_expression_reference(report_code)
     reference_effective = effective_expression_reference(reference_code)
-    best_expression_record = None
+    requested_expression_options = expression_reference_options(
+        requested_expression_code,
+        include_fallback=False,
+    )
+    candidates = (
+        list(report_direct_options)
+        + list(requested_expression_options)
+        + ([report_effective] if report_effective is not None else [])
+        + list(reference_direct_options)
+        + ([reference_effective] if reference_effective is not None else [])
+    )
+    best_expression_record = next(
+        (
+            record
+            for record in candidates
+            if cancer_type_tree_relationship(
+                report_code,
+                record.reference_code,
+            )
+            != "sibling"
+        ),
+        None,
+    )
+    for record in candidates:
+        if (
+            cancer_type_tree_relationship(report_code, record.reference_code)
+            == "sibling"
+        ):
+            excluded_sibling_codes.add(record.reference_code)
+
     if report_direct_options:
         best_expression_code = report_code
-        best_expression_record = report_direct_options[0]
-    elif report_effective is not None:
-        best_expression_code = report_effective.reference_code
-        best_expression_record = report_effective
-    elif reference_direct_options:
-        best_expression_code = reference_code
-        best_expression_record = reference_direct_options[0]
-    elif reference_effective is not None:
-        best_expression_code = reference_effective.reference_code
-        best_expression_record = reference_effective
+    elif best_expression_record is not None:
+        best_expression_code = best_expression_record.reference_code
     else:
         best_expression_code = reference_code or report_code
 
+    reference_relationship = cancer_type_tree_relationship(
+        report_code,
+        reference_code,
+    )
+    expression_relationship = cancer_type_tree_relationship(
+        report_code,
+        best_expression_code,
+    )
     if report_code and reference_code and report_code == reference_code:
         relationship = "same"
-    elif parent_code and reference_code and parent_code == reference_code:
+    elif reference_relationship == "ancestor":
         relationship = "fine_child_of_reference"
     elif parent_code:
         relationship = "fine_child_with_independent_reference"
@@ -678,6 +914,11 @@ def cancer_type_context_from_analysis(
         ),
         source=_clean(analysis.get("cancer_type_source")),
         relationship=relationship,
+        requested_reference_code=requested_reference_code,
+        requested_expression_code=requested_expression_code,
+        reference_relationship=reference_relationship,
+        expression_relationship=expression_relationship,
+        excluded_sibling_codes=tuple(sorted(excluded_sibling_codes)),
         report_has_expression_ref=bool(report_sources),
         reference_has_expression_ref=bool(reference_sources),
         fine_expression_sources=report_sources,
