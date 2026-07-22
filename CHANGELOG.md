@@ -8,6 +8,28 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.23.0 — 2026-07-21 — ancestry-aware sibling entity reasoning
+
+### Cancer-type reasoning
+
+- Curated sibling contrasts now resolve their participants through the cancer
+  registry, allowing stable parent panels to adjudicate specific child calls
+  without replacing an agreeing child with its parent.
+- Consensus vetoes, marker-coherence checks, and deterministic tie-breaking now
+  operate on the active descendant context, so parent-level evidence cannot
+  bypass a coherent subtype or explicit broad/coarse agreement.
+- Reports keep diagnosis, analysis-reference, and expression-reference roles
+  explicit. Ancestor references are labeled as context only, and a sibling
+  subtype is excluded rather than mixed into the active report branch.
+
+### Reference compatibility
+
+- Lineage panels use trufflepig's bounded artifact reference accessor instead
+  of materializing pirlygenes' full expression-summary union.
+- Reference integration follows the installed oncoref/pirlygenes artifact
+  layout while preserving exact-reference preference, parent fallback, and
+  per-normalization provenance.
+
 ## 1.22.0 — 2026-07-20 — staged cancer-type evidence graph
 
 ### Entity uncertainty and parent abstention
