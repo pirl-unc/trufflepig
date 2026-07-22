@@ -142,8 +142,8 @@ def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
     table itself is ~70 cohorts × 20k genes ≈ 1.4M entries — a single
     GroupBy at first use, hot lookup after.
     """
-    from pirlygenes import cancer_reference_expression
     from .common import _versionless_gene_id
+    from .reference import cancer_reference_expression
 
     df = cancer_reference_expression()
     df = df[df["normalization"] == "TPM_clean"]
@@ -160,7 +160,9 @@ def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
 def _cohort_hk_medians() -> dict[str, float]:
     """Per-cohort housekeeping median, used as the HK denominator when
     normalizing a marker against its cohort distribution."""
-    from pirlygenes import cancer_reference_expression, housekeeping_gene_ids
+    from pirlygenes import housekeeping_gene_ids
+
+    from .reference import cancer_reference_expression
 
     df = cancer_reference_expression()
     df = df[df["normalization"] == "TPM_clean"]

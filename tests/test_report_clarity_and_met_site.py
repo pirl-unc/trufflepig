@@ -879,7 +879,8 @@ def test_recommended_targets_skips_tme_dominant_rows():
         cancer_type="PRAD",
         purity_result=purity,
     )
-    targets = open(f"{tmp_prefix}-targets.md").read()
+    with open(f"{tmp_prefix}-targets.md", encoding="utf-8") as target_file:
+        targets = target_file.read()
 
     # The Recommended Targets section must not list CD74 as a best
     # surface target — it was low-confidence flagged.
@@ -986,7 +987,8 @@ def test_target_report_explains_blocked_fn1_pyx201_call():
         cancer_type="PRAD",
         purity_result=purity,
     )
-    targets = open(f"{tmp_prefix}-targets.md").read()
+    with open(f"{tmp_prefix}-targets.md", encoding="utf-8") as target_file:
+        targets = target_file.read()
 
     assert "PYX-201 (NCT05720117) targets EDB+ FN1" in targets
     assert "Landscape cautions" in targets

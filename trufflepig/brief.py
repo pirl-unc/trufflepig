@@ -1398,7 +1398,8 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     fine_inference = analysis.get("fine_report_scope_inference") or {}
     if fine_inference and not constrained_code and source != "user-specified":
         reference = str(
-            fine_inference.get("reference_cancer_type")
+            cancer_type_context.code_for("reference")
+            or fine_inference.get("reference_cancer_type")
             or analysis.get("reference_cancer_type")
             or "the broad reference"
         ).strip()
@@ -1415,8 +1416,9 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
             f"**Cancer-type basis:** RNA evidence supports "
             f"{_cancer_type_context_label(cancer_code)} as the fine label over "
             f"the {_cancer_type_context_label(reference)} expression-reference context"
-            f"{score_clause}; modules that need a coarse expression reference still "
-            f"use {reference}."
+            f"{score_clause}; {reference} is analysis context only, not an "
+            "alternative diagnosis, and no sibling subtype context is carried "
+            "into downstream interpretation."
         )
     call_rescue = analysis.get("cancer_call_rescue") or {}
     if call_rescue and not constrained_code and source != "user-specified":
@@ -1717,9 +1719,14 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
     constrained_code = str(constraints.get("cancer_type") or "").strip()
     source = str(analysis.get("cancer_type_source") or "").strip()
     rare_inference = analysis.get("rare_report_scope_inference") or {}
+    cancer_type_context = cancer_type_context_from_analysis(analysis)
     if not (constrained_code or source == "user-specified"):
         if rare_inference:
-            top_code = str(rare_inference.get("top_reference_cancer_type") or "")
+            top_code = str(
+                cancer_type_context.code_for("reference")
+                or rare_inference.get("top_reference_cancer_type")
+                or ""
+            )
             candidate_trace = analysis.get("candidate_trace") or []
             alternatives = _candidate_code_list(
                 candidate_trace,
@@ -1739,7 +1746,8 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
         fine_inference = analysis.get("fine_report_scope_inference") or {}
         if fine_inference:
             reference = str(
-                fine_inference.get("reference_cancer_type")
+                cancer_type_context.code_for("reference")
+                or fine_inference.get("reference_cancer_type")
                 or analysis.get("reference_cancer_type")
                 or ""
             ).strip()
@@ -1751,7 +1759,6 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
             )
         return ""
 
-    cancer_type_context = cancer_type_context_from_analysis(analysis)
     report_context_code = cancer_type_context.code_for("report")
     parent_context_code = cancer_type_context.code_for("parent")
     supplied_code = (
@@ -1761,11 +1768,11 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
     if parent_context_code:
         from trufflepig.analyze import expression_reference_options
 
-        explicit_parent_context = str(
-            analysis.get("report_scope_parent_cancer_type")
-            or analysis.get("reference_cancer_type")
-            or ""
-        ).strip()
+        explicit_parent_context = (
+            cancer_type_context.code_for("reference")
+            if cancer_type_context.requested_reference_code
+            else ""
+        )
         # Prefer the supplied label whenever it has its own typed expression reference. A newly
         # operational member-union parent (for example CRC above COAD) is useful as a fallback but
         # must not replace a more specific own-cohort label in the RNA concordance check. Preserve

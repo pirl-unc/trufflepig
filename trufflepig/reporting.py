@@ -2330,7 +2330,25 @@ def candidate_winning_subtype_for_analysis(analysis):
         # candidate cannot get a second, unaudited chance to change the entity.
         return None
 
-    return _clean_text(row.get("winning_subtype")) or None
+    winning_subtype = _clean_text(row.get("winning_subtype"))
+    if not winning_subtype:
+        return None
+    if active_code:
+        try:
+            from .analyze import cancer_type_tree_relationship
+
+            relationship = cancer_type_tree_relationship(
+                active_code,
+                winning_subtype,
+            )
+        except Exception:
+            relationship = "unknown"
+        if relationship not in {"same", "descendant", "unknown"}:
+            # A subtype may refine its active parent, but it may not broaden to
+            # an ancestor or jump sideways to a sibling branch. Those codes can
+            # remain in the differential; they are not this report's subtype.
+            return None
+    return winning_subtype
 
 
 def _match_curated_subtype(parent_code, *candidates):

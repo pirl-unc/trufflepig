@@ -415,6 +415,76 @@ def test_summary_compares_registry_child_against_parent_reference():
     assert "nearest RNA alternatives: BLCA" in md
 
 
+def test_summary_replaces_stale_sibling_context_with_shared_parent():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "BRCA_Basal",
+            "cancer_name": "Basal-like breast carcinoma",
+            "report_scope_cancer_type": "BRCA_Basal",
+            "report_scope_parent_cancer_type": "BRCA_HER2",
+            "reference_cancer_type": "BRCA_HER2",
+            "reference_cancer_name": "HER2-enriched",
+            "expression_reference_cancer_type": "BRCA_HER2",
+            "cancer_type_source": "auto-detected",
+            "analysis_constraints": {},
+            "candidate_trace": [
+                {"code": "BRCA", "support_geomean": 0.82},
+            ],
+            "fine_report_scope_inference": {
+                "reference_cancer_type": "BRCA_HER2",
+                "metrics": {"fine_reference_support": 0.91},
+            },
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="BRCA_Basal",
+        disease_state="",
+    )
+
+    assert "BRCA_Basal (Basal-like) as the fine label" in md
+    assert "BRCA (Breast Invasive Carcinoma) expression-reference context" in md
+    assert "BRCA is analysis context only, not an alternative diagnosis" in md
+    assert "no sibling subtype context is carried" in md
+    assert "BRCA_HER2" not in md
+
+
+def test_supplied_summary_reads_resolved_parent_not_stale_sibling_field():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "BRCA_Basal",
+            "cancer_name": "Basal-like breast carcinoma",
+            "report_scope_cancer_type": "BRCA_Basal",
+            "report_scope_parent_cancer_type": "BRCA_HER2",
+            "reference_cancer_type": "BRCA_HER2",
+            "reference_cancer_name": "HER2-enriched",
+            "expression_reference_cancer_type": "BRCA_HER2",
+            "cancer_type_source": "user-specified",
+            "analysis_constraints": {"cancer_type": "BRCA_Basal"},
+            "candidate_trace": [
+                {"code": "BRCA", "support_geomean": 0.82},
+                {"code": "BLCA", "support_geomean": 0.31},
+            ],
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="BRCA_Basal",
+        disease_state="",
+    )
+
+    assert "BRCA (Breast Invasive Carcinoma) is used as the parent expression context" in md
+    assert "concordant at the parent level: BRCA (Breast Invasive Carcinoma) is top" in md
+    assert "refined report label remains BRCA_Basal (Basal-like)" in md
+    assert "BRCA_HER2" not in md
+
+
 def test_summary_marks_supplied_cancer_type_rna_discordance():
     analysis = _make_analysis()
     analysis["cancer_type"] = "COAD"

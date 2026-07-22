@@ -2344,18 +2344,87 @@ def _contrast_signal_is_strong(signal: Mapping[str, Any], margin: float) -> bool
     )
 
 
+def _contrast_participant_for_code(code: str, type_a: str, type_b: str) -> str:
+    """Return the contrast side represented by an exact or descendant code."""
+    code = _clean(code)
+    participants = (type_a, type_b)
+    if code in participants:
+        return code
+    return next(
+        (
+            ancestor
+            for ancestor in _registry_parent_chain(code)
+            if ancestor in participants
+        ),
+        "",
+    )
+
+
+def _contrast_participant_support(
+    participant: str,
+    support_by_code: Mapping[str, float],
+) -> tuple[float, str]:
+    """Return the strongest context support represented by a contrast side."""
+    matches = [
+        (float(_safe_float(support)), code)
+        for code, support in support_by_code.items()
+        if _safe_float(support) > 0
+        and _code_has_registry_ancestor(code, participant)
+    ]
+    if not matches:
+        return 0.0, ""
+    support, matched_code = max(
+        matches,
+        key=lambda item: (item[0], item[1] == participant, item[1]),
+    )
+    return support, matched_code
+
+
 def _contrast_context_code(
     type_a: str,
     type_b: str,
     support_by_code: Mapping[str, float],
     top_code: str,
-) -> tuple[str, float]:
-    candidates = [(type_a, _safe_float(support_by_code.get(type_a)))]
-    candidates.append((type_b, _safe_float(support_by_code.get(type_b))))
-    if top_code in {type_a, type_b}:
-        candidates.append((top_code, max(1.0, _safe_float(support_by_code.get(top_code)))))
-    code, support = max(candidates, key=lambda item: (item[1], item[0]))
-    return (code, float(support)) if support > 0 else ("", 0.0)
+) -> tuple[str, float, str, str]:
+    top_participant = _contrast_participant_for_code(top_code, type_a, type_b)
+    candidates: list[tuple[str, float, str]] = []
+    for participant in (type_a, type_b):
+        support, matched_code = _contrast_participant_support(
+            participant,
+            support_by_code,
+        )
+        if participant == top_participant:
+            support = max(1.0, support)
+            matched_code = top_code
+        candidates.append((participant, support, matched_code))
+    participant, support, matched_code = max(
+        candidates,
+        key=lambda item: (item[1], item[0] == top_participant, item[0]),
+    )
+    if support <= 0:
+        return "", 0.0, "", top_participant
+    return participant, float(support), matched_code, top_participant
+
+
+def _contrast_consensus_context(
+    analysis: Mapping[str, Any],
+    type_a: str,
+    type_b: str,
+) -> str:
+    """Return shared broad/coarse support at the contrast-participant level."""
+    broad_participant = _contrast_participant_for_code(
+        _top_code(analysis),
+        type_a,
+        type_b,
+    )
+    coarse_participant = _contrast_participant_for_code(
+        _top_coarse_reference_code(analysis),
+        type_a,
+        type_b,
+    )
+    if broad_participant and broad_participant == coarse_participant:
+        return broad_participant
+    return ""
 
 
 def _contrast_active_ambiguity(
@@ -2365,26 +2434,30 @@ def _contrast_active_ambiguity(
     type_b: str,
     winner_code: str,
     context_code: str,
+    context_match_code: str,
     top_code: str,
-    primary_contexts: tuple[str, ...],
+    top_participant: str,
+    context_is_primary: bool,
     broad_uncertain: bool,
     context_marker_incoherent: bool,
     strong_signal: bool,
 ) -> dict[str, Any]:
     """Describe whether a contrast is local enough to select a label."""
-    top_participates = top_code in {type_a, type_b}
-    context_is_top = context_code == top_code
-    same_top = winner_code == top_code
+    top_participates = bool(top_participant)
+    context_is_top = context_code == top_participant
+    same_top = winner_code == top_participant
     same_context = winner_code == context_code
     return {
         "contrast": contrast,
         "participants": [type_a, type_b],
         "winner": winner_code,
         "top_code": top_code,
+        "top_participant": top_participant,
         "context_code": context_code,
+        "context_match_code": context_match_code,
         "top_participates": bool(top_participates),
         "context_is_top": bool(context_is_top),
-        "context_is_primary": bool(context_code in primary_contexts),
+        "context_is_primary": bool(context_is_primary),
         "same_top": bool(same_top),
         "same_context": bool(same_context),
         "broad_uncertain": bool(broad_uncertain),
@@ -2425,7 +2498,6 @@ def _add_contrast_discriminator_features(
         else ""
     )
     broad_uncertain = fit_label in {"weak", "ambiguous"}
-    consensus_context = _broad_coarse_consensus_context(analysis)
 
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
@@ -2437,7 +2509,17 @@ def _add_contrast_discriminator_features(
         type_b = _clean(first.get("type_b")).upper()
         if type_a not in registry or type_b not in registry:
             continue
-        context_code, context_support = _contrast_context_code(
+        consensus_context = _contrast_consensus_context(
+            analysis,
+            type_a,
+            type_b,
+        )
+        (
+            context_code,
+            context_support,
+            context_match_code,
+            top_participant,
+        ) = _contrast_context_code(
             type_a,
             type_b,
             support_by_code,
@@ -2486,13 +2568,24 @@ def _add_contrast_discriminator_features(
             continue
 
         same_context = winner_code == context_code
-        same_top = winner_code == top_code
-        top_participates = top_code in {type_a, type_b}
-        context_is_top = context_code == top_code
-        context_is_primary = context_code in primary_contexts
+        same_top = winner_code == top_participant
+        top_participates = bool(top_participant)
+        context_is_top = context_code == top_participant
+        context_is_primary = any(
+            _contrast_participant_for_code(code, type_a, type_b) == context_code
+            for code in primary_contexts
+        )
         strong_signal = _contrast_signal_is_strong(winner_signal, margin)
         marker_coherence = _marker_coherence(winner_code, sample_tpm_by_symbol)
-        context_marker_coherence = _marker_coherence(context_code, sample_tpm_by_symbol)
+        # A parent contrast can be activated by a more specific registry child
+        # (for example BRCA_Basal participating in BRCA_vs_SARC_EPITH). Judge
+        # whether the active diagnosis is coherent on that matched child, not
+        # on the broader participant's potentially different marker program.
+        context_marker_coherence_code = context_match_code or context_code
+        context_marker_coherence = _marker_coherence(
+            context_marker_coherence_code,
+            sample_tpm_by_symbol,
+        )
         context_marker_incoherent = bool(
             context_marker_coherence
             and not _marker_coherence_selection_grade(context_marker_coherence)
@@ -2503,8 +2596,10 @@ def _add_contrast_discriminator_features(
             type_b=type_b,
             winner_code=winner_code,
             context_code=context_code,
+            context_match_code=context_match_code,
             top_code=top_code,
-            primary_contexts=primary_contexts,
+            top_participant=top_participant,
+            context_is_primary=context_is_primary,
             broad_uncertain=broad_uncertain,
             context_marker_incoherent=context_marker_incoherent,
             strong_signal=strong_signal,
@@ -2574,7 +2669,16 @@ def _add_contrast_discriminator_features(
                 1.0,
             )
         )
-        hypothesis = _hypothesis(hypotheses, winner_code)
+        # A parent-level contrast agreeing with an active child is explanatory
+        # evidence for that child, not a competing report-label hypothesis. If
+        # it were placed on a new parent row, later hierarchy/centroid fusion
+        # could broaden the already-more-specific child call to its parent.
+        evidence_code = (
+            top_code
+            if same_top and _code_has_registry_ancestor(top_code, winner_code)
+            else winner_code
+        )
+        hypothesis = _hypothesis(hypotheses, evidence_code)
         hypothesis.add_source("contrast_discriminator")
         hypothesis.expression_reference_cancer_type = (
             hypothesis.expression_reference_cancer_type or winner_code
@@ -2599,6 +2703,11 @@ def _add_contrast_discriminator_features(
             {
                 "contrast_discriminator": contrast,
                 "contrast_discriminator_context_code": context_code,
+                "contrast_discriminator_context_match_code": context_match_code,
+                "contrast_discriminator_context_marker_coherence_code": (
+                    context_marker_coherence_code
+                ),
+                "contrast_discriminator_top_participant": top_participant,
                 "contrast_discriminator_context_support": round(
                     float(context_support),
                     4,
@@ -2611,6 +2720,7 @@ def _add_contrast_discriminator_features(
                 "contrast_discriminator_margin": round(float(margin), 4),
                 "contrast_discriminator_strong_signal": bool(strong_signal),
                 "contrast_discriminator_broad_fit_label": fit_label,
+                "contrast_discriminator_consensus_context": consensus_context,
                 "contrast_discriminator_active_ambiguity": active_ambiguity,
                 "contrast_discriminator_sources": winner_signal.get("sources") or [],
                 "contrast_discriminator_support_types": (

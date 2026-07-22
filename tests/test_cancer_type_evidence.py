@@ -5738,6 +5738,495 @@ def _contrast_rows(*, contrast="GBC_vs_PAAD"):
     )
 
 
+def _stad_chol_contrast_rows():
+    """Representative parent-level GI contrast in the pirlygenes row schema."""
+    rows = []
+    for favors, primary, supporting in (
+        ("STAD", ("CDX2", "CLDN18"), ("GKN1",)),
+        ("CHOL", ("KRT19", "EPCAM"), ("KRT7", "SOX9", "HNF1B")),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "STAD_vs_CHOL",
+                    "type_a": "STAD",
+                    "type_b": "CHOL",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "pirlygenes#266",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
+def _laml_cml_contrast_rows():
+    """Representative parent-level heme contrast in the pirlygenes row schema."""
+    rows = []
+    for favors, primary, supporting in (
+        ("LAML", ("CD34", "FLT3"), ("GATA2",)),
+        ("CML", ("BCR", "ABL1"), ("LYZ",)),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "LAML_vs_CML",
+                    "type_a": "LAML",
+                    "type_b": "CML",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "pirlygenes#266",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
+def _crc_stad_contrast_rows():
+    """A valid but non-strong parent contrast for consensus safety tests."""
+    rows = []
+    for favors, primary, supporting in (
+        ("CRC", ("KRT20",), ("CDH17",)),
+        ("STAD", ("CLDN18",), ("GKN1",)),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "CRC_vs_STAD",
+                    "type_a": "CRC",
+                    "type_b": "STAD",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "curated-parent-contrast",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
+def _brca_sarc_epith_contrast_rows():
+    """A cross-lineage parent contrast with a basal breast child context."""
+    rows = []
+    for favors, primary, supporting in (
+        ("BRCA", ("ESR1", "FOXA1"), ("GATA3",)),
+        ("SARC_EPITH", ("KRT8", "KRT18"), ("EPCAM", "CD34", "SMARCB1")),
+    ):
+        for symbol in (*primary, *supporting):
+            rows.append(
+                {
+                    "contrast": "BRCA_vs_SARC_EPITH",
+                    "type_a": "BRCA",
+                    "type_b": "SARC_EPITH",
+                    "favors": favors,
+                    "symbol": symbol,
+                    "direction": "high",
+                    "tier": "primary" if symbol in primary else "supporting",
+                    "separability": "strong",
+                    "source": "curated-parent-contrast",
+                    "support_type": "contrast_marker_literature",
+                }
+            )
+    return tuple(rows)
+
+
+def _stad_program_expression():
+    return _expression_frame(
+        {
+            "CLDN18": 100.0,
+            "GKN1": 60.0,
+            "CDX2": 40.0,
+            "MUC5AC": 30.0,
+            "MUC6": 20.0,
+            "TFF1": 25.0,
+            "KRT20": 0.1,
+            "CDH17": 0.1,
+        }
+    )
+
+
+def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch):
+    """A stable parent panel applies when the ranker reports a registry child."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _stad_chol_contrast_rows,
+    )
+    analysis = _analysis(("STAD_EBV", 1.0), ("CHOL", 0.78))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "KRT19": 120.0,
+                "EPCAM": 80.0,
+                "KRT7": 90.0,
+                "SOX9": 35.0,
+                "HNF1B": 25.0,
+                "CDX2": 0.1,
+                "CLDN18": 0.1,
+                "GKN1": 0.1,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "CHOL"
+    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["contrast_discriminator_context_code"] == "STAD"
+    assert (
+        result["selected"]["contrast_discriminator_context_match_code"]
+        == "STAD_EBV"
+    )
+    assert result["selected"]["contrast_discriminator_top_participant"] == "STAD"
+    ambiguity = result["selected"]["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["active_for_report_label"] is True
+    assert ambiguity["top_code"] == "STAD_EBV"
+    assert ambiguity["top_participant"] == "STAD"
+
+
+def test_parent_contrast_uses_coherent_child_program_before_cross_code_promotion(
+    monkeypatch,
+):
+    """A coherent subtype is not rejected for lacking its parent's markers."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _brca_sarc_epith_contrast_rows,
+    )
+    analysis = _analysis(("BRCA_Basal", 1.0))
+    analysis["fit_quality"] = {"label": "focused"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                # Coherent basal-like breast program, with the luminal parent
+                # program appropriately absent.
+                "KRT5": 60.0,
+                "KRT14": 50.0,
+                "KRT17": 45.0,
+                "KRT6B": 40.0,
+                "FOXC1": 35.0,
+                # A strong opposing contrast program must still not relabel a
+                # focused, coherent child diagnosis merely because BRCA's
+                # luminal markers are absent.
+                "KRT8": 60.0,
+                "KRT18": 60.0,
+                "EPCAM": 50.0,
+                "CD34": 40.0,
+                "SMARCB1": 20.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "BRCA_Basal"
+    sarcoma = next(
+        row for row in result["evidence"] if row["cancer_type"] == "SARC_EPITH"
+    )
+    assert sarcoma["contrast_discriminator_context_code"] == "BRCA"
+    assert sarcoma["contrast_discriminator_context_match_code"] == "BRCA_Basal"
+    assert (
+        sarcoma["contrast_discriminator_context_marker_coherence_code"]
+        == "BRCA_Basal"
+    )
+    assert sarcoma["contrast_discriminator_context_marker_coherence"]["status"] == (
+        "consistent"
+    )
+    ambiguity = sarcoma["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["context_marker_incoherent"] is False
+    assert ambiguity["active_for_report_label"] is False
+    assert sarcoma["label_decision"]["status"] == "blocked"
+
+
+def test_parent_contrast_support_does_not_demote_an_agreeing_child(monkeypatch):
+    """Parent evidence explains a matching child call without broadening it."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _stad_chol_contrast_rows,
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CDX2": 80.0,
+                "CLDN18": 100.0,
+                "GKN1": 60.0,
+                "MUC5AC": 30.0,
+                "MUC6": 20.0,
+                "TFF1": 25.0,
+                "KRT19": 0.1,
+                "EPCAM": 0.1,
+                "KRT7": 0.1,
+                "SOX9": 0.1,
+                "HNF1B": 0.1,
+            }
+        ),
+        _analysis(("STAD_EBV", 1.0), ("CHOL", 0.72)),
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD_EBV"
+    child = next(
+        row for row in result["evidence"] if row["cancer_type"] == "STAD_EBV"
+    )
+    assert "contrast_discriminator" in child["evidence_sources"]
+    assert child["contrast_discriminator_context_match_code"] == "STAD_EBV"
+    assert all(
+        "contrast_discriminator" not in row["evidence_sources"]
+        for row in result["evidence"]
+        if row["cancer_type"] == "STAD"
+    )
+    ambiguity = child["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["same_top"] is True
+    assert ambiguity["active_for_report_label"] is False
+
+
+def test_agreeing_parent_contrast_survives_hierarchy_centroid_fusion_on_child(
+    monkeypatch,
+):
+    """Downstream whole-profile support cannot broaden an agreeing child call."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _stad_chol_contrast_rows,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series({"STAD": 0.91}), True),
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_pan_cancer_signature_marker_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_expression_classifier_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_local_expression_reference_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_lineage_panel_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
+
+    def add_parent_compatible_hierarchy(hypotheses, _sample):
+        for hypothesis in hypotheses.values():
+            hypothesis.details.update(
+                {
+                    "learned_expression_hierarchy_support": 0.90,
+                    "learned_expression_entity_support": 0.90,
+                    "learned_expression_entity_label": "STAD",
+                    "learned_expression_family_support": 0.95,
+                    "learned_expression_family_label": "carcinoma-gi",
+                    "learned_expression_compartment_support": 0.98,
+                    "learned_expression_compartment_label": "epithelial",
+                }
+            )
+
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_hierarchy_candidate_features",
+        add_parent_compatible_hierarchy,
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CDX2": 80.0,
+                "CLDN18": 100.0,
+                "GKN1": 60.0,
+                "KRT19": 0.1,
+                "EPCAM": 0.1,
+                "KRT7": 0.1,
+                "SOX9": 0.1,
+                "HNF1B": 0.1,
+            }
+        ),
+        _analysis(("STAD_EBV", 1.0)),
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD_EBV"
+    assert result["selected"]["fused_evidence_centroid_support"] == 1.0
+    assert result["selected"]["learned_expression_hierarchy_support"] == 0.9
+    assert "contrast_discriminator" in result["selected"]["evidence_sources"]
+    assert all(
+        "contrast_discriminator" not in row["evidence_sources"]
+        for row in result["evidence"]
+        if row["cancer_type"] == "STAD"
+    )
+
+
+def test_parent_contrast_stays_nonselecting_for_an_unrelated_top_context(monkeypatch):
+    """A descendant secondary hit cannot activate a contrast under another lineage."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _stad_chol_contrast_rows,
+    )
+    analysis = _analysis(("PCPG", 1.0), ("STAD_CIN", 0.76))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "KRT19": 120.0,
+                "EPCAM": 80.0,
+                "KRT7": 90.0,
+                "SOX9": 35.0,
+                "HNF1B": 25.0,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "PCPG"
+    chol = next(row for row in result["evidence"] if row["cancer_type"] == "CHOL")
+    assert chol["contrast_discriminator_context_code"] == "STAD"
+    assert chol["contrast_discriminator_context_match_code"] == "STAD_CIN"
+    assert chol["contrast_discriminator_top_participant"] == ""
+    ambiguity = chol["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["top_participates"] is False
+    assert ambiguity["active_for_report_label"] is False
+    assert chol["label_decision"]["status"] == "blocked"
+
+
+def test_parent_contrast_resolves_heme_entity_without_inventing_risk_group(monkeypatch):
+    """Expression can distinguish AML from CML, but cannot assign an ELN child."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _laml_cml_contrast_rows,
+    )
+    analysis = _analysis(("CML", 1.0), ("LAML_ELNadv", 0.82))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "CD34": 80.0,
+                "FLT3": 45.0,
+                "GATA2": 35.0,
+                "ELANE": 70.0,
+                "KIT": 30.0,
+                "MPO": 100.0,
+                "BCR": 0.1,
+                "ABL1": 0.1,
+                "LYZ": 0.1,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "LAML"
+    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["contrast_discriminator_context_code"] == "CML"
+    assert result["selected"]["contrast_discriminator_context_match_code"] == "CML"
+    assert result["selected"]["contrast_discriminator_top_participant"] == "CML"
+    assert result["selected"]["cancer_type"] != "LAML_ELNadv"
+
+
+def test_parent_contrast_preserves_normalized_broad_coarse_consensus(monkeypatch):
+    """Matching child/parent contexts retain the existing consensus veto."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _crc_stad_contrast_rows,
+    )
+    analysis = _analysis(("COAD_MSI", 1.0))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("COAD_TPM", 0.9), ("STAD_TPM", 0.8)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _stad_program_expression(),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "COAD_MSI"
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["contrast_discriminator_context_code"] == "CRC"
+    assert stad["contrast_discriminator_context_match_code"] == "COAD_MSI"
+    assert stad["contrast_discriminator_consensus_context"] == "CRC"
+    assert stad["contrast_discriminator_strong_signal"] is False
+    assert stad["label_decision"]["status"] == "blocked"
+    assert any(
+        "coarse reference matching both support CRC" in reason
+        for reason in stad["blocking_reasons"]
+    )
+
+
+def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
+    """An equally strong opposite coarse match cannot win by code spelling."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _crc_stad_contrast_rows,
+    )
+    analysis = _analysis(("COAD_MSI", 1.0))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        top_tcga_cohorts=[("STAD_TPM", 0.9)]
+    )
+
+    result = select_report_scope_from_evidence(
+        _stad_program_expression(),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD"
+    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["contrast_discriminator_context_code"] == "CRC"
+    assert (
+        result["selected"]["contrast_discriminator_context_match_code"]
+        == "COAD_MSI"
+    )
+    ambiguity = result["selected"]["contrast_discriminator_active_ambiguity"]
+    assert ambiguity["context_is_top"] is True
+    assert ambiguity["active_for_report_label"] is True
+
+
 def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence

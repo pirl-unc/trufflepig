@@ -5726,28 +5726,73 @@ def _apply_cancer_type_context_roles(analysis, cancer_type_context):
         or cancer_type_context.code_for("cohort")
         or report_code
     )
+    parent_code = cancer_type_context.code_for("parent")
     expression_code = (
         cancer_type_context.code_for("expression")
         or reference_code
         or report_code
     )
+    if cancer_type_context.requested_reference_code:
+        analysis.setdefault(
+            "requested_reference_cancer_type",
+            cancer_type_context.requested_reference_code,
+        )
+    if cancer_type_context.requested_expression_code:
+        analysis.setdefault(
+            "requested_expression_reference_cancer_type",
+            cancer_type_context.requested_expression_code,
+        )
+    if cancer_type_context.excluded_sibling_codes:
+        analysis["excluded_sibling_cancer_type_contexts"] = list(
+            cancer_type_context.excluded_sibling_codes
+        )
     if reference_code:
         analysis["reference_cancer_type"] = reference_code
+        analysis["reference_cancer_name"] = cancer_code_display_name(
+            reference_code,
+            reference_code,
+        )
         analysis["fallback_expression_reference_cancer_type"] = reference_code
+    if parent_code:
+        analysis["report_scope_parent_cancer_type"] = parent_code
+    else:
+        analysis.pop("report_scope_parent_cancer_type", None)
     if expression_code:
         analysis["expression_reference_cancer_type"] = expression_code
     if expression_code == report_code and expression_code == reference_code:
         role = "same_reference"
     elif expression_code == report_code and cancer_type_context.best_expression_direct:
         role = "report_label_exact"
-    elif expression_code == reference_code:
-        role = "fallback_reference"
+    elif cancer_type_context.expression_relationship == "ancestor":
+        role = "ancestor_fallback_reference"
+    elif cancer_type_context.expression_relationship == "descendant":
+        role = "descendant_expression_reference_only"
+    elif cancer_type_context.expression_relationship == "independent":
+        role = "independent_fallback_reference"
     else:
         role = "related_exact_reference"
     analysis["expression_reference_role"] = role
     analysis["expression_reference_is_direct"] = bool(
         cancer_type_context.best_expression_direct
     )
+    analysis["cancer_type_tree_roles"] = {
+        "report": {
+            "code": report_code,
+            "role": "diagnosis",
+            "relationship": "same",
+        },
+        "reference": {
+            "code": reference_code,
+            "role": "analysis_context",
+            "relationship": cancer_type_context.reference_relationship,
+        },
+        "expression": {
+            "code": expression_code,
+            "role": "expression_reference",
+            "relationship": cancer_type_context.expression_relationship,
+        },
+        "excluded_siblings": list(cancer_type_context.excluded_sibling_codes),
+    }
 
 
 @lru_cache(maxsize=256)
@@ -6122,22 +6167,52 @@ def _cancer_type_context_line(cancer_type_context):
     else:
         same_reference_label = "broad expression reference"
     if not cancer_type_context.uses_distinct_reference:
-        return (
-            f"- **Cancer label context**: {report} is used as both the report "
-            f"label and the {same_reference_label}; no finer active subtype "
-            "is being carried."
+        line = (
+            f"- **Cancer label roles**: diagnosis/report node is {report}; the "
+            f"same node supplies the {same_reference_label}."
         )
+        if cancer_type_context.excluded_sibling_codes:
+            excluded = ", ".join(
+                _cancer_label(code)
+                for code in cancer_type_context.excluded_sibling_codes
+            )
+            line += (
+                f" Competing sibling context {excluded} is not used anywhere "
+                "downstream in this report."
+            )
+        else:
+            line += " No different active subtype node is carried downstream."
+        return line
+    relation = (
+        "ancestor analysis context"
+        if cancer_type_context.reference_relationship == "ancestor"
+        else "independent fallback analysis context"
+    )
     line = (
-        f"- **Cancer label context**: fine/report label is {report}; "
-        f"fallback expression reference is {reference}"
+        f"- **Cancer label roles**: diagnosis/report node is {report}; "
+        f"{reference} is the {relation} only and is not an alternative diagnosis"
     )
     if expression and expression != reference:
+        expression_relation = cancer_type_context.expression_relationship
+        expression_role = {
+            "same": "the diagnosis-matched expression reference",
+            "ancestor": "an ancestor expression fallback",
+            "descendant": "a descendant expression reference only",
+            "independent": "an independent expression fallback",
+        }.get(expression_relation, "the expression reference")
         line += (
-            f"; exact expression reference is {expression} and is preferred by "
-            "modules that support fine-grained cohorts"
+            f"; {expression} is {expression_role}"
         )
     elif expression:
-        line += f"; expression-context stages use {expression}"
+        line += f"; expression-context stages use that same {expression} node"
+    if cancer_type_context.excluded_sibling_codes:
+        excluded = ", ".join(
+            _cancer_label(code)
+            for code in cancer_type_context.excluded_sibling_codes
+        )
+        line += f"; competing sibling {excluded} is explicitly excluded"
+    elif cancer_type_context.reference_relationship == "ancestor":
+        line += f"; interpretation remains on the {report} branch"
     line += "."
     return line
 

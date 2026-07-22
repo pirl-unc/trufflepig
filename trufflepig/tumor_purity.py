@@ -2833,7 +2833,9 @@ def plot_purity_method_comparison(
         if integration_source:
             title += f" · integration: {integration_source}"
     ax.set_title(title, fontsize=11, fontweight="bold", loc="left")
-    ax.legend(loc="lower right", fontsize=8, frameon=False)
+    handles, _labels = ax.get_legend_handles_labels()
+    if handles:
+        ax.legend(loc="lower right", fontsize=8, frameon=False)
 
     fig.tight_layout()
     if save_to_filename:

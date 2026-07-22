@@ -4,6 +4,7 @@ from pirlygenes.gene_sets_cancer import cancer_type_registry
 import trufflepig.analyze.cancer_type_context as context_module
 from trufflepig import reference as reference_module
 from trufflepig.analyze import (
+    ExpressionReferenceRecord,
     cancer_type_context_from_analysis,
     effective_expression_reference,
     expression_reference_options,
@@ -59,6 +60,75 @@ def test_context_exposes_refined_child_and_parent_reference():
     assert context.code_for("parent") == "SARC"
     assert context.relationship == "fine_child_of_reference"
     assert context.uses_distinct_reference
+
+
+def test_context_excludes_sibling_reference_from_active_report_roles():
+    from trufflepig.main import _cancer_type_context_line
+
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "BRCA_Basal",
+            "report_scope_cancer_type": "BRCA_Basal",
+            "reference_cancer_type": "BRCA_HER2",
+            "expression_reference_cancer_type": "BRCA_HER2",
+        }
+    )
+
+    assert context.code_for("report") == "BRCA_Basal"
+    assert context.code_for("reference") == "BRCA"
+    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.reference_relationship == "ancestor"
+    assert context.expression_relationship == "same"
+    assert context.excluded_sibling_codes == ("BRCA_HER2",)
+    exported = context.to_dict()
+    assert exported["report_role"] == "diagnosis"
+    assert exported["reference_role"] == "ancestor_analysis_context"
+    assert exported["expression_role"] == "same_expression_reference"
+
+    lines = "\n".join(context.markdown_lines())
+    assert "BRCA_Basal (Basal-like)" in lines
+    assert "BRCA (Breast Invasive Carcinoma)" in lines
+    assert "does not replace the report diagnosis" in lines
+    assert "BRCA_HER2 (HER2-enriched)" in lines
+    assert "is not used as a report, reference, or expression context" in lines
+    report_line = _cancer_type_context_line(context)
+    assert "diagnosis/report node is BRCA_Basal (Basal-like)" in report_line
+    assert "BRCA (Breast Invasive Carcinoma) is the ancestor analysis context only" in (
+        report_line
+    )
+    assert "competing sibling BRCA_HER2 (HER2-enriched) is explicitly excluded" in (
+        report_line
+    )
+
+
+def test_context_labels_descendant_expression_as_reference_only(monkeypatch):
+    basal_record = ExpressionReferenceRecord(
+        requested_code="BRCA_Basal",
+        reference_code="BRCA_Basal",
+        source_kind="deconvolved_tumor_reference",
+        source="TCGA_BRCA_PAM50",
+    )
+    monkeypatch.setattr(
+        context_module,
+        "_direct_expression_reference_records",
+        lambda: {"BRCA_Basal": (basal_record,)},
+    )
+
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "BRCA",
+            "reference_cancer_type": "BRCA_Basal",
+        }
+    )
+
+    assert context.code_for("report") == "BRCA"
+    assert context.code_for("reference") == "BRCA"
+    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.reference_relationship == "same"
+    assert context.expression_relationship == "descendant"
+    lines = "\n".join(context.markdown_lines())
+    assert "Best expression reference (descendant only)" in lines
+    assert "does not refine the report diagnosis BRCA" in lines
 
 
 def test_context_defaults_refined_label_to_registry_parent_reference():
@@ -253,18 +323,6 @@ def test_expression_reference_options_canonicalize_source_codes():
             "",
         ),
         (
-            # There is no standalone subgroup artifact. The typed MBL parent
-            # supplies the closest physical deconvolved reference instead of
-            # advertising summary-only provenance as a direct loader target.
-            "MBL_G3",
-            "MBL",
-            "deconvolved_tumor_reference",
-            "TREEHOUSE_POLYA_25_01",
-            "symbol_only",
-            False,
-            "registry parent",
-        ),
-        (
             "SARC_ASPS",
             "SARC_ASPS",
             "observed_bulk_reference",
@@ -278,15 +336,6 @@ def test_expression_reference_options_canonicalize_source_codes():
             "ADCC",
             "observed_bulk_reference",
             "GSE294016_BARTL_2025_SGC",
-            "ensembl_symbol",
-            True,
-            "",
-        ),
-        (
-            "MTC",
-            "MTC",
-            "observed_bulk_reference",
-            "GSE32662_PRINGLE_2012",
             "ensembl_symbol",
             True,
             "",
@@ -358,6 +407,20 @@ def test_effective_expression_reference_examples_cover_reference_paths(
     assert record.gene_key == gene_key
     assert record.direct is direct
     assert record.fallback_reason == fallback_reason
+
+
+def test_mbl_subgroup_uses_its_artifact_when_present_and_parent_otherwise():
+    """Optional exact artifacts take precedence without breaking older bundles."""
+    manifest = reference_module.cancer_reference_manifest()
+    exact_available = manifest["cancer_code"].eq("MBL_G3").any()
+
+    record = effective_expression_reference("MBL_G3")
+
+    assert record is not None
+    assert record.requested_code == "MBL_G3"
+    assert record.reference_code == ("MBL_G3" if exact_available else "MBL")
+    assert record.direct is bool(exact_available)
+    assert record.fallback_reason == ("" if exact_available else "registry parent")
 
 
 def test_reference_discovery_keeps_other_sources_when_pan_reference_fails(monkeypatch):
@@ -442,7 +505,7 @@ def test_reference_discovery_does_not_materialize_full_observed_bulk(monkeypatch
     assert record.source == "GSE235092_MERKEL_2024"
 
 
-def test_every_registry_code_has_an_effective_expression_reference():
+def test_effective_references_never_borrow_a_sibling_cohort():
     missing = [
         code
         for code in cancer_type_registry()["code"].dropna().astype(str)
@@ -450,6 +513,22 @@ def test_every_registry_code_has_an_effective_expression_reference():
     ]
 
     assert not missing
+    for code in cancer_type_registry()["code"].dropna().astype(str):
+        record = effective_expression_reference(code)
+        if record is None:
+            continue
+        assert (
+            context_module.cancer_type_tree_relationship(
+                code,
+                record.reference_code,
+            )
+            != "sibling"
+        ), (code, record.reference_code)
+
+    thymic_carcinoma = effective_expression_reference("THYMCA")
+    assert thymic_carcinoma is not None
+    assert thymic_carcinoma.reference_code == "THYM_EPITHELIAL"
+    assert thymic_carcinoma.fallback_reason == "registry parent"
 
 
 def test_expression_reference_contract_is_clean_tpm_with_known_gene_keys():
