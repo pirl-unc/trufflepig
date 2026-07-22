@@ -31,13 +31,17 @@ from trufflepig.tumor_purity import (
 
 def _cohort_median_sample(code: str) -> pd.DataFrame:
     """Synthesize a pseudo-sample whose TPM column is the TCGA cohort
-    median for ``code``. Equivalent to what the median battery uses."""
+    median for ``code``. Equivalent to what the median battery uses.
+
+    Reference-universe genes absent from that cohort are unavailable rather
+    than measured NaNs; represent them as zero in the sample TPM vector.
+    """
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(
         {
             "ensembl_gene_id": ref["Ensembl_Gene_ID"],
             "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"{code}_TPM"].astype(float),
+            "TPM": ref[f"{code}_TPM"].astype(float).fillna(0.0),
         }
     )
 
@@ -126,11 +130,11 @@ def test_override_rejects_orphan_with_tme_driven_raw_signal():
 
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     coad = pd.Series(
-        ref["COAD_TPM"].astype(float).values,
+        ref["COAD_TPM"].astype(float).fillna(0.0).values,
         index=ref["Ensembl_Gene_ID"].values,
     )
     lymph = pd.Series(
-        ref["lymph_node_nTPM"].astype(float).values,
+        ref["lymph_node_nTPM"].astype(float).fillna(0.0).values,
         index=ref["Ensembl_Gene_ID"].values,
     )
     mix = 0.3 * coad + 0.7 * lymph
