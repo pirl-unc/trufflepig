@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import trufflepig.plot as plot_mod
+import trufflepig.plot_scatter as plot_scatter_mod
 import trufflepig.plot_strip as plot_strip_mod
 import trufflepig.main as cli_mod
 import trufflepig.tumor_purity as purity_mod
@@ -1481,7 +1482,7 @@ def test_hierarchy_embedding_metadata_reports_feature_space():
 def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     mock_result = {
         "cancer_type": "DLBC",
-        "tcga_median_purity": 0.94,
+        "tcga_median_purity": None,
         "overall_estimate": 0.81,
         "overall_lower": 0.71,
         "overall_upper": 0.89,
@@ -1510,6 +1511,7 @@ def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     assert result["cancer_type"] == "DLBC"
     assert fig.axes[0].get_xlabel() == "Fraction estimate (%)"
     assert fig.axes[1].get_title() == "Fraction / context components"
+    assert "TCGA median purity not available" in fig.axes[0].get_title()
     assert "Malignant-lineage fraction estimate" in fig._suptitle.get_text()
 
 
@@ -1544,6 +1546,95 @@ def test_plot_sample_summary_is_mode_aware(monkeypatch):
     assert fig.axes[1].get_title() == "Heme Composition Context"
     assert fig.axes[2].get_title().startswith("Lineage / Background Context")
     assert "hematologic / lymphoid bulk" in fig._suptitle.get_text()
+
+
+def test_plot_sample_summary_allows_missing_reference_purity(monkeypatch):
+    """A loadable report must not depend on optional cohort-purity metadata."""
+    mock_analysis = {
+        "cancer_type": "SARC_LPS_UNSPEC",
+        "cancer_name": "Liposarcoma, unspecified",
+        "top_cancers": [("SARC_LPS_UNSPEC", 0.42)],
+        "purity": {
+            "overall_estimate": 0.61,
+            "overall_lower": 0.48,
+            "overall_upper": 0.72,
+            "tcga_median_purity": None,
+            "components": {
+                "stromal": {"enrichment": 1.2},
+                "immune": {"enrichment": 0.8},
+            },
+        },
+        "tissue_scores": [("adipose", 0.93, 20)],
+        "mhc1": {"HLA-A": 40, "HLA-B": 55, "HLA-C": 30, "B2M": 200},
+        "mhc2": {},
+        "candidate_trace": [{"code": "SARC_LPS_UNSPEC"}],
+    }
+    monkeypatch.setattr(purity_mod, "analyze_sample", lambda *a, **k: mock_analysis)
+
+    fig, _analysis = purity_mod.plot_sample_summary(
+        pd.DataFrame({"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}),
+        cancer_type="SARC_LPS_UNSPEC",
+        sample_mode="solid",
+    )
+
+    purity_text = "\n".join(text.get_text() for text in fig.axes[1].texts)
+    assert "median purity: not available" in purity_text
+
+
+@pytest.mark.parametrize(
+    ("cancer_type", "expected_label"),
+    [
+        (
+            "SARC_LPS_UNSPEC",
+            "parent cohort (SARC; requested SARC_LPS_UNSPEC)",
+        ),
+        (
+            "NUTM",
+            "Mean across available pan-cancer cohorts "
+            "(no NUTM pan-cancer cohort)",
+        ),
+    ],
+)
+def test_scatter_uses_an_honest_available_reference_fallback(
+    monkeypatch,
+    cancer_type,
+    expected_label,
+):
+    """Report plots remain loadable when a leaf has no pan-cancer column."""
+    ref = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG1"],
+            "Symbol": ["GENE1"],
+            "SARC_TPM": [2.0],
+            "LUAD_TPM": [4.0],
+        }
+    )
+    monkeypatch.setattr(
+        plot_scatter_mod,
+        "pan_cancer_expression",
+        lambda **_kwargs: ref.copy(),
+    )
+    monkeypatch.setattr(
+        plot_scatter_mod,
+        "housekeeping_gene_ids",
+        lambda: {"ENSG1"},
+    )
+
+    _plot_df, _cats, _colors, _sample_label, cohort_label = (
+        plot_scatter_mod._prepare_sample_vs_cancer_data(
+            pd.DataFrame(
+                {
+                    "gene_id": ["ENSG1"],
+                    "gene_display_name": ["GENE1"],
+                    "TPM": [10.0],
+                }
+            ),
+            {"markers": ["ENSG1"]},
+            cancer_type,
+        )
+    )
+
+    assert expected_label in cohort_label
 
 
 def test_hierarchy_embedding_plot_adds_family_legend_and_neighbors(monkeypatch):

@@ -2749,6 +2749,54 @@ def _add_contrast_discriminator_features(
             priority=(1, support),
         )
 
+    # A two-way panel answers only its named A-vs-B question.  If several
+    # panels activated by the same broad context nominate different
+    # alternatives, none of those pairwise answers is a globally identified
+    # diagnosis.  Keep every signal in the evidence trace, but withhold all of
+    # the conflicting promotions so a later fused pass cannot turn an
+    # arbitrary iteration/tie-break order into the report label.
+    active_promotions: dict[str, list[CancerTypeEvidence]] = {}
+    for hypothesis in hypotheses.values():
+        if (
+            not hypothesis.can_select_report_label
+            or hypothesis.selected_by != "contrast_discriminator"
+        ):
+            continue
+        context_code = _clean(
+            hypothesis.details.get("contrast_discriminator_context_code")
+        )
+        winner_code = _clean(
+            hypothesis.details.get("contrast_discriminator_winner")
+        )
+        if context_code and winner_code and winner_code != context_code:
+            active_promotions.setdefault(context_code, []).append(hypothesis)
+    for context_code, promoted in active_promotions.items():
+        winners = {
+            _clean(row.details.get("contrast_discriminator_winner"))
+            for row in promoted
+        }
+        winners.discard("")
+        if len(winners) < 2:
+            continue
+        alternatives = ", ".join(sorted(winners))
+        reason = (
+            f"pairwise contrast panels activated by {context_code} disagree "
+            f"across alternative diagnoses ({alternatives}); retain the "
+            "signals as hypotheses but do not use any one pairwise panel as "
+            "a global report-label classifier"
+        )
+        for hypothesis in promoted:
+            hypothesis.can_select_report_label = False
+            hypothesis.label_status = "blocked"
+            hypothesis.label_basis = "contrast_discriminator"
+            hypothesis.blocking_reasons = tuple(
+                dict.fromkeys((*hypothesis.blocking_reasons, reason))
+            )
+            hypothesis.selection_priority = (0, 0.0, 0)
+            hypothesis.details["contrast_discriminator_conflicting_winners"] = (
+                sorted(winners)
+            )
+
 
 def _top_code(analysis: Mapping[str, Any]) -> str:
     rows = _candidate_rows(analysis)
@@ -3309,7 +3357,14 @@ def _local_reference_family_specificity_bonus(family: str) -> float:
 
 
 def _is_molecular_status_expression_source(value: object) -> bool:
-    text = _clean(value).lower()
+    cleaned = _clean(value)
+    registry_row = _registry_by_code().get(cleaned, {})
+    if (
+        _clean(registry_row.get("ontology_kind")).lower()
+        == "molecular_status_subtype"
+    ):
+        return True
+    text = cleaned.lower()
     if not text:
         return False
     normalized = text.replace(";", "/").replace(",", "/").replace("_", "/")
@@ -3445,6 +3500,7 @@ def _orthogonal_axes_for_code(
     suffix_upper = suffix.upper()
     expression_source = _clean(row.get("expression_source"))
     source_cohort = _clean(row.get("source_cohort"))
+    ontology_kind = _clean(row.get("ontology_kind")).lower()
     name = _clean(row.get("name"))
     notes = _clean(row.get("notes"))
     viral_agent = _clean(row.get("viral_agent"))
@@ -3580,8 +3636,15 @@ def _orthogonal_axes_for_code(
     if fusion_driver and parent_code and fusion_driven == "subtype":
         add_axis("fusion_driver", fusion_driver, system="fusion")
 
-    if not axes and parent_code and _is_molecular_status_expression_source(
-        expression_source or source_cohort or code_text
+    if (
+        not axes
+        and parent_code
+        and (
+            ontology_kind == "molecular_status_subtype"
+            or _is_molecular_status_expression_source(expression_source)
+            or _is_molecular_status_expression_source(source_cohort)
+            or _is_molecular_status_expression_source(code_text)
+        )
     ):
         add_axis(
             "molecular_status",
@@ -5067,6 +5130,7 @@ def _persistent_report_label_blockers(
     if hypothesis.direct_fusion_support > 0:
         return ()
     details = hypothesis.details
+    registry_row = _registry_row_for_code(hypothesis.cancer_type)
     declared_blockers = details.get("hard_report_label_blockers") or ()
     if isinstance(declared_blockers, str):
         declared_blockers = (declared_blockers,)
@@ -5075,6 +5139,16 @@ def _persistent_report_label_blockers(
         for reason in declared_blockers
         if _clean(reason)
     ]
+    if registry_row and not _safe_bool(
+        registry_row.get("is_classification_target"),
+        default=True,
+    ):
+        blockers.append(
+            f"{hypothesis.cancer_type} is registry-declared as a hypothesis/"
+            "context code rather than a classification target; direct "
+            "molecular evidence is required before it can become the report "
+            "label"
+        )
     if details.get("local_reference_explicit_negative_fusion"):
         conflict = details.get("local_reference_explicit_negative_fusion_details") or {}
         blockers.append(
@@ -6281,10 +6355,18 @@ def _add_local_expression_reference_features(
                 )
             )
         primary_tissue = _clean(panel.get("primary_tissue")).lower()
+        marker_program_allows_signature_anchor = bool(
+            not code_marker_coherence
+            or (
+                _marker_coherence_selection_grade(code_marker_coherence)
+                and _marker_coherence_unexpected_low_count(code_marker_coherence) == 0
+            )
+        )
         signature_anchor_support = (
             0.0
             if (
                 molecular_status_source
+                or not marker_program_allows_signature_anchor
                 or context_support >= _LOCAL_REFERENCE_NEAR_TOP_CONTEXT_MIN_SUPPORT
                 or primary_tissue
                 in _LOCAL_REFERENCE_SIGNATURE_ANCHOR_GENERIC_PRIMARY_TISSUES
@@ -6758,6 +6840,15 @@ def _add_local_expression_reference_features(
             parent_blockers = [
                 reason for reason in blockers if reason != molecular_status_blocker
             ]
+            if not (
+                _code_has_registry_ancestor(top, parent_code)
+                or _code_has_registry_ancestor(parent_code, top)
+            ):
+                parent_blockers.append(
+                    f"{code} molecular/status expression can annotate or refine "
+                    f"only an established {parent_code} parent diagnosis; the "
+                    f"primary RNA context is {top}"
+                )
             parent_marker_coherence = _marker_coherence(
                 parent_code,
                 sample_tpm_by_symbol,
@@ -7413,6 +7504,10 @@ def _add_rare_marker_features(
     )
     has_direct_fusion = hypothesis.direct_fusion_support > 0
     registry_row = _registry_by_code().get(code, {})
+    classification_target = _safe_bool(
+        registry_row.get("is_classification_target"),
+        default=True,
+    )
     fusion_defined_code = _clean(registry_row.get("fusion_driven")).lower() == "defining"
     context_support = max(
         (support_by_code.get(context_code, 0.0) for context_code in context_codes),
@@ -7445,6 +7540,12 @@ def _add_rare_marker_features(
     blockers: list[str] = []
     if not rule_promotes:
         blockers.append("rule is a diagnostic prompt only")
+    if rule_promotes and not classification_target and not has_direct_fusion:
+        blockers.append(
+            f"{code} is not a registry classification target; RNA-surrogate "
+            "evidence remains a diagnostic prompt unless direct molecular "
+            "evidence establishes the entity"
+        )
     if (
         code == "ADCC"
         and rule_promotes
@@ -7632,6 +7733,7 @@ def _add_rare_marker_features(
         {
             "rule_id": rule_id,
             "rule_promotes_report_scope": rule_promotes,
+            "registry_classification_target": classification_target,
             "surrogate": finding.get("surrogate"),
             "surrogate_tpm": finding.get("surrogate_tpm"),
             "threshold_tpm": finding.get("threshold_tpm"),
@@ -9017,6 +9119,22 @@ def _add_fused_evidence_features(
         hypothesis.details["fused_evidence_can_select"] = bool(can_select)
         if blockers:
             hypothesis.details["fused_evidence_blockers"] = list(blockers)
+        hard_blockers = _persistent_report_label_blockers(hypothesis)
+        if hard_blockers:
+            blockers = list(
+                dict.fromkeys((*blockers, *hard_blockers))
+            )
+            can_select = False
+            hypothesis.details["fused_evidence_can_select"] = False
+            hypothesis.details["fused_evidence_blockers"] = list(blockers)
+        if hypothesis.can_select_report_label and hard_blockers:
+            hypothesis.can_select_report_label = False
+            hypothesis.label_status = "blocked"
+            hypothesis.label_basis = hypothesis.selected_by
+            hypothesis.blocking_reasons = tuple(
+                dict.fromkeys((*hypothesis.blocking_reasons, *hard_blockers))
+            )
+            hypothesis.selection_priority = (0, 0.0, 0)
         if (
             hypothesis.can_select_report_label
             and hypothesis.selected_by

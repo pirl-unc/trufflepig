@@ -79,16 +79,45 @@ def _prepare_sample_vs_cancer_data(
         normalize="housekeeping",
         technical_rna_normalize=True,
     )
+    resolved_reference_code = None
+    requested_cancer_type = None
     if cancer_type is not None:
-        cancer_type = resolve_cancer_type(cancer_type)
-        ref_col = f"{cancer_type}_TPM"
+        requested_cancer_type = resolve_cancer_type(cancer_type)
+        candidates = [requested_cancer_type]
+        try:
+            from .analyze.cancer_type_context import registry_parent_code
+
+            parent = registry_parent_code(requested_cancer_type)
+            while parent and parent not in candidates:
+                candidates.append(parent)
+                parent = registry_parent_code(parent)
+        except (ImportError, KeyError, ValueError):
+            pass
+        resolved_reference_code = next(
+            (code for code in candidates if f"{code}_TPM" in ref.columns),
+            None,
+        )
+    if resolved_reference_code is not None:
+        ref_col = f"{resolved_reference_code}_TPM"
         ref["_ref_hk"] = ref[ref_col].astype(float)
-        cancer_label = CANCER_TYPE_NAMES.get(cancer_type, cancer_type)
-        cohort_label = f"{cancer_label} cohort ({cancer_type})"
+        cancer_label = CANCER_TYPE_NAMES.get(
+            resolved_reference_code,
+            resolved_reference_code,
+        )
+        cohort_label = (
+            f"{cancer_label} cohort ({resolved_reference_code})"
+            if resolved_reference_code == requested_cancer_type
+            else (
+                f"{cancer_label} parent cohort ({resolved_reference_code}; "
+                f"requested {requested_cancer_type})"
+            )
+        )
     else:
         cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
         ref["_ref_hk"] = ref[cohort_cols].astype(float).mean(axis=1)
-        cohort_label = "Mean across 33 TCGA cancer cohorts"
+        cohort_label = "Mean across available pan-cancer cohorts"
+        if requested_cancer_type:
+            cohort_label += f" (no {requested_cancer_type} pan-cancer cohort)"
 
     ref_lookup = dict(
         zip(

@@ -2299,6 +2299,12 @@ def plot_tumor_purity(
         result = purity_result
     cancer_code = result["cancer_type"]
     comp = result["components"]
+    tcga_median = result.get("tcga_median_purity")
+    tcga_median_text = (
+        f"{float(tcga_median):.0%}"
+        if tcga_median is not None
+        else "not available"
+    )
     if sample_mode == "auto":
         try:
             from .decomposition import infer_sample_mode
@@ -2318,7 +2324,7 @@ def plot_tumor_purity(
         left_title = (
             f"{cancer_code} lineage-signature fraction estimates\n"
             f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
-            f"TCGA median purity {result['tcga_median_purity']:.0%})"
+            f"TCGA median purity {tcga_median_text})"
         )
     elif sample_mode == "pure":
         metric_label = "Consistency estimate"
@@ -2339,7 +2345,7 @@ def plot_tumor_purity(
         left_title = (
             f"{cancer_code} signature gene purity estimates\n"
             f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
-            f"TCGA median purity {result['tcga_median_purity']:.0%})"
+            f"TCGA median purity {tcga_median_text})"
         )
 
     fig, (ax1, ax2) = plt.subplots(
@@ -3933,6 +3939,32 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     return rows
 
 
+def _apply_unconstrained_identity_rescues(
+    rows,
+    sample_tpm_by_symbol,
+    family_params,
+    *,
+    tissue_signal=None,
+):
+    """Apply identity repairs from specific to aggregate evidence.
+
+    A tumor-intrinsic program must be evaluated before a broad
+    tissue-composition/member-union rescue. Otherwise the aggregate can replace
+    the top row that activates the specific discriminator and make the stronger
+    signal unreachable. Normal-tissue tiebreaking stays last because it is
+    contextual rather than tumor-intrinsic.
+    """
+
+    rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm_by_symbol)
+    rows = _apply_coarse_tcga_orphan_rescue(
+        rows,
+        family_params,
+        tissue_signal=tissue_signal,
+    )
+    rows = _apply_prad_stromal_rescue(rows, sample_tpm_by_symbol)
+    return _apply_normal_tissue_tiebreaker(rows, sample_tpm_by_symbol)
+
+
 def rank_cancer_type_candidates(
     df_gene_expr,
     candidate_codes=None,
@@ -4300,14 +4332,12 @@ def rank_cancer_type_candidates(
                     tissue_signal = assess_tissue_composition(df_gene_expr)
                 except Exception:  # noqa: BLE001
                     tissue_signal = None
-        rows = _apply_coarse_tcga_orphan_rescue(
+        rows = _apply_unconstrained_identity_rescues(
             rows,
+            sample_tpm,
             family_params,
             tissue_signal=tissue_signal,
         )
-        rows = _apply_prad_stromal_rescue(rows, sample_tpm)
-        rows = _apply_tnbc_basal_brca_rescue(rows, sample_tpm)
-        rows = _apply_normal_tissue_tiebreaker(rows, sample_tpm)
 
     # Tumour-intrinsic lineage exclusion (#71/#75): demote candidates whose broad
     # lineage is contradicted by the sample's tumour-intrinsic program — epithelial
@@ -4924,11 +4954,17 @@ def plot_sample_summary(
         + (f" [{lo:.0%}–{hi:.0%}]" if lo is not None else "")
     ]
     if sample_mode == "solid":
+        tcga_median = purity.get("tcga_median_purity")
+        tcga_median_text = (
+            f"{float(tcga_median):.0%}"
+            if tcga_median is not None
+            else "not available"
+        )
         details.extend(
             [
                 f"Stromal enrichment: {render_fold(stromal_enr)} vs TCGA {cancer_code}",
                 f"Immune enrichment: {render_fold(immune_enr)} vs TCGA {cancer_code}",
-                f"TCGA {cancer_code} median purity: {purity['tcga_median_purity']:.0%}",
+                f"TCGA {cancer_code} median purity: {tcga_median_text}",
             ]
         )
     elif sample_mode == "heme":

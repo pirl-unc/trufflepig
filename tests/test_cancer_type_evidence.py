@@ -3093,7 +3093,7 @@ def test_basal_brca_candidate_overrides_background_label_refinement():
     assert result["selected"]["tumor_label_basal_brca_override"] is True
 
 
-def test_local_sarcoma_reference_beats_ranker_only_winning_subtype(monkeypatch):
+def test_nonclassification_local_reference_cannot_replace_broad_ranker(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -3134,13 +3134,16 @@ def test_local_sarcoma_reference_beats_ranker_only_winning_subtype(monkeypatch):
 
     result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
 
-    assert result["selected"]["cancer_type"] == "SARC_LPS_UNSPEC"
-    assert result["selected"]["selected_by"] == "local_expression_reference"
+    assert result["selected"]["cancer_type"] == "SARC"
     rms = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_RMS_ERMS")
     assert rms["evidence_sources"] == ["pan_cancer_signature_subtype"]
     assert rms["can_select_report_label"] is False
     lps = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_LPS_UNSPEC")
-    assert lps["can_select_report_label"] is True
+    assert lps["can_select_report_label"] is False
+    assert any(
+        "rather than a classification target" in reason
+        for reason in lps["blocking_reasons"]
+    )
 
 
 def test_learned_expression_classifier_can_rescue_context_supported_type(monkeypatch):
@@ -3772,16 +3775,157 @@ def test_signature_anchored_exact_reference_can_escape_wrong_broad_context(monke
         top_tcga_cohorts=[("LIHC_TPM", 0.88), ("CHOL_TPM", 0.84)]
     )
     expression = {gene: 120.0 for gene in gist_markers}
-    expression.update({gene: 80.0 for gene in hepb_markers[:5]})
 
     result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
 
     assert result["selected"]["cancer_type"] == "SARC_GIST"
     assert result["selected"]["reference_cancer_type"] == "SARC"
     assert result["selected"]["local_reference_signature_anchored"] is True
-    hepb = next(row for row in result["evidence"] if row["cancer_type"] == "HEPB")
-    assert hepb["can_select_report_label"] is True
-    assert hepb["local_reference_signature_anchored"] is False
+    assert all(row["cancer_type"] != "HEPB" for row in result["evidence"])
+
+
+def test_mixed_marker_program_cannot_become_a_signature_anchor(monkeypatch):
+    """Positive markers cannot erase explicit expected-low contradictions."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("GAB1", "ZIC1", "MYC", "NEUROD1", "MYCN", "OTX2", "SOX2", "ATOH1")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "MBL": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("GBM", "LGG"),
+                "family": "cns-embryonal",
+                "primary_tissue": "cerebellum",
+                "source_cohort": "TREEHOUSE_POLYA_25_01",
+                "reference_kind": "deconvolved_tumor_reference",
+                "expression_source": "Treehouse",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_marker_coherence",
+        lambda code, _sample: {
+            "code": code,
+            "status": "mixed",
+            "detected": 8,
+            "total": 8,
+            "required_for_consistent": 4,
+            "detected_fraction": 1.0,
+            "unexpected_low_detected": 2,
+            "unexpected_low_genes": ["KRT8", "EPCAM"],
+        }
+        if code == "MBL"
+        else {},
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 120.0 for gene in markers}),
+        _analysis(("SARC_LPS_UNSPEC", 1.0), ("GBM", 0.62)),
+    )
+
+    assert result["selected"]["cancer_type"] == "SARC_LPS_UNSPEC"
+    mbl = next(row for row in result["evidence"] if row["cancer_type"] == "MBL")
+    assert mbl["local_reference_signature_anchored"] is False
+    assert mbl["can_select_report_label"] is False
+    assert any("expected-low" in reason for reason in mbl["blocking_reasons"])
+
+
+def test_molecular_status_child_cannot_originate_a_runner_up_parent(monkeypatch):
+    """Resolve the entity branch before applying an expression-status child."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("CLDN18", "MUC5AC", "MUC6", "KRT20")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "STAD_GS": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("STAD",),
+                "parent_code": "STAD",
+                "family": "carcinoma-gi",
+                "primary_tissue": "stomach",
+                "source_cohort": "TREEHOUSE_POLYA_25_01_TCGA_STAD_SUBTYPE",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "curated",
+            }
+        },
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 95.0 for gene in markers}),
+        _analysis(("READ", 1.0), ("STAD", 0.96), ("COAD", 0.84)),
+    )
+
+    assert result["selected"]["cancer_type"] == "READ"
+    status = next(
+        row for row in result["evidence"] if row["cancer_type"] == "STAD_GS"
+    )
+    parent = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert status["can_select_report_label"] is False
+    assert any(
+        axis["axis"] == "molecular_status"
+        for axis in status["orthogonal_axes"]
+    )
+    assert parent["can_select_report_label"] is False
+    assert any("established STAD parent diagnosis" in reason for reason in parent["blocking_reasons"])
+
+
+def test_nonclassification_rare_surrogate_remains_a_prompt(monkeypatch):
+    """A surrogate cannot make a registry-non-target histology the diagnosis."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+    finding = {
+        "cancer_type": "ACINIC",
+        "rule_id": "acinic_nr4a3",
+        "surrogate": "NR4A3",
+        "surrogate_tpm": 15000.0,
+        "threshold_tpm": 10.0,
+        "support_genes": ["SOX10", "AQP5", "DOG1"],
+        "support_gene_count": 3,
+        "min_support_genes": 2,
+        "required_support_gene_count": 2,
+        "support_pass": True,
+    }
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "NR4A3": 15000.0,
+                "SOX10": 40.0,
+                "AQP5": 30.0,
+                "DOG1": 20.0,
+            }
+        ),
+        _analysis(("STAD", 1.0), ("READ", 0.97), ("HNSC", 0.95)),
+        rare_marker_hypotheses=[finding],
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD"
+    acinic = next(
+        row for row in result["evidence"] if row["cancer_type"] == "ACINIC"
+    )
+    assert acinic["registry_classification_target"] is False
+    assert acinic["can_select_report_label"] is False
+    assert any(
+        "not a registry classification target" in reason
+        for reason in acinic["blocking_reasons"]
+    )
 
 
 def test_generic_soft_tissue_reference_cannot_escape_wrong_broad_context(monkeypatch):
@@ -4439,7 +4583,7 @@ def test_molecular_status_expression_reference_promotes_parent_label(monkeypatch
                 "TFF1": 25.0,
             }
         ),
-        _analysis(("KIRC", 1.0), ("BRCA", 0.97), ("LUAD", 0.8)),
+        _analysis(("BRCA", 1.0), ("KIRC", 0.97), ("LUAD", 0.8)),
     )
 
     assert result["selected"]["cancer_type"] == "BRCA"
@@ -5144,13 +5288,13 @@ def test_rare_marker_selector_honors_min_support_genes_with_optional_markers():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     finding = {
-        "cancer_type": "ACINIC",
-        "rule_id": "acinic_nr4a3",
-        "surrogate": "NR4A3",
+        "cancer_type": "MTC",
+        "rule_id": "mtc_calca",
+        "surrogate": "CALCA",
         "surrogate_tpm": 18.0,
         "threshold_tpm": 10.0,
-        "support_genes": ["SOX10"],
-        "missing_support_genes": ["AQP5", "DOG1"],
+        "support_genes": ["CHGA"],
+        "missing_support_genes": ["SYP", "RET"],
         "support_pass": True,
         "support_gene_count": 1,
         "min_support_genes": 1,
@@ -5159,17 +5303,17 @@ def test_rare_marker_selector_honors_min_support_genes_with_optional_markers():
 
     result = select_report_scope_from_evidence(
         _empty_expression_frame(),
-        _analysis(("HNSC", 1.0), ("LUSC", 0.25)),
+        _analysis(("THCA", 1.0), ("PCPG", 0.25)),
         rare_marker_hypotheses=[finding],
     )
 
-    assert result["selected"]["cancer_type"] == "ACINIC"
-    acinic = next(row for row in result["evidence"] if row["cancer_type"] == "ACINIC")
-    assert acinic["can_select_report_label"] is True
-    assert acinic["support_gene_count"] == 1
-    assert acinic["min_support_genes"] == 1
-    assert acinic["required_support_gene_count"] == 3
-    assert acinic["missing_support_genes"] == ["AQP5", "DOG1"]
+    assert result["selected"]["cancer_type"] == "MTC"
+    mtc = next(row for row in result["evidence"] if row["cancer_type"] == "MTC")
+    assert mtc["can_select_report_label"] is True
+    assert mtc["support_gene_count"] == 1
+    assert mtc["min_support_genes"] == 1
+    assert mtc["required_support_gene_count"] == 3
+    assert mtc["missing_support_genes"] == ["SYP", "RET"]
 
 
 def test_rare_marker_selector_rejects_rules_below_min_support_genes():
@@ -6227,7 +6371,7 @@ def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
     assert ambiguity["active_for_report_label"] is True
 
 
-def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(monkeypatch):
+def test_nonclassification_contrast_program_remains_a_hypothesis(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -6250,20 +6394,105 @@ def test_contrast_discriminator_promotes_biliary_program_in_uncertain_context(mo
         analysis,
     )
 
-    assert result["selected"]["cancer_type"] == "GBC"
-    assert result["selected"]["selected_by"] == "contrast_discriminator"
-    assert result["selected"]["contrast_discriminator_context_code"] == "PAAD"
-    assert result["selected"]["metrics"]["contrast_discriminator_support"] > 0.8
+    assert result["selected"]["cancer_type"] == "PAAD"
+    gbc = next(row for row in result["evidence"] if row["cancer_type"] == "GBC")
+    assert gbc["metrics"]["contrast_discriminator_support"] > 0.8
+    assert gbc["can_select_report_label"] is False
+    assert any(
+        "rather than a classification target" in reason
+        for reason in gbc["blocking_reasons"]
+    )
     graph = result["staged_evidence_graph"]
     contrast_channel = next(
         row for row in graph["channels"]
         if row.get("candidate_code") == "GBC"
         and row["channel"] == "contrast_discriminator"
     )
-    assert contrast_channel["selects_report_label"] is True
+    assert contrast_channel["selects_report_label"] is False
     assert contrast_channel["details"]["active_for_report_label"] is True
     assert contrast_channel["details"]["top_participates"] is True
     assert contrast_channel["details"]["context_is_top"] is True
+
+
+def test_conflicting_pairwise_contrasts_cannot_act_as_a_global_classifier(
+    monkeypatch,
+):
+    """Simultaneous A-vs-B answers must not choose among A, B, C globally."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    def contrast_rows():
+        rows = []
+        for contrast, type_a, type_b, programs in (
+            (
+                "PAAD_vs_STAD",
+                "PAAD",
+                "STAD",
+                {
+                    "PAAD": ("GATA6", "PDX1", "MSLN"),
+                    "STAD": ("CLDN18", "GKN1", "MUC5AC"),
+                },
+            ),
+            (
+                "GBC_vs_STAD",
+                "GBC",
+                "STAD",
+                {
+                    "GBC": ("KRT7", "KRT19", "ERBB2"),
+                    "STAD": ("CLDN18", "GKN1", "MUC5AC"),
+                },
+            ),
+        ):
+            for favors, symbols in programs.items():
+                for index, symbol in enumerate(symbols):
+                    rows.append(
+                        {
+                            "contrast": contrast,
+                            "type_a": type_a,
+                            "type_b": type_b,
+                            "favors": favors,
+                            "symbol": symbol,
+                            "direction": "high",
+                            "tier": "primary" if index < 2 else "supporting",
+                            "separability": "strong",
+                            "source": "representative-pairwise-panel",
+                            "support_type": "contrast_marker_literature",
+                        }
+                    )
+        return tuple(rows)
+
+    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", contrast_rows)
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda *_args: {})
+    analysis = _analysis(("STAD", 1.0), ("READ", 0.97), ("PAAD", 0.93))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "GATA6": 100.0,
+                "PDX1": 80.0,
+                "MSLN": 60.0,
+                "KRT7": 100.0,
+                "KRT19": 80.0,
+                "ERBB2": 60.0,
+                "CLDN18": 0.1,
+                "GKN1": 0.1,
+                "MUC5AC": 0.1,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "STAD"
+    for code in ("PAAD", "GBC"):
+        candidate = next(
+            row for row in result["evidence"] if row["cancer_type"] == code
+        )
+        assert candidate["can_select_report_label"] is False
+        assert any(
+            "pairwise contrast panels" in reason
+            for reason in candidate["blocking_reasons"]
+        )
 
 
 def test_contrast_discriminator_blocks_marker_incoherent_override(monkeypatch):
