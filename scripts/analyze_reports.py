@@ -64,6 +64,17 @@ _EXPECTED_CODE_ALIASES = {
 }
 
 
+def expected_codes(expected):
+    """Return every accepted truth code from a pipe-delimited specification."""
+
+    codes = [code.strip() for code in str(expected or "").split("|") if code.strip()]
+    out = []
+    for code in codes:
+        out.append(code)
+        out.extend(_EXPECTED_CODE_ALIASES.get(code, ()))
+    return list(dict.fromkeys(out))
+
+
 def _registry_parent_map():
     """code -> parent_code, from pirlygenes (empty dict if unavailable)."""
     try:
@@ -250,14 +261,6 @@ def main(argv=None):
 
     truth = _load_truth(args.truth) if args.truth else {}
     compat = Compat(_registry_parent_map(), _broad_lineage_fn())
-
-    def expected_codes(expected):
-        codes = [e.strip() for e in str(expected).split("|") if e.strip()]
-        out = []
-        for code in codes:
-            out.append(code)
-            out.extend(_EXPECTED_CODE_ALIASES.get(code, ()))
-        return list(dict.fromkeys(out))
 
     def headline_has_expected(calls, expected):
         return any(

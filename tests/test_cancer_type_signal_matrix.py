@@ -385,6 +385,7 @@ def test_summary_markdown_survives_all_nan_selector_columns():
     single = pd.DataFrame([{c: None for c in SIGNAL_MATRIX_COLUMNS}])
     single["sample"] = "case-x"
     single["support"] = 0.0
+    single["details"] = float("nan")
     md = build_signal_matrix_summary_markdown(single)
     assert "Final call" in md  # renders the single-sample layout with em-dash placeholders
 

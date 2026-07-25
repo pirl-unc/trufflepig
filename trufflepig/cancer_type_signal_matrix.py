@@ -817,13 +817,8 @@ def build_signal_matrix_summary_markdown(
         )
         support = row.get("support")
         support_text = f"{float(support):.3f}" if isinstance(support, (int, float)) else ""
-        detail_text = ""
-        try:
-            details = json.loads(row.get("details") or "{}")
-        except json.JSONDecodeError:
-            details = {}
-        if isinstance(details, Mapping):
-            detail_text = _details_summary(details)
+        details = _parse_details(row.get("details"))
+        detail_text = _details_summary(details)
         signal_name = md_table_cell(row.get("signal_label") or row.get("signal_source"))
         lines.append(
             f"| {signal_name or '—'} | "
@@ -869,6 +864,15 @@ def compact_signal_plot_rows(matrix: pd.DataFrame, *, max_rows: int = 18) -> pd.
             (~df["_mmr"])
             | df["_label_space"].astype(str).str.contains("release_ensemble", na=False)
         ].copy()
+
+    # The reader-facing chart is a decision summary, not the full audit trace.
+    # Blocked counterfactuals (especially unsupported fusion/status subtypes)
+    # remain in the TSV and evidence appendix, but letting their normalized
+    # support bars fill the chart makes them look like live diagnoses.
+    blocked = df["is_blocked"].fillna(False).astype(bool)
+    df = df[(~blocked) | df["_selected"]].copy()
+    if df.empty:
+        return df
 
     def display_code(row: pd.Series) -> tuple[str, str, str]:
         pred = _clean(row.get("predicted_code"))

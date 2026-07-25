@@ -18,13 +18,15 @@ from trufflepig.tumor_purity import rank_cancer_type_candidates
 
 def _tcga_sample(cancer_code):
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    cohort_tpm = pd.to_numeric(ref[f"{cancer_code}_TPM"], errors="coerce")
+    observed = cohort_tpm.notna()
     return pd.DataFrame(
         {
-            "ensembl_gene_id": ref["Ensembl_Gene_ID"],
-            "gene_symbol": ref["Symbol"],
-            "TPM": ref[f"{cancer_code}_TPM"].astype(float),
+            "ensembl_gene_id": ref.loc[observed, "Ensembl_Gene_ID"],
+            "gene_symbol": ref.loc[observed, "Symbol"],
+            "TPM": cohort_tpm.loc[observed],
         }
-    )
+    ).reset_index(drop=True)
 
 
 def test_specific_program_demotes_other_lineages_in_live_ranking():

@@ -697,9 +697,31 @@ def _lineage_purity_estimates(
     # relative to other TCGA cohorts — avoids the STAD/PAAD-style
     # crosstalk where shared GI-epithelium markers inflate the wrong
     # cancer type's lineage purity.
+    panel_genes = _lineage_genes_map().get(cancer_code, [])
     genes = _cancer_specific_lineage_genes(cancer_code)
+    skipped_detected = [
+        {
+            "gene": gene,
+            "sample_tpm": float(sample_tpm.get(gene, 0.0) or 0.0),
+            "reason": "not_in_cancer_specific_panel",
+        }
+        for gene in panel_genes
+        if gene not in genes and float(sample_tpm.get(gene, 0.0) or 0.0) > 0
+    ]
     if not genes:
-        return [], []
+        return [], skipped_detected
+
+    def unavailable(reason):
+        unavailable_genes = [
+            {
+                "gene": gene,
+                "sample_tpm": float(sample_tpm.get(gene, 0.0) or 0.0),
+                "reason": reason,
+            }
+            for gene in genes
+            if float(sample_tpm.get(gene, 0.0) or 0.0) > 0
+        ]
+        return [*skipped_detected, *unavailable_genes]
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
@@ -728,10 +750,10 @@ def _lineage_purity_estimates(
     # HK medians per column
     cancer_col = f"{cancer_code}_TPM"
     if cancer_col not in ref_dedup.columns:
-        return [], []
+        return [], unavailable("reference_cohort_unavailable")
     ref_hk_cancer = ref_dedup.loc[hk_in_ref, cancer_col].astype(float).median()
-    if ref_hk_cancer <= 0:
-        return [], []
+    if not np.isfinite(ref_hk_cancer) or ref_hk_cancer <= 0:
+        return [], unavailable("reference_scale_unavailable")
 
     tme_hk_medians = {}
     for col in tme_cols:
@@ -741,7 +763,7 @@ def _lineage_purity_estimates(
     sample_hk_vals = [sample_tpm[g] for g in hk_syms if sample_tpm.get(g, 0) > 0]
     sample_hk_med = float(np.median(sample_hk_vals)) if sample_hk_vals else 0.0
     if sample_hk_med <= 0:
-        return [], []
+        return [], unavailable("sample_scale_unavailable")
 
     results = []
     # Parallel list of lineage genes that were genuinely present in the
@@ -751,16 +773,32 @@ def _lineage_purity_estimates(
     # than "not detected" — the distinction matters for sarcoma-style
     # cases where ACTA2 is at ~190 TPM but gets filtered because its
     # TME-bleed-through in SARC exceeds its tumor contribution.
-    skipped_detected = []
     for gene in genes:
-        if gene not in ref_dedup.index:
-            continue
-        s_tpm = sample_tpm.get(gene, 0)
+        s_tpm = float(sample_tpm.get(gene, 0.0) or 0.0)
         if s_tpm <= 0:
+            continue
+        if gene not in ref_dedup.index:
+            skipped_detected.append(
+                {
+                    "gene": gene,
+                    "sample_tpm": s_tpm,
+                    "reason": "reference_gene_unavailable",
+                }
+            )
             continue
 
         sample_ratio = s_tpm / sample_hk_med
-        ref_ratio = float(ref_dedup.loc[gene, cancer_col]) / ref_hk_cancer
+        ref_value = float(ref_dedup.loc[gene, cancer_col])
+        if not np.isfinite(ref_value) or ref_value < 0:
+            skipped_detected.append(
+                {
+                    "gene": gene,
+                    "sample_tpm": s_tpm,
+                    "reason": "reference_gene_unavailable",
+                }
+            )
+            continue
+        ref_ratio = ref_value / ref_hk_cancer
 
         # TME ratio: median across TME tissues (HK-normalized)
         tme_ratios = []
@@ -926,9 +964,22 @@ def _subtype_lineage_purity_estimates(
     Returns ``(results, skipped_detected)`` matching the parent helper
     contract so :func:`_summarize_lineage_support` consumes either.
     """
+    panel = list(panel or ())
+
+    def unavailable(reason):
+        return [
+            {
+                "gene": gene,
+                "sample_tpm": float(sample_tpm.get(gene, 0.0) or 0.0),
+                "reason": reason,
+            }
+            for gene in panel
+            if float(sample_tpm.get(gene, 0.0) or 0.0) > 0
+        ]
+
     subtype_tpm = _subtype_tumor_tpm_lookup(subtype_code)
     if not subtype_tpm:
-        return [], []
+        return [], unavailable("subtype_reference_unavailable")
 
     ref = pan_cancer_expression(technical_rna_normalize=True)
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
@@ -958,7 +1009,7 @@ def _subtype_lineage_purity_estimates(
     sample_hk_vals = [sample_tpm[g] for g in hk_syms if sample_tpm.get(g, 0) > 0]
     sample_hk_med = float(np.median(sample_hk_vals)) if sample_hk_vals else 0.0
     if sample_hk_med <= 0:
-        return [], []
+        return [], unavailable("sample_scale_unavailable")
 
     # The subtype tumor-TPM table has no HK row per se; use the HPA
     # median of HK genes as the normalizer that converts subtype tumor
@@ -973,23 +1024,41 @@ def _subtype_lineage_purity_estimates(
         not in {"testis", "epididymis", "seminal_vesicle", "placenta", "ovary"}
     ]
     if not ref_hk_median_cols:
-        return [], []
+        return [], unavailable("reference_scale_unavailable")
     ref_hk_normalizer = float(
         ref_dedup.loc[hk_in_ref, ref_hk_median_cols].astype(float).median().median()
     )
-    if ref_hk_normalizer <= 0:
-        return [], []
+    if not np.isfinite(ref_hk_normalizer) or ref_hk_normalizer <= 0:
+        return [], unavailable("reference_scale_unavailable")
 
     results = []
     skipped_detected = []
     for gene in panel:
-        s_tpm = sample_tpm.get(gene, 0)
+        s_tpm = float(sample_tpm.get(gene, 0.0) or 0.0)
         if s_tpm <= 0:
             continue
         tumor_tpm = subtype_tpm.get(gene)
-        if tumor_tpm is None or tumor_tpm <= 0:
+        if (
+            tumor_tpm is None
+            or not np.isfinite(float(tumor_tpm))
+            or float(tumor_tpm) <= 0
+        ):
+            skipped_detected.append(
+                {
+                    "gene": gene,
+                    "sample_tpm": s_tpm,
+                    "reason": "subtype_reference_gene_unavailable",
+                }
+            )
             continue
         if gene not in ref_dedup.index:
+            skipped_detected.append(
+                {
+                    "gene": gene,
+                    "sample_tpm": s_tpm,
+                    "reason": "reference_gene_unavailable",
+                }
+            )
             continue
 
         sample_ratio = s_tpm / sample_hk_med
@@ -2298,6 +2367,7 @@ def plot_tumor_purity(
     else:
         result = purity_result
     cancer_code = result["cancer_type"]
+    reference_code = result.get("reference_cancer_type") or cancer_code
     comp = result["components"]
     tcga_median = result.get("tcga_median_purity")
     tcga_median_text = (
@@ -2322,7 +2392,7 @@ def plot_tumor_purity(
         signature_label = "Malignant signature"
         overall_label = "Overall fraction proxy"
         left_title = (
-            f"{cancer_code} lineage-signature fraction estimates\n"
+            f"{reference_code} reference lineage-signature fraction estimates\n"
             f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
             f"TCGA median purity {tcga_median_text})"
         )
@@ -2333,7 +2403,7 @@ def plot_tumor_purity(
         signature_label = "Population signature"
         overall_label = "Overall consistency"
         left_title = (
-            f"{cancer_code} lineage-profile consistency estimates\n"
+            f"{reference_code} reference lineage-profile consistency estimates\n"
             f"(gene TPM / HK TPM vs TCGA reference, not interpreted as bulk admixture)"
         )
     else:
@@ -2343,7 +2413,7 @@ def plot_tumor_purity(
         signature_label = "Tumor signature"
         overall_label = "Overall estimate"
         left_title = (
-            f"{cancer_code} signature gene purity estimates\n"
+            f"{reference_code} reference signature gene purity estimates\n"
             f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
             f"TCGA median purity {tcga_median_text})"
         )
@@ -3787,8 +3857,8 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
     ``support_score`` is the raw marker/geomean support and remains untouched for
     auditability. ``support_rank_score`` is the post-gate score used for
     ``support_fraction_of_top`` so the first row is always the normalized leader,
-    even when a confident compartment gate has floated a lower-raw-support row
-    above an out-of-compartment marker-panel winner.
+    even when a confident compartment or member-union ancestry gate has floated
+    a lower-raw-support row above a marker-panel winner.
 
     The incoming row order is already biologically curated by earlier gates:
     raw marker support chooses the leader, same-family promotion keeps plausible
@@ -3803,12 +3873,17 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
     tier_stride = raw_max + 1e-12
     for row in rows:
         raw = float(row.get("support_score") or 0.0)
-        rank_tier = 1 if compartment_restricted and row.get("compartment_in_set") else 0
+        if row.get("centroid_member_union_branch_promoted"):
+            rank_tier = 2
+        elif compartment_restricted and row.get("compartment_in_set"):
+            rank_tier = 1
+        else:
+            rank_tier = 0
         row["support_raw_fraction_of_max"] = raw / raw_max if raw_max > 0 else 0.0
         row["support_rank_tier"] = rank_tier
         row["support_rank_score"] = raw + rank_tier * tier_stride
 
-    if compartment_restricted:
+    if any(int(row.get("support_rank_tier") or 0) > 0 for row in rows):
         indexed_rows = list(enumerate(rows))
         indexed_rows.sort(
             key=lambda item: (
@@ -4108,6 +4183,25 @@ def rank_cancer_type_candidates(
         for code in subtype_aware_codes:
             if code not in candidate_codes:
                 candidate_codes.append(code)
+        # The curated signature screen and the whole-profile centroid are
+        # complementary candidate generators. A fine centroid leaf can belong
+        # to a member-union reference whose parent signature is deliberately
+        # broad (for example ADCC -> SGC), so neither the leaf nor its parent is
+        # guaranteed to appear in the signature top eight. Admit the nearest
+        # ancestor that has a scoreable pan-cancer reference; later evidence
+        # still decides whether it wins.
+        if _ranker_cen_corr is not None and len(_ranker_cen_corr):
+            from .analyze.cancer_type_context import registry_ancestor_codes
+
+            centroid_top_code = str(_ranker_cen_corr.index[0])
+            for code in (
+                centroid_top_code,
+                *registry_ancestor_codes(centroid_top_code),
+            ):
+                if code in valid_tcga_codes:
+                    if code not in candidate_codes:
+                        candidate_codes.append(code)
+                    break
         # When the early signature top is squamous and the sample shows
         # the basal-mammary cytokeratin program, force BRCA into the
         # scored pool so the TNBC rescue further down has something to
@@ -4438,6 +4532,61 @@ def rank_cancer_type_candidates(
                 row["winning_subtype"] = resolve_fine_subtype(
                     row["code"], cen_corr, current_subtype=row.get("winning_subtype")
                 )
+
+            # A ``member_union`` parent is the scoreable representation of its
+            # children, not a competing biological entity. When the confident
+            # centroid resolves one of those children and the parent row's own
+            # fine-subtype resolution agrees, keep that ancestry branch ahead
+            # of unrelated same-compartment entities. This is a categorical
+            # ontology rule; it does not add centroid correlation to the
+            # support geomean or tune a sample-specific threshold.
+            if comp["confident"] and cen_top_code:
+                from .analyze.cancer_type_context import registry_ancestor_codes
+                from .cancer_ontology import cancer_type_registry
+
+                ancestors = set(registry_ancestor_codes(cen_top_code))
+                registry = cancer_type_registry()
+                member_union_codes = set(
+                    registry.loc[
+                        registry["reference_source"].astype(str) == "member_union",
+                        "code",
+                    ].astype(str)
+                )
+                promoted_parents = [
+                    row
+                    for row in rows
+                    if row.get("code") in ancestors
+                    and row.get("code") in member_union_codes
+                    and row.get("winning_subtype") == cen_top_code
+                ]
+                if promoted_parents:
+                    # Promote the resolved branch as a unit, keeping the
+                    # resolved child above aggregate ancestors. Moving only
+                    # the aggregate parent broadens a precise call (for
+                    # example LUAD -> NSCLC).
+                    promoted_parent_ids = {
+                        id(row) for row in promoted_parents
+                    }
+                    promoted_children = [
+                        row
+                        for row in rows
+                        if row.get("code") == cen_top_code
+                    ]
+                    promoted_branch = [
+                        *promoted_children,
+                        *(
+                            row
+                            for row in rows
+                            if id(row) in promoted_parent_ids
+                        ),
+                    ]
+                    promoted_ids = {id(row) for row in promoted_branch}
+                    for row in promoted_branch:
+                        row["centroid_member_union_branch_promoted"] = True
+                    rows = [
+                        *promoted_branch,
+                        *(row for row in rows if id(row) not in promoted_ids),
+                    ]
 
             # Confidence-gated stage-1 leaf restriction: float in-compartment leaves
             # above out-of-compartment ones (stable -> within-tier order preserved).
@@ -4811,6 +4960,7 @@ def plot_sample_summary(
     purity = analysis["purity"]
     cancer_code = analysis["cancer_type"]
     cancer_name = analysis["cancer_name"]
+    purity_reference_code = purity.get("reference_cancer_type") or cancer_code
     if sample_mode == "auto":
         try:
             from .decomposition import infer_sample_mode
@@ -4831,7 +4981,15 @@ def plot_sample_summary(
     top_cancers = analysis["top_cancers"]
     codes = [c for c, s in top_cancers]
     scores = [s for c, s in top_cancers]
-    colors = ["#2166ac" if c == cancer_code else "#92c5de" for c in codes]
+    top_code = codes[0] if codes else cancer_code
+    colors = [
+        (
+            "#2166ac"
+            if c == cancer_code
+            else ("#f4a340" if c == top_code else "#92c5de")
+        )
+        for c in codes
+    ]
     y = np.arange(len(codes))
     ax1.barh(y, scores, color=colors, edgecolor="none", height=0.6)
     for i, (code, score) in enumerate(top_cancers):
@@ -4846,7 +5004,11 @@ def plot_sample_summary(
     ax1.set_xlabel("Normalized support (top = 1.0)", fontsize=10)
     fit_quality = analysis.get("fit_quality", {})
     fit_label = fit_quality.get("label")
-    title = "Cancer type hypotheses"
+    title = (
+        "Pre-adjudication cancer-type ranker"
+        if top_code != cancer_code
+        else "Cancer type hypotheses"
+    )
     if fit_label in {"weak", "ambiguous"}:
         title += f" ({fit_label} fit)"
     ax1.set_title(title, fontsize=12, fontweight="bold")
@@ -4854,17 +5016,15 @@ def plot_sample_summary(
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
     ax1.spines["left"].set_visible(False)
-    label_options = [top_cancers[0][0]] if top_cancers else []
-    if len(top_cancers) >= 2 and fit_label in {"weak", "ambiguous"}:
-        label_options.append(top_cancers[1][0])
-    if fit_label or label_options:
+    if fit_label or top_cancers:
         lines = []
         if fit_label:
             lines.append(f"Fit: {fit_label}")
-        if label_options:
-            lines.append(f"Lead label: {label_options[0]}")
-            if len(label_options) >= 2:
-                lines.append("Retained alternatives: see differential section")
+        lines.append(f"Final report call: {cancer_code}")
+        if top_code != cancer_code:
+            lines.append(f"Pre-adjudication ranker leader: {top_code}")
+        if len(top_cancers) >= 2:
+            lines.append("Retained alternatives: see differential section")
         fusion_note = _fusion_plot_note(analysis)
         if fusion_note:
             lines.append(fusion_note)
@@ -4962,24 +5122,24 @@ def plot_sample_summary(
         )
         details.extend(
             [
-                f"Stromal enrichment: {render_fold(stromal_enr)} vs TCGA {cancer_code}",
-                f"Immune enrichment: {render_fold(immune_enr)} vs TCGA {cancer_code}",
-                f"TCGA {cancer_code} median purity: {tcga_median_text}",
+                f"Stromal enrichment: {render_fold(stromal_enr)} vs TCGA {purity_reference_code}",
+                f"Immune enrichment: {render_fold(immune_enr)} vs TCGA {purity_reference_code}",
+                f"TCGA {purity_reference_code} median purity: {tcga_median_text}",
             ]
         )
     elif sample_mode == "heme":
         details.extend(
             [
-                f"Stromal context: {render_fold(stromal_enr)} vs TCGA {cancer_code}",
-                f"Immune context: {render_fold(immune_enr)} vs TCGA {cancer_code}",
+                f"Stromal context: {render_fold(stromal_enr)} vs TCGA {purity_reference_code}",
+                f"Immune context: {render_fold(immune_enr)} vs TCGA {purity_reference_code}",
                 "Interpretation: lineage/background context, not a strict tumor-vs-immune split",
             ]
         )
     else:
         details.extend(
             [
-                f"Residual stromal context: {render_fold(stromal_enr)} vs TCGA {cancer_code}",
-                f"Residual immune context: {render_fold(immune_enr)} vs TCGA {cancer_code}",
+                f"Residual stromal context: {render_fold(stromal_enr)} vs TCGA {purity_reference_code}",
+                f"Residual immune context: {render_fold(immune_enr)} vs TCGA {purity_reference_code}",
                 "Interpretation: consistency vs likely tissue-of-origin profile, not bulk admixture",
             ]
         )
@@ -5008,7 +5168,11 @@ def plot_sample_summary(
     if tissue_scores:
         tissues = [t.replace("_", " ").title() for t, s, n in tissue_scores]
         t_scores = [s for t, s, n in tissue_scores]
-        matched = CANCER_TO_TISSUE.get(cancer_code, "").replace("_", " ").title()
+        matched = (
+            CANCER_TO_TISSUE.get(purity_reference_code, "")
+            .replace("_", " ")
+            .title()
+        )
         t_colors = []
         for t, s, n in tissue_scores:
             tname = t.replace("_", " ").title()

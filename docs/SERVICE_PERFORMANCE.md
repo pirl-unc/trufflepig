@@ -1,12 +1,23 @@
 # Service / batch performance roadmap
 
+## At a glance
+
+- Today, a full report is a memory-heavy single-process job; figures dominate
+  wall time.
+- Local and CI test suites must run through `./test.sh`, which serializes suites
+  and chooses workers from available RAM.
+- Batch report replay should use `--in-process` to reuse references and
+  `--no-figures` unless visual QA is required.
+- The service architecture below is a target, not a description of deployed
+  infrastructure or a measured memory guarantee.
+
 The current `trufflepig run` CLI is tuned for one-sample-at-a-time local
 use. As soon as that becomes a website, a queue worker, or a batch over
 local cohorts, the per-process startup tax dominates wall time. This
 document captures the staged plan so the cheap wins can land now and the
 deeper changes have a written target.
 
-## What the per-sample run actually pays for
+## Historical per-sample cost profile
 
 Measured on the 19-sample local-reports regen (Apple Silicon, 32 GB):
 
@@ -19,8 +30,10 @@ Measured on the 19-sample local-reports regen (Apple Silicon, 32 GB):
 | Plotting (~40 figures + 3 PDFs) | 8–12 min | matplotlib + high-DPI PNG + multi-page PDF aggregation | **Dominant cost** |
 | Markdown synthesis | 30–60 s | rendering helpers | Cheap |
 
-Per-process startup (index + references) is ~10 s and ~1.5 GB resident.
-Plotting is the dominant single cost when figures are on.
+The timing table is a historical Apple Silicon measurement. Later test-suite
+investigation observed 6.3-7.4 GB per heavy worker and roughly 9.6 GB for a
+serial full suite, so do not use the older 1.5 GB estimate for worker sizing.
+Plotting remains the dominant wall-time cost when figures are on.
 
 ## Tier 1 — landing in this PR / immediate
 
@@ -32,9 +45,9 @@ These are local-mode-only and don't change shared contracts.
    regen from ~5 hr to ~1 hr on a 32 GB Mac.
 2. **Ensembl id → name pickle cache** (in `pirlygenes/gene_ids.py`).
    Caches the prebuilt dicts to `~/.cache/pirlygenes/ensembl-{release}-id-index.pkl`.
-   Sub-second load vs ~2 s build per process. *Status: pirlygenes-side
-   edit landed mid-conversation behind the auto-mode classifier; pending
-   explicit user acknowledgment before being held as a real commit.*
+   Sub-second load vs ~2 s build per process. This is a dependency-owned
+   optimization; verify its status in pirlygenes rather than treating this
+   roadmap as a release ledger.
 
 ## Tier 2 — dependency-owned data-format change (separate PR)
 
@@ -96,7 +109,8 @@ seconds, not minutes. The architecture should split into:
   Celery worker pool) accepts (sample_path, config) jobs.
 - Each worker is reset between requests (free per-sample caches) but
   keeps reference handles open via the daemon.
-- Memory budget: ~200 MB per worker (sample-specific only), not 1.5 GB.
+- Target memory should be established by measurement after shared-reference
+  transport exists; no per-worker budget is claimed yet.
 
 ### Request lifecycle
 1. Web request arrives → enqueue with idempotency key

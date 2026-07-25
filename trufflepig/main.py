@@ -4263,9 +4263,28 @@ def _analyze_body(run: AnalyzeRun):
     readme_path = Path(prefix).parent / "README.md"
     cancer_code = analysis["cancer_type"]
     cancer_name = analysis["cancer_name"]
-    readme = f"""# PIRLy Genes Analysis Output
+    readme = f"""# Trufflepig Analysis Output
 
-Sample analyzed as **{cancer_code}** ({cancer_name}).
+## Result
+
+Sample analyzed as **{cancer_code}** ({cancer_name}). Treat an RNA-inferred
+cancer type as a hypothesis until it is reconciled with pathology and clinical
+context.
+
+## Start here
+
+| File | Description |
+|------|-------------|
+| `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
+| `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
+| `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
+| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
+| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
+
+Read `*-summary.md` first, use `*-analysis.md` for the reasoning, and open
+`*-evidence.md` or the audit packet only when validating a specific claim.
+
+## Data and normalization
 
 Raw QC figures use the original expression table. Downstream biology uses
 technical-RNA-normalized TPM by default: mitochondrial transcripts, NUMT-like
@@ -4274,16 +4293,11 @@ zeroed and the remaining TPM is renormalized. Downstream reference comparisons
 use the same normalized analysis view; raw sample/reference values remain
 available for QC and provenance.
 
-## Reports
+## Supporting artifacts
 
 | File | Description |
 |------|-------------|
-| `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
-| `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
-| `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
 | `*-analysis-parameters.json` | Free model parameters plus selected sample mode and embedding methods |
-| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
-| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
 | `*-cancer-candidates.tsv` | Candidate cancer-type support trace |
 | `*-decomposition-hypotheses.tsv` | Ranked decomposition hypotheses |
 | `*-decomposition-components.tsv` | Component-level fit for best decomposition |
@@ -8575,6 +8589,26 @@ def _generate_text_reports(
         skipped_detected = {
             entry["gene"]: entry for entry in lineage.get("skipped_detected", [])
         }
+        # Model participation is not a detection assay. A gene can be absent
+        # from ``per_gene`` because a cancer-specific filter or a winning
+        # subtype panel excluded it even though the input contains measurable
+        # expression. Use the sample itself as the final authority on
+        # detection so those genes are described as detected-but-not-used,
+        # never as absent.
+        if df_expr is not None:
+            from .common import build_sample_tpm_by_symbol
+
+            sample_tpm = build_sample_tpm_by_symbol(df_expr)
+            for gene_name in all_lineage:
+                if gene_name in found_names or gene_name in skipped_detected:
+                    continue
+                sample_value = float(sample_tpm.get(gene_name, 0.0) or 0.0)
+                if sample_value > 0:
+                    skipped_detected[gene_name] = {
+                        "gene": gene_name,
+                        "sample_tpm": sample_value,
+                        "reason": "not_used_in_lineage_calibration",
+                    }
         not_found = [
             g for g in all_lineage if g not in found_names and g not in skipped_detected
         ]
@@ -8604,11 +8638,40 @@ def _generate_text_reports(
             s_tpm = entry["sample_tpm"]
             # Keep resolution proportional to magnitude so a 0.3 TPM
             # gene doesn't render as "0 TPM".
-            tpm_str = f"{s_tpm:.1f}" if s_tpm < 10 else f"{s_tpm:.0f}"
+            if s_tpm < 0.01:
+                tpm_str = "<0.01"
+            elif s_tpm < 0.1:
+                tpm_str = f"{s_tpm:.2f}"
+            elif s_tpm < 10:
+                tpm_str = f"{s_tpm:.1f}"
+            else:
+                tpm_str = f"{s_tpm:.0f}"
+            reason = entry.get("reason")
+            if reason == "tme_dominated":
+                explanation = (
+                    "TME background exceeds tumor contribution for this "
+                    "cancer type"
+                )
+            elif reason in {
+                "not_in_cancer_specific_panel",
+                "not_used_in_lineage_calibration",
+            }:
+                explanation = (
+                    "not specific enough to this cancer type for purity "
+                    "calibration"
+                )
+            elif reason == "sample_scale_unavailable":
+                explanation = (
+                    "sample housekeeping scale is unavailable for calibration"
+                )
+            else:
+                explanation = (
+                    "the matching cohort/gene reference is unavailable for "
+                    "calibration"
+                )
             lines.append(
                 f"| {gene_name} | — | detected {tpm_str} TPM — "
-                "uninformative (TME background exceeds tumor contribution "
-                "for this cancer type) |"
+                f"uninformative ({explanation}) |"
             )
         for g in not_found:
             lines.append(f"| {g} | — | not detected |")

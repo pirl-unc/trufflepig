@@ -1,10 +1,24 @@
 # Report belief-consistency + friendliness redesign plan
 
+## At a glance
+
+The report must render one finalized sample decision everywhere. First finalize
+the cancer entity, reference scope, purity, decomposition, uncertainty, and
+orthogonal molecular states. Then render summary, analysis, evidence, figures,
+and PDF from that frozen decision. Reader-facing artifacts should present the
+result and uncertainty before implementation detail.
+
+This document is a design and rollout record. Some phases have landed and some
+remain proposals; use tests and the current decision-flow document to determine
+production behavior.
+
 Companion to `docs/rnaseq-cancer-call-redesign.md`. That doc redesigns *how the
 cancer type is decided*; this one redesigns *how every per-sample conclusion is
 represented, finalized, and rendered* so figures, markdown, and the PDF can
 never disagree — and then makes the rendered report legible and actionable for a
 mixed audience (patient, therapy-navigation expert, oncologist).
+
+## Design tiers
 
 Two tiers, in order:
 

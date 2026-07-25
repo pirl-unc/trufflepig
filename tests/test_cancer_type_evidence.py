@@ -794,13 +794,43 @@ def _adjudicate_stad_esca_evidence_scenario(axis_preferences):
     candidate.rna_marker_support, selected.rna_marker_support = support_pair(
         axis_preferences["curated_marker_program"]
     )
+    candidate.admit_adjudication_support(
+        "curated_marker_program",
+        candidate.rna_marker_support,
+        selector="test_marker",
+    )
+    selected.admit_adjudication_support(
+        "curated_marker_program",
+        selected.rna_marker_support,
+        selector="test_marker",
+    )
     candidate.fine_reference_support, selected.fine_reference_support = support_pair(
         axis_preferences["exact_expression_reference"]
+    )
+    candidate.admit_adjudication_support(
+        "exact_expression_reference",
+        candidate.fine_reference_support,
+        selector="test_reference",
+    )
+    selected.admit_adjudication_support(
+        "exact_expression_reference",
+        selected.fine_reference_support,
+        selector="test_reference",
     )
     (
         candidate.coarse_composition_support,
         selected.coarse_composition_support,
     ) = support_pair(axis_preferences["composition_reference"])
+    candidate.admit_adjudication_support(
+        "composition_reference",
+        candidate.coarse_composition_support,
+        selector="test_composition",
+    )
+    selected.admit_adjudication_support(
+        "composition_reference",
+        selected.coarse_composition_support,
+        selector="test_composition",
+    )
 
     centroid_preference = axis_preferences["whole_profile_centroid"]
     if centroid_preference == "candidate":
@@ -1007,6 +1037,16 @@ def test_entity_consensus_requires_multiple_independent_evidence_groups():
         "unexpected_low_detected": 1,
         "total": 10,
     }
+    candidate.admit_adjudication_support(
+        "exact_expression_reference",
+        candidate.fine_reference_support,
+        selector="test_reference",
+    )
+    selected.admit_adjudication_support(
+        "exact_expression_reference",
+        selected.fine_reference_support,
+        selector="test_reference",
+    )
 
     result = _entity_evidence_consensus(candidate, selected, details)
 
@@ -1044,6 +1084,337 @@ def test_entity_consensus_does_not_promote_a_learned_vote_alone():
     assert result["candidate_votes"] == 1
     assert result["candidate_nonlearned_votes"] == 0
     assert result["decisive_candidate"] is False
+
+
+def test_flat_learned_view_can_supply_a_corroborated_entity_beam_candidate():
+    """A quantifier-robust flat result may enter the beam but remains one vote.
+
+    This exercises the report-label decision seam: the calibrated hierarchy's
+    top entity is unhelpful, while the flat view proposes BRCA and three
+    independent report signals corroborate it over a selected sarcoma label.
+    """
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "RB",
+            entity_support=0.50,
+            entity_margin=0.20,
+            family="RB",
+            family_support=0.50,
+            compartment="embryonal",
+            compartment_support=0.50,
+        ),
+        ("RB", 0.50),
+        ("SARC", 0.30),
+    )
+    details["learned_expression_hierarchy_votes"].append(
+        {
+            "stage": "compartment",
+            "label": "embryonal",
+            "probability": 0.50,
+            "top_predictions": [
+                {"label": "embryonal", "probability": 0.50},
+                {"label": "epithelial", "probability": 0.40},
+                {"label": "mesenchymal", "probability": 0.10},
+            ],
+        }
+    )
+    details["learned_expression_flat_top_predictions"] = [
+        {"code": "BRCA_Basal", "probability": 0.40},
+        {"code": "SARC_DDLPS", "probability": 0.15},
+    ]
+
+    selected = _selectable("SARC", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 0.20
+    selected.rna_marker_support = 0.20
+    selected.coarse_composition_support = 0.20
+    selected.details.update(details)
+    brca = CancerTypeEvidence(
+        cancer_type="BRCA",
+        broad_rna_support=0.80,
+        rna_marker_support=0.80,
+        coarse_composition_support=0.80,
+    )
+    selected.admit_adjudication_support(
+        "curated_marker_program",
+        selected.rna_marker_support,
+        selector="test_marker",
+    )
+    brca.admit_adjudication_support(
+        "curated_marker_program",
+        brca.rna_marker_support,
+        selector="test_marker",
+    )
+    selected.admit_adjudication_support(
+        "composition_reference",
+        selected.coarse_composition_support,
+        selector="test_composition",
+    )
+    brca.admit_adjudication_support(
+        "composition_reference",
+        brca.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC": selected, "BRCA": brca},
+        selected,
+    )
+
+    assert result is brca
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.details["entity_consensus_adjudication_mode"] == (
+        "candidate_beam_consensus"
+    )
+    consensus = result.details["entity_evidence_consensus"]
+    learned_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "learned_full_profile"
+    )
+    assert learned_axis["candidate_support"] == 0.40
+    assert consensus["candidate_nonlearned_votes"] == 3
+
+
+def test_entity_beam_uses_valid_child_reference_and_stronger_corroboration():
+    """Competing learned views are resolved by independent evidence strength."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "SARC_MYXFIB",
+            entity_support=0.239,
+            entity_margin=0.085,
+            family="SARC_OTHER",
+            family_support=0.483,
+            compartment="mesenchymal",
+            compartment_support=0.827,
+        ),
+        ("SARC_MYXFIB", 0.239),
+        ("BRCA_Basal", 0.033),
+    )
+    details["learned_expression_hierarchy_votes"].append(
+        {
+            "stage": "compartment",
+            "label": "mesenchymal",
+            "probability": 0.827,
+            "top_predictions": [
+                {"label": "mesenchymal", "probability": 0.827},
+                {"label": "epithelial", "probability": 0.159},
+                {"label": "heme", "probability": 0.009},
+            ],
+        }
+    )
+    details["learned_expression_flat_top_predictions"] = [
+        {"code": "BRCA_Basal", "probability": 0.191},
+        {"code": "SARC_ESS_HG", "probability": 0.122},
+    ]
+
+    selected = _selectable("HL", "pan_cancer_signature_ranker", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    sarcoma = CancerTypeEvidence(
+        cancer_type="SARC_MYXFIB",
+        rna_marker_support=0.48,
+        fine_reference_support=0.294,
+    )
+    brca = CancerTypeEvidence(
+        cancer_type="BRCA",
+        broad_rna_support=0.473,
+        rna_marker_support=0.875,
+    )
+    basal = CancerTypeEvidence(
+        cancer_type="BRCA_Basal",
+        fine_reference_support=0.546,
+    )
+    basal.admit_adjudication_support(
+        "exact_expression_reference",
+        basal.fine_reference_support,
+        selector="test_reference",
+    )
+    sarcoma.admit_adjudication_support(
+        "curated_marker_program",
+        sarcoma.rna_marker_support,
+        selector="test_marker",
+    )
+    brca.admit_adjudication_support(
+        "curated_marker_program",
+        brca.rna_marker_support,
+        selector="test_marker",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {
+            "HL": selected,
+            "SARC_MYXFIB": sarcoma,
+            "BRCA": brca,
+            "BRCA_Basal": basal,
+        },
+        selected,
+    )
+
+    assert result is brca
+    assert result.details["entity_descendant_exact_reference_code"] == "BRCA_Basal"
+    assert result.details["entity_descendant_exact_reference_support"] == 0.546
+    consensus = result.details["entity_evidence_consensus"]
+    exact_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "exact_expression_reference"
+    )
+    assert exact_axis["candidate_support"] == 0.546
+
+
+def test_entity_beam_cannot_roll_up_a_blocked_child_reference():
+    """A rejected child match stays visible but cannot originate its parent."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "BRCA",
+            entity_support=0.40,
+            entity_margin=0.20,
+            family="carcinoma-breast",
+            family_support=0.60,
+            compartment="epithelial",
+            compartment_support=0.70,
+        ),
+        ("BRCA", 0.40),
+        ("HL", 0.20),
+    )
+    selected = _selectable("HL", "pan_cancer_signature_ranker", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    brca = CancerTypeEvidence(
+        cancer_type="BRCA",
+        coarse_composition_support=0.80,
+    )
+    basal = CancerTypeEvidence(
+        cancer_type="BRCA_Basal",
+        fine_reference_support=0.80,
+        blocking_reasons=(
+            "expression-reference context is not the top compatible context",
+        ),
+        label_status="blocked",
+    )
+    basal.admit_adjudication_support(
+        "exact_expression_reference",
+        basal.fine_reference_support,
+        selector="test_reference",
+        blocking_reasons=basal.blocking_reasons,
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {
+            "HL": selected,
+            "BRCA": brca,
+            "BRCA_Basal": basal,
+        },
+        selected,
+    )
+
+    assert result is selected
+    assert basal.fine_reference_support == 0.80
+    assert basal.adjudication_support == {}
+    assert (
+        basal.adjudication_exclusions["exact_expression_reference"][
+            "test_reference"
+        ]
+        == basal.blocking_reasons
+    )
+    consensus = brca.details["entity_evidence_consensus"]
+    exact_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "exact_expression_reference"
+    )
+    assert exact_axis["available"] is False
+    assert "entity_descendant_exact_reference_support" not in brca.details
+
+
+def test_top_learned_entity_uses_same_consensus_beam_as_runner_up():
+    """A top entity can win on marker and composition despite stage conflict."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "PRAD",
+            entity_support=0.425,
+            entity_margin=0.282,
+            family="SARC_OTHER",
+            family_support=0.229,
+            compartment="mesenchymal",
+            compartment_support=0.532,
+        ),
+        ("PRAD", 0.425),
+        ("SARC", 0.064),
+    )
+    details["learned_expression_hierarchy_votes"].append(
+        {
+            "stage": "compartment",
+            "label": "mesenchymal",
+            "probability": 0.532,
+            "top_predictions": [
+                {"label": "mesenchymal", "probability": 0.532},
+                {"label": "epithelial", "probability": 0.454},
+            ],
+        }
+    )
+    details["learned_expression_flat_top_predictions"] = [
+        {"code": "SARC_KS", "probability": 0.356},
+        {"code": "PRAD", "probability": 0.047},
+    ]
+
+    selected = _selectable("SARC", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    prad = CancerTypeEvidence(
+        cancer_type="PRAD",
+        broad_rna_support=0.671,
+        rna_marker_support=0.864,
+    )
+    prad.admit_adjudication_support(
+        "curated_marker_program",
+        prad.rna_marker_support,
+        selector="test_marker",
+    )
+    prad.coarse_composition_support = 0.943
+    prad.admit_adjudication_support(
+        "composition_reference",
+        prad.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC": selected, "PRAD": prad},
+        selected,
+    )
+
+    assert result is prad
+    assert result.details["entity_consensus_adjudication_mode"] == (
+        "candidate_beam_consensus"
+    )
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["learned_entity_prediction_rank"] == 1
+    assert consensus["candidate_votes"] == 3
+    assert consensus["candidate_nonlearned_votes"] == 2
 
 
 def test_entity_consensus_does_not_double_count_signature_derived_marker_score():
@@ -1204,6 +1575,16 @@ def test_learned_hierarchy_uses_multi_axis_consensus_below_single_model_gate():
         "unexpected_low_detected": 0,
         "total": 10,
     }
+    candidate.admit_adjudication_support(
+        "exact_expression_reference",
+        candidate.fine_reference_support,
+        selector="test_reference",
+    )
+    selected.admit_adjudication_support(
+        "exact_expression_reference",
+        selected.fine_reference_support,
+        selector="test_reference",
+    )
 
     result = _adjudicate_selection_with_learned_hierarchy(
         {"ESCA": selected, "STAD": candidate},
@@ -1600,6 +1981,116 @@ def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call
     assert result["selected"]["metrics"]["coarse_composition_support"] > 0.7
     selected = next(row for row in result["evidence"] if row["cancer_type"] == "BLCA")
     assert selected["coarse_reference_type_specific_hit_count"] == 3
+
+
+@pytest.mark.parametrize(
+    ("stad_rho", "expected_code", "composition_available"),
+    [
+        (0.010, "ESCA", False),
+        (0.800, "STAD", True),
+    ],
+)
+def test_composition_consensus_requires_an_absolute_candidate_fit(
+    monkeypatch,
+    stad_rho,
+    expected_code,
+    composition_available,
+):
+    """Keep credible secondary fits while rejecting negligible correlations."""
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [("STAD", 0.40), ("ESCA", 0.20)],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label": "STAD",
+                    "probability": 0.40,
+                    "margin": 0.20,
+                    "top_predictions": [
+                        {"label": "STAD", "probability": 0.40},
+                        {"label": "ESCA", "probability": 0.20},
+                    ],
+                }
+            )
+        ],
+    )
+
+    def marker_coherence(code, _sample):
+        if code == "STAD":
+            return {
+                "status": "consistent",
+                "detected": 4,
+                "total": 4,
+                "required_for_consistent": 3,
+                "detected_fraction": 1.0,
+                "unexpected_low_detected": 0,
+            }
+        return {}
+
+    monkeypatch.setattr(evidence, "_marker_coherence", marker_coherence)
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
+    monkeypatch.setattr(
+        evidence,
+        "_add_local_expression_reference_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_lineage_panel_features",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_contrast_discriminator_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_fused_evidence_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series(dtype=float), False),
+    )
+    analysis = _analysis(("ESCA", 1.0), ("STAD", 0.90))
+    analysis["fit_quality"] = {"label": "well-supported"}
+    analysis["healthy_vs_tumor"] = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[
+            ("SGC_TPM", 0.820),
+            ("STAD_TPM", stad_rho),
+            ("ESCA_TPM", 0.009),
+        ],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({"TP53": 10.0}),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == expected_code
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    composition = next(
+        axis
+        for axis in stad["entity_evidence_consensus"]["axes"]
+        if axis["axis"] == "composition_reference"
+    )
+    assert composition["available"] is composition_available
+    assert (
+        "composition_reference" in stad["adjudication_admissible_support"]
+    ) is composition_available
 
 
 def test_structural_sarcoma_composition_yields_to_learned_crc_family(monkeypatch):
@@ -3220,12 +3711,27 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
     learned_channels = [
         row for row in result["staged_evidence_graph"]["channels"]
         if row["channel"] == "learned_expression_classifier"
-        and row.get("candidate_code") == "STAD"
     ]
-    assert any(row["role"] == "full_profile_discriminative_vote" for row in learned_channels)
-    assert any(row["role"] == "hierarchical_compartment_vote" for row in learned_channels)
-    assert any(row["role"] == "hierarchical_family_vote" for row in learned_channels)
-    assert any(row["role"] == "hierarchical_entity_vote" for row in learned_channels)
+    assert any(
+        row["role"] == "full_profile_discriminative_vote"
+        and row.get("candidate_code") == "STAD"
+        for row in learned_channels
+    )
+    assert any(
+        row["role"] == "hierarchical_compartment_vote"
+        and row.get("candidate_code") == "epithelial"
+        for row in learned_channels
+    )
+    assert any(
+        row["role"] == "hierarchical_family_vote"
+        and row.get("candidate_code") == "carcinoma-gi"
+        for row in learned_channels
+    )
+    assert any(
+        row["role"] == "hierarchical_entity_vote"
+        and row.get("candidate_code") == "STAD"
+        for row in learned_channels
+    )
 
 
 def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(monkeypatch):
@@ -3838,6 +4344,7 @@ def test_mixed_marker_program_cannot_become_a_signature_anchor(monkeypatch):
 def test_molecular_status_child_cannot_originate_a_runner_up_parent(monkeypatch):
     """Resolve the entity branch before applying an expression-status child."""
     import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     markers = ("CLDN18", "MUC5AC", "MUC6", "KRT20")
@@ -3859,13 +4366,66 @@ def test_molecular_status_child_cannot_originate_a_runner_up_parent(monkeypatch)
         },
     )
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [("STAD", 0.40), ("READ", 0.20)],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label": "STAD",
+                    "probability": 0.40,
+                    "margin": 0.20,
+                    "top_predictions": [
+                        {"label": "STAD", "probability": 0.40},
+                        {"label": "READ", "probability": 0.20},
+                    ],
+                }
+            ),
+        ],
+    )
+
+    def add_composition(hypotheses, *_args, **_kwargs):
+        evidence._hypothesis(
+            hypotheses,
+            "STAD",
+        ).coarse_composition_support = 0.80
+
+    monkeypatch.setattr(
+        evidence,
+        "_add_coarse_composition_reference_features",
+        add_composition,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series(dtype=float), False),
+    )
 
     result = select_report_scope_from_evidence(
         _expression_frame({gene: 95.0 for gene in markers}),
         _analysis(("READ", 1.0), ("STAD", 0.96), ("COAD", 0.84)),
     )
 
-    assert result["selected"]["cancer_type"] == "READ"
+    assert result["selected"]["cancer_type"] == "READ", {
+        key: result["selected"].get(key)
+        for key in (
+            "selected_by",
+            "label_decision",
+            "entity_evidence_consensus",
+            "adjudication_admissible_support",
+            "adjudication_exclusions",
+            "fused_evidence_score",
+            "fused_evidence_components",
+            "fused_evidence_can_select",
+            "fused_evidence_blockers",
+        )
+    }
     status = next(
         row for row in result["evidence"] if row["cancer_type"] == "STAD_GS"
     )
@@ -3877,6 +4437,16 @@ def test_molecular_status_child_cannot_originate_a_runner_up_parent(monkeypatch)
     )
     assert parent["can_select_report_label"] is False
     assert any("established STAD parent diagnosis" in reason for reason in parent["blocking_reasons"])
+    assert "exact_expression_reference" not in (
+        parent["adjudication_admissible_support"]
+    )
+    assert "exact_expression_reference" in parent["adjudication_exclusions"]
+    exact_axis = next(
+        axis
+        for axis in parent["entity_evidence_consensus"]["axes"]
+        if axis["axis"] == "exact_expression_reference"
+    )
+    assert exact_axis["candidate_support"] == 0.0
 
 
 def test_nonclassification_rare_surrogate_remains_a_prompt(monkeypatch):
@@ -6359,7 +6929,7 @@ def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
         analysis,
     )
 
-    assert result["selected"]["cancer_type"] == "STAD"
+    assert result["selected"]["cancer_type"] == "STAD", result["selected"]
     assert result["selected"]["selected_by"] == "contrast_discriminator"
     assert result["selected"]["contrast_discriminator_context_code"] == "CRC"
     assert (
@@ -6414,55 +6984,101 @@ def test_nonclassification_contrast_program_remains_a_hypothesis(monkeypatch):
     assert contrast_channel["details"]["context_is_top"] is True
 
 
+def _conflicting_pairwise_contrast_rows():
+    rows = []
+    for contrast, type_a, type_b, programs in (
+        (
+            "PAAD_vs_STAD",
+            "PAAD",
+            "STAD",
+            {
+                "PAAD": ("GATA6", "PDX1", "MSLN"),
+                "STAD": ("CLDN18", "GKN1", "MUC5AC"),
+            },
+        ),
+        (
+            "GBC_vs_STAD",
+            "GBC",
+            "STAD",
+            {
+                "GBC": ("KRT7", "KRT19", "ERBB2"),
+                "STAD": ("CLDN18", "GKN1", "MUC5AC"),
+            },
+        ),
+    ):
+        for favors, symbols in programs.items():
+            for index, symbol in enumerate(symbols):
+                rows.append(
+                    {
+                        "contrast": contrast,
+                        "type_a": type_a,
+                        "type_b": type_b,
+                        "favors": favors,
+                        "symbol": symbol,
+                        "direction": "high",
+                        "tier": "primary" if index < 2 else "supporting",
+                        "separability": "strong",
+                        "source": "representative-pairwise-panel",
+                        "support_type": "contrast_marker_literature",
+                    }
+                )
+    return tuple(rows)
+
+
 def test_conflicting_pairwise_contrasts_cannot_act_as_a_global_classifier(
     monkeypatch,
 ):
     """Simultaneous A-vs-B answers must not choose among A, B, C globally."""
     import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
-    def contrast_rows():
-        rows = []
-        for contrast, type_a, type_b, programs in (
-            (
-                "PAAD_vs_STAD",
-                "PAAD",
-                "STAD",
-                {
-                    "PAAD": ("GATA6", "PDX1", "MSLN"),
-                    "STAD": ("CLDN18", "GKN1", "MUC5AC"),
-                },
-            ),
-            (
-                "GBC_vs_STAD",
-                "GBC",
-                "STAD",
-                {
-                    "GBC": ("KRT7", "KRT19", "ERBB2"),
-                    "STAD": ("CLDN18", "GKN1", "MUC5AC"),
-                },
-            ),
-        ):
-            for favors, symbols in programs.items():
-                for index, symbol in enumerate(symbols):
-                    rows.append(
-                        {
-                            "contrast": contrast,
-                            "type_a": type_a,
-                            "type_b": type_b,
-                            "favors": favors,
-                            "symbol": symbol,
-                            "direction": "high",
-                            "tier": "primary" if index < 2 else "supporting",
-                            "separability": "strong",
-                            "source": "representative-pairwise-panel",
-                            "support_type": "contrast_marker_literature",
-                        }
-                    )
-        return tuple(rows)
-
-    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", contrast_rows)
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _conflicting_pairwise_contrast_rows,
+    )
     monkeypatch.setattr(evidence, "_marker_coherence", lambda *_args: {})
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression",
+        lambda _sample, top_k=5: [("PAAD", 0.40), ("STAD", 0.20)],
+    )
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [
+            SimpleNamespace(
+                public_dict=lambda: {
+                    "stage": "entity",
+                    "label": "PAAD",
+                    "probability": 0.40,
+                    "margin": 0.20,
+                    "top_predictions": [
+                        {"label": "PAAD", "probability": 0.40},
+                        {"label": "STAD", "probability": 0.20},
+                    ],
+                }
+            ),
+        ],
+    )
+
+    def add_composition(hypotheses, *_args, **_kwargs):
+        evidence._hypothesis(
+            hypotheses,
+            "PAAD",
+        ).coarse_composition_support = 0.80
+
+    monkeypatch.setattr(
+        evidence,
+        "_add_coarse_composition_reference_features",
+        add_composition,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series(dtype=float), False),
+    )
     analysis = _analysis(("STAD", 1.0), ("READ", 0.97), ("PAAD", 0.93))
     analysis["fit_quality"] = {"label": "ambiguous"}
 
@@ -6493,6 +7109,109 @@ def test_conflicting_pairwise_contrasts_cannot_act_as_a_global_classifier(
             "pairwise contrast panels" in reason
             for reason in candidate["blocking_reasons"]
         )
+        assert "curated_marker_program" not in (
+            candidate["adjudication_admissible_support"]
+        )
+    paad = next(row for row in result["evidence"] if row["cancer_type"] == "PAAD")
+    marker_axis = next(
+        axis
+        for axis in paad["entity_evidence_consensus"]["axes"]
+        if axis["axis"] == "curated_marker_program"
+    )
+    assert marker_axis["candidate_support"] == 0.0
+
+
+def test_conflicting_contrasts_preserve_an_independent_lineage_selection(
+    monkeypatch,
+):
+    """Invalidating one selector must not erase another selector's decision."""
+    import trufflepig.cancer_type_evidence as evidence
+    import trufflepig.expression_classifier as classifier
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    monkeypatch.setattr(
+        evidence,
+        "_contrast_discriminator_rows",
+        _conflicting_pairwise_contrast_rows,
+    )
+    monkeypatch.setattr(evidence, "_marker_coherence", lambda *_args: {})
+    monkeypatch.setattr(classifier, "classify_expression", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
+    monkeypatch.setattr(
+        evidence,
+        "_add_local_expression_reference_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_coarse_composition_reference_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_fused_evidence_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series(dtype=float), False),
+    )
+
+    def add_lineage(hypotheses, *_args, **_kwargs):
+        paad = evidence._hypothesis(hypotheses, "PAAD")
+        paad.add_source("lineage_panel")
+        paad.details["lineage_panel_score"] = 0.65
+        paad.admit_adjudication_support(
+            "curated_marker_program",
+            0.65,
+            selector="lineage_panel",
+        )
+        paad.consider_for_report_label(
+            selected_by="lineage_panel",
+            can_select=True,
+            blocking_reasons=(),
+            priority=(1, 0.65),
+        )
+        return {"promotion": {"promoted": True, "code": "PAAD"}}
+
+    monkeypatch.setattr(evidence, "_add_lineage_panel_features", add_lineage)
+    analysis = _analysis(("STAD", 1.0), ("PAAD", 0.93))
+    analysis["fit_quality"] = {"label": "ambiguous"}
+
+    result = select_report_scope_from_evidence(
+        _expression_frame(
+            {
+                "GATA6": 100.0,
+                "PDX1": 80.0,
+                "MSLN": 60.0,
+                "KRT7": 100.0,
+                "KRT19": 80.0,
+                "ERBB2": 60.0,
+                "CLDN18": 0.1,
+                "GKN1": 0.1,
+                "MUC5AC": 0.1,
+            }
+        ),
+        analysis,
+    )
+
+    assert result["selected"]["cancer_type"] == "PAAD"
+    assert result["selected"]["selected_by"] == "lineage_panel"
+    paad = next(row for row in result["evidence"] if row["cancer_type"] == "PAAD")
+    marker_support = paad["adjudication_admissible_support_by_selector"][
+        "curated_marker_program"
+    ]
+    assert marker_support == {"lineage_panel": 0.65}
+    assert "contrast_discriminator" in paad["adjudication_exclusions"][
+        "curated_marker_program"
+    ]
+    assert paad["blocking_reasons"] == []
 
 
 def test_contrast_discriminator_blocks_marker_incoherent_override(monkeypatch):

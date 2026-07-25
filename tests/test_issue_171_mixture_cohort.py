@@ -127,13 +127,15 @@ def test_winning_subtype_none_for_non_mixture():
     """Non-mixture cohorts must always report ``winning_subtype=None``
     — the subtype-aware path must not fire outside mixture parents."""
     pan = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
+    prad_tpm = pd.to_numeric(pan["PRAD_TPM"], errors="coerce")
+    observed = prad_tpm.notna()
     sample = pd.DataFrame(
         {
-            "ensembl_gene_id": pan["Ensembl_Gene_ID"],
-            "gene_symbol": pan["Symbol"],
-            "TPM": pan["PRAD_TPM"].astype(float),
+            "ensembl_gene_id": pan.loc[observed, "Ensembl_Gene_ID"],
+            "gene_symbol": pan.loc[observed, "Symbol"],
+            "TPM": prad_tpm.loc[observed],
         }
-    )
+    ).reset_index(drop=True)
     ranked = rank_cancer_type_candidates(sample)
     for row in ranked:
         if row["code"] == "PRAD":

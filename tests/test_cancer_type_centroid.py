@@ -224,6 +224,26 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
     assert rows[0].get("compartment_in_set") is False
 
 
+def test_member_union_ancestry_keeps_resolved_child_above_parent():
+    """A confident LUAD branch may promote NSCLC, but must not broaden to it."""
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("LUAD"),
+        candidate_codes=["NSCLC", "LUAD", "LUSC"],
+        top_k=3,
+    )
+    by_code = {row["code"]: row for row in rows}
+
+    assert rows[0]["code"] == "LUAD"
+    assert [row["code"] for row in rows].index("LUAD") < [
+        row["code"] for row in rows
+    ].index("NSCLC")
+    assert by_code["LUAD"]["centroid_member_union_branch_promoted"] is True
+    assert by_code["NSCLC"]["centroid_member_union_branch_promoted"] is True
+    assert by_code["NSCLC"]["winning_subtype"] == "LUAD"
+
+
 def test_ranker_does_not_hallmark_veto_on_unconfident_compartment(monkeypatch):
     """A near-tie compartment call may annotate disagreement but must not delete
     cross-compartment leaves. This is the HCC1395-shaped failure mode: a basal/EMT

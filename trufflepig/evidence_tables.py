@@ -82,7 +82,10 @@ def _per_subtype_evidence_table(
     label = subtype or cancer_code
     title = title_hint or f"Signature evidence for **{label}**"
     competitor_code = _COMPETING_COHORT_FOR_TABLE.get(cancer_code, "")
-    has_competitor = competitor_medians is not None and competitor_code
+    has_reference = bool(cohort_medians)
+    has_competitor = (
+        has_reference and bool(competitor_medians) and bool(competitor_code)
+    )
     lines: list[str] = []
     lines.append(f"#### {title}\n")
     if has_competitor:
@@ -90,20 +93,28 @@ def _per_subtype_evidence_table(
             f"| Gene | Sample TPM | {label} median | {competitor_code} median | Δlog2 | Sample supports? |"
         )
         lines.append("|---|---:|---:|---:|---:|:---:|")
-    else:
+    elif has_reference:
         lines.append(f"| Gene | Sample TPM | {label} median |")
         lines.append("|---|---:|---:|")
+    else:
+        lines.append(
+            "No exact expression reference is available for this candidate; "
+            "the table therefore shows the sample panel without fabricating "
+            "zero-valued cohort medians.\n"
+        )
+        lines.append("| Gene | Sample TPM |")
+        lines.append("|---|---:|")
 
     for gene in genes:
         sample_v = float(sample_tpm_by_symbol.get(gene, 0.0) or 0.0)
-        ref_v = float(cohort_medians.get(gene, 0.0) or 0.0)
-        comp_v = (
-            float((competitor_medians or {}).get(gene, 0.0) or 0.0)
-            if has_competitor
-            else None
-        )
+        ref_raw = cohort_medians.get(gene)
+        ref_v = float(ref_raw) if ref_raw is not None else None
+        comp_raw = (competitor_medians or {}).get(gene) if has_competitor else None
+        comp_v = float(comp_raw) if comp_raw is not None else None
         if has_competitor:
             try:
+                if ref_v is None or comp_v is None:
+                    raise ValueError
                 dlog2 = math.log2((ref_v + 1.0) / (comp_v + 1.0))
                 dlog2_str = f"{dlog2:+.2f}"
             except (ValueError, ZeroDivisionError):
@@ -112,17 +123,26 @@ def _per_subtype_evidence_table(
             # gene high in the subtype reference but absent in the sample reads
             # as misleading "support". Mark whether the sample's own expression
             # is actually closer to the subtype than to the competitor.
-            dist_subtype = abs(math.log2((sample_v + 1.0) / (ref_v + 1.0)))
-            dist_comp = abs(math.log2((sample_v + 1.0) / (comp_v + 1.0)))
-            supports = "✓" if dist_subtype <= dist_comp else "✗"
+            if ref_v is None or comp_v is None:
+                supports = "—"
+            else:
+                dist_subtype = abs(
+                    math.log2((sample_v + 1.0) / (ref_v + 1.0))
+                )
+                dist_comp = abs(
+                    math.log2((sample_v + 1.0) / (comp_v + 1.0))
+                )
+                supports = "✓" if dist_subtype <= dist_comp else "✗"
             lines.append(
                 f"| {gene} | {_format_tpm(sample_v)} | {_format_tpm(ref_v)} | "
                 f"{_format_tpm(comp_v)} | {dlog2_str} | {supports} |"
             )
-        else:
+        elif has_reference:
             lines.append(
                 f"| {gene} | {_format_tpm(sample_v)} | {_format_tpm(ref_v)} |"
             )
+        else:
+            lines.append(f"| {gene} | {_format_tpm(sample_v)} |")
     if has_competitor:
         lines.append(
             f"\n*Δlog2 = log2((subtype + 1) / ({competitor_code} median + 1)). "
@@ -282,6 +302,7 @@ def build_candidate_evidence_block(
 
     # Lazy imports — keep this module light when not consumed.
     from .plot_embedding import _get_cancer_type_signature_panels
+    from .plot_tumor_expr import _exact_expression_tpm_reference
     from .reference import pan_cancer_expression
     from .subtype_signature import subtype_signature_panels
 
@@ -291,6 +312,7 @@ def build_candidate_evidence_block(
     pan = pan_cancer_expression(technical_rna_normalize=True)
     pan = pan.drop_duplicates(subset="Symbol").set_index("Symbol")
     pan_dict_cache: dict[str, dict[str, float]] = {}
+    exact_dict_cache: dict[str, dict[str, float]] = {}
 
     def _broad_cohort_medians(code: str) -> dict[str, float]:
         cached = pan_dict_cache.get(code)
@@ -310,6 +332,12 @@ def build_candidate_evidence_block(
             sub = subtype_medians.get((code, subtype))
             if sub:
                 return sub
+        exact = exact_dict_cache.get(code)
+        if exact is None:
+            exact, _source, _kind = _exact_expression_tpm_reference(code)
+            exact_dict_cache[code] = exact
+        if exact:
+            return exact
         return _broad_cohort_medians(code)
 
     lines: list[str] = [
@@ -354,7 +382,9 @@ def build_candidate_evidence_block(
         # don't have subtype data, and the contrast we want is "this
         # candidate vs its natural alternative" at the cohort level.
         competitor = (
-            _broad_cohort_medians(competitor_code) if competitor_code else None
+            _candidate_medians(competitor_code, None)
+            if competitor_code
+            else None
         )
         lines.extend(
             _per_subtype_evidence_table(

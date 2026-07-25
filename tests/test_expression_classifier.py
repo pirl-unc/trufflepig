@@ -80,6 +80,23 @@ def test_family_is_recovered_for_subtype_dense_type():
     assert any(c.startswith(("COAD", "READ", "CRC")) for c, _ in top), top
 
 
+def test_flat_classifier_is_invariant_to_global_tpm_scaling():
+    """Library-scale changes do not alter the within-profile learned view."""
+
+    sample = _bulk_sample("SKCM")
+    baseline = classify_expression(sample, top_k=5)
+    rescaled = classify_expression(
+        {gene: value * 100.0 for gene, value in sample.items()},
+        top_k=5,
+    )
+
+    assert baseline
+    assert [code for code, _ in rescaled] == [code for code, _ in baseline]
+    assert [probability for _, probability in rescaled] == pytest.approx(
+        [probability for _, probability in baseline]
+    )
+
+
 def test_learned_family_walks_registry_ancestors_for_crc_subtypes():
     assert _learned_family_for_code("READ") == "CRC"
     assert _learned_family_for_code("READ_MSS") == "CRC"

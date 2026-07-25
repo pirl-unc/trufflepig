@@ -82,6 +82,24 @@ def test_per_subtype_table_returns_empty_on_no_genes():
     assert _per_subtype_evidence_table("BRCA", None, {}, {}, None, []) == []
 
 
+def test_per_subtype_table_does_not_invent_missing_reference_medians():
+    body = "\n".join(
+        _per_subtype_evidence_table(
+            "SARC_MPLPS",
+            None,
+            {"KRT8": 42.0, "MDM2": 0.0},
+            {},
+            None,
+            ["KRT8", "MDM2"],
+        )
+    )
+
+    assert "No exact expression reference is available" in body
+    assert "| Gene | Sample TPM |" in body
+    assert "median |" not in body
+    assert "| KRT8 | 42.0 |" in body
+
+
 # ---------------------------------------------------------------------------
 # _rescue_evidence_table
 # ---------------------------------------------------------------------------

@@ -1,23 +1,25 @@
-"""Optional LEARNED cancer-type co-signal — a multinomial logistic regression over the per-gene
-z-score feature space, trained on the representative-cohort samples.
+"""Optional learned cancer-type co-signals trained on representative cohorts.
 
-This is a deliberately guarded second opinion. The default analysis pipeline can fuse it through the
-evidence graph, but the hierarchical compartment→leaf system (curated panels, vetoes, family logic,
-interpretability, rare/zero-sample types, structured-contamination handling) remains the primary path.
-This module exists so callers can add cheap, purity-robust learned votes as explicit evidence rows.
+At a high level, the flat classifier supplies a quantifier-robust second
+opinion and the staged hierarchy supplies calibrated compartment, family, and
+entity context. The evidence graph treats those related predictions as one
+learned full-profile evidence group and requires independent corroboration
+before changing a report label.
 
-Measured (scripts/zscore_classifier_ab.py, 266 samples / 54 primary types, leakage-free 5-fold CV):
-  - LR (z-score) 0.865 clean, > nearest-centroid 0.835;
-  - perfectly purity-robust to a GENERIC (pan-cancer-mean) contaminant — 0.865 flat to 30% purity,
-    where nearest-centroid collapses to ~0.16.
-Honest caveats it does NOT fix: (1) STRUCTURED contamination (liver->LIHC, immune-rich->heme) still
-misleads any linear model; (2) rare types with ≤5 (or zero) training samples can't get a reliable
-boundary — class_weight='balanced' helps but does not invent data; (3) it is not interpretable. Use
-it as a co-signal, never as the sole call.
+The flat model uses within-sample expression percentiles, which limit the
+leverage of isolated abundance differences between quantifiers. The hierarchy
+uses calibrated log-clean-TPM because its stage probabilities and lineage
+contexts depend on absolute reference-space abundance. Neither view is an
+oracle: structured contamination can mislead both, rare classes remain
+data-limited, and neither replaces interpretable marker or reference evidence.
 
 The module also exposes orthogonal learned molecular-state votes when the
 representative labels support them. The MSI-vs-MSS classifier is reported as
 mismatch-repair RNA context, not as clinical MSI/MMR status.
+
+Historical benchmark results for an earlier z-score flat model are retained in
+``docs/cancer-type-hierarchical-classifier.md`` and should not be read as
+current-bundle performance.
 """
 from __future__ import annotations
 
@@ -273,7 +275,7 @@ def _collapse_predictions(
 
 
 @lru_cache(maxsize=1)
-def _training_matrix():
+def _training_matrices():
     try:
         from oncoref.normalization import clean_tpm
         from pirlygenes.expression.accessors import (
@@ -304,13 +306,48 @@ def _training_matrix():
         clean.index = base["Symbol"].reindex(expr.index).values
         clean = clean[~clean.index.duplicated(keep="first")]
         logc = np.log1p(clean.clip(lower=0))
-        var = logc.var(axis=1)
-        genes = list(var.sort_values(ascending=False).index[:_N_GENES])
-        X = np.nan_to_num(logc.loc[genes].T.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0)
+        raw_variance = logc.var(axis=1)
+        raw_genes = list(
+            raw_variance.sort_values(ascending=False).index[:_N_GENES]
+        )
+        raw_x = np.nan_to_num(
+            logc.loc[raw_genes].T.to_numpy(),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        # A second, quantifier-robust view for the flat classifier. Per-sample
+        # percentile ranks cap the leverage of a few gene-level abundance
+        # disagreements (for example, alternative quantifiers assigning very
+        # different TPM to one paralog) while retaining the within-profile
+        # lineage program. Hierarchical models keep the calibrated log-TPM view.
+        ranked = clean.rank(axis=0, pct=True, method="average")
+        rank_variance = ranked.var(axis=1)
+        rank_genes = list(
+            rank_variance.sort_values(ascending=False).index[:_N_GENES]
+        )
+        rank_x = np.nan_to_num(
+            ranked.loc[rank_genes].T.to_numpy(),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         y = np.asarray(labels)
-        return X, y, genes
+        return (raw_x, y, raw_genes), (rank_x, y, rank_genes)
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
+
+
+@lru_cache(maxsize=1)
+def _training_matrix():
+    matrices = _training_matrices()
+    return matrices[0] if matrices is not None else None
+
+
+@lru_cache(maxsize=1)
+def _rank_training_matrix():
+    matrices = _training_matrices()
+    return matrices[1] if matrices is not None else None
 
 
 @lru_cache(maxsize=1)
@@ -423,11 +460,14 @@ def _leave_one_out_top1_accuracy(X, y) -> float | None:
 def _trained_model():
     """``(pipeline, gene_symbols, classes)`` — lazily trained once, cached.
 
-    Features are log1p(clean-TPM) over a fixed high-variance SYMBOL index; the pipeline z-scores
-    (StandardScaler) then fits a balanced multinomial logistic regression. Returns ``None`` if the
-    reference samples or sklearn are unavailable (callers then skip the co-signal)."""
+    Features are within-sample percentile ranks over a fixed high-variance
+    SYMBOL index; the pipeline z-scores them and fits a balanced multinomial
+    logistic regression. This flat view is deliberately robust to isolated
+    quantifier-specific TPM spikes. Returns ``None`` if the reference samples
+    or sklearn are unavailable (callers then skip the co-signal).
+    """
     try:
-        training = _training_matrix()
+        training = _rank_training_matrix()
         if training is None:
             return None
         X, y, genes = training
@@ -702,6 +742,28 @@ def _sample_vector(
     )
 
 
+def _sample_rank_vector(
+    sample_tpm_by_symbol: Mapping[str, float],
+    genes: list[str],
+) -> np.ndarray | None:
+    """Return within-sample percentile features for the robust flat model."""
+
+    if not sample_tpm_by_symbol:
+        return None
+    present = sum(1 for gene in genes if gene in sample_tpm_by_symbol)
+    if present < _MIN_SHARED_GENES:
+        return None
+    values = pd.Series(
+        {
+            str(gene): max(0.0, float(value or 0.0))
+            for gene, value in sample_tpm_by_symbol.items()
+        },
+        dtype=float,
+    )
+    ranks = values.rank(pct=True, method="average")
+    return np.asarray([float(ranks.get(gene, 0.0)) for gene in genes])
+
+
 def _predict_with_model(
     pipe,
     classes: list[str],
@@ -728,7 +790,7 @@ def classify_expression(sample_tpm_by_symbol, top_k=5):
     if trained is None:
         return []
     pipe, genes, classes = trained
-    vec = _sample_vector(sample_tpm_by_symbol, genes)
+    vec = _sample_rank_vector(sample_tpm_by_symbol, genes)
     if vec is None:
         return []
     return list(_predict_with_model(pipe, classes, vec, top_k))

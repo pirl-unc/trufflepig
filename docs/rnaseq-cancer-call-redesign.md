@@ -1,5 +1,18 @@
 # RNA-seq cancer-call information flow and redesign plan
 
+## At a glance
+
+Trufflepig should make one staged, ancestry-aware cancer call from independent
+evidence groups, finalize it once, and use that same scope for decomposition and
+reporting. Whole-profile, marker, exact-reference, and composition evidence are
+integrated at the entity level; molecular and expression subtypes remain
+separate axes until their parent entity is established.
+
+This document combines current implementation notes, historical validation
+snapshots, failure analyses, and a target architecture. Read the implementation
+status for shipped behavior and treat every dated accuracy table as an
+experiment record rather than a release guarantee.
+
 This note summarizes how trufflepig currently determines cancer type,
 subtype, molecular-expression context, purity, and decomposition from
 RNA-seq, then proposes a simpler confluent redesign.
@@ -55,9 +68,14 @@ for a full replacement classifier:
   itself.
 - The fused evidence layer now carries flat learned predictions plus staged
   learned compartment/family/entity votes as first-class decision features.
-  A strong learned entity call must agree with its entity label, hierarchy
-  support, flat-lineage support, and margin before it can overrule weak or
-  blocked local-reference markers.
+  The calibrated hierarchy and quantifier-robust flat classifier form one
+  learned full-profile axis. A candidate can change the report entity only when
+  it wins a true majority of available evidence groups with at least two
+  non-learned groups; hard molecular blockers remain disqualifying.
+- Entity consensus evaluates the full learned candidate beam, not only the
+  hierarchy top-1. Valid expression-subtype reference support rolls up to its
+  parent entity for that comparison while retaining the child code in audit
+  fields; subtype selection remains a later decision.
 - Curated local-expression references and pan-cancer marker programs retain
   positive marker evidence in the trace, but expected-low conflicts make them
   contextual unless independent learned, centroid, fusion, lineage-panel, or
@@ -81,10 +99,14 @@ for a full replacement classifier:
 - Nonselecting ranker fallbacks are rendered as "Fallback RNA context" in the
   evidence appendix, not as an independently selected report label.
 
-## Validation status
+## Historical validation snapshot — 2026-07-05
 
-Validation through 2026-07-05 shows a large improvement, including removal of
-the severe cross-lineage failures that motivated this refactor:
+This snapshot records the evidence used for the refactor at that date. It is not
+a current-release guarantee; rerun the blind local corpus and packaged
+evaluation harness after decision-logic or dependency changes.
+
+At the time, validation showed a large improvement, including removal of the
+severe cross-lineage failures that motivated this refactor:
 
 - Focused selector/report regression subset:
   `109 passed` (`./test.sh tests/test_cancer_type_evidence.py -q`).

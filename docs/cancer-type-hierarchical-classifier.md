@@ -6,6 +6,17 @@ re-derived from scratch. Companion to
 [cancer-type-residual-matching-findings.md](./cancer-type-residual-matching-findings.md)
 (the residual-matching negative result).
 
+## At a glance
+
+The classifier first estimates a broad histogenesis compartment, then compares
+only compatible entities and subtypes. This prevents a stromal or immune
+program from winning merely because it resembles a leaf in another lineage.
+Fine labels still require entity-specific support; otherwise the result
+abstains to an ancestor or retains alternatives.
+
+The accuracy figures below are dated experiment snapshots, not timeless release
+guarantees. Current release claims must come from a fresh blind corpus run.
+
 ## The problem this fixes
 
 The leaf marker panels **saturate for promiscuous lineages**. The (removed)
@@ -38,7 +49,7 @@ It is selectable only when probability, margin, ontology marker sanity, broad
 candidate support, and compartment/background checks agree; it is evidence for
 the hierarchy, not a replacement for it.
 
-## Stage 1 — compartment call (LOCKED, 15/15)
+## Stage 1 — compartment call
 
 `cancer_type_centroid.compartment_call(sample_tpm_by_symbol)`.
 
@@ -67,11 +78,11 @@ compartment; requiring the top-3 to agree means a prostate tumor can't summon th
 sarcoma cohorts, so the spurious win collapses.
 
 It returns a confidence margin (top compartment − runner-up); a call is `confident`
-when the margin ≥ `_COMPARTMENT_CONFIDENT_MARGIN` (**0.025** rho). On the local truth
-set the compartment is right 15/18, and — the property that makes it safe to *act* —
-**every confident call is correct**, while the residual near-ties (basal/EMT or
-pure-cell-line profiles grazing an adjacent compartment) fall below the margin and
-defer to the marker ranker rather than restricting wrongly.
+when the margin ≥ `_COMPARTMENT_CONFIDENT_MARGIN` (**0.025** rho). In the dated
+local checkpoint used to choose that margin, the compartment was right 15/18
+and every confident call was correct. This is historical calibration evidence,
+not a current guarantee; residual near-ties defer to the other evidence groups
+rather than restricting a leaf by themselves.
 
 **Sarcoma is a broad grouping, never a leaf** (the SARC-is-broad rule). Stage 1 may
 *pin* the Sarcoma compartment, but it never resolves a single sarcoma type; every
@@ -205,7 +216,7 @@ allows and otherwise leaves the near-tied leaves as a candidate set (the
 [ontology layer](./cancer-type-ontology.md)'s abstention behavior), rather than
 forcing a wrong leaf.
 
-## Local blind truth set (15 samples)
+## Historical local blind truth set (15 samples)
 
 Run on every local report under `/tmp/bughunt_sweep/*/analyze/` with known truth.
 Each is scored from expression alone — the cancer type is **not** passed in.
@@ -220,7 +231,8 @@ Each is scored from expression alone — the cancer type is **not** passed in.
 | pfo017 | 3 | Epithelial | BLCA |
 | tempus-nutm1 | 3 | Epithelial | NUTM |
 
-Stage 1: **15/15** compartments correct. Stage 2 (epithelial leaf, family-aware):
+On this checkpoint, stage 1 had **15/15** correct compartments. Stage 2
+(epithelial leaf, family-aware):
 best method 7/12 (0.58); the misses are the rare/admixed cases noted above.
 
 ## 565-sample refactor checkpoint

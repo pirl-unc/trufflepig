@@ -214,6 +214,37 @@ def test_lineage_estimator_separates_tme_dominated_from_usable():
     assert skipped[0]["sample_tpm"] == 190.0
 
 
+def test_lineage_estimator_reports_detected_genes_excluded_from_specific_panel(
+    monkeypatch,
+):
+    """Panel filtering is a calibration choice, not evidence of non-detection."""
+    from trufflepig import tumor_purity as tp
+
+    monkeypatch.setattr(tp, "LINEAGE_GENES", {"FAKE": ["KEPT", "SHARED"]})
+    monkeypatch.setattr(
+        tp,
+        "_cancer_specific_lineage_genes",
+        lambda _cancer_code: [],
+    )
+
+    estimates, skipped = tp._lineage_purity_estimates(
+        "FAKE",
+        {"KEPT": 0.0, "SHARED": 0.03},
+        {},
+        [],
+        0.7,
+    )
+
+    assert estimates == []
+    assert skipped == [
+        {
+            "gene": "SHARED",
+            "sample_tpm": 0.03,
+            "reason": "not_in_cancer_specific_panel",
+        }
+    ]
+
+
 # ── #39: MT-quality split — n_mt=0 vs n_mt>0 + low fraction ─────────
 
 

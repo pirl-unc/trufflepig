@@ -114,7 +114,17 @@ def classify_without_hint_with_analysis(df):
         _finalize_purity_for_final_call,
         _veto_local_reference_lineage_flip,
     )
-    analysis = analyze_sample(df)                                       # no cancer_type → auto-detect
+    from trufflepig.healthy_vs_tumor import assess_healthy_vs_tumor
+
+    try:
+        tissue_signal = assess_healthy_vs_tumor(df)
+    except Exception:  # noqa: BLE001 - mirror the report CLI's optional screen
+        tissue_signal = None
+    analysis = analyze_sample(                                         # no cancer_type → auto-detect
+        df,
+        tissue_signal=tissue_signal,
+    )
+    analysis["healthy_vs_tumor"] = tissue_signal
     rare_marker_hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(df, analysis)
     analysis["rare_marker_hypotheses"] = rare_marker_hypotheses
     scope = select_report_scope_from_evidence(
