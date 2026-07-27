@@ -165,10 +165,13 @@ def _cohort_hk_medians() -> dict[str, float]:
     from .reference import cancer_reference_expression
 
     df = cancer_reference_expression()
-    df = df[df["normalization"] == "TPM_clean"]
     hk_ids = set(housekeeping_gene_ids())
-    hk = df[df["Ensembl_Gene_ID"].isin(hk_ids)]
-    return {str(k): float(v) for k, v in hk.groupby("cancer_code")["expression"].median().items()}
+    mask = df["normalization"].eq("TPM_clean") & df["Ensembl_Gene_ID"].isin(hk_ids)
+    hk = df.loc[mask, ["cancer_code", "expression"]]
+    return {
+        str(k): float(v)
+        for k, v in hk.groupby("cancer_code")["expression"].median().items()
+    }
 
 
 def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:

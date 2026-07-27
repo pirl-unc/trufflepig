@@ -235,3 +235,22 @@ def test_promoting_rare_surrogate_can_use_strong_near_top_parent_context():
     adcc = next(row for row in findings if row["rule_id"] == "adcc_myb")
     assert adcc["cancer_type"] == "ADCC"
     assert adcc["context_match_reason"] == "near_top_context"
+    assert adcc["promote_report_scope"] is True
+
+
+def test_generated_nutm_surrogate_preserves_promoting_rule_flag():
+    findings = infer_rare_cancer_marker_hypotheses_from_rna(
+        _expression_frame({"NUTM1": 68.0, "TP63": 40.0, "SOX2": 30.0}),
+        {
+            "cancer_type": "LUSC",
+            "candidate_trace": [
+                {"code": "LUSC", "support_fraction_of_top": 1.0},
+                {"code": "HNSC", "support_fraction_of_top": 0.95},
+            ],
+        },
+    )
+
+    nutm = next(row for row in findings if row["rule_id"] == "nutm_nutm1")
+    assert nutm["cancer_type"] == "NUTM"
+    assert nutm["promote_report_scope"] is True
+    assert nutm["context_match_reason"] == "top_context"
