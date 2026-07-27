@@ -483,6 +483,14 @@ def highlight_lines(
     max_lines: int = 28,
 ) -> List[str]:
     lines: List[str] = []
+    seen: set[str] = set()
+
+    def append_once(line: str) -> None:
+        line = line.lstrip("- ").strip()
+        if line and line not in seen:
+            seen.add(line)
+            lines.append(line)
+
     if summary_path.exists():
         for raw in summary_path.read_text(errors="replace").splitlines():
             line = clean_markdown(raw)
@@ -490,7 +498,7 @@ def highlight_lines(
                 continue
             if line.startswith("#"):
                 continue
-            lines.append(line.lstrip("- ").strip())
+            append_once(line)
             if len(lines) >= max_lines:
                 break
     if analysis_path and analysis_path.exists():
@@ -502,9 +510,7 @@ def highlight_lines(
         )
         for raw in analysis_lines:
             if any(raw.startswith(prefix) for prefix in wanted_prefixes):
-                line = clean_markdown(raw).lstrip("- ").strip()
-                if line and line not in lines:
-                    lines.append(line)
+                append_once(clean_markdown(raw))
             if len(lines) >= max_lines + 6:
                 break
     return lines[: max_lines + 6]

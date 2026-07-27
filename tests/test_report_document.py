@@ -95,6 +95,20 @@ def test_document_carries_headline_records_tables_and_figures(tmp_path):
     assert rd.record_value(doc["records"], "Cancer call").startswith("PRAD")
 
 
+def test_document_deduplicates_repeated_summary_highlights(tmp_path):
+    _write_reports(tmp_path)
+    repeated = (
+        "Technical-RNA normalization: mtDNA/rRNA-like features were removed "
+        "for reference comparability."
+    )
+    summary = tmp_path / f"{_PREFIX}-summary.md"
+    summary.write_text(summary.read_text() + f"\n- {repeated}\n- {repeated}\n")
+
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
+
+    assert doc["highlights"].count(repeated) == 1
+
+
 def test_figure_manifest_is_belief_gated(tmp_path):
     # Only two figures emitted; the rest of the registry must be present=False.
     _write_reports(tmp_path, emit_figures=("sample-summary", "purity-methods"))
