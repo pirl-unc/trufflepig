@@ -185,20 +185,20 @@ def test_context_separates_nutm_report_label_from_fallback_reference():
     assert "expression data are available for the report label" in lines
 
 
-def test_context_uses_documented_fallback_when_fine_expression_is_missing():
-    # ACINIC (acinic cell carcinoma) has no direct cohort of its own. Via its
-    # registry parent SGC (salivary gland carcinoma) it resolves to the typed
-    # member-union salivary reference rather than borrowing one child cohort.
+def test_context_uses_documented_fallback_for_noncohort_scope():
+    # NET_NONPANCREATIC is an evidence/source scope, not an expression cohort.
+    # It therefore resolves through its typed member-union parent rather than
+    # borrowing one site-specific neuroendocrine cohort.
     context = cancer_type_context_from_analysis(
         {
-            "cancer_type": "ACINIC",
-            "report_scope_cancer_type": "ACINIC",
+            "cancer_type": "NET_NONPANCREATIC",
+            "report_scope_cancer_type": "NET_NONPANCREATIC",
         }
     )
 
-    assert context.code_for("report") == "ACINIC"
+    assert context.code_for("report") == "NET_NONPANCREATIC"
     assert not context.report_has_expression_ref
-    assert context.code_for("expression") == "SGC"
+    assert context.code_for("expression") == "NET"
     assert context.best_expression_source_kind == "observed_pan_cancer_reference"
     assert context.best_expression_fallback_reason == "registry parent"
     assert not context.best_expression_direct
@@ -217,7 +217,9 @@ def test_grouping_uses_its_typed_member_union_reference():
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():
-    context = cancer_type_context_from_analysis({"cancer_type": "ACINIC"})
+    context = cancer_type_context_from_analysis(
+        {"cancer_type": "NET_NONPANCREATIC"}
+    )
 
     lines = "\n".join(context.markdown_lines())
 
@@ -355,12 +357,12 @@ def test_expression_reference_options_canonicalize_source_codes():
         # below; the old neuroendocrine-fallback example was retired because the
         # rebuild gave every NE code its own cohort — see NEC_MERKEL.)
         (
-            # ACINIC has no direct cohort; its registry parent SGC supplies a
-            # typed member-union salivary reference.
-            "ACINIC",
-            "SGC",
+            # Evidence/source scopes are not expression cohorts. The typed
+            # member-union parent supplies a deterministic broad reference.
+            "NET_NONPANCREATIC",
+            "NET",
             "observed_pan_cancer_reference",
-            "LITERATURE_CURATED",
+            "pan_cancer",
             "ensembl_symbol",
             False,
             "registry parent",

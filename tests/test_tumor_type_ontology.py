@@ -135,14 +135,14 @@ def test_ontology_records_direct_reference_and_literature_markers_for_adcc():
     assert {"MYB", "MYBL1", "NFIB"} <= set(entry.expected_high_genes)
 
 
-def test_ontology_records_member_cohort_fallback_for_acinic():
-    # ACINIC has no direct cohort of its own; its registry parent SGC now supplies
-    # the typed member-union salivary reference.
-    entry = tumor_type_ontology_entry("ACINIC")
+def test_ontology_records_member_cohort_fallback_for_noncohort_scope():
+    # NET_NONPANCREATIC is a source/evidence scope rather than an expression
+    # cohort, so its typed member-union parent supplies the reference.
+    entry = tumor_type_ontology_entry("NET_NONPANCREATIC")
 
     assert entry is not None
-    assert entry.family == "salivary"
-    assert entry.expression_reference_code == "SGC"
+    assert entry.family == "neuroendocrine"
+    assert entry.expression_reference_code == "NET"
     assert not entry.expression_reference_direct
     assert entry.expression_reference_reason == "registry parent"
 

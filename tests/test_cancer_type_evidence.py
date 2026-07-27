@@ -4450,10 +4450,25 @@ def test_molecular_status_child_cannot_originate_a_runner_up_parent(monkeypatch)
 
 
 def test_nonclassification_rare_surrogate_remains_a_prompt(monkeypatch):
-    """A surrogate cannot make a registry-non-target histology the diagnosis."""
+    """A surrogate cannot make a registry-non-target scope the diagnosis."""
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    rule_id = "test_nonclassification_marker"
+    monkeypatch.setattr(
+        evidence,
+        "_rare_rules_by_id",
+        lambda: {
+            rule_id: {
+                "rule_id": rule_id,
+                "cancer_code": "NET_NONPANCREATIC",
+                "required_support_genes": "SOX10;AQP5;DOG1",
+                "min_support_genes": 2,
+                "context_codes": "HNSC",
+                "promote_report_scope": True,
+            }
+        },
+    )
     monkeypatch.setattr(
         evidence,
         "_local_expression_reference_panels",
@@ -4461,8 +4476,8 @@ def test_nonclassification_rare_surrogate_remains_a_prompt(monkeypatch):
     )
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
     finding = {
-        "cancer_type": "ACINIC",
-        "rule_id": "acinic_nr4a3",
+        "cancer_type": "NET_NONPANCREATIC",
+        "rule_id": rule_id,
         "surrogate": "NR4A3",
         "surrogate_tpm": 15000.0,
         "threshold_tpm": 10.0,
@@ -4487,14 +4502,16 @@ def test_nonclassification_rare_surrogate_remains_a_prompt(monkeypatch):
     )
 
     assert result["selected"]["cancer_type"] == "STAD"
-    acinic = next(
-        row for row in result["evidence"] if row["cancer_type"] == "ACINIC"
+    nonclassification = next(
+        row
+        for row in result["evidence"]
+        if row["cancer_type"] == "NET_NONPANCREATIC"
     )
-    assert acinic["registry_classification_target"] is False
-    assert acinic["can_select_report_label"] is False
+    assert nonclassification["registry_classification_target"] is False
+    assert nonclassification["can_select_report_label"] is False
     assert any(
         "not a registry classification target" in reason
-        for reason in acinic["blocking_reasons"]
+        for reason in nonclassification["blocking_reasons"]
     )
 
 

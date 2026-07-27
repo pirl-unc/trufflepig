@@ -281,9 +281,9 @@ _SIGNATURE_ROWS: tuple[LiteratureSignature, ...] = (
         "curated_merkel_literature",
         "Merkel-cell carcinoma epithelial/neuroendocrine marker program",
     ),
-    # ACINIC (acinic cell carcinoma, salivary) has no direct cohort. Its SGC parent now has
-    # an oncoref member-union reference, which is the canonical family-level context; ADCC
-    # remains a useful data-bearing salivary comparison and HNSC a broader head/neck context.
+    # ACINIC has an exact cohort in newer reference bundles; SGC remains its
+    # canonical family-level context. ADCC is a useful salivary comparison and
+    # HNSC a broader head/neck context.
     LiteratureSignature(
         "ACINIC",
         ("SGC", "ADCC", "HNSC"),
