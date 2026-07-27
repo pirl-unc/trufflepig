@@ -1071,8 +1071,27 @@ def _hypothesis_evidence_channels(
             ),
         },
     )
+    structured_abstention = (
+        hypothesis.details.get("fallback_context_adjudication") or {}
+    )
+    if (
+        isinstance(structured_abstention, Mapping)
+        and structured_abstention.get("mode") == "structured_parent_abstention"
+    ):
+        add(
+            channel="entity_evidence_consensus",
+            stage=_decision_stage_for_hypothesis(hypothesis),
+            role="structured_parent_abstention",
+            support=hypothesis.related_context_support,
+            selector="entity_evidence_consensus",
+            details=structured_abstention,
+        )
     entity_consensus = hypothesis.details.get("entity_evidence_consensus") or {}
-    if isinstance(entity_consensus, Mapping) and entity_consensus:
+    if (
+        not structured_abstention
+        and isinstance(entity_consensus, Mapping)
+        and entity_consensus
+    ):
         available_axes = sum(
             bool(axis.get("available"))
             for axis in entity_consensus.get("axes") or []
@@ -8916,10 +8935,18 @@ def _pick_selected(
 
 
 def _fallback_context_selected(
-    hypotheses: Mapping[str, CancerTypeEvidence],
+    hypotheses: dict[str, CancerTypeEvidence],
     analysis: Mapping[str, Any],
 ) -> CancerTypeEvidence | None:
-    """Return the top contextual RNA hypothesis when no label is selectable."""
+    """Return a structured abstention or the best contextual RNA hypothesis.
+
+    A fused-evidence blocker can carry a structured alternative.  Honor that
+    adjudication instead of immediately reintroducing the blocked top ranker
+    row as the fallback.  When the blocker names an ontology parent for
+    abstention, that parent can select while the supporting child remains the
+    expression-reference context.  Otherwise the returned row remains
+    context-only.
+    """
 
     top_code = _top_code(analysis)
     if not top_code:
@@ -8929,6 +8956,54 @@ def _fallback_context_selected(
         return None
     if "pan_cancer_signature_ranker" not in hypothesis.evidence_sources:
         return None
+    crc_conflict = hypothesis.details.get("fused_evidence_crc_family_conflict")
+    if isinstance(crc_conflict, Mapping):
+        crc_candidate = crc_conflict.get("crc_candidate")
+        crc_code = (
+            _clean(crc_candidate.get("code"))
+            if isinstance(crc_candidate, Mapping)
+            else ""
+        )
+        alternative = hypotheses.get(crc_code)
+        if (
+            alternative is not None
+            and "pan_cancer_signature_ranker" in alternative.evidence_sources
+        ):
+            abstention_code = _clean(crc_conflict.get("abstention_code"))
+            if abstention_code:
+                abstention = _hypothesis(hypotheses, abstention_code)
+                abstention.add_source("entity_evidence_consensus")
+                abstention.expression_reference_cancer_type = crc_code
+                abstention.reference_cancer_type = crc_code
+                abstention.related_context_code = crc_code
+                abstention.related_context_support = (
+                    alternative.broad_rna_support
+                )
+                abstention.broad_rna_support = alternative.broad_rna_support
+                abstention.broad_rna_rank = alternative.broad_rna_rank
+                abstention.details["fallback_context_adjudication"] = {
+                    "mode": "structured_parent_abstention",
+                    "blocked_top_code": top_code,
+                    "supporting_child_code": crc_code,
+                    "abstention_code": abstention_code,
+                    "conflict": dict(crc_conflict),
+                }
+                abstention.details["entity_consensus_adjudication_mode"] = (
+                    "structured_parent_abstention"
+                )
+                abstention.basis = (
+                    f"{top_code} was vetoed by convergent {abstention_code} "
+                    f"family evidence; report scope abstained to "
+                    f"{abstention_code} while retaining {crc_code} as the "
+                    "expression-reference context"
+                )
+                abstention.consider_for_report_label(
+                    selected_by="entity_evidence_consensus",
+                    can_select=True,
+                    blocking_reasons=(),
+                    priority=(4, 1.0 + alternative.broad_rna_support),
+                )
+                return abstention
     hypothesis.report_label_candidate = True
     # This is a BLOCKED fallback context row (no label was selectable) admitted via the
     # pan-cancer signature ranker. Force the selector to the ranker rather than
@@ -9117,6 +9192,7 @@ def _weak_non_crc_fused_call_conflicts_with_crc_family(
         "candidate_marker_status": marker_status,
         "candidate_unexpected_low_marker_count": int(marker_unexpected_low),
         "crc_candidate": dict(competitor),
+        "abstention_code": _CRC_REGISTRY_ROOT,
     }
 
 

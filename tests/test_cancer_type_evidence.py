@@ -2925,6 +2925,7 @@ def test_weak_non_crc_fused_gi_call_blocked_by_close_crc_candidate(monkeypatch):
     stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
     assert stad["fused_evidence_can_select"] is False
     assert stad["fused_evidence_crc_family_conflict"]["crc_candidate"]["code"] == "READ"
+    assert stad["fused_evidence_crc_family_conflict"]["abstention_code"] == "CRC"
     assert any("CRC-family RNA support" in reason for reason in stad["fused_evidence_blockers"])
 
 
@@ -7636,6 +7637,69 @@ def test_fallback_context_selection_resets_stale_selectable_selector():
     assert result.label_basis == "pan_cancer_signature_ranker"
     # The serialized selection the caller reads must carry the ranker so it is not routed to scope.
     assert result.public_dict()["selected_by"] == "pan_cancer_signature_ranker"
+
+
+def test_fallback_context_abstains_to_structured_crc_parent():
+    """A blocked GI top row yields to the supported ontology parent."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fallback_context_selected,
+        _hypothesis_evidence_channels,
+    )
+
+    stad = CancerTypeEvidence(
+        cancer_type="STAD",
+        evidence_sources=("pan_cancer_signature_ranker",),
+        details={
+            "fused_evidence_crc_family_conflict": {
+                "candidate_code": "STAD",
+                "abstention_code": "CRC",
+                "crc_candidate": {
+                    "code": "READ",
+                    "rank": 2,
+                    "support_fraction_of_top": 0.97,
+                    "family_support": 0.76,
+                },
+            },
+        },
+    )
+    read = CancerTypeEvidence(
+        cancer_type="READ",
+        broad_rna_support=0.97,
+        broad_rna_rank=2,
+        evidence_sources=("pan_cancer_signature_ranker",),
+    )
+    analysis = {
+        "candidate_trace": [
+            {"code": "STAD", "support_fraction_of_top": 1.0},
+            {"code": "READ", "support_fraction_of_top": 0.97},
+        ]
+    }
+
+    hypotheses = {"STAD": stad, "READ": read}
+    result = _fallback_context_selected(hypotheses, analysis)
+
+    assert result is hypotheses["CRC"]
+    assert result.can_select_report_label is True
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.expression_reference_cancer_type == "READ"
+    assert result.details["entity_consensus_adjudication_mode"] == (
+        "structured_parent_abstention"
+    )
+    assert result.details["fallback_context_adjudication"] == {
+        "mode": "structured_parent_abstention",
+        "blocked_top_code": "STAD",
+        "supporting_child_code": "READ",
+        "abstention_code": "CRC",
+        "conflict": stad.details["fused_evidence_crc_family_conflict"],
+    }
+    abstention_channel = next(
+        channel
+        for channel in _hypothesis_evidence_channels(result)
+        if channel["channel"] == "entity_evidence_consensus"
+    )
+    assert abstention_channel["role"] == "structured_parent_abstention"
+    assert abstention_channel["details"]["supporting_child_code"] == "READ"
 
 
 def test_enrich_mmr_vote_mlh1_cohort_context_adds_ratio(monkeypatch):
