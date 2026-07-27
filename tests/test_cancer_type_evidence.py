@@ -1287,6 +1287,82 @@ def test_entity_beam_runs_after_matching_top_and_preserves_candidate_mmr():
     assert mmr_channels[0]["context_code"] == "COAD"
 
 
+def test_entity_beam_does_not_promote_a_tail_from_both_learned_views():
+    """Independent axes cannot turn learned tail noise into a report label.
+
+    The hierarchy and flat views both lead with CRC-family entities.  STAD has
+    strong reference-derived context, but it is a tail prediction in each
+    learned view, so the already integrated READ selection remains active.
+    """
+
+    import pandas as pd
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "COAD",
+            entity_support=0.40,
+            entity_margin=0.25,
+            family="CRC",
+            family_support=0.80,
+            compartment="epithelial",
+            compartment_support=0.95,
+        ),
+        ("COAD", 0.40),
+        ("STAD", 0.12),
+    )
+    details["learned_expression_flat_top_predictions"] = [
+        {"code": "COAD_MSS", "probability": 0.35},
+        {"code": "STAD_CIN", "probability": 0.10},
+    ]
+
+    selected = _selectable("READ", "fused_evidence", (3, 1.50, 5))
+    selected.broad_rna_support = 1.0
+    selected.rna_marker_support = 0.70
+    selected.details.update(details)
+    selected.admit_adjudication_support(
+        "curated_marker_program",
+        selected.rna_marker_support,
+        selector="test_marker",
+    )
+
+    stad = CancerTypeEvidence(
+        cancer_type="STAD",
+        broad_rna_support=0.95,
+        fine_reference_support=0.90,
+        coarse_composition_support=0.82,
+    )
+    stad.admit_adjudication_support(
+        "exact_expression_reference",
+        stad.fine_reference_support,
+        selector="test_reference",
+    )
+    stad.admit_adjudication_support(
+        "composition_reference",
+        stad.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {
+            "READ": selected,
+            "COAD": CancerTypeEvidence(cancer_type="COAD"),
+            "STAD": stad,
+        },
+        selected,
+        cen=pd.Series({"READ": 0.80, "STAD": 0.84}),
+        centroid_confident=True,
+    )
+
+    assert result is selected
+    assert result.cancer_type == "READ"
+    assert stad.can_select_report_label is False
+
+
 def test_entity_beam_uses_valid_child_reference_and_stronger_corroboration():
     """Competing learned views are resolved by independent evidence strength."""
 

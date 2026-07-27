@@ -5238,7 +5238,15 @@ def _flat_learned_entity_supports(
 def _learned_entity_prediction_codes(
     details: Mapping[str, Any],
 ) -> list[tuple[str, float]]:
-    """Ordered entity candidates across the two related learned views."""
+    """Return the entity leader from each related learned view.
+
+    The hierarchy and flat classifiers are alternative transformations of the
+    same expression profile, not an open-ended candidate generator.  A tail
+    prediction is useful audit context, but treating every nonzero tail as an
+    affirmative learned vote lets unrelated reference axes promote an entity
+    that neither learned view actually selected.  The adjudication beam is
+    therefore the union of the hierarchy leader and the flat-view leader.
+    """
 
     votes = (
         details.get("learned_expression_hierarchy_votes")
@@ -5247,26 +5255,50 @@ def _learned_entity_prediction_codes(
     )
     order: list[str] = []
     support_by_code: dict[str, float] = {}
+
+    def add_leader(code: str, support: float) -> None:
+        code = _clean(code)
+        if not code:
+            return
+        if code not in support_by_code:
+            order.append(code)
+        support_by_code[code] = max(
+            support_by_code.get(code, 0.0),
+            _safe_float(support),
+        )
+
     for vote in votes:
         if not isinstance(vote, Mapping) or _clean(vote.get("stage")) != "entity":
             continue
-        for item in vote.get("top_predictions") or []:
-            if not isinstance(item, Mapping):
-                continue
-            code = _clean(item.get("label") or item.get("code"))
-            if not code:
-                continue
-            if code not in support_by_code:
-                order.append(code)
-            support_by_code[code] = max(
-                support_by_code.get(code, 0.0),
-                _safe_float(item.get("probability")),
+        predictions = [
+            item
+            for item in vote.get("top_predictions") or []
+            if isinstance(item, Mapping)
+            and _clean(item.get("label") or item.get("code"))
+        ]
+        if predictions:
+            leader = max(
+                predictions,
+                key=lambda item: _safe_float(item.get("probability")),
+            )
+            add_leader(
+                leader.get("label") or leader.get("code"),
+                leader.get("probability"),
             )
         break
-    for code, support in _flat_learned_entity_supports(details).items():
-        if code not in support_by_code:
-            order.append(code)
-        support_by_code[code] = max(support_by_code.get(code, 0.0), support)
+    if not order:
+        add_leader(
+            details.get("learned_expression_top_entity_label"),
+            details.get("learned_expression_top_entity_support"),
+        )
+
+    flat_supports = _flat_learned_entity_supports(details)
+    if flat_supports:
+        flat_code, flat_support = max(
+            flat_supports.items(),
+            key=lambda item: item[1],
+        )
+        add_leader(flat_code, flat_support)
     return [(code, support_by_code[code]) for code in order]
 
 
@@ -5297,13 +5329,13 @@ def _learned_entity_consensus_candidate(
     cen=None,
     centroid_confident: bool = False,
 ) -> CancerTypeEvidence | None:
-    """Adjudicate every learned entity candidate with the same consensus.
+    """Adjudicate each learned-view leader with the same consensus.
 
-    A single learned top-1 is often the wrong candidate in heterogeneous
-    samples even when another learned view agrees with organ markers and an
-    independent composition reference. Evaluate the entire learned entity beam
-    symmetrically while retaining the same majority, non-learned corroboration,
-    ontology, and hard-blocker requirements.
+    The hierarchy and quantifier-robust flat views may have different leaders.
+    Evaluate that small union symmetrically while retaining the same majority,
+    non-learned corroboration, ontology, and hard-blocker requirements. Lower
+    ranked predictions remain visible in the audit details but cannot supply
+    the affirmative learned vote required to change the report entity.
     """
 
     predictions = _learned_entity_prediction_codes(hierarchy_details)
@@ -5323,6 +5355,7 @@ def _learned_entity_consensus_candidate(
     decisive: list[
         tuple[tuple[float, float, float, float], CancerTypeEvidence, dict[str, Any]]
     ] = []
+    evaluated_entities: set[str] = set()
     for prediction_rank, (raw_code, predicted_support) in enumerate(
         predictions,
         start=1,
@@ -5334,6 +5367,9 @@ def _learned_entity_consensus_candidate(
             or entity_code not in _registry_by_code()
         ):
             continue
+        if entity_code in evaluated_entities:
+            continue
+        evaluated_entities.add(entity_code)
 
         candidate = _hypothesis(hypotheses, entity_code)
         candidate_lineage = _code_lineage_token(entity_code)
