@@ -332,8 +332,14 @@ def _training_matrices():
             posinf=0.0,
             neginf=0.0,
         )
+        rank_universe = list(ranked.index)
         y = np.asarray(labels)
-        return (raw_x, y, raw_genes), (rank_x, y, rank_genes)
+        return (raw_x, y, raw_genes), (
+            rank_x,
+            y,
+            rank_genes,
+            rank_universe,
+        )
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
@@ -458,21 +464,23 @@ def _leave_one_out_top1_accuracy(X, y) -> float | None:
 
 @lru_cache(maxsize=1)
 def _trained_model():
-    """``(pipeline, gene_symbols, classes)`` — lazily trained once, cached.
+    """``(pipeline, features, classes, rank_universe)`` — trained and cached.
 
     Features are within-sample percentile ranks over a fixed high-variance
-    SYMBOL index; the pipeline z-scores them and fits a balanced multinomial
+    SYMBOL index. Percentiles are computed over the full stored training gene
+    universe before selecting those features, exactly as they were during
+    training. The pipeline z-scores them and fits a balanced multinomial
     logistic regression. This flat view is deliberately robust to isolated
-    quantifier-specific TPM spikes. Returns ``None`` if the reference samples
-    or sklearn are unavailable (callers then skip the co-signal).
+    quantifier-specific TPM spikes and to quantifiers that omit zero rows.
+    Returns ``None`` if references or sklearn are unavailable.
     """
     try:
         training = _rank_training_matrix()
         if training is None:
             return None
-        X, y, genes = training
+        X, y, genes, rank_universe = training
         pipe = _fit_lr_model(X, y)
-        return pipe, genes, list(pipe.classes_)
+        return pipe, genes, list(pipe.classes_), rank_universe
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
@@ -745,21 +753,32 @@ def _sample_vector(
 def _sample_rank_vector(
     sample_tpm_by_symbol: Mapping[str, float],
     genes: list[str],
+    rank_universe: list[str],
 ) -> np.ndarray | None:
-    """Return within-sample percentile features for the robust flat model."""
+    """Return flat-model percentiles over its fixed training gene universe.
+
+    Missing training genes are zero, matching an explicit zero-expression row;
+    input-only genes are ignored. Thus equivalent profiles cannot change merely
+    because a quantifier omits zeros or an annotation supplies extra genes.
+    """
 
     if not sample_tpm_by_symbol:
         return None
-    present = sum(1 for gene in genes if gene in sample_tpm_by_symbol)
-    if present < _MIN_SHARED_GENES:
+    values_by_gene: dict[str, float] = {}
+    expressed_features = 0
+    feature_set = set(genes)
+    for gene in rank_universe:
+        try:
+            value = float(sample_tpm_by_symbol.get(gene, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            value = 0.0
+        value = value if np.isfinite(value) and value > 0 else 0.0
+        values_by_gene[gene] = value
+        if gene in feature_set and value > 0:
+            expressed_features += 1
+    if expressed_features < _MIN_SHARED_GENES:
         return None
-    values = pd.Series(
-        {
-            str(gene): max(0.0, float(value or 0.0))
-            for gene, value in sample_tpm_by_symbol.items()
-        },
-        dtype=float,
-    )
+    values = pd.Series(values_by_gene, dtype=float)
     ranks = values.rank(pct=True, method="average")
     return np.asarray([float(ranks.get(gene, 0.0)) for gene in genes])
 
@@ -784,13 +803,11 @@ def classify_expression(sample_tpm_by_symbol, top_k=5):
     """
     if not sample_tpm_by_symbol:
         return []
-    if len(sample_tpm_by_symbol) < _MIN_SHARED_GENES:
-        return []
     trained = _trained_model()
     if trained is None:
         return []
-    pipe, genes, classes = trained
-    vec = _sample_rank_vector(sample_tpm_by_symbol, genes)
+    pipe, genes, classes, rank_universe = trained
+    vec = _sample_rank_vector(sample_tpm_by_symbol, genes, rank_universe)
     if vec is None:
         return []
     return list(_predict_with_model(pipe, classes, vec, top_k))
@@ -901,12 +918,12 @@ def classify_mismatch_repair_sibling_expression(
     to the cancer family only when the entity lacks both states.
     """
 
-    if not sample_tpm_by_symbol or len(sample_tpm_by_symbol) < _MIN_SHARED_GENES:
+    if not sample_tpm_by_symbol:
         return None
     trained = _trained_model()
     if trained is None:
         return None
-    _pipe, _genes, classes = trained
+    _pipe, _genes, classes, _rank_universe = trained
     flat = classify_expression(sample_tpm_by_symbol, top_k=max(len(classes), top_k))
     if not flat:
         return None

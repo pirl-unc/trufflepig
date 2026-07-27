@@ -241,6 +241,13 @@ def test_member_union_ancestry_keeps_resolved_child_above_parent():
     ].index("NSCLC")
     assert by_code["LUAD"]["centroid_member_union_branch_promoted"] is True
     assert by_code["NSCLC"]["centroid_member_union_branch_promoted"] is True
+    assert by_code["LUAD"]["centroid_member_union_branch_role"] == "resolved_child"
+    assert by_code["NSCLC"]["centroid_member_union_branch_role"] == "aggregate_parent"
+    assert by_code["LUAD"]["support_rank_tier"] > by_code["NSCLC"][
+        "support_rank_tier"
+    ]
+    assert by_code["LUAD"]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert by_code["NSCLC"]["support_fraction_of_top"] < 1.0
     assert by_code["NSCLC"]["winning_subtype"] == "LUAD"
 
 
@@ -383,6 +390,40 @@ def test_final_support_compartment_tier_preserves_order_within_tier():
     assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
     assert rows[1]["support_fraction_of_top"] < 1.0
     assert rows[2]["support_raw_fraction_of_max"] == pytest.approx(1.0)
+    assert rows[2]["support_fraction_of_top"] < rows[1]["support_fraction_of_top"]
+
+
+def test_final_support_resolved_child_outranks_stronger_aggregate_parent():
+    """Branch normalization must agree with the child-first biological order."""
+    from trufflepig.tumor_purity import _finalize_candidate_rank_support
+
+    rows = [
+        {
+            "code": "LUAD",
+            "centroid_member_union_branch_promoted": True,
+            "centroid_member_union_branch_role": "resolved_child",
+            "support_score": 0.40,
+            "signature_score": 0.40,
+        },
+        {
+            "code": "NSCLC",
+            "centroid_member_union_branch_promoted": True,
+            "centroid_member_union_branch_role": "aggregate_parent",
+            "support_score": 1.00,
+            "signature_score": 1.00,
+        },
+        {
+            "code": "LUSC",
+            "support_score": 0.80,
+            "signature_score": 0.80,
+        },
+    ]
+
+    _finalize_candidate_rank_support(rows, compartment_restricted=False)
+
+    assert [row["code"] for row in rows] == ["LUAD", "NSCLC", "LUSC"]
+    assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert rows[1]["support_fraction_of_top"] < 1.0
     assert rows[2]["support_fraction_of_top"] < rows[1]["support_fraction_of_top"]
 
 

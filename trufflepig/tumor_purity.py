@@ -3873,7 +3873,13 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
     tier_stride = raw_max + 1e-12
     for row in rows:
         raw = float(row.get("support_score") or 0.0)
-        if row.get("centroid_member_union_branch_promoted"):
+        branch_role = row.get("centroid_member_union_branch_role")
+        if branch_role == "resolved_child":
+            rank_tier = 3
+        elif (
+            branch_role == "aggregate_parent"
+            or row.get("centroid_member_union_branch_promoted")
+        ):
             rank_tier = 2
         elif compartment_restricted and row.get("compartment_in_set"):
             rank_tier = 1
@@ -4581,8 +4587,12 @@ def rank_cancer_type_candidates(
                         ),
                     ]
                     promoted_ids = {id(row) for row in promoted_branch}
-                    for row in promoted_branch:
+                    for row in promoted_children:
                         row["centroid_member_union_branch_promoted"] = True
+                        row["centroid_member_union_branch_role"] = "resolved_child"
+                    for row in promoted_parents:
+                        row["centroid_member_union_branch_promoted"] = True
+                        row["centroid_member_union_branch_role"] = "aggregate_parent"
                     rows = [
                         *promoted_branch,
                         *(row for row in rows if id(row) not in promoted_ids),

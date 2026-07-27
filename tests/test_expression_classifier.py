@@ -97,6 +97,39 @@ def test_flat_classifier_is_invariant_to_global_tpm_scaling():
     )
 
 
+def test_flat_classifier_is_invariant_to_zero_row_gene_universe_changes():
+    """Omitted or input-only zero rows cannot change the learned prediction."""
+
+    sample = _bulk_sample("SKCM")
+    expressed_only = {
+        gene: value
+        for gene, value in sample.items()
+        if float(value) > 0
+    }
+    with_annotation_padding = {
+        **expressed_only,
+        **{f"UNRELATED_ZERO_{index}": 0.0 for index in range(5000)},
+    }
+
+    baseline = classify_expression(sample, top_k=5)
+    omitted_zero_rows = classify_expression(expressed_only, top_k=5)
+    padded_zero_rows = classify_expression(with_annotation_padding, top_k=5)
+
+    assert baseline
+    assert [code for code, _ in omitted_zero_rows] == [
+        code for code, _ in baseline
+    ]
+    assert [code for code, _ in padded_zero_rows] == [
+        code for code, _ in baseline
+    ]
+    assert [probability for _, probability in omitted_zero_rows] == pytest.approx(
+        [probability for _, probability in baseline]
+    )
+    assert [probability for _, probability in padded_zero_rows] == pytest.approx(
+        [probability for _, probability in baseline]
+    )
+
+
 def test_learned_family_walks_registry_ancestors_for_crc_subtypes():
     assert _learned_family_for_code("READ") == "CRC"
     assert _learned_family_for_code("READ_MSS") == "CRC"
