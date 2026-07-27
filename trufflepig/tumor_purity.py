@@ -4510,6 +4510,7 @@ def rank_cancer_type_candidates(
                 compartment_call,
                 hallmark_fit,
                 hallmark_veto,
+                in_compartment,
                 range_plausibility,
                 resolve_fine_subtype,
                 restrict_rows_to_compartment,
@@ -4546,7 +4547,11 @@ def rank_cancer_type_candidates(
             # of unrelated same-compartment entities. This is a categorical
             # ontology rule; it does not add centroid correlation to the
             # support geomean or tune a sample-specific threshold.
-            if comp["confident"] and cen_top_code:
+            if (
+                comp["confident"]
+                and cen_top_code
+                and in_compartment(cen_top_code, cen_coarse)
+            ):
                 from .analyze.cancer_type_context import registry_ancestor_codes
                 from .cancer_ontology import cancer_type_registry
 

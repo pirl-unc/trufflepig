@@ -1153,8 +1153,8 @@ def _hypothesis_evidence_channels(
         "mismatch_repair": "orthogonal_state",
     }
     hierarchy_votes = (
-        hypothesis.details.get("learned_expression_hierarchical_votes")
-        or hypothesis.details.get("learned_expression_hierarchy_votes")
+        hypothesis.details.get("learned_expression_hierarchy_votes")
+        or hypothesis.details.get("learned_expression_hierarchical_votes")
         or []
     )
     for vote in hierarchy_votes:
@@ -4817,6 +4817,157 @@ def _top_learned_stage_margin(
     return 0.0
 
 
+_GLOBAL_LEARNED_AUDIT_FIELDS = (
+    "learned_expression_flat_top_predictions",
+    "learned_expression_flat_feature_space",
+    "learned_expression_top_entity_label",
+    "learned_expression_top_entity_support",
+    "learned_expression_top_entity_margin",
+    "learned_expression_top_family_label",
+    "learned_expression_top_family_support",
+    "learned_expression_top_family_margin",
+    "learned_expression_top_compartment_label",
+    "learned_expression_top_compartment_support",
+)
+
+
+def _public_learned_vote_dict(vote: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "stage": _clean(vote.get("stage")),
+        "label_space": _clean(vote.get("label_space")),
+        "label": _clean(vote.get("label")),
+        "probability": round(_safe_float(vote.get("probability")), 4),
+        "margin": round(_safe_float(vote.get("margin")), 4),
+        "top_predictions": vote.get("top_predictions") or [],
+        "training_split_policy": vote.get("training_split_policy"),
+        "holdout_top1_accuracy": vote.get("holdout_top1_accuracy"),
+        "holdout_medoid_top1_accuracy": vote.get(
+            "holdout_medoid_top1_accuracy"
+        ),
+        "oof_precision_at_threshold": vote.get("oof_precision_at_threshold"),
+        "oof_top3_recovery": vote.get("oof_top3_recovery"),
+        "training_sample_count": vote.get("training_sample_count"),
+        "training_cohorts": vote.get("training_cohorts") or [],
+        "details": vote.get("details") or {},
+    }
+
+
+def _candidate_mismatch_repair_votes(
+    sample_tpm_by_symbol: Mapping[str, float],
+    code: str,
+    flat_predictions: list[tuple[str, float]],
+) -> list[dict[str, Any]]:
+    """Build MMR votes in the destination cancer entity's context."""
+
+    try:
+        from .expression_classifier import (
+            classify_mismatch_repair_expression,
+            mismatch_repair_context_group,
+            mismatch_repair_sibling_vote_from_predictions,
+        )
+    except ImportError:
+        return []
+    if not mismatch_repair_context_group(code):
+        return []
+
+    votes: list[dict[str, Any]] = []
+    release_vote = classify_mismatch_repair_expression(
+        sample_tpm_by_symbol,
+        code,
+    )
+    if release_vote is not None:
+        votes.append(
+            _enrich_mmr_vote_mlh1_cohort_context(
+                _public_learned_vote_dict(release_vote.public_dict()),
+                code,
+            )
+        )
+    if flat_predictions:
+        sibling_vote = mismatch_repair_sibling_vote_from_predictions(
+            tuple(flat_predictions),
+            code,
+        )
+        if sibling_vote is not None:
+            votes.append(
+                _public_learned_vote_dict(sibling_vote.public_dict())
+            )
+    return votes
+
+
+def _merge_global_learned_audit_details(
+    candidate: CancerTypeEvidence,
+    hierarchy_details: Mapping[str, Any],
+) -> None:
+    """Merge sample-global hierarchy stages without transplanting MMR state."""
+
+    source_votes = (
+        hierarchy_details.get("learned_expression_hierarchy_votes")
+        or hierarchy_details.get("learned_expression_hierarchical_votes")
+        or []
+    )
+    candidate_votes = (
+        candidate.details.get("learned_expression_hierarchy_votes") or []
+    )
+    global_votes = [
+        dict(vote)
+        for vote in source_votes
+        if isinstance(vote, Mapping)
+        and _clean(vote.get("stage")) != "mismatch_repair"
+    ]
+    candidate_mmr_votes = [
+        dict(vote)
+        for vote in candidate_votes
+        if isinstance(vote, Mapping)
+        and _clean(vote.get("stage")) == "mismatch_repair"
+    ]
+    for key in _GLOBAL_LEARNED_AUDIT_FIELDS:
+        if key in hierarchy_details:
+            candidate.details[key] = hierarchy_details[key]
+    if global_votes or candidate_mmr_votes:
+        candidate.details["learned_expression_hierarchy_votes"] = [
+            *global_votes,
+            *candidate_mmr_votes,
+        ]
+
+
+def _refresh_candidate_mismatch_repair_votes(
+    candidate: CancerTypeEvidence,
+    sample_tpm_by_symbol: Mapping[str, float] | None,
+) -> None:
+    """Recompute final-row MMR votes after an entity-changing adjudication."""
+
+    if not sample_tpm_by_symbol:
+        return
+    try:
+        from .expression_classifier import (
+            classify_expression,
+            mismatch_repair_context_group,
+        )
+    except ImportError:
+        return
+    candidate_votes = (
+        candidate.details.get("learned_expression_hierarchy_votes") or []
+    )
+    global_votes = [
+        dict(vote)
+        for vote in candidate_votes
+        if isinstance(vote, Mapping)
+        and _clean(vote.get("stage")) != "mismatch_repair"
+    ]
+    if not mismatch_repair_context_group(candidate.cancer_type):
+        candidate.details["learned_expression_hierarchy_votes"] = global_votes
+        return
+    flat_predictions = classify_expression(sample_tpm_by_symbol, top_k=1000)
+    candidate.details["learned_expression_hierarchy_votes"] = [
+        *global_votes,
+        *_candidate_mismatch_repair_votes(
+            sample_tpm_by_symbol,
+            candidate.cancer_type,
+            flat_predictions,
+        ),
+    ]
+
+
 def _add_learned_hierarchy_candidate_features(
     hypotheses: dict[str, CancerTypeEvidence],
     sample_tpm_by_symbol: Mapping[str, float],
@@ -4844,55 +4995,18 @@ def _add_learned_hierarchy_candidate_features(
     )
     top_entity_margin = _top_learned_stage_margin(hierarchical_votes, "entity")
     flat_predictions: list[tuple[str, float]] = []
-    build_mismatch_repair_sibling_vote = None
-    build_mismatch_repair_release_vote = None
-    mismatch_repair_context_group = None
     try:
         from .expression_classifier import classify_expression
-        from .expression_classifier import (
-            classify_mismatch_repair_expression as _build_release_mmr_vote,
-        )
-        from .expression_classifier import (
-            mismatch_repair_context_group as _mmr_context_group,
-        )
-        from .expression_classifier import (
-            mismatch_repair_sibling_vote_from_predictions as _build_mmr_vote,
-        )
     except ImportError:
         flat_predictions = []
     else:
         flat_predictions = classify_expression(sample_tpm_by_symbol, top_k=1000)
-        build_mismatch_repair_sibling_vote = _build_mmr_vote
-        build_mismatch_repair_release_vote = _build_release_mmr_vote
-        mismatch_repair_context_group = _mmr_context_group
     flat_top_predictions = [
         {"code": _clean(code), "probability": round(_safe_float(prob), 4)}
         for code, prob in flat_predictions[:10]
     ]
-    def public_vote_dict(vote: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "stage": _clean(vote.get("stage")),
-            "label_space": _clean(vote.get("label_space")),
-            "label": _clean(vote.get("label")),
-            "probability": round(_safe_float(vote.get("probability")), 4),
-            "margin": round(_safe_float(vote.get("margin")), 4),
-            "top_predictions": vote.get("top_predictions") or [],
-            "training_split_policy": vote.get("training_split_policy"),
-            "holdout_top1_accuracy": vote.get("holdout_top1_accuracy"),
-            "holdout_medoid_top1_accuracy": vote.get(
-                "holdout_medoid_top1_accuracy"
-            ),
-            "oof_precision_at_threshold": vote.get(
-                "oof_precision_at_threshold"
-            ),
-            "oof_top3_recovery": vote.get("oof_top3_recovery"),
-            "training_sample_count": vote.get("training_sample_count"),
-            "training_cohorts": vote.get("training_cohorts") or [],
-            "details": vote.get("details") or {},
-        }
-
     public_votes = [
-        public_vote_dict(vote)
+        _public_learned_vote_dict(vote)
         for vote in hierarchical_votes
         if _clean(vote.get("stage")) != "mismatch_repair"
     ]
@@ -4920,32 +5034,14 @@ def _add_learned_hierarchy_candidate_features(
         hierarchy_support = max(entity_support, family_support, compartment_support)
         if hierarchy_support <= 0:
             continue
-        hypothesis_public_votes = list(public_votes)
-        if (
-            build_mismatch_repair_release_vote is not None
-            and mismatch_repair_context_group is not None
-            and mismatch_repair_context_group(code)
-        ):
-            release_vote = build_mismatch_repair_release_vote(
+        hypothesis_public_votes = [
+            *public_votes,
+            *_candidate_mismatch_repair_votes(
                 sample_tpm_by_symbol,
                 code,
-            )
-            if release_vote is not None:
-                hypothesis_public_votes.append(
-                    _enrich_mmr_vote_mlh1_cohort_context(
-                        public_vote_dict(release_vote.public_dict()),
-                        code,
-                    )
-                )
-        if build_mismatch_repair_sibling_vote is not None and flat_predictions:
-            sibling_vote = build_mismatch_repair_sibling_vote(
-                tuple(flat_predictions),
-                code,
-            )
-            if sibling_vote is not None:
-                hypothesis_public_votes.append(
-                    public_vote_dict(sibling_vote.public_dict())
-                )
+                flat_predictions,
+            ),
+        ]
         hypothesis.details.update(
             {
                 "learned_expression_hierarchy_votes": hypothesis_public_votes,
@@ -5272,13 +5368,9 @@ def _learned_entity_consensus_candidate(
         candidate.expression_reference_cancer_type = (
             candidate.expression_reference_cancer_type or entity_code
         )
-        candidate.details.update(
-            {
-                key: value
-                for key, value in hierarchy_details.items()
-                if str(key).startswith("learned_expression_")
-                and key != "learned_expression_marker_coherence"
-            }
+        _merge_global_learned_audit_details(
+            candidate,
+            hierarchy_details,
         )
         if sample_tpm_by_symbol:
             candidate.details["learned_hierarchy_entity_marker_coherence"] = dict(
@@ -5331,6 +5423,10 @@ def _learned_entity_consensus_candidate(
     if not decisive:
         return None
     _score, candidate, consensus = max(decisive, key=lambda item: item[0])
+    _refresh_candidate_mismatch_repair_votes(
+        candidate,
+        sample_tpm_by_symbol,
+    )
     selected.details["entity_evidence_consensus"] = dict(consensus)
     candidate.details.update(
         {
@@ -5737,7 +5833,15 @@ def _adjudicate_selection_with_learned_hierarchy(
     if not entity_code:
         return selected
     if entity_code == selected.cancer_type:
-        return selected
+        beam_candidate = _learned_entity_consensus_candidate(
+            hypotheses,
+            selected,
+            details,
+            sample_tpm_by_symbol=sample_tpm_by_symbol,
+            cen=cen,
+            centroid_confident=centroid_confident,
+        )
+        return beam_candidate if beam_candidate is not None else selected
 
     entity_support = _safe_float(
         details.get("learned_expression_top_entity_support")
@@ -5802,18 +5906,12 @@ def _adjudicate_selection_with_learned_hierarchy(
     candidate.expression_reference_cancer_type = (
         candidate.expression_reference_cancer_type or entity_code
     )
-    # Preserve global hierarchy fields so both the consensus trace and the
-    # evidence graph remain complete when the learned top entity was not
-    # already a hypothesis. Marker coherence belongs to the code on the row
-    # that supplied ``details`` and must never be transplanted to another
-    # hierarchy candidate.
-    candidate.details.update(
-        {
-            key: value
-            for key, value in details.items()
-            if str(key).startswith("learned_expression_")
-            and key != "learned_expression_marker_coherence"
-        }
+    # Preserve sample-global hierarchy stages without transplanting
+    # destination-specific context or MMR votes from the previously selected
+    # row. Marker coherence is likewise recomputed for this entity below.
+    _merge_global_learned_audit_details(
+        candidate,
+        details,
     )
     candidate_marker_coherence: Mapping[str, Any] = {}
     if sample_tpm_by_symbol:
@@ -5912,6 +6010,11 @@ def _adjudicate_selection_with_learned_hierarchy(
         parent.add_source("entity_evidence_consensus")
         parent.expression_reference_cancer_type = common_ancestor
         parent.reference_cancer_type = common_ancestor
+        _merge_global_learned_audit_details(parent, details)
+        _refresh_candidate_mismatch_repair_votes(
+            parent,
+            sample_tpm_by_symbol,
+        )
         parent.details.update(
             {
                 "entity_evidence_consensus": dict(consensus),
@@ -5986,7 +6089,13 @@ def _adjudicate_selection_with_learned_hierarchy(
         blocking_reasons=(),
         priority=(4, 1.0 + entity_support + 0.25 * family_support),
     )
-    return candidate if candidate.can_select_report_label else selected
+    if candidate.can_select_report_label:
+        _refresh_candidate_mismatch_repair_votes(
+            candidate,
+            sample_tpm_by_symbol,
+        )
+        return candidate
+    return selected
 
 
 def _add_learned_expression_classifier_features(

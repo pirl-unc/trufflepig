@@ -1181,6 +1181,112 @@ def test_flat_learned_view_can_supply_a_corroborated_entity_beam_candidate():
     assert consensus["candidate_nonlearned_votes"] == 3
 
 
+def test_entity_beam_runs_after_matching_top_and_preserves_candidate_mmr():
+    """A flat alternative can win without inheriting the old row's MMR state."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+        _build_staged_evidence_graph,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "STAD",
+            entity_support=0.65,
+            entity_margin=0.30,
+            family="carcinoma-gi",
+            family_support=0.90,
+            compartment="epithelial",
+            compartment_support=0.95,
+        ),
+        ("STAD", 0.65),
+        ("COAD", 0.20),
+    )
+    details["learned_expression_flat_top_predictions"] = [
+        {"code": "COAD_MSS", "probability": 0.80},
+        {"code": "STAD", "probability": 0.10},
+    ]
+    details["learned_expression_hierarchy_votes"].append(
+        {
+            "stage": "mismatch_repair",
+            "label_space": "selected_row_mmr",
+            "label": "MSI",
+            "probability": 0.90,
+            "top_predictions": [{"label": "MSI", "probability": 0.90}],
+        }
+    )
+
+    selected = _selectable("STAD", "fused_evidence", (3, 2.0, 4))
+    selected.details.update(details)
+    coad = CancerTypeEvidence(
+        cancer_type="COAD",
+        rna_marker_support=0.85,
+        coarse_composition_support=0.80,
+    )
+    coad.details.update(
+        {
+            "learned_expression_hierarchy_votes": [
+                {
+                    "stage": "mismatch_repair",
+                    "label_space": "candidate_row_mmr",
+                    "label": "MSS",
+                    "probability": 0.75,
+                    "top_predictions": [
+                        {"label": "MSS", "probability": 0.75}
+                    ],
+                }
+            ],
+            # The candidate-specific key must win over this legacy global key
+            # when the evidence graph is rendered.
+            "learned_expression_hierarchical_votes": [
+                {
+                    "stage": "mismatch_repair",
+                    "label_space": "legacy_wrong_context",
+                    "label": "MSI",
+                    "probability": 0.90,
+                }
+            ],
+        }
+    )
+    coad.admit_adjudication_support(
+        "curated_marker_program",
+        coad.rna_marker_support,
+        selector="test_marker",
+    )
+    coad.admit_adjudication_support(
+        "composition_reference",
+        coad.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"STAD": selected, "COAD": coad},
+        selected,
+    )
+
+    assert result is coad
+    assert result.selected_by == "entity_evidence_consensus"
+    mmr_votes = [
+        vote
+        for vote in result.details["learned_expression_hierarchy_votes"]
+        if vote["stage"] == "mismatch_repair"
+    ]
+    assert [vote["label"] for vote in mmr_votes] == ["MSS"]
+    graph = _build_staged_evidence_graph(
+        [selected, coad],
+        result,
+        {},
+    )
+    mmr_channels = [
+        row
+        for row in graph["channels"]
+        if row["role"] == "hierarchical_mismatch_repair_vote"
+    ]
+    assert [row["code"] for row in mmr_channels] == ["MSS"]
+    assert mmr_channels[0]["context_code"] == "COAD"
+
+
 def test_entity_beam_uses_valid_child_reference_and_stronger_corroboration():
     """Competing learned views are resolved by independent evidence strength."""
 

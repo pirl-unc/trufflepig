@@ -328,6 +328,55 @@ def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
     assert by_code["SARC"]["support_fraction_of_top"] < 1.0
 
 
+def test_member_union_branch_abstains_with_inconsistent_centroid_top(monkeypatch):
+    """Branch promotion must honor the compartment gate's safety abstention."""
+    import trufflepig.cancer_type_centroid as ctc
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    monkeypatch.setattr(
+        ctc,
+        "centroid_correlations",
+        lambda sample, restrict_to=None: pd.Series(
+            {"SARC_PEC": 0.90, "COAD": 0.70}
+        ),
+    )
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda sample, _corr=None: {
+            "compartment": "Epithelial",
+            "score": 0.90,
+            "runner_up": "Sarcoma",
+            "margin": 0.20,
+            "confident": True,
+            "scores": pd.Series({"Epithelial": 0.90, "Sarcoma": 0.70}),
+        },
+    )
+    monkeypatch.setattr(
+        ctc,
+        "resolve_fine_subtype",
+        lambda code, correlations, current_subtype=None: (
+            "SARC_PEC"
+            if code in {"SARC", "SARC_PEC"}
+            else current_subtype
+        ),
+    )
+    monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("COAD"),
+        candidate_codes=["COAD", "SARC", "SARC_PEC"],
+        top_k=3,
+    )
+
+    assert rows[0]["code"] == "COAD"
+    assert rows[0]["centroid_compartment_restricted"] is False
+    assert all(
+        not row.get("centroid_member_union_branch_promoted")
+        for row in rows
+    )
+
+
 def test_final_support_preserves_same_family_display_order_without_compartment():
     from trufflepig.tumor_purity import _finalize_candidate_rank_support
 
