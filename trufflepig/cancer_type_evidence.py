@@ -2404,11 +2404,14 @@ def _context_support_by_code(analysis: Mapping[str, Any]) -> dict[str, float]:
 def _contrast_discriminator_rows() -> tuple[dict[str, Any], ...]:
     """Curated two-way expression discriminators shipped by pirlygenes."""
     try:
-        from pirlygenes import get_data
+        from pirlygenes import cancer_type_discriminators_df
     except ImportError:
         return ()
     try:
-        df = get_data("cancer-type-discriminators")
+        # Use the public accessor rather than loading the CSV directly. Since
+        # pirlygenes 5.23.45 this validates and exposes the evidence-role and
+        # report-promotion safety policy carried by every row.
+        df = cancer_type_discriminators_df()
     except (FileNotFoundError, KeyError, ValueError):
         _LOGGER.warning(
             "pirlygenes cancer-type discriminator table unavailable",
@@ -2441,6 +2444,13 @@ def _contrast_discriminator_rows() -> tuple[dict[str, Any], ...]:
                 "source": _clean(row.get("source")),
                 "support_type": _clean(row.get("support_type")),
                 "source_anchor": _clean(row.get("source_anchor")),
+                "evidence_role": _clean(row.get("evidence_role")),
+                "promote_report_scope": _safe_bool(
+                    row.get("promote_report_scope"),
+                    default=False,
+                ),
+                "validation_scope": _clean(row.get("validation_scope")),
+                "conflict_policy": _clean(row.get("conflict_policy")),
             }
         )
     return tuple(rows)
@@ -2711,6 +2721,7 @@ def _add_contrast_discriminator_features(
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(_clean(row.get("contrast")), []).append(row)
+    activated_nominations: list[tuple[str, str, CancerTypeEvidence]] = []
 
     for contrast, contrast_rows in grouped.items():
         first = contrast_rows[0]
@@ -2775,6 +2786,39 @@ def _add_contrast_discriminator_features(
             or _safe_int(winner_signal.get("total_hits"), 0) < min_total_hits
         ):
             continue
+        policy = {
+            "evidence_roles": sorted(
+                {
+                    _clean(row.get("evidence_role"))
+                    for row in contrast_rows
+                    if _clean(row.get("evidence_role"))
+                }
+            ),
+            "promote_report_scope": bool(
+                contrast_rows
+                and all(
+                    _safe_bool(
+                        row.get("promote_report_scope"),
+                        default=False,
+                    )
+                    for row in contrast_rows
+                )
+            ),
+            "validation_scopes": sorted(
+                {
+                    _clean(row.get("validation_scope"))
+                    for row in contrast_rows
+                    if _clean(row.get("validation_scope"))
+                }
+            ),
+            "conflict_policies": sorted(
+                {
+                    _clean(row.get("conflict_policy"))
+                    for row in contrast_rows
+                    if _clean(row.get("conflict_policy"))
+                }
+            ),
+        }
 
         same_context = winner_code == context_code
         same_top = winner_code == top_participant
@@ -2868,6 +2912,13 @@ def _add_contrast_discriminator_features(
                 f"{marker_coherence.get('required_for_consistent')} required)"
             )
             can_select = False
+        if not policy["promote_report_scope"]:
+            blockers.append(
+                "pirlygenes validates this discriminator as pairwise "
+                "hypothesis evidence only; it cannot promote report scope or "
+                "supply an entity-consensus vote"
+            )
+            can_select = False
 
         support = float(
             np.clip(
@@ -2941,6 +2992,7 @@ def _add_contrast_discriminator_features(
                 "contrast_discriminator_loser_markers": (
                     loser_signal.get("markers") or []
                 )[:8],
+                "contrast_discriminator_upstream_policy": policy,
             }
         )
         if marker_coherence:
@@ -2963,56 +3015,75 @@ def _add_contrast_discriminator_features(
             blocking_reasons=blockers,
             priority=(1, support),
         )
+        activated_nominations.append((contrast, winner_code, hypothesis))
 
-    # A two-way panel answers only its named A-vs-B question.  If several
-    # panels activated by the same broad context nominate different
-    # alternatives, none of those pairwise answers is a globally identified
-    # diagnosis.  Keep every signal in the evidence trace, but withhold all of
-    # the conflicting promotions so a later fused pass cannot turn an
-    # arbitrary iteration/tie-break order into the report label.
-    active_promotions: dict[str, list[CancerTypeEvidence]] = {}
-    for hypothesis in hypotheses.values():
-        if (
-            not hypothesis.can_select_report_label
-            or hypothesis.selected_by != "contrast_discriminator"
+    if activated_nominations:
+        try:
+            from pirlygenes import cancer_type_discriminator_consensus
+
+            upstream_consensus = cancer_type_discriminator_consensus(
+                [
+                    (contrast, winner_code)
+                    for contrast, winner_code, _ in activated_nominations
+                ]
+            )
+        except (ImportError, KeyError, TypeError, ValueError):
+            _LOGGER.warning(
+                "pirlygenes contrast consensus unavailable or rejected the "
+                "activated nominations; keeping them hypothesis-only",
+                exc_info=True,
+            )
+            upstream_consensus = {
+                "status": "unavailable",
+                "hypotheses": sorted(
+                    {winner for _, winner, _ in activated_nominations}
+                ),
+                "promote_report_scope": False,
+                "report_code": None,
+            }
+        if not _safe_bool(
+            upstream_consensus.get("promote_report_scope"),
+            default=False,
         ):
-            continue
-        context_code = _clean(
-            hypothesis.details.get("contrast_discriminator_context_code")
-        )
-        winner_code = _clean(
-            hypothesis.details.get("contrast_discriminator_winner")
-        )
-        if context_code and winner_code and winner_code != context_code:
-            active_promotions.setdefault(context_code, []).append(hypothesis)
-    for context_code, promoted in active_promotions.items():
-        winners = {
-            _clean(row.details.get("contrast_discriminator_winner"))
-            for row in promoted
-        }
-        winners.discard("")
-        if len(winners) < 2:
-            continue
-        alternatives = ", ".join(sorted(winners))
-        reason = (
-            f"pairwise contrast panels activated by {context_code} disagree "
-            f"across alternative diagnoses ({alternatives}); retain the "
-            "signals as hypotheses but do not use any one pairwise panel as "
-            "a global report-label classifier"
-        )
-        for hypothesis in promoted:
-            hypothesis.details["contrast_discriminator_conflicting_winners"] = (
-                sorted(winners)
+            reason = (
+                "pirlygenes discriminator consensus is "
+                f"{_clean(upstream_consensus.get('status')) or 'hypothesis-only'}; "
+                "pairwise nominations remain contextual evidence and cannot "
+                "set the report label"
             )
-            hypothesis.exclude_adjudication_support(
-                _ENTITY_CONSENSUS_MARKER_AXIS,
-                selector="contrast_discriminator",
-                blocking_reasons=(reason,),
-            )
-            hypothesis.withdraw_report_label_selector(
-                "contrast_discriminator",
-                blocking_reasons=(reason,),
-            )
+            for _, _, hypothesis in activated_nominations:
+                hypothesis.details["contrast_discriminator_upstream_consensus"] = (
+                    upstream_consensus
+                )
+                hypothesis.exclude_adjudication_support(
+                    _ENTITY_CONSENSUS_MARKER_AXIS,
+                    selector="contrast_discriminator",
+                    blocking_reasons=(reason,),
+                )
+                hypothesis.withdraw_report_label_selector(
+                    "contrast_discriminator",
+                    blocking_reasons=(reason,),
+                )
+        else:
+            report_code = _clean(upstream_consensus.get("report_code"))
+            for _, winner_code, hypothesis in activated_nominations:
+                hypothesis.details["contrast_discriminator_upstream_consensus"] = (
+                    upstream_consensus
+                )
+                if not report_code or winner_code != report_code:
+                    reason = (
+                        "pirlygenes discriminator consensus did not select "
+                        f"{winner_code} as its report-scope entity"
+                    )
+                    hypothesis.exclude_adjudication_support(
+                        _ENTITY_CONSENSUS_MARKER_AXIS,
+                        selector="contrast_discriminator",
+                        blocking_reasons=(reason,),
+                    )
+                    hypothesis.withdraw_report_label_selector(
+                        "contrast_discriminator",
+                        blocking_reasons=(reason,),
+                    )
 
 
 def _top_code(analysis: Mapping[str, Any]) -> str:

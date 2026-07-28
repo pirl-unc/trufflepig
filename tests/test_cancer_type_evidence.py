@@ -6688,7 +6688,7 @@ def _laml_cml_contrast_rows():
         for symbol in (*primary, *supporting):
             rows.append(
                 {
-                    "contrast": "LAML_vs_CML",
+                    "contrast": "CML_vs_LAML",
                     "type_a": "LAML",
                     "type_b": "CML",
                     "favors": favors,
@@ -6769,7 +6769,7 @@ def _stad_program_expression():
 
 
 def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch):
-    """A stable parent panel applies when the ranker reports a registry child."""
+    """Pairwise evidence can inform, but cannot itself select, a child context."""
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -6798,7 +6798,7 @@ def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch)
     )
 
     assert result["selected"]["cancer_type"] == "CHOL"
-    assert result["selected"]["selected_by"] == "contrast_discriminator"
+    assert result["selected"]["selected_by"] == "fused_evidence"
     assert result["selected"]["contrast_discriminator_context_code"] == "STAD"
     assert (
         result["selected"]["contrast_discriminator_context_match_code"]
@@ -6809,6 +6809,13 @@ def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch)
     assert ambiguity["active_for_report_label"] is True
     assert ambiguity["top_code"] == "STAD_EBV"
     assert ambiguity["top_participant"] == "STAD"
+    assert (
+        result["selected"]["contrast_discriminator_upstream_consensus"]["status"]
+        == "hypothesis_only"
+    )
+    assert "curated_marker_program" not in (
+        result["selected"]["adjudication_admissible_support"]
+    )
 
 
 def test_parent_contrast_uses_coherent_child_program_before_cross_code_promotion(
@@ -7038,7 +7045,7 @@ def test_parent_contrast_stays_nonselecting_for_an_unrelated_top_context(monkeyp
 
 
 def test_parent_contrast_resolves_heme_entity_without_inventing_risk_group(monkeypatch):
-    """Expression can distinguish AML from CML, but cannot assign an ELN child."""
+    """A pairwise AML nomination remains contextual and cannot assign a child."""
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -7067,12 +7074,15 @@ def test_parent_contrast_resolves_heme_entity_without_inventing_risk_group(monke
         analysis,
     )
 
-    assert result["selected"]["cancer_type"] == "LAML"
-    assert result["selected"]["selected_by"] == "contrast_discriminator"
-    assert result["selected"]["contrast_discriminator_context_code"] == "CML"
-    assert result["selected"]["contrast_discriminator_context_match_code"] == "CML"
-    assert result["selected"]["contrast_discriminator_top_participant"] == "CML"
-    assert result["selected"]["cancer_type"] != "LAML_ELNadv"
+    assert result["selected"]["cancer_type"] == "CML"
+    laml = next(row for row in result["evidence"] if row["cancer_type"] == "LAML")
+    assert laml["contrast_discriminator_context_code"] == "CML"
+    assert laml["contrast_discriminator_context_match_code"] == "CML"
+    assert laml["contrast_discriminator_top_participant"] == "CML"
+    assert laml["can_select_report_label"] is False
+    assert laml["contrast_discriminator_upstream_consensus"]["status"] == (
+        "hypothesis_only"
+    )
 
 
 def test_parent_contrast_preserves_normalized_broad_coarse_consensus(monkeypatch):
@@ -7110,7 +7120,7 @@ def test_parent_contrast_preserves_normalized_broad_coarse_consensus(monkeypatch
 
 
 def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
-    """An equally strong opposite coarse match cannot win by code spelling."""
+    """A tied context remains on the active child when the panel cannot promote."""
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -7130,23 +7140,22 @@ def test_parent_contrast_tie_prefers_active_top_participant(monkeypatch):
         analysis,
     )
 
-    assert result["selected"]["cancer_type"] == "STAD", result["selected"]
-    assert result["selected"]["selected_by"] == "contrast_discriminator"
-    assert result["selected"]["contrast_discriminator_context_code"] == "CRC"
+    assert result["selected"]["cancer_type"] == "COAD_MSI", result["selected"]
+    stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
+    assert stad["contrast_discriminator_context_code"] == "CRC"
     assert (
-        result["selected"]["contrast_discriminator_context_match_code"]
+        stad["contrast_discriminator_context_match_code"]
         == "COAD_MSI"
     )
-    ambiguity = result["selected"]["contrast_discriminator_active_ambiguity"]
+    ambiguity = stad["contrast_discriminator_active_ambiguity"]
     assert ambiguity["context_is_top"] is True
     assert ambiguity["active_for_report_label"] is True
+    assert stad["can_select_report_label"] is False
 
 
-def test_nonclassification_contrast_program_remains_a_hypothesis(monkeypatch):
-    import trufflepig.cancer_type_evidence as evidence
+def test_shipped_pairwise_contrast_program_remains_a_hypothesis():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
-    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", _contrast_rows)
     analysis = _analysis(("PAAD", 1.0))
     analysis["fit_quality"] = {"label": "ambiguous"}
 
@@ -7170,7 +7179,7 @@ def test_nonclassification_contrast_program_remains_a_hypothesis(monkeypatch):
     assert gbc["metrics"]["contrast_discriminator_support"] > 0.8
     assert gbc["can_select_report_label"] is False
     assert any(
-        "rather than a classification target" in reason
+        "hypothesis evidence only" in reason
         for reason in gbc["blocking_reasons"]
     )
     graph = result["staged_evidence_graph"]
@@ -7307,7 +7316,7 @@ def test_conflicting_pairwise_contrasts_cannot_act_as_a_global_classifier(
         )
         assert candidate["can_select_report_label"] is False
         assert any(
-            "pairwise contrast panels" in reason
+            "discriminator consensus is conflict" in reason
             for reason in candidate["blocking_reasons"]
         )
         assert "curated_marker_program" not in (

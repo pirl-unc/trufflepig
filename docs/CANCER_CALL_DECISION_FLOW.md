@@ -52,6 +52,9 @@ refactor, described in
 - learned leaf predictions are normalized to the entity being adjudicated,
   while the original child remains explicit in audit fields and may be applied
   later on its subtype/status axis; and
+- pirlygenes pairwise discriminators are retained as contextual hypotheses and
+  pass through its global consensus policy; pairwise-only rows cannot promote
+  report scope or supply an entity-consensus vote; and
 - expected-low marker conflicts and definitive molecular blockers remain
   disqualifying even when other channels agree.
 
