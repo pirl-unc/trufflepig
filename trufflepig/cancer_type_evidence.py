@@ -1137,6 +1137,12 @@ def _hypothesis_evidence_channels(
         details={
             "panel": hypothesis.details.get("lineage_panel_top"),
             "margin": hypothesis.details.get("lineage_panel_margin_over_second"),
+            "entity_margin": hypothesis.details.get(
+                "lineage_panel_margin_over_competing_entity"
+            ),
+            "decision_basis": hypothesis.details.get(
+                "lineage_panel_decision_basis"
+            ),
             "rationale": hypothesis.details.get("lineage_panel_rationale"),
             "out_of_beam_rescue": hypothesis.details.get(
                 "lineage_panel_out_of_beam_rescue"
@@ -7837,13 +7843,13 @@ def _add_lineage_panel_features(
     """Evaluate ``trufflepig.lineage_panels`` against the sample and
     register hypotheses for any panel that clearly wins.
 
-    A "clear win" requires:
+    A "clear entity win" requires:
       - top panel score >= ``_LINEAGE_PANEL_MIN_SCORE`` (positive
         markers cohort-comparable, low markers compliant, obligates
         passed),
-      - margin over second-best panel score >=
-        ``_LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND`` (no ambiguity
-        between siblings),
+      - either score separation from the best panel belonging to a
+        different cancer entity, or a complete positive/negative-marker
+        program with no complete competing entity program,
       - panel's parent_cohort is a valid registry code.
 
     Returns the ``summarize_evidence`` dict (with an extra
@@ -7874,6 +7880,7 @@ def _add_lineage_panel_features(
     try:
         from .lineage_panels import (
             LINEAGE_PANELS,
+            complete_program_entity_decision,
             evaluate_panels,
             summarize_evidence,
         )
@@ -7918,6 +7925,8 @@ def _add_lineage_panel_features(
         return None
 
     summary = dict(summarize_evidence(evidence))
+    program_decision = complete_program_entity_decision(evidence)
+    summary["entity_program_decision"] = program_decision
     # Initialize the promotion block once — every return path below
     # rewrites it (either with the appropriate blocker string for an
     # early-return reason, or with the final can_promote verdict at
@@ -7932,10 +7941,17 @@ def _add_lineage_panel_features(
             f"{_LINEAGE_PANEL_MIN_SCORE:.2f}"
         )
         return summary
-    if margin < _LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND:
+    entity_margin = _safe_float(
+        program_decision.get("margin_over_competing_entity"),
+        margin,
+    )
+    separated_by_score = entity_margin >= _LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND
+    separated_by_complete_program = bool(program_decision.get("decisive"))
+    if not separated_by_score and not separated_by_complete_program:
         summary["promotion"]["blockers"].append(
-            f"margin over second {margin:.2f} below threshold "
-            f"{_LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND:.2f}"
+            f"margin over competing cancer entity {entity_margin:.2f} below "
+            f"threshold {_LINEAGE_PANEL_MIN_MARGIN_OVER_SECOND:.2f}, and "
+            f"{program_decision.get('reason') or 'the top program is not decisive'}"
         )
         return summary
 
@@ -7978,6 +7994,13 @@ def _add_lineage_panel_features(
             "lineage_panel_top": top_panel,
             "lineage_panel_score": round(top_score, 4),
             "lineage_panel_margin_over_second": round(margin, 4),
+            "lineage_panel_margin_over_competing_entity": round(entity_margin, 4),
+            "lineage_panel_decision_basis": (
+                "score_separation"
+                if separated_by_score
+                else "complete_program_dominance"
+            ),
+            "lineage_panel_entity_program_decision": program_decision,
             "lineage_panel_rationale": top_rationale,
             "lineage_panel_all": [
                 {"name": e.panel_name, "score": round(e.score, 4)}

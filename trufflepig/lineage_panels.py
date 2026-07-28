@@ -36,6 +36,7 @@ section at the bottom for the integration sketch.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, asdict
 from functools import lru_cache
 from typing import Any, Mapping
@@ -774,6 +775,195 @@ def summarize_evidence(evidence: tuple[PanelEvidence, ...]) -> dict[str, Any]:
         "top_rationale": top.rationale,
         "margin_over_second": margin,
         "panels": [e.to_dict() for e in evidence],
+    }
+
+
+def complete_program_entity_decision(
+    evidence: tuple[PanelEvidence, ...],
+) -> dict[str, Any]:
+    """Describe whether the top panel is an unopposed complete program.
+
+    Panel scores are useful summaries, but they are not the whole evidentiary
+    structure. A panel with every expected-high marker present, every
+    expected-low marker compliant, and its obligate marker present is
+    qualitatively stronger than an incomplete runner-up. This helper preserves
+    that distinction without introducing another numeric cutoff.
+
+    Competition is evaluated between parent cancer entities, not between two
+    subtype panels that both map to the same parent. If a second entity also
+    has a complete program, the result remains ambiguous.
+    """
+    if not evidence:
+        return {
+            "decisive": False,
+            "reason": "no panel evidence",
+            "top_parent_cohort": None,
+            "competing_parent_cohort": None,
+        }
+
+    top = evidence[0]
+
+    def _complete(row: PanelEvidence) -> bool:
+        return bool(
+            getattr(row, "obligate_passed", False)
+            and getattr(row, "high_hits", ())
+            and getattr(row, "low_passes", ())
+            and not getattr(row, "high_misses", ())
+            and not getattr(row, "low_violations", ())
+        )
+
+    top_parent = str(getattr(top, "parent_cohort", "") or "")
+    competing_rows = tuple(
+        row
+        for row in evidence[1:]
+        if str(getattr(row, "parent_cohort", "") or "") != top_parent
+    )
+    competing = competing_rows[0] if competing_rows else None
+    top_complete = _complete(top)
+    competing_complete = any(_complete(row) for row in competing_rows)
+    decisive = bool(top_complete and not competing_complete)
+    if not top_complete:
+        reason = "top panel is not a complete positive/negative-marker program"
+    elif competing_complete:
+        reason = (
+            "another cancer entity also has a complete positive/negative-marker "
+            "program"
+        )
+    else:
+        reason = (
+            "top panel is complete and no competing cancer entity has a "
+            "complete program"
+        )
+    return {
+        "decisive": decisive,
+        "reason": reason,
+        "top_parent_cohort": top_parent or None,
+        "top_panel": top.panel_name,
+        "top_complete": top_complete,
+        "competing_parent_cohort": (
+            getattr(competing, "parent_cohort", None)
+            if competing is not None
+            else None
+        ),
+        "competing_panel": competing.panel_name if competing is not None else None,
+        "competing_complete": competing_complete,
+        "margin_over_competing_entity": (
+            float(top.score - competing.score)
+            if competing is not None
+            else float(top.score)
+        ),
+    }
+
+
+def attribute_panel_markers_to_decomposition(
+    panel_evidence: Mapping[str, Any],
+    gene_attribution: Any,
+) -> dict[str, Any]:
+    """Attribute a panel's positive markers to tumor or background.
+
+    The decomposition table contains one expression contribution per modeled
+    component. We call a marker tumor-residual only when ``tumor`` is its
+    largest modeled contributor. This is a structural comparison—there is no
+    new tumor-fraction threshold to tune.
+
+    The result is post-selection corroboration. It must not be counted as an
+    independent cancer-classifier vote because the decomposition candidates
+    already reuse ranker support.
+    """
+    high_hits = list(panel_evidence.get("high_hits") or [])
+    symbols = [str(row[0]).strip() for row in high_hits if row]
+    empty_result = {
+        "status": "not_evaluable",
+        "role": "post_selection_corroboration",
+        "panel": panel_evidence.get("panel_name"),
+        "parent_cohort": panel_evidence.get("parent_cohort"),
+        "evaluated_marker_count": 0,
+        "tumor_dominant_count": 0,
+        "ambiguous_marker_count": 0,
+        "markers": [],
+    }
+    if (
+        not symbols
+        or gene_attribution is None
+        or getattr(gene_attribution, "empty", True)
+    ):
+        return empty_result
+
+    metadata_columns = {
+        "gene_id",
+        "symbol",
+        "observed_tpm",
+        "overexplained_tpm",
+        "tumor_fraction_of_total",
+    }
+    component_columns = [
+        str(column)
+        for column in gene_attribution.columns
+        if str(column) not in metadata_columns
+    ]
+    if "tumor" not in component_columns:
+        return empty_result
+
+    rows_by_symbol = {}
+    symbol_set = set(symbols)
+    for _, row in gene_attribution.iterrows():
+        symbol = row.get("symbol")
+        if isinstance(symbol, str) and symbol.strip() in symbol_set:
+            rows_by_symbol[symbol.strip()] = row
+    markers: list[dict[str, Any]] = []
+    ambiguous_count = 0
+    for symbol in symbols:
+        row = rows_by_symbol.get(symbol)
+        if row is None:
+            continue
+        contributions = {}
+        for component in component_columns:
+            try:
+                value = float(row.get(component) or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            contributions[component] = value if math.isfinite(value) else 0.0
+        largest = max(contributions.values())
+        dominant_components = sorted(
+            component
+            for component, value in contributions.items()
+            if value == largest
+        )
+        unambiguous = len(dominant_components) == 1
+        dominant_component = (
+            dominant_components[0] if unambiguous else "ambiguous"
+        )
+        if not unambiguous:
+            ambiguous_count += 1
+        markers.append(
+            {
+                "symbol": symbol,
+                "observed_tpm": round(float(row.get("observed_tpm") or 0.0), 4),
+                "dominant_component": dominant_component,
+                "dominant_components": dominant_components,
+                "tumor_dominant": unambiguous and dominant_component == "tumor",
+                "tumor_contribution": round(contributions["tumor"], 4),
+            }
+        )
+
+    tumor_dominant_count = sum(row["tumor_dominant"] for row in markers)
+    if not markers:
+        status = "not_evaluable"
+    elif tumor_dominant_count == len(markers):
+        status = "tumor_residual"
+    elif tumor_dominant_count or ambiguous_count:
+        status = "mixed_tumor_and_background"
+    else:
+        status = "background_attributed"
+    return {
+        "status": status,
+        "role": "post_selection_corroboration",
+        "panel": panel_evidence.get("panel_name"),
+        "parent_cohort": panel_evidence.get("parent_cohort"),
+        "evaluated_marker_count": len(markers),
+        "tumor_dominant_count": tumor_dominant_count,
+        "ambiguous_marker_count": ambiguous_count,
+        "markers": markers,
     }
 
 

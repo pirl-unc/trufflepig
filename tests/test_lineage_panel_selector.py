@@ -4,8 +4,9 @@ PR-42 wires ``trufflepig.lineage_panels`` into the cancer-type
 evidence consolidator as a new selector. These tests pin the
 contract:
 
-  - The selector only fires when a single panel clearly wins
-    (score >= 0.60 AND margin over second-best >= 0.20).
+  - The selector only fires when a single cancer entity clearly wins:
+    either its score separates it from the next entity or its complete
+    positive/negative-marker program dominates an incomplete competitor.
   - When it fires, the proposed cancer type is the winning panel's
     ``parent_cohort``, NOT the panel name (e.g. BRCA_BASAL → BRCA).
   - The selector is graceful: missing inputs, panel evaluation
@@ -17,8 +18,35 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from types import SimpleNamespace
 
 from trufflepig import cancer_type_evidence as cte
+
+
+def _panel_evidence(
+    *,
+    name,
+    code,
+    score,
+    high_hits,
+    high_misses=(),
+    low_passes=(),
+    low_violations=(),
+):
+    from trufflepig.lineage_panels import PanelEvidence
+
+    return PanelEvidence(
+        panel_name=name,
+        parent_cohort=code,
+        obligate_passed=True,
+        obligate_failures=(),
+        high_hits=tuple(high_hits),
+        high_misses=tuple(high_misses),
+        low_passes=tuple(low_passes),
+        low_violations=tuple(low_violations),
+        score=score,
+        rationale=f"{name}: observed test program",
+    )
 
 
 def _empty_analysis():
@@ -165,6 +193,277 @@ def test_selector_returns_summary_with_promotion_block():
     promotion = summary["promotion"]
     assert "promoted" in promotion
     assert "blockers" in promotion
+
+
+def test_complete_urothelial_program_dominates_incomplete_biliary_program(
+    monkeypatch,
+):
+    """A complete tumor-identity program is not reduced to a score margin.
+
+    The values mirror PFO017's liver metastasis: all seven urothelial positive
+    markers and all three exclusion markers pass, while the biliary runner-up
+    misses a positive and violates ALB. The broad ranker is explicitly
+    ambiguous and already keeps BLCA in its beam. This is the intended
+    general cross-site refinement case.
+    """
+    from trufflepig import lineage_panels
+
+    urothelial = _panel_evidence(
+        name="BLCA_LUMINAL",
+        code="BLCA",
+        score=1.0,
+        high_hits=(
+            ("UPK1A", 64.0, 30.0),
+            ("UPK1B", 179.0, 40.0),
+            ("UPK2", 88.0, 25.0),
+            ("UPK3A", 17.0, 8.0),
+            ("KRT20", 26.0, 20.0),
+            ("GATA3", 30.0, 20.0),
+            ("FOXA1", 16.0, 10.0),
+        ),
+        low_passes=(
+            ("MUCL1", 0.0, 1.0),
+            ("SCGB2A2", 0.0, 1.0),
+            ("CDX2", 0.0, 5.0),
+        ),
+    )
+    biliary = _panel_evidence(
+        name="CHOL",
+        code="CHOL",
+        score=0.82,
+        high_hits=(
+            ("KRT19", 400.0, 200.0),
+            ("MUC1", 300.0, 150.0),
+            ("EPCAM", 200.0, 100.0),
+            ("CDH1", 180.0, 90.0),
+            ("CFTR", 20.0, 10.0),
+        ),
+        high_misses=(("MUC5AC", 0.0, 20.0),),
+        low_passes=(
+            ("AFP", 0.0, 5.0),
+            ("CDX2", 0.0, 30.0),
+            ("CDH17", 0.0, 50.0),
+            ("VIL1", 0.0, 50.0),
+        ),
+        low_violations=(("ALB", 832.0, 30.0),),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (urothelial, biliary),
+    )
+    sample = {
+        row[0]: row[1]
+        for row in (*urothelial.high_hits, *urothelial.low_passes)
+    }
+    analysis = {
+        "candidate_trace": [
+            {"code": "HEPB"},
+            {"code": "BLCA"},
+            {"code": "ESCA"},
+            {"code": "STAD"},
+            {"code": "CHOL"},
+        ],
+        "fit_quality": {"label": "ambiguous"},
+    }
+    hypotheses = {}
+
+    summary = cte._add_lineage_panel_features(
+        hypotheses,
+        sample,
+        analysis,
+        sample_tpm_by_gene_id={"test": 1.0},
+    )
+
+    assert summary["margin_over_second"] == pytest.approx(0.18)
+    assert summary["entity_program_decision"]["decisive"] is True
+    assert summary["promotion"] == {
+        "promoted": True,
+        "code": "BLCA",
+        "blockers": [],
+    }
+    assert (
+        hypotheses["BLCA"].details["lineage_panel_decision_basis"]
+        == "complete_program_dominance"
+    )
+    assert hypotheses["BLCA"].can_select_report_label is True
+
+
+def test_two_complete_entity_programs_remain_ambiguous(monkeypatch):
+    """A complete panel cannot override a different complete entity panel."""
+    from trufflepig import lineage_panels
+
+    urothelial = _panel_evidence(
+        name="BLCA_LUMINAL",
+        code="BLCA",
+        score=1.0,
+        high_hits=(("UPK1B", 179.0, 40.0),),
+        low_passes=(("CDX2", 0.0, 5.0),),
+    )
+    biliary = _panel_evidence(
+        name="CHOL",
+        code="CHOL",
+        score=1.0,
+        high_hits=(("KRT19", 400.0, 200.0),),
+        low_passes=(("ALB", 0.0, 30.0),),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (urothelial, biliary),
+    )
+    hypotheses = {}
+
+    summary = cte._add_lineage_panel_features(
+        hypotheses,
+        {"UPK1B": 179.0, "CDX2": 0.0},
+        {
+            "candidate_trace": [{"code": "BLCA"}, {"code": "CHOL"}],
+            "fit_quality": {"label": "ambiguous"},
+        },
+        sample_tpm_by_gene_id={"test": 1.0},
+    )
+
+    assert summary["entity_program_decision"]["decisive"] is False
+    assert summary["promotion"]["promoted"] is False
+    assert "another cancer entity also has a complete" in " ".join(
+        summary["promotion"]["blockers"]
+    )
+    assert hypotheses == {}
+
+
+def test_decomposition_attributes_real_urothelial_markers_to_tumor_residual():
+    """Gene attribution separates a metastatic tumor program from liver host."""
+    from trufflepig.lineage_panels import attribute_panel_markers_to_decomposition
+
+    marker_values = {
+        "UPK1A": (64.0, 63.94, 0.01),
+        "UPK1B": (179.0, 178.97, 0.01),
+        "UPK2": (88.0, 88.36, 0.01),
+        "UPK3A": (17.0, 16.62, 0.01),
+        "KRT20": (26.0, 26.47, 0.01),
+        "GATA3": (30.0, 28.14, 0.80),
+        "FOXA1": (16.0, 15.64, 0.20),
+    }
+    attribution_frame = pd.DataFrame(
+        [
+            {
+                "gene_id": f"gene-{symbol}",
+                "symbol": symbol,
+                "observed_tpm": observed,
+                "tumor": tumor,
+                "hepatocyte": hepatocyte,
+                "endothelial": 0.0,
+                "overexplained_tpm": 0.0,
+                "tumor_fraction_of_total": tumor / observed,
+            }
+            for symbol, (observed, tumor, hepatocyte) in marker_values.items()
+        ]
+        + [
+            {
+                "gene_id": "gene-ALB",
+                "symbol": "ALB",
+                "observed_tpm": 832.0,
+                "tumor": 10.0,
+                "hepatocyte": 820.0,
+                "endothelial": 0.0,
+                "overexplained_tpm": 0.0,
+                "tumor_fraction_of_total": 10.0 / 832.0,
+            }
+        ]
+    )
+    panel = {
+        "panel_name": "BLCA_LUMINAL",
+        "parent_cohort": "BLCA",
+        "high_hits": [
+            (symbol, values[0], 1.0)
+            for symbol, values in marker_values.items()
+        ],
+    }
+
+    result = attribute_panel_markers_to_decomposition(panel, attribution_frame)
+
+    assert result["status"] == "tumor_residual"
+    assert result["tumor_dominant_count"] == result["evaluated_marker_count"] == 7
+    assert {row["dominant_component"] for row in result["markers"]} == {"tumor"}
+    assert result["role"] == "post_selection_corroboration"
+
+
+def test_decomposition_does_not_break_component_ties_in_tumor_favor():
+    """Equal tumor/background attribution remains ambiguous, not tumor support."""
+    from trufflepig.lineage_panels import attribute_panel_markers_to_decomposition
+
+    result = attribute_panel_markers_to_decomposition(
+        {
+            "panel_name": "TEST",
+            "parent_cohort": "TEST",
+            "high_hits": [("MARKER", 10.0, 5.0)],
+        },
+        pd.DataFrame(
+            [
+                {
+                    "symbol": "MARKER",
+                    "observed_tpm": 10.0,
+                    "tumor": 5.0,
+                    "hepatocyte": 5.0,
+                }
+            ]
+        ),
+    )
+
+    assert result["status"] == "mixed_tumor_and_background"
+    assert result["tumor_dominant_count"] == 0
+    assert result["ambiguous_marker_count"] == 1
+    assert result["markers"][0]["dominant_components"] == ["hepatocyte", "tumor"]
+
+
+def test_main_uses_matching_candidate_for_panel_marker_attribution():
+    """Attribution follows the panel entity, not the reordered report fit."""
+    from trufflepig import main
+
+    panel_summary = {
+        "top_panel": "BLCA_LUMINAL",
+        "panels": [
+            {
+                "panel_name": "BLCA_LUMINAL",
+                "parent_cohort": "BLCA",
+                "high_hits": [("UPK1B", 179.0, 40.0)],
+            }
+        ],
+    }
+    chol = SimpleNamespace(
+        cancer_type="CHOL",
+        template="met_liver",
+        gene_attribution=pd.DataFrame(
+            [{"symbol": "UPK1B", "observed_tpm": 179.0, "tumor": 1.0, "hepatocyte": 178.0}]
+        ),
+    )
+    blca = SimpleNamespace(
+        cancer_type="BLCA",
+        template="met_liver",
+        gene_attribution=pd.DataFrame(
+            [{"symbol": "UPK1B", "observed_tpm": 179.0, "tumor": 178.0, "hepatocyte": 1.0}]
+        ),
+    )
+    analysis = {
+        "lineage_panel_evidence": panel_summary,
+        "cancer_type_evidence": {"lineage_panel_evidence": panel_summary},
+    }
+
+    result = main._attach_lineage_panel_decomposition_attribution(
+        analysis,
+        [chol, blca],
+    )
+
+    assert result["status"] == "tumor_residual"
+    assert result["decomposition_cancer_type"] == "BLCA"
+    assert analysis["lineage_panel_evidence"]["decomposition_attribution"] == result
+    assert (
+        analysis["cancer_type_evidence"]["lineage_panel_evidence"][
+            "decomposition_attribution"
+        ]
+        == result
+    )
 
 
 def test_basis_line_renders_panel_when_summary_present():

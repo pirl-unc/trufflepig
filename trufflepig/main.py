@@ -2798,6 +2798,10 @@ def _analyze_body(run: AnalyzeRun):
     if decomp_results:
         analysis["decomposition_results"] = decomp_results
         best_decomp = decomp_results[0]
+        _attach_lineage_panel_decomposition_attribution(
+            analysis,
+            decomp_results,
+        )
         run.note_step(
             "decomposition",
             outputs={
@@ -5077,6 +5081,63 @@ def _prioritize_report_compatible_decomposition(
     return [selected] + [row for row in decomp_results if row is not selected]
 
 
+def _attach_lineage_panel_decomposition_attribution(
+    analysis,
+    decomp_results,
+):
+    """Explain whether lineage-panel markers remain in the tumor residual.
+
+    Candidate decomposition scores are not independent cancer-type votes: they
+    reuse the ranker's support. Gene-level attribution is still valuable for a
+    different question—whether a lineage program came from modeled host/TME
+    background or remained in the tumor residual. Persist that distinction as
+    post-selection corroboration only.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel or not decomp_results:
+        return None
+    panel_evidence = next(
+        (
+            row
+            for row in (summary.get("panels") or [])
+            if str(row.get("panel_name") or "").strip() == top_panel
+        ),
+        None,
+    )
+    if panel_evidence is None:
+        return None
+    panel_code = str(panel_evidence.get("parent_cohort") or "").strip()
+    decomposition = next(
+        (
+            row
+            for row in decomp_results
+            if str(getattr(row, "cancer_type", "") or "").strip() == panel_code
+        ),
+        None,
+    )
+    if decomposition is None:
+        return None
+    from .lineage_panels import attribute_panel_markers_to_decomposition
+
+    attribution = attribute_panel_markers_to_decomposition(
+        panel_evidence,
+        getattr(decomposition, "gene_attribution", None),
+    )
+    attribution["decomposition_cancer_type"] = str(
+        getattr(decomposition, "cancer_type", "") or ""
+    )
+    attribution["decomposition_template"] = str(
+        getattr(decomposition, "template", "") or ""
+    )
+    summary["decomposition_attribution"] = attribution
+    evidence = analysis.get("cancer_type_evidence")
+    if isinstance(evidence, dict):
+        evidence["lineage_panel_evidence"] = summary
+    analysis["lineage_panel_evidence"] = summary
+    return attribution
+
+
 def _reconcile_purity_after_decomposition(
     analysis, best_decomp, *, reference_cancer_code, effective_purity, run
 ):
@@ -7047,6 +7108,38 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 )
         sentence += "."
         bullets.append(sentence)
+
+    panel_attribution = (
+        (analysis.get("lineage_panel_evidence") or {}).get(
+            "decomposition_attribution"
+        )
+        or {}
+    )
+    evaluated_markers = int(panel_attribution.get("evaluated_marker_count") or 0)
+    tumor_markers = int(panel_attribution.get("tumor_dominant_count") or 0)
+    if evaluated_markers:
+        panel_name = str(panel_attribution.get("panel") or "lineage panel")
+        status = str(panel_attribution.get("status") or "")
+        if status == "tumor_residual":
+            interpretation = (
+                "the identity program remains after modeled host/TME subtraction"
+            )
+        elif status == "background_attributed":
+            interpretation = (
+                "the apparent identity program is attributable to modeled "
+                "host/TME rather than tumor"
+            )
+        else:
+            interpretation = (
+                "the identity program is split between tumor and modeled "
+                "host/TME"
+            )
+        bullets.append(
+            f"- **Tumor-versus-host lineage attribution**: {panel_name} has "
+            f"{tumor_markers}/{evaluated_markers} positive markers primarily "
+            f"assigned to tumor; {interpretation}. This is decomposition "
+            "corroboration, not an additional classifier vote."
+        )
 
     active_biology = []
     for finding in (analysis.get("pathway_activity_inferences") or [])[:3]:

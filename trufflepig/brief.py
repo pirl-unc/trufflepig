@@ -1495,6 +1495,16 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     promoted = bool(promotion.get("promoted"))
     promoted_code = str(promotion.get("code") or "").strip()
     blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
+    decomposition_attribution = summary.get("decomposition_attribution") or {}
+    attribution_status = str(
+        decomposition_attribution.get("status") or ""
+    ).strip()
+    attribution_evaluated = int(
+        decomposition_attribution.get("evaluated_marker_count") or 0
+    )
+    attribution_tumor = int(
+        decomposition_attribution.get("tumor_dominant_count") or 0
+    )
     if promoted and promoted_code:
         promoted_clause = (
             f" — supports the {promoted_code} call"
@@ -1508,6 +1518,17 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         promoted_clause = f" — noted, did not change the call ({blockers[0]})"
     else:
         promoted_clause = ""
+    if attribution_status == "tumor_residual" and attribution_evaluated:
+        promoted_clause += (
+            f"; decomposition assigns {attribution_tumor}/"
+            f"{attribution_evaluated} positive markers primarily to the "
+            "tumor residual rather than modeled host/TME background"
+        )
+    elif attribution_status == "background_attributed" and attribution_evaluated:
+        promoted_clause += (
+            f"; decomposition assigns all {attribution_evaluated} positive "
+            "markers primarily to modeled host/TME background, not the tumor residual"
+        )
     rationale_clause = f": {rationale}" if rationale else ""
     return (
         f"**Lineage panel:** {top_panel} score "

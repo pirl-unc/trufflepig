@@ -66,6 +66,21 @@ def test_lineage_panel_evidence_marks_promoted_unadopted_label_as_competing():
     assert "did not override the ADCC call" in line
 
 
+def test_lineage_panel_evidence_distinguishes_tumor_residual_from_host():
+    analysis = _lineage_panel_evidence("BLCA_LUMINAL", promoted=True, code="BLCA")
+    analysis["lineage_panel_evidence"]["decomposition_attribution"] = {
+        "status": "tumor_residual",
+        "evaluated_marker_count": 7,
+        "tumor_dominant_count": 7,
+    }
+
+    line = _lineage_panel_evidence_line(analysis, "BLCA") or ""
+
+    assert "supports the BLCA call" in line
+    assert "7/7 positive markers" in line
+    assert "tumor residual rather than modeled host/TME background" in line
+
+
 def _make_analysis(
     purity_point=0.28,
     ci_low=0.19,
