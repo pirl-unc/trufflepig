@@ -8956,26 +8956,39 @@ def _fallback_context_selected(
         return None
     if "pan_cancer_signature_ranker" not in hypothesis.evidence_sources:
         return None
-    crc_conflict = hypothesis.details.get("fused_evidence_crc_family_conflict")
-    if isinstance(crc_conflict, Mapping):
-        crc_candidate = crc_conflict.get("crc_candidate")
-        crc_code = (
-            _clean(crc_candidate.get("code"))
-            if isinstance(crc_candidate, Mapping)
+    structured_abstention = hypothesis.details.get(
+        "fused_evidence_structured_parent_abstention"
+    )
+    if isinstance(structured_abstention, Mapping):
+        supporting_candidate = structured_abstention.get("supporting_candidate")
+        supporting_code = (
+            _clean(supporting_candidate.get("code"))
+            if isinstance(supporting_candidate, Mapping)
             else ""
         )
-        alternative = hypotheses.get(crc_code)
+        alternative = hypotheses.get(supporting_code)
         if (
             alternative is not None
             and "pan_cancer_signature_ranker" in alternative.evidence_sources
         ):
-            abstention_code = _clean(crc_conflict.get("abstention_code"))
-            if abstention_code:
+            abstention_code = _clean(structured_abstention.get("abstention_code"))
+            abstention_is_parent = bool(
+                abstention_code
+                and abstention_code in _registry_by_code()
+                and (
+                    supporting_code == abstention_code
+                    or _code_has_registry_ancestor(
+                        supporting_code,
+                        abstention_code,
+                    )
+                )
+            )
+            if abstention_is_parent:
                 abstention = _hypothesis(hypotheses, abstention_code)
                 abstention.add_source("entity_evidence_consensus")
-                abstention.expression_reference_cancer_type = crc_code
-                abstention.reference_cancer_type = crc_code
-                abstention.related_context_code = crc_code
+                abstention.expression_reference_cancer_type = supporting_code
+                abstention.reference_cancer_type = supporting_code
+                abstention.related_context_code = supporting_code
                 abstention.related_context_support = (
                     alternative.broad_rna_support
                 )
@@ -8984,9 +8997,9 @@ def _fallback_context_selected(
                 abstention.details["fallback_context_adjudication"] = {
                     "mode": "structured_parent_abstention",
                     "blocked_top_code": top_code,
-                    "supporting_child_code": crc_code,
+                    "supporting_child_code": supporting_code,
                     "abstention_code": abstention_code,
-                    "conflict": dict(crc_conflict),
+                    "conflict": dict(structured_abstention),
                 }
                 abstention.details["entity_consensus_adjudication_mode"] = (
                     "structured_parent_abstention"
@@ -8994,7 +9007,7 @@ def _fallback_context_selected(
                 abstention.basis = (
                     f"{top_code} was vetoed by convergent {abstention_code} "
                     f"family evidence; report scope abstained to "
-                    f"{abstention_code} while retaining {crc_code} as the "
+                    f"{abstention_code} while retaining {supporting_code} as the "
                     "expression-reference context"
                 )
                 abstention.consider_for_report_label(
@@ -9191,7 +9204,7 @@ def _weak_non_crc_fused_call_conflicts_with_crc_family(
         "candidate_learned_margin": round(float(learned_margin), 4),
         "candidate_marker_status": marker_status,
         "candidate_unexpected_low_marker_count": int(marker_unexpected_low),
-        "crc_candidate": dict(competitor),
+        "supporting_candidate": dict(competitor),
         "abstention_code": _CRC_REGISTRY_ROOT,
     }
 
@@ -9625,17 +9638,19 @@ def _fused_evidence_eligible(
             "coarse_composition_reference",
         }
     ):
-        crc_candidate = crc_family_conflict.get("crc_candidate") or {}
+        supporting_candidate = (
+            crc_family_conflict.get("supporting_candidate") or {}
+        )
         blockers.append(
             "weak non-CRC epithelial fused evidence is competing with close "
-            f"CRC-family RNA support ({crc_candidate.get('code', 'CRC')} "
-            f"rank {crc_candidate.get('rank', '?')}, "
-            f"{_safe_float(crc_candidate.get('support_fraction_of_top')):.2f}x top; "
-            f"family support {_safe_float(crc_candidate.get('family_support')):.2f}); "
+            f"CRC-family RNA support ({supporting_candidate.get('code', 'CRC')} "
+            f"rank {supporting_candidate.get('rank', '?')}, "
+            f"{_safe_float(supporting_candidate.get('support_fraction_of_top')):.2f}x top; "
+            f"family support {_safe_float(supporting_candidate.get('family_support')):.2f}); "
             "require stronger learned, exact-reference, marker, lineage-panel, "
             "fusion, or contrast support before selecting the non-CRC label"
         )
-        hypothesis.details["fused_evidence_crc_family_conflict"] = (
+        hypothesis.details["fused_evidence_structured_parent_abstention"] = (
             crc_family_conflict
         )
     orthogonal_blocking_axes = _orthogonal_axes_that_block_report_label(

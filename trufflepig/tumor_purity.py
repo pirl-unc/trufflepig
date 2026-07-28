@@ -5209,12 +5209,22 @@ def plot_sample_summary(
         # Legend
         from matplotlib.patches import Patch
 
-        ax3.legend(
-            handles=[
-                Patch(color="#2166ac", label=f"Expected origin family ({matched})"),
+        legend_handles = []
+        if matched and matched in tissues:
+            legend_handles.append(
+                Patch(
+                    color="#2166ac",
+                    label=f"Reference tissue proxy ({matched})",
+                )
+            )
+        legend_handles.extend(
+            [
                 Patch(color="#b2182b", label="Strong residual background"),
                 Patch(color="#92c5de", label="Background"),
-            ],
+            ]
+        )
+        ax3.legend(
+            handles=legend_handles,
             loc="lower right",
             fontsize=7,
             framealpha=0.9,
@@ -5541,12 +5551,22 @@ def plot_background_tissues(analysis, save_to_filename=None, save_dpi=300):
     ax.set_xlim(0, 1.1)
     ax.set_xlabel("Background signature score")
     ax.invert_yaxis()
-    ax.legend(
-        handles=[
-            Patch(color="#2166ac", label=f"Expected origin ({matched})"),
+    legend_handles = []
+    if matched and matched in tissues:
+        legend_handles.append(
+            Patch(
+                color="#2166ac",
+                label=f"Reference tissue proxy ({matched})",
+            )
+        )
+    legend_handles.extend(
+        [
             Patch(color="#b2182b", label="Strong residual"),
             Patch(color="#92c5de", label="Background"),
-        ],
+        ]
+    )
+    ax.legend(
+        handles=legend_handles,
         loc="lower right",
         fontsize=8,
     )

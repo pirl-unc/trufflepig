@@ -2924,8 +2924,9 @@ def test_weak_non_crc_fused_gi_call_blocked_by_close_crc_candidate(monkeypatch):
     assert result["selected"]["cancer_type"] == "READ"
     stad = next(row for row in result["evidence"] if row["cancer_type"] == "STAD")
     assert stad["fused_evidence_can_select"] is False
-    assert stad["fused_evidence_crc_family_conflict"]["crc_candidate"]["code"] == "READ"
-    assert stad["fused_evidence_crc_family_conflict"]["abstention_code"] == "CRC"
+    structured_abstention = stad["fused_evidence_structured_parent_abstention"]
+    assert structured_abstention["supporting_candidate"]["code"] == "READ"
+    assert structured_abstention["abstention_code"] == "CRC"
     assert any("CRC-family RNA support" in reason for reason in stad["fused_evidence_blockers"])
 
 
@@ -7651,10 +7652,10 @@ def test_fallback_context_abstains_to_structured_crc_parent():
         cancer_type="STAD",
         evidence_sources=("pan_cancer_signature_ranker",),
         details={
-            "fused_evidence_crc_family_conflict": {
+            "fused_evidence_structured_parent_abstention": {
                 "candidate_code": "STAD",
                 "abstention_code": "CRC",
-                "crc_candidate": {
+                "supporting_candidate": {
                     "code": "READ",
                     "rank": 2,
                     "support_fraction_of_top": 0.97,
@@ -7691,7 +7692,7 @@ def test_fallback_context_abstains_to_structured_crc_parent():
         "blocked_top_code": "STAD",
         "supporting_child_code": "READ",
         "abstention_code": "CRC",
-        "conflict": stad.details["fused_evidence_crc_family_conflict"],
+        "conflict": stad.details["fused_evidence_structured_parent_abstention"],
     }
     abstention_channel = next(
         channel
@@ -7700,6 +7701,51 @@ def test_fallback_context_abstains_to_structured_crc_parent():
     )
     assert abstention_channel["role"] == "structured_parent_abstention"
     assert abstention_channel["details"]["supporting_child_code"] == "READ"
+
+
+def test_fallback_context_rejects_unrelated_structured_abstention():
+    """A malformed structured blocker cannot select an unrelated branch."""
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fallback_context_selected,
+    )
+
+    stad = CancerTypeEvidence(
+        cancer_type="STAD",
+        evidence_sources=("pan_cancer_signature_ranker",),
+        details={
+            "fused_evidence_structured_parent_abstention": {
+                "candidate_code": "STAD",
+                "abstention_code": "BRCA",
+                "supporting_candidate": {
+                    "code": "READ",
+                    "rank": 2,
+                    "support_fraction_of_top": 0.97,
+                },
+            },
+        },
+    )
+    read = CancerTypeEvidence(
+        cancer_type="READ",
+        broad_rna_support=0.97,
+        broad_rna_rank=2,
+        evidence_sources=("pan_cancer_signature_ranker",),
+    )
+    hypotheses = {"STAD": stad, "READ": read}
+
+    result = _fallback_context_selected(
+        hypotheses,
+        {
+            "candidate_trace": [
+                {"code": "STAD", "support_fraction_of_top": 1.0},
+                {"code": "READ", "support_fraction_of_top": 0.97},
+            ]
+        },
+    )
+
+    assert result is stad
+    assert result.selected_by == "pan_cancer_signature_ranker"
+    assert "BRCA" not in hypotheses
 
 
 def test_enrich_mmr_vote_mlh1_cohort_context_adds_ratio(monkeypatch):

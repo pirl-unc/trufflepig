@@ -35,4 +35,3 @@ and evaluation corpus.
   harness, reproducible commands, and recorded regression baselines.
 - [Service and batch performance](./SERVICE_PERFORMANCE.md) describes runtime,
   memory, and deployment-oriented performance work.
-

@@ -1641,6 +1641,27 @@ def test_plot_sample_summary_allows_missing_reference_purity(monkeypatch):
 
     purity_text = "\n".join(text.get_text() for text in fig.axes[1].texts)
     assert "median purity: not available" in purity_text
+    legend_labels = [
+        text.get_text() for text in fig.axes[2].get_legend().get_texts()
+    ]
+    assert all("()" not in label for label in legend_labels)
+    assert not any("origin" in label.lower() for label in legend_labels)
+
+
+def test_background_tissue_plot_labels_model_proxy_without_claiming_origin():
+    fig = purity_mod.plot_background_tissues(
+        {
+            "cancer_type": "CHOL",
+            "tissue_scores": [
+                ("liver", 0.96, 20),
+                ("gallbladder", 0.78, 20),
+            ],
+        }
+    )
+
+    legend_labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+    assert "Reference tissue proxy (Gallbladder)" in legend_labels
+    assert not any("expected origin" in label.lower() for label in legend_labels)
 
 
 @pytest.mark.parametrize(
