@@ -332,6 +332,7 @@ _CONTRAST_DISCRIMINATOR_LOW_TPM = 1.0
 _ENTITY_CONSENSUS_MARKER_AXIS = "curated_marker_program"
 _ENTITY_CONSENSUS_REFERENCE_AXIS = "exact_expression_reference"
 _ENTITY_CONSENSUS_COMPOSITION_AXIS = "composition_reference"
+_ENTITY_CONSENSUS_RESIDUAL_AXIS = "decomposition_residual_identity"
 _ADCC_PROMOTING_MIN_MYB_TPM = 20.0
 _ADCC_STRONG_MYB_AXIS_TPM = 75.0
 _ADCC_LOW_MYB_BASAL_BREAST_MIN_SCORE = 0.75
@@ -5424,17 +5425,38 @@ def _learned_entity_consensus_candidate(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
+    residual_identity_evidence: Mapping[str, Any] | None = None,
 ) -> CancerTypeEvidence | None:
-    """Adjudicate each learned-view leader with the same consensus.
+    """Adjudicate each learned-view or invariant-residual leader.
 
     The hierarchy and quantifier-robust flat views may have different leaders.
-    Evaluate that small union symmetrically while retaining the same majority,
-    non-learned corroboration, ontology, and hard-blocker requirements. Lower
-    ranked predictions remain visible in the audit details but cannot supply
-    the affirmative learned vote required to change the report entity.
+    An invariant post-background identity may add one parent-level entity to
+    that small union, but is still only one consensus axis. Lower-ranked
+    learned tails remain audit-only. Every candidate retains the same
+    available-axis majority and hard-blocker requirements.
     """
 
     predictions = _learned_entity_prediction_codes(hierarchy_details)
+    residual_code = _qualified_residual_identity_candidate(
+        residual_identity_evidence
+    )
+    residual_prediction_appended = bool(
+        residual_code
+        and not any(
+            _learned_prediction_entity_code(code) == residual_code
+            for code, _support in predictions
+        )
+    )
+    if residual_prediction_appended:
+        predictions.append(
+            (
+                residual_code,
+                _learned_entity_support_for_code(
+                    hierarchy_details,
+                    residual_code,
+                ),
+            )
+        )
     if not predictions:
         return None
     hierarchy_votes = (
@@ -5469,8 +5491,31 @@ def _learned_entity_consensus_candidate(
 
         candidate = _hypothesis(hypotheses, entity_code)
         candidate_lineage = _code_lineage_token(entity_code)
+        # A parent-level residual result may corroborate a learned child as one
+        # branch-level axis, but it did not originate that child hypothesis.
+        # Only the exact parent row appended above receives the residual-origin
+        # audit label and the corresponding cross-lineage admission path.
+        residual_origin = bool(
+            residual_prediction_appended
+            and raw_code == residual_code
+            and entity_code == residual_code
+        )
         if (
-            candidate_lineage
+            not residual_origin
+            and _fused_parent_abstention_blocks_entity_consensus(candidate)
+        ):
+            candidate.details["entity_consensus_preserved_fused_abstention"] = (
+                dict(
+                    candidate.details.get(
+                        "fused_evidence_structured_parent_abstention"
+                    )
+                    or {}
+                )
+            )
+            continue
+        if (
+            not residual_origin
+            and candidate_lineage
             and selected_lineage
             and candidate_lineage != selected_lineage
         ):
@@ -5488,7 +5533,11 @@ def _learned_entity_consensus_candidate(
                 if candidate_composition <= selected_composition:
                     continue
 
-        candidate.add_source("learned_expression_classifier")
+        candidate.add_source(
+            "decomposition_residual_identity"
+            if residual_origin
+            else "learned_expression_classifier"
+        )
         entity_support = max(
             predicted_support,
             _learned_entity_support_for_code(hierarchy_details, entity_code),
@@ -5517,6 +5566,7 @@ def _learned_entity_consensus_candidate(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
+            residual_identity_evidence=residual_identity_evidence,
         )
         consensus["learned_entity_prediction_rank"] = prediction_rank
         consensus["learned_entity_prediction_support"] = round(
@@ -5525,6 +5575,11 @@ def _learned_entity_consensus_candidate(
         )
         consensus["learned_entity_prediction_raw_code"] = raw_code
         consensus["learned_entity_prediction_entity_code"] = entity_code
+        consensus["entity_prediction_origin"] = (
+            "invariant_residual_identity"
+            if residual_origin
+            else "learned_expression_view"
+        )
         hard_blockers = _persistent_report_label_blockers(candidate)
         if hard_blockers:
             consensus["evidence_decisive_candidate"] = bool(
@@ -5569,7 +5624,7 @@ def _learned_entity_consensus_candidate(
         }
     )
     candidate.basis = (
-        f"the learned entity beam and a majority of independent evidence "
+        f"the entity consensus beam and a majority of independent evidence "
         f"groups support {candidate.cancer_type} over {selected.cancer_type}"
     )
     candidate.consider_for_report_label(
@@ -5678,6 +5733,143 @@ def _entity_marker_program_support(
     return float(np.clip(support, 0.0, 1.0)), coherence
 
 
+def _same_registry_branch(left: str, right: str) -> bool:
+    """Whether two codes have an ancestor/descendant relationship."""
+
+    left_code = _clean(left)
+    right_code = _clean(right)
+    return bool(
+        left_code
+        and right_code
+        and (
+            left_code == right_code
+            or _code_has_registry_ancestor(left_code, right_code)
+            or _code_has_registry_ancestor(right_code, left_code)
+        )
+    )
+
+
+def _residual_identity_support(
+    residual_identity_evidence: Mapping[str, Any] | None,
+    cancer_code: str,
+) -> float:
+    """Return one structural residual-identity vote for a compatible branch.
+
+    Residual identity is one consensus vote, never a standalone selector. A
+    cross-branch result must either have a matching lineage-panel program or a
+    fully audited ontology result invariant across every background model.
+    """
+
+    if not isinstance(residual_identity_evidence, Mapping):
+        return 0.0
+    if residual_identity_evidence.get("adjudication_eligible") is False:
+        return 0.0
+    if _clean(residual_identity_evidence.get("status")) not in {
+        "candidate",
+        "corroborated",
+    }:
+        return 0.0
+    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
+    current_code = _clean(residual_identity_evidence.get("current_code"))
+    if not residual_code:
+        return 0.0
+    if current_code and not _same_registry_branch(residual_code, current_code):
+        panel_code = _clean(
+            residual_identity_evidence.get("panel_candidate_code")
+        )
+        ontology_code = _clean(
+            residual_identity_evidence.get("ontology_candidate_code")
+        )
+        if not (
+            panel_code
+            and _same_registry_branch(residual_code, panel_code)
+        ) and not (
+            ontology_code
+            and _same_registry_branch(residual_code, ontology_code)
+            and _residual_identity_is_structurally_invariant(
+                residual_identity_evidence
+            )
+        ):
+            return 0.0
+    return 1.0 if _same_registry_branch(residual_code, cancer_code) else 0.0
+
+
+def _residual_identity_is_structurally_invariant(
+    residual_identity_evidence: Mapping[str, Any] | None,
+) -> bool:
+    if not isinstance(residual_identity_evidence, Mapping):
+        return False
+    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
+    models = residual_identity_evidence.get("background_models") or ()
+    if not residual_code or not models:
+        return False
+    return all(
+        isinstance(model, Mapping)
+        and _same_registry_branch(
+            _clean(model.get("candidate_code")),
+            residual_code,
+        )
+        and _safe_int(model.get("realizations"), 0) > 0
+        for model in models
+    )
+
+
+def _qualified_residual_identity_candidate(
+    residual_identity_evidence: Mapping[str, Any] | None,
+) -> str:
+    """Return a consensus-eligible residual entity, never a direct call."""
+
+    if not isinstance(residual_identity_evidence, Mapping):
+        return ""
+    if residual_identity_evidence.get("adjudication_eligible") is False:
+        return ""
+    if _clean(residual_identity_evidence.get("status")) != "candidate":
+        return ""
+    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
+    panel_code = _clean(residual_identity_evidence.get("panel_candidate_code"))
+    ontology_code = _clean(
+        residual_identity_evidence.get("ontology_candidate_code")
+    )
+    panel_supported = bool(
+        panel_code and _same_registry_branch(residual_code, panel_code)
+    )
+    ontology_supported = bool(
+        ontology_code
+        and _same_registry_branch(residual_code, ontology_code)
+        and _residual_identity_is_structurally_invariant(
+            residual_identity_evidence
+        )
+    )
+    return residual_code if residual_code and (panel_supported or ontology_supported) else ""
+
+
+def _raw_signature_support(hypothesis: CancerTypeEvidence) -> float:
+    """Signature-only support, falling back for legacy/test callers."""
+
+    if "signature_score" in hypothesis.details:
+        return _safe_float(hypothesis.details.get("signature_score"))
+    return _safe_float(hypothesis.broad_rna_support)
+
+
+def _fused_parent_abstention_blocks_entity_consensus(
+    hypothesis: CancerTypeEvidence,
+) -> bool:
+    """Keep a structured family abstention authoritative downstream.
+
+    A close, better-supported child of a structured family is an explicit
+    instruction not to promote the competing leaf. The later learned/entity
+    consensus may audit that leaf, but must not recreate it from raw signature
+    and centroid axes after fused evidence rejected it.
+    """
+
+    return bool(
+        hypothesis.details.get("fused_evidence_can_select") is False
+        and hypothesis.details.get(
+            "fused_evidence_structured_parent_abstention"
+        )
+    )
+
+
 def _entity_evidence_consensus(
     candidate: CancerTypeEvidence,
     selected: CancerTypeEvidence,
@@ -5686,6 +5878,7 @@ def _entity_evidence_consensus(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
+    residual_identity_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare two entity hypotheses across independent evidence groups.
 
@@ -5719,6 +5912,21 @@ def _entity_evidence_consensus(
             selected_coherence
         )
 
+    candidate_residual_support = _residual_identity_support(
+        residual_identity_evidence,
+        candidate.cancer_type,
+    )
+    selected_residual_support = _residual_identity_support(
+        residual_identity_evidence,
+        selected.cancer_type,
+    )
+    # The residual identity programs reuse the curated high/low marker
+    # vocabulary. When that axis is available, omit the bulk marker axis so the
+    # same program is not counted twice.
+    if candidate_residual_support > 0 or selected_residual_support > 0:
+        candidate_marker = 0.0
+        selected_marker = 0.0
+
     raw_axes = {
         "learned_full_profile": (
             _learned_entity_support_for_code(
@@ -5731,8 +5939,8 @@ def _entity_evidence_consensus(
             ),
         ),
         "pan_cancer_signature": (
-            candidate.broad_rna_support,
-            selected.broad_rna_support,
+            _raw_signature_support(candidate),
+            _raw_signature_support(selected),
         ),
         "whole_profile_centroid": (
             _safe_float(centroid_supports.get(candidate.cancer_type)),
@@ -5772,6 +5980,10 @@ def _entity_evidence_consensus(
             selected.adjudication_axis_support(
                 _ENTITY_CONSENSUS_COMPOSITION_AXIS
             ),
+        ),
+        _ENTITY_CONSENSUS_RESIDUAL_AXIS: (
+            candidate_residual_support,
+            selected_residual_support,
         ),
     }
     axes: list[dict[str, Any]] = []
@@ -5823,11 +6035,24 @@ def _entity_evidence_consensus(
         and axis["preference"] == "candidate"
         for axis in axes
     )
+    candidate_has_residual_vote = any(
+        axis["axis"] == _ENTITY_CONSENSUS_RESIDUAL_AXIS
+        and axis["preference"] == "candidate"
+        for axis in axes
+    )
     available_axis_count = sum(axis["available"] for axis in axes)
+    candidate_has_originating_axis = (
+        candidate_has_learned_vote or candidate_has_residual_vote
+    )
+    required_nonlearned_votes = (
+        _ENTITY_CONSENSUS_MIN_NONLEARNED_AXES
+        if candidate_has_learned_vote
+        else _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
+    )
     decisive_candidate = bool(
-        candidate_has_learned_vote
+        candidate_has_originating_axis
         and candidate_votes >= _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
-        and candidate_nonlearned_votes >= _ENTITY_CONSENSUS_MIN_NONLEARNED_AXES
+        and candidate_nonlearned_votes >= required_nonlearned_votes
         and candidate_votes * 2 > available_axis_count
         and candidate_advantage > 0
     )
@@ -5841,11 +6066,13 @@ def _entity_evidence_consensus(
         "selected_votes": selected_votes,
         "available_axis_count": available_axis_count,
         "candidate_advantage": round(float(candidate_advantage), 4),
+        "candidate_has_learned_vote": candidate_has_learned_vote,
+        "candidate_has_residual_vote": candidate_has_residual_vote,
         "decisive_candidate": decisive_candidate,
         "conflicted": bool(candidate_votes > 0 and selected_votes > 0),
         "decision_rule": (
-            "learned entity plus at least two independent evidence groups; "
-            "candidate must win the available-axis majority"
+            "a learned-view or invariant-residual entity plus independent "
+            "evidence groups; candidate must win the available-axis majority"
         ),
     }
 
@@ -5930,6 +6157,7 @@ def _adjudicate_selection_with_learned_hierarchy(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
+    residual_identity_evidence: Mapping[str, Any] | None = None,
 ) -> CancerTypeEvidence | None:
     """Apply calibrated hierarchy arbitration after ordinary fused selection.
 
@@ -5972,6 +6200,7 @@ def _adjudicate_selection_with_learned_hierarchy(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
+            residual_identity_evidence=residual_identity_evidence,
         )
         return beam_candidate if beam_candidate is not None else selected
 
@@ -6030,6 +6259,14 @@ def _adjudicate_selection_with_learned_hierarchy(
         and selected_lineage != entity_lineage
     )
     candidate = _hypothesis(hypotheses, entity_code)
+    if _fused_parent_abstention_blocks_entity_consensus(candidate):
+        candidate.details["entity_consensus_preserved_fused_abstention"] = dict(
+            candidate.details.get(
+                "fused_evidence_structured_parent_abstention"
+            )
+            or {}
+        )
+        return selected
     candidate.add_source("learned_expression_classifier")
     candidate.learned_expression_support = max(
         candidate.learned_expression_support,
@@ -6061,6 +6298,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=cen,
         centroid_confident=centroid_confident,
+        residual_identity_evidence=residual_identity_evidence,
     )
     credible_learned_candidate = bool(
         entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
@@ -6084,10 +6322,17 @@ def _adjudicate_selection_with_learned_hierarchy(
         return selected
     multi_axis_entity_refinement = bool(
         entity_incompatible
-        and not lineage_disagreement
         and family_consistent
         and compartment_consistent
         and consensus.get("decisive_candidate")
+        and (
+            not lineage_disagreement
+            or any(
+                axis.get("axis") == _ENTITY_CONSENSUS_RESIDUAL_AXIS
+                and axis.get("preference") == "candidate"
+                for axis in consensus.get("axes") or ()
+            )
+        )
     )
 
     marker_coherence = (
@@ -6185,6 +6430,7 @@ def _adjudicate_selection_with_learned_hierarchy(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
+            residual_identity_evidence=residual_identity_evidence,
         )
         if beam_candidate is not None:
             return beam_candidate
@@ -9159,13 +9405,22 @@ def _centroid_supports_for_hypotheses(
         return {}
     raw: dict[str, float] = {}
     for code, hypothesis in hypotheses.items():
-        centroid_codes = (
+        centroid_codes = [
             code,
             hypothesis.reference_cancer_type,
             hypothesis.expression_reference_cancer_type,
             hypothesis.related_context_code,
             hypothesis.details.get("winning_subtype"),
             hypothesis.details.get("winning_subtype_from_candidate_trace"),
+        ]
+        # Aggregate registry entities (for example CRC) may not have their own
+        # centroid because their observed references live at child cohorts
+        # (COAD and READ). Roll those loadable descendants up for the entity
+        # comparison while keeping the final label at the parent.
+        centroid_codes.extend(
+            centroid_code
+            for centroid_code in getattr(cen, "index", ())
+            if _code_has_registry_ancestor(_clean(centroid_code), code)
         )
         best_rho = float("nan")
         for centroid_code in centroid_codes:
@@ -10175,6 +10430,7 @@ def select_report_scope_from_evidence(
     *,
     rare_marker_hypotheses: list[Mapping[str, Any]] | None = None,
     fusion_scope_inference: Mapping[str, Any] | None = None,
+    residual_identity_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build cancer-type hypotheses and return the selected report label."""
     try:
@@ -10282,6 +10538,7 @@ def select_report_scope_from_evidence(
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=_cen,
         centroid_confident=_cen_confident,
+        residual_identity_evidence=residual_identity_evidence,
     )
     rows = list(hypotheses.values())
 
@@ -10314,6 +10571,11 @@ def select_report_scope_from_evidence(
         # panel verdict so analysis-parameters.json and report
         # rendering can surface it without re-running the evaluator.
         "lineage_panel_evidence": lineage_panel_evidence,
+        "residual_identity_evidence": (
+            dict(residual_identity_evidence)
+            if isinstance(residual_identity_evidence, Mapping)
+            else None
+        ),
     }
 
 

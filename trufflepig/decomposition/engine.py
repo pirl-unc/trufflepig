@@ -930,6 +930,19 @@ def _fit_one_hypothesis(
         winning_subtype=winning_subtype,
         detected_compartments=detected_compartments,
     )
+    # Smooth muscle is a useful host subtraction only when soft tissue was
+    # independently established as the specimen context. Without that context,
+    # making the metastatic template strictly more expressive lets it absorb a
+    # smooth-muscle-rich primary and win on fit alone.
+    if (
+        template_name == "met_soft_tissue"
+        and site_hint_template != "met_soft_tissue"
+    ):
+        components = [
+            component
+            for component in components
+            if component != "smooth_muscle"
+        ]
     comp_names = [comp for comp in components if comp != "tumor"]
     matched_normal_name = (
         matched_normal_component(cancer_type, winning_subtype=winning_subtype)

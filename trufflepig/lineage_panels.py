@@ -39,6 +39,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, asdict
 from functools import lru_cache
+from statistics import median
 from typing import Any, Mapping
 
 
@@ -61,6 +62,12 @@ class LineagePanel:
     high_markers: tuple[str, ...]
     """Genes that should be ON in this lineage. Scored HK-normalized
     against the parent cohort's HK-normalized cohort median."""
+
+    reference_cohorts: tuple[str, ...] = ()
+    """Optional loadable child cohorts used to construct a parent-level
+    reference. This keeps the reported identity at the defensible parent while
+    allowing aggregate registry nodes such as CRC to use their observed
+    children (COAD and READ) as the expression reference."""
 
     low_markers: tuple[tuple[str, float], ...] = ()
     """(symbol, max_tpm) — gene should be below the absolute TPM cap.
@@ -178,8 +185,27 @@ def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:
     return _cohort_medians_by_gene_id().get((cohort, gene_id))
 
 
-def _cohort_hk(cohort: str) -> float:
-    return _cohort_hk_medians().get(cohort, 1.0) or 1.0
+def _panel_reference_cohorts(panel: LineagePanel) -> tuple[str, ...]:
+    return panel.reference_cohorts or (panel.parent_cohort,)
+
+
+def _panel_cohort_median(panel: LineagePanel, gene_id: str) -> float | None:
+    values = [
+        value
+        for cohort in _panel_reference_cohorts(panel)
+        if (value := _cohort_median_by_id(cohort, gene_id)) is not None
+    ]
+    return float(median(values)) if values else None
+
+
+def _panel_cohort_hk(panel: LineagePanel) -> float:
+    medians = _cohort_hk_medians()
+    values = [
+        medians[cohort]
+        for cohort in _panel_reference_cohorts(panel)
+        if cohort in medians and float(medians[cohort]) > 0
+    ]
+    return float(median(values)) if values else 1.0
 
 
 @lru_cache(maxsize=64)
@@ -264,7 +290,7 @@ def score_panel(
     function pure).
     """
 
-    cohort_hk = _cohort_hk(panel.parent_cohort)
+    cohort_hk = _panel_cohort_hk(panel)
     marker_ids = _panel_marker_ids(panel)
 
     def _sample(gid: str) -> float:
@@ -290,7 +316,7 @@ def score_panel(
                     "resolved to a gene_id — panel not scored"
                 ),
             )
-        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
+        cohort_val = _panel_cohort_median(panel, gid)
         if cohort_val is None:
             continue
         cohort_hk_ratio = cohort_val / cohort_hk
@@ -326,7 +352,7 @@ def score_panel(
             # marker can't inflate the panel's score.
             high_misses.append((sym, 0.0, 0.0))
             continue
-        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
+        cohort_val = _panel_cohort_median(panel, gid)
         obs_tpm = _sample(gid)
         if cohort_val is None:
             high_misses.append((sym, obs_tpm, 0.0))
@@ -728,6 +754,29 @@ _BLCA_BASAL_PANEL = LineagePanel(
     ),
 )
 
+_CRC_PANEL = LineagePanel(
+    name="CRC",
+    parent_cohort="CRC",
+    reference_cohorts=("COAD", "READ"),
+    high_markers=("VIL1", "CDH17", "SATB2", "CDX2", "KRT20", "MUC2"),
+    low_markers=(
+        ("ALB", 5.0),
+        ("AFP", 5.0),
+        ("UPK1B", 1.0),
+        ("MYOD1", 5.0),
+        ("MYOG", 5.0),
+        ("DES", 10.0),
+    ),
+    obligate=("CDX2",),
+    description="Colorectal adenocarcinoma — shared colon/rectal identity",
+    references=("WHO Classification of Tumours, Digestive System Tumours",),
+    program_note=(
+        "colorectal epithelial program (CDX2, SATB2, CDH17, VIL1, KRT20, MUC2). "
+        "This parent-level program establishes CRC identity but does not by "
+        "itself distinguish colon from rectal origin"
+    ),
+)
+
 
 # Public registry. Tier-1 broad triage (squamous-vs-glandular-vs-...)
 # is a separate concern — these are tier-3 within-tier discriminators.
@@ -747,6 +796,7 @@ LINEAGE_PANELS: tuple[LineagePanel, ...] = (
     _THYM_PANEL,
     _PCPG_PANEL,
     _LUAD_PANEL,
+    _CRC_PANEL,
 )
 
 

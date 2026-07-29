@@ -114,15 +114,29 @@ def apply_sample_context_to_purity(analysis: dict[str, Any], sample_context) -> 
     hi = purity_block.get("overall_upper")
     if est is None or lo is None or hi is None:
         return False
+    existing_caveat = purity_block.get("degradation_caveat") or {}
+    already_widened = bool(
+        purity_block.get("ci_widening_factor") == round(ci_factor, 3)
+        and existing_caveat.get("widened_lower") == round(float(lo), 4)
+        and existing_caveat.get("widened_upper") == round(float(hi), 4)
+    )
+    if already_widened:
+        return False
 
     half_lo = max(0.0, est - lo) * ci_factor
     half_hi = max(0.0, hi - est) * ci_factor
-    purity_block["overall_lower"] = round(max(0.0, est - half_lo), 4)
-    purity_block["overall_upper"] = round(min(1.0, est + half_hi), 4)
+    widened_lower = round(max(0.0, est - half_lo), 4)
+    widened_upper = round(min(1.0, est + half_hi), 4)
+    purity_block["overall_lower"] = widened_lower
+    purity_block["overall_upper"] = widened_upper
     purity_block["ci_widening_factor"] = round(ci_factor, 3)
     purity_block["degradation_caveat"] = {
         "severity": sample_context.degradation_severity,
         "index": sample_context.degradation_index,
+        "base_lower": round(float(lo), 4),
+        "base_upper": round(float(hi), 4),
+        "widened_lower": widened_lower,
+        "widened_upper": widened_upper,
         "message": (
             f"Purity confidence interval widened x{ci_factor:.2f} "
             f"to reflect {sample_context.degradation_severity} RNA degradation; "

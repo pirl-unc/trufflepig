@@ -87,3 +87,9 @@ def test_top3_no_kin():
     matched, kind = calib._any_in_kin(["LUSC", "ESCA", "HNSC"], "BRCA")
     assert matched is False
     assert kind == "none"
+
+
+def test_local_expectation_uses_canonical_registry_aliases():
+    """Legacy OS truth labels are equivalent to the canonical SARC_OS code."""
+
+    assert calib._accept_expected("SARC_OS", "OS") is True

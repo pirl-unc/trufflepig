@@ -41,6 +41,25 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
             "score": 0.91,
             "message": "liver-associated host context",
         },
+        "residual_identity_evidence": {
+            "status": "corroborated",
+            "role": "independent_residual_identity",
+            "candidate_code": "BLCA",
+            "current_code": "BLCA",
+            "models_evaluated": 1,
+            "realizations_evaluated": 5,
+            "reason": "BLCA remained invariant across liver-host residuals",
+            "background_models": [
+                {
+                    "template": "met_liver",
+                    "components": ["hepatocyte", "endothelial"],
+                    "realizations": 5,
+                    "candidate_code": "BLCA",
+                    "panel_candidate": "BLCA",
+                    "ontology_candidate": None,
+                }
+            ],
+        },
         "cancer_type_evidence": {
             "selected": {
                 "cancer_type": "BLCA",
@@ -129,6 +148,7 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
         "composition_reference",
         "learned_expression_classifier",
         "background_site_context",
+        "decomposition_residual_identity",
         "expression_decomposition",
     }
     selected = matrix[matrix["selects_report_label"] == True]  # noqa: E712
@@ -140,6 +160,12 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     epithelial = matrix[matrix["predicted_code"] == "epithelial"].iloc[0]
     assert epithelial["predicted_lineage"] == "solid"
     assert bool(epithelial["lineage_agrees_final"]) is True
+    residual = matrix[
+        matrix["signal_source"] == "decomposition_residual_identity"
+    ].iloc[0]
+    assert residual["predicted_code"] == "BLCA"
+    assert residual["support_metric"] == "structural_unanimity"
+    assert bool(residual["selects_report_label"]) is False
 
     summary = build_signal_matrix_summary_markdown(matrix)
     assert "Final call" in summary

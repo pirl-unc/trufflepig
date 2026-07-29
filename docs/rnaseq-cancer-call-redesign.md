@@ -419,8 +419,10 @@ rewards the dominant normal liver compartment. Whole-profile centroid and
 tissue composition also prefer liver/LIHC because most RNA really is liver.
 
 The correct signal is component-aware: subtract the structured liver
-background, then score the residual tumor identity. The current pipeline does
-that too late, only after the label has already been chosen.
+background, then score the residual tumor identity. The original pipeline did
+that too late, only after the label had already been chosen. The incremental
+implementation below now permits a blocker-preserving post-decomposition
+entity refinement; the full single-DAG redesign remains future work.
 
 The existing normal-tissue tiebreaker only boosts a candidate whose primary
 normal tissue matches the sample. It does not demote a candidate whose apparent
@@ -470,6 +472,46 @@ it is validated.
   curated identity panels rather than cosine-like whole-profile similarity.
 - Fusion and direct molecular evidence: authoritative for entities where the
   alteration is defining.
+
+### Implemented incremental residual-identity path
+
+`decomposition.evaluate_residual_identity` now evaluates the plausible
+candidate/background beam without using decomposition rank, purity, or the
+upstream cancer-support score as identity evidence.
+
+For every usable tumor residual it evaluates curated expected-high and
+expected-low lineage panels plus ontology sanity programs. Candidate-specific
+fits are first grouped by structural background model. A residual identity is
+eligible only when every realization within each model agrees and every model
+agrees with the others. Discordant models remain explicitly `ambiguous`;
+same-branch sibling ambiguity resolves only to the deepest shared registry
+parent.
+
+The result is one independent entity-consensus axis, not a direct selector.
+An invariant residual may add one parent-level entity to the small consensus
+beam. Cross-branch eligibility requires either a matching lineage panel or an
+ontology result whose identity is invariant across every usable background
+model and candidate realization. It must then win a true majority of the
+available independent axes; a residual-led candidate needs three non-learned
+groups. Blocked contrast/reference evidence and persistent molecular/registry
+vetoes remain unavailable. Because residual ontology programs reuse curated
+marker genes, the bulk marker-program axis abstains whenever the residual axis
+is active rather than counting the same program twice. Subtype/status
+resolution still happens after entity coherence.
+
+Sibling leaves with identical positive/negative programs are rolled up to
+their deepest shared registry parent. Thus the ASY residual supports `CRC`,
+not an arbitrary `COAD` or `READ` leaf. The soft-tissue template fits the
+smooth-muscle host it declares only when soft-tissue specimen context is
+independently available. This lets ACTG2/DES-rich host signal be modeled
+without allowing an unconstrained metastatic template to absorb a
+smooth-muscle-rich primary.
+
+On the 160 public exemplars this changed exactly one headline:
+`TCGA-OR-A5L5-01` moved from `SARC_DDLPS` to its expected `ACC`. Compatible
+accuracy increased from 134/160 to 135/160 with no regressions. Across the
+beam, 64 residual results corroborated the current entity, 15 nominated an
+alternative for consensus, and 81 abstained as ambiguous.
 
 ## Required design clarifications
 

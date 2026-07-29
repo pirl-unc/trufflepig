@@ -485,6 +485,70 @@ def build_cancer_type_signal_matrix(
             )
         )
 
+    residual_identity = analysis.get("residual_identity_evidence") or {}
+    if isinstance(residual_identity, Mapping) and residual_identity:
+        predicted_code = _clean(residual_identity.get("candidate_code"))
+        status = _clean(residual_identity.get("status")) or "not_evaluable"
+        details = {
+            "reason": residual_identity.get("reason"),
+            "current_code": residual_identity.get("current_code"),
+            "panel_candidate_code": residual_identity.get(
+                "panel_candidate_code"
+            ),
+            "ontology_candidate_code": residual_identity.get(
+                "ontology_candidate_code"
+            ),
+            "decision_basis": residual_identity.get("decision_basis"),
+            "adjudication_eligible": residual_identity.get(
+                "adjudication_eligible"
+            ),
+            "adjudication_blocker": residual_identity.get(
+                "adjudication_blocker"
+            ),
+            "decomposition_sample_mode": residual_identity.get(
+                "decomposition_sample_mode"
+            ),
+            "candidate_sample_mode": residual_identity.get(
+                "candidate_sample_mode"
+            ),
+            "models_evaluated": residual_identity.get("models_evaluated"),
+            "realizations_evaluated": residual_identity.get(
+                "realizations_evaluated"
+            ),
+            "background_models": [
+                {
+                    "template": row.get("template"),
+                    "components": row.get("components"),
+                    "realizations": row.get("realizations"),
+                    "candidate_code": row.get("candidate_code"),
+                    "panel_candidate": row.get("panel_candidate"),
+                    "ontology_candidate": row.get("ontology_candidate"),
+                }
+                for row in (residual_identity.get("background_models") or ())
+                if isinstance(row, Mapping)
+            ],
+        }
+        rows.append(
+            _row(
+                sample_id=sample,
+                final_call=final_call,
+                reference_call=reference_call,
+                selected_by=selected_by,
+                signal_source="decomposition_residual_identity",
+                signal_label="Decomposition residual identity",
+                stage="post_label_context",
+                role="independent_tumor_identity",
+                status=status,
+                predicted_code=predicted_code,
+                support=None,
+                confidence=None,
+                support_metric="structural_unanimity",
+                context_code=_clean(residual_identity.get("current_code")),
+                selects_report_label=False,
+                details=details,
+            )
+        )
+
     for rank, result in enumerate(list(decomp_results or [])[:8], start=1):
         code = _clean(getattr(result, "cancer_type", ""))
         template = _clean(getattr(result, "template", ""))

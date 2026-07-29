@@ -32,6 +32,7 @@ COMPONENT_TO_HPA = {
     # Stromal
     "fibroblast": ["Fibroblasts"],
     "endothelial": ["Endothelial cells"],
+    "smooth_muscle": ["Smooth muscle cells"],
     # Site-specific host compartments
     "hepatocyte": ["Hepatocytes"],
     "astrocyte": ["Astrocytes"],

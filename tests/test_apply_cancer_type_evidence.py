@@ -17,6 +17,7 @@ import pandas as pd
 
 from trufflepig.main import (
     _apply_cancer_type_evidence,
+    _scope_residual_identity_to_decomposition_mode,
     _selected_report_scope_basis_label,
 )
 
@@ -333,3 +334,83 @@ def test_helper_is_robust_to_import_or_load_failures(monkeypatch):
     # The helper must not have written cancer_type_evidence on failure —
     # the caller's analysis dict stays clean.
     assert "cancer_type_evidence" not in analysis
+
+
+def test_helper_forwards_post_decomposition_identity_evidence(monkeypatch):
+    """The second selector pass receives the independent residual audit."""
+
+    import trufflepig.cancer_type_evidence as cte_module
+
+    captured = {}
+    fake_selected = {
+        "cancer_type": "ACC",
+        "selected_by": "entity_evidence_consensus",
+        "evidence_sources": ["learned_expression_classifier"],
+        "expression_reference_cancer_type": "ACC",
+    }
+
+    def fake_select(*args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "selected": fake_selected,
+            "primary_expression_context": {"cancer_type": "SARC_DDLPS"},
+            "residual_identity_evidence": kwargs.get(
+                "residual_identity_evidence"
+            ),
+        }
+
+    monkeypatch.setattr(
+        cte_module,
+        "select_report_scope_from_evidence",
+        fake_select,
+    )
+    residual = {
+        "status": "candidate",
+        "candidate_code": "ACC",
+        "panel_candidate_code": "ACC",
+        "current_code": "SARC_DDLPS",
+    }
+    analysis = _analysis(("SARC_DDLPS", 1.0), ("ACC", 0.8))
+
+    evidence, selected, report_code, *_ = _apply_cancer_type_evidence(
+        analysis,
+        _empty_expression_frame(),
+        rna_inferred_cancer_type="SARC_DDLPS",
+        fusion_scope_inference=None,
+        report_scope_cancer_type=None,
+        rare_scope_inference=None,
+        fine_scope_inference=None,
+        residual_identity_evidence=residual,
+    )
+
+    assert captured["residual_identity_evidence"] is residual
+    assert evidence["residual_identity_evidence"] is residual
+    assert selected is fake_selected
+    assert report_code == "ACC"
+
+
+def test_residual_identity_stays_within_the_decomposition_regime():
+    solid_residual = {
+        "status": "candidate",
+        "candidate_code": "CRC",
+        "current_code": "SARC_PLEOLPS",
+    }
+    compatible = _scope_residual_identity_to_decomposition_mode(
+        solid_residual,
+        sample_mode="solid",
+    )
+    assert compatible["adjudication_eligible"] is True
+    assert compatible["candidate_sample_mode"] == "solid"
+
+    heme_residual_from_solid_fit = {
+        "status": "candidate",
+        "candidate_code": "DLBC",
+        "current_code": "SARC_PLEOLPS",
+    }
+    incompatible = _scope_residual_identity_to_decomposition_mode(
+        heme_residual_from_solid_fit,
+        sample_mode="solid",
+    )
+    assert incompatible["adjudication_eligible"] is False
+    assert incompatible["candidate_sample_mode"] == "heme"
+    assert "requires heme decomposition" in incompatible["adjudication_blocker"]

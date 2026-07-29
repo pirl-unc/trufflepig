@@ -67,6 +67,7 @@ COMPONENT_TO_CATEGORY = {
     "neuron": "CNS",
     "adrenal_cortical": "adrenal",
     "keratinocyte": "skin",
+    "smooth_muscle": "muscle",
     # Optional compartments (#59 items 2-4) are registered only in
     # ``signature.COMPONENT_TO_HPA`` — they resolve directly to HPA
     # single-cell rows (Adipocytes / Schwann cells / Erythroid cells)
@@ -275,7 +276,11 @@ TEMPLATES = {
         "description": "Metastasis in skin",
     },
     "met_soft_tissue": {
-        "components": _SOLID_IMMUNE + _SOLID_STROMA,
+        # The engine fits smooth muscle only after a soft-tissue site context
+        # has been established. Keeping it in the template definition makes
+        # it part of the supported host model without letting an unconstrained
+        # metastatic fit absorb smooth-muscle-rich primary tumors.
+        "components": _SOLID_IMMUNE + _SOLID_STROMA + ["smooth_muscle"],
         "host_tissue": "smooth_muscle",
         "description": "Metastasis in soft tissue / retroperitoneum",
     },

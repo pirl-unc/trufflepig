@@ -21,6 +21,7 @@ from .panels import (
     estimate_lineage_tumor_fraction,
     summarize_panels,
 )
+from .residual_identity import evaluate_residual_identity
 from .plot import (
     plot_decomposition_candidates,
     plot_decomposition_component_breakdown,
@@ -40,6 +41,7 @@ __all__ = [
     "build_tumor_biased_panel",
     "build_matched_normal_biased_panel",
     "build_shared_lineage_panel",
+    "evaluate_residual_identity",
     "estimate_lineage_tumor_fraction",
     "summarize_panels",
     "get_decomposition_parameters",

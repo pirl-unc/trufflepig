@@ -701,6 +701,22 @@ def test_apply_sample_context_to_purity_widens_ci():
     assert analysis["purity"]["overall_upper"] == pytest.approx(0.66)
     assert analysis["purity"]["degradation_caveat"]["severity"] == "severe"
 
+    widened = dict(analysis["purity"])
+    assert apply_sample_context_to_purity(analysis, context) is False
+    assert analysis["purity"] == widened
+
+    # A downstream purity replacement or fusion can change the interval while
+    # retaining metadata. The same context must widen that new final interval
+    # exactly once.
+    analysis["purity"]["overall_lower"] = 0.45
+    analysis["purity"]["overall_upper"] = 0.55
+    assert apply_sample_context_to_purity(analysis, context) is True
+    assert analysis["purity"]["overall_lower"] == pytest.approx(0.42)
+    assert analysis["purity"]["overall_upper"] == pytest.approx(0.58)
+    re_widened = dict(analysis["purity"])
+    assert apply_sample_context_to_purity(analysis, context) is False
+    assert analysis["purity"] == re_widened
+
 
 def test_should_adopt_decomposition_purity_contract():
     ok = SimpleNamespace(

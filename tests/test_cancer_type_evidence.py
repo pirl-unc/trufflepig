@@ -1181,6 +1181,281 @@ def test_flat_learned_view_can_supply_a_corroborated_entity_beam_candidate():
     assert consensus["candidate_nonlearned_votes"] == 3
 
 
+def test_residual_identity_completes_an_integrated_entity_consensus():
+    """Post-background identity is one vote, not a standalone selector."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "ACC",
+            entity_support=0.60,
+            entity_margin=0.30,
+            family="endocrine-epithelial",
+            family_support=0.75,
+            compartment="epithelial",
+            compartment_support=0.90,
+        ),
+        ("ACC", 0.60),
+        ("SARC_DDLPS", 0.30),
+    )
+    selected = _selectable("SARC_DDLPS", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="ACC",
+    )
+    candidate.coarse_composition_support = 0.80
+    selected.coarse_composition_support = 0.20
+    candidate.admit_adjudication_support(
+        "composition_reference",
+        candidate.coarse_composition_support,
+        selector="test_composition",
+    )
+    selected.admit_adjudication_support(
+        "composition_reference",
+        selected.coarse_composition_support,
+        selector="test_composition",
+    )
+    hypotheses = {"SARC_DDLPS": selected, "ACC": candidate}
+
+    with_incompatible_residual = _adjudicate_selection_with_learned_hierarchy(
+        hypotheses,
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "ACC",
+            "panel_candidate_code": "ACC",
+            "current_code": "SARC_DDLPS",
+            "adjudication_eligible": False,
+        },
+    )
+    assert with_incompatible_residual is selected
+
+    without_residual = _adjudicate_selection_with_learned_hierarchy(
+        hypotheses,
+        selected,
+    )
+    assert without_residual is selected
+
+    with_residual = _adjudicate_selection_with_learned_hierarchy(
+        hypotheses,
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "ACC",
+            "panel_candidate_code": "ACC",
+            "current_code": "SARC_DDLPS",
+        },
+    )
+
+    assert with_residual is candidate
+    consensus = candidate.details["entity_evidence_consensus"]
+    assert consensus["candidate_votes"] == 3
+    assert consensus["candidate_nonlearned_votes"] == 2
+    residual_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "decomposition_residual_identity"
+    )
+    assert residual_axis["preference"] == "candidate"
+
+
+def test_residual_identity_cannot_originate_an_unrelated_entity():
+    """An ontology-only residual program cannot manufacture a third vote."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "ESCA",
+            entity_support=0.60,
+            entity_margin=0.30,
+            family="carcinoma-gi",
+            family_support=0.80,
+            compartment="epithelial",
+            compartment_support=0.95,
+        ),
+        ("ESCA", 0.60),
+        ("CESC", 0.30),
+    )
+    selected = _selectable("CESC", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="ESCA",
+        rna_marker_support=0.80,
+    )
+    candidate.admit_adjudication_support(
+        "curated_marker_program",
+        candidate.rna_marker_support,
+        selector="lineage_panel",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"CESC": selected, "ESCA": candidate},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "ESCA",
+            "panel_candidate_code": None,
+            "ontology_candidate_code": "ESCA",
+            "current_code": "CESC",
+        },
+    )
+
+    assert result is selected
+    consensus = selected.details["entity_evidence_consensus"]
+    residual_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "decomposition_residual_identity"
+    )
+    assert residual_axis["available"] is False
+    assert consensus["decisive_candidate"] is False
+
+
+def test_invariant_residual_parent_can_enter_but_not_bypass_entity_consensus():
+    """A residual parent needs separate signature and centroid corroboration."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "ESCA",
+            entity_support=0.80,
+            entity_margin=0.60,
+            family="carcinoma-gi",
+            family_support=0.90,
+            compartment="epithelial",
+            compartment_support=0.95,
+        ),
+        ("ESCA", 0.80),
+        ("STAD", 0.05),
+    )
+    selected = _selectable("ESCA", "fused_evidence", (3, 2.0, 4))
+    selected.details.update(details)
+    selected.details["signature_score"] = 0.20
+    candidate = CancerTypeEvidence(
+        cancer_type="CRC",
+        details={"signature_score": 0.80},
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"ESCA": selected, "CRC": candidate},
+        selected,
+        cen=pd.Series({"ESCA": 0.30, "COAD": 0.90, "READ": 0.88}),
+        centroid_confident=True,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": None,
+            "ontology_candidate_code": "CRC",
+            "current_code": "ESCA",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 2,
+                    "template": "met_soft_tissue",
+                }
+            ],
+        },
+    )
+
+    assert result is candidate
+    assert result.selected_by == "entity_evidence_consensus"
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["candidate_votes"] == 3
+    assert consensus["selected_votes"] == 1
+    assert consensus["candidate_has_learned_vote"] is False
+    assert consensus["candidate_has_residual_vote"] is True
+    assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
+    marker_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "curated_marker_program"
+    )
+    assert marker_axis["available"] is False
+
+
+def test_residual_identity_preserves_explicit_entity_blockers():
+    """Even a full RNA majority cannot erase a persistent safety veto."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "NUTM",
+            entity_support=0.70,
+            entity_margin=0.50,
+            family="squamous",
+            family_support=0.90,
+            compartment="epithelial",
+            compartment_support=0.95,
+        ),
+        ("NUTM", 0.70),
+        ("LUSC", 0.20),
+    )
+    selected = _selectable("LUSC", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(details)
+    candidate = CancerTypeEvidence(
+        cancer_type="NUTM",
+        rna_marker_support=0.90,
+        details={
+            "hard_report_label_blockers": [
+                "supplied fusion evidence excludes the defining fusion"
+            ]
+        },
+    )
+    candidate.admit_adjudication_support(
+        "curated_marker_program",
+        candidate.rna_marker_support,
+        selector="lineage_panel",
+    )
+    candidate.coarse_composition_support = 0.90
+    selected.coarse_composition_support = 0.10
+    candidate.admit_adjudication_support(
+        "composition_reference",
+        candidate.coarse_composition_support,
+        selector="test_composition",
+    )
+    selected.admit_adjudication_support(
+        "composition_reference",
+        selected.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"LUSC": selected, "NUTM": candidate},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "NUTM",
+            "panel_candidate_code": "NUTM",
+            "current_code": "LUSC",
+        },
+    )
+
+    assert result is selected
+    consensus = candidate.details["entity_evidence_consensus"]
+    assert consensus["evidence_decisive_candidate"] is True
+    assert consensus["decisive_candidate"] is False
+    assert consensus["selection_blocked"] is True
+
+
 def test_entity_beam_runs_after_matching_top_and_preserves_candidate_mmr():
     """A flat alternative can win without inheriting the old row's MMR state."""
 

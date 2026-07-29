@@ -100,6 +100,7 @@ from .plot import (
 from .decomposition import (
     decompose_sample,
     epithelial_matched_normal_component,
+    evaluate_residual_identity,
     get_decomposition_parameters,
     infer_sample_mode,
     plot_decomposition_candidates,
@@ -2349,7 +2350,8 @@ def _analyze_body(run: AnalyzeRun):
             analysis["rare_marker_hypotheses"] = []
     cancer_type_evidence = None
     selected_scope = None
-    if not cancer_type and not report_scope_cancer_type:
+    allow_auto_scope_refinement = not cancer_type and not report_scope_cancer_type
+    if allow_auto_scope_refinement:
         (
             cancer_type_evidence,
             selected_scope,
@@ -2372,40 +2374,17 @@ def _analyze_body(run: AnalyzeRun):
     if not report_scope_cancer_type:
         selected_scope = None  # veto cleared the evidence selection → fall back to the bulk classifier call
     if report_scope_cancer_type:
-        selected_reference_cancer_type = (
-            (selected_scope or {}).get("reference_cancer_type")
-        ) or rna_inferred_cancer_type
-        analysis["reference_cancer_type"] = selected_reference_cancer_type
-        analysis["expression_reference_cancer_type"] = (
-            (selected_scope or {}).get("expression_reference_cancer_type")
-            or selected_reference_cancer_type
-        )
-        analysis["inferred_cancer_type"] = report_scope_cancer_type
-        analysis["reference_cancer_name"] = cancer_code_display_name(
-            selected_reference_cancer_type,
-            selected_reference_cancer_type or rna_inferred_cancer_name,
-        )
-        analysis["report_scope_cancer_type"] = report_scope_cancer_type
-        # Make the reported PURITY consistent with the final evidence-refined call: analyze_sample
-        # bound purity (+ its one decomposition) to the pre-evidence ranking winner, so an ATRT
-        # scored as LGG had a solid-mode decomposition; once evidence calls ATRT (embryonal) the
-        # reported purity lineage should match. No-op when the winner already equals the final call.
-        _finalize_purity_for_final_call(analysis, df_expr, report_scope_cancer_type)
-        if analysis_cancer_type:
-            analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
-        elif fine_scope_inference and fine_scope_inference.get("reference_cancer_type"):
-            analysis["report_scope_parent_cancer_type"] = fine_scope_inference[
-                "reference_cancer_type"
-            ]
-        if fusion_scope_inference:
-            analysis["fusion_report_scope_inference"] = fusion_scope_inference
-        if rare_scope_inference:
-            analysis["rare_report_scope_inference"] = rare_scope_inference
-        if fine_scope_inference:
-            analysis["fine_report_scope_inference"] = fine_scope_inference
-        analysis["cancer_type"] = report_scope_cancer_type
-        analysis["cancer_name"] = cancer_code_display_name(
-            report_scope_cancer_type, report_scope_cancer_type
+        _propagate_report_scope_selection(
+            analysis,
+            df_expr,
+            report_scope_cancer_type=report_scope_cancer_type,
+            selected_scope=selected_scope,
+            rna_inferred_cancer_type=rna_inferred_cancer_type,
+            rna_inferred_cancer_name=rna_inferred_cancer_name,
+            analysis_cancer_type=analysis_cancer_type,
+            fusion_scope_inference=fusion_scope_inference,
+            rare_scope_inference=rare_scope_inference,
+            fine_scope_inference=fine_scope_inference,
         )
     analysis["cancer_type_source"] = (
         "user-specified" if cancer_type else "auto-detected"
@@ -2436,16 +2415,10 @@ def _analyze_body(run: AnalyzeRun):
         hla_types=config.hla_types,
         alterations=config.alterations,
     )
-    cancer_type_context = cancer_type_context_from_analysis(
+    cancer_type_context = _synchronize_cancer_type_context(
         analysis,
         supplied_cancer_type=cancer_type,
     )
-    _apply_cancer_type_context_roles(analysis, cancer_type_context)
-    cancer_type_context = cancer_type_context_from_analysis(
-        analysis,
-        supplied_cancer_type=cancer_type,
-    )
-    analysis["cancer_type_context"] = cancer_type_context.to_dict()
     cancer_code = cancer_type_context.code_for("report")
     reference_cancer_code = cancer_type_context.code_for("cohort")
     inferred_site_context = _infer_likely_met_site_context(
@@ -2772,6 +2745,155 @@ def _analyze_body(run: AnalyzeRun):
         # per candidate).
         candidate_rows=analysis.get("candidate_trace"),
     )
+    residual_identity_evidence = evaluate_residual_identity(
+        decomp_results,
+        candidate_codes=candidate_codes,
+        current_code=cancer_code,
+    )
+    residual_identity_evidence = (
+        _scope_residual_identity_to_decomposition_mode(
+            residual_identity_evidence,
+            sample_mode=analysis["sample_mode"],
+        )
+    )
+    analysis["residual_identity_evidence"] = residual_identity_evidence
+    if isinstance(cancer_type_evidence, dict):
+        cancer_type_evidence["residual_identity_evidence"] = (
+            residual_identity_evidence
+        )
+    residual_identity_code = str(
+        residual_identity_evidence.get("candidate_code") or ""
+    ).strip()
+    if residual_identity_code:
+        print(
+            "[analysis] Residual tumor identity: "
+            f"{residual_identity_code} "
+            f"({residual_identity_evidence.get('status')}; "
+            f"{residual_identity_evidence.get('realizations_evaluated', 0)} "
+            "decomposition realizations)"
+        )
+    elif residual_identity_evidence.get("status") == "ambiguous":
+        print(
+            "[analysis] Residual tumor identity: ambiguous across "
+            "decomposition backgrounds"
+        )
+    if (
+        allow_auto_scope_refinement
+        and residual_identity_evidence.get("status") == "candidate"
+        and residual_identity_evidence.get("adjudication_eligible", True)
+    ):
+        previous_cancer_code = cancer_code
+        (
+            post_decomposition_evidence,
+            post_decomposition_scope,
+            post_decomposition_report_code,
+            rare_scope_inference,
+            fine_scope_inference,
+        ) = _apply_cancer_type_evidence(
+            analysis,
+            df_expr,
+            rna_inferred_cancer_type=rna_inferred_cancer_type,
+            fusion_scope_inference=fusion_scope_inference,
+            report_scope_cancer_type=report_scope_cancer_type,
+            rare_scope_inference=rare_scope_inference,
+            fine_scope_inference=fine_scope_inference,
+            residual_identity_evidence=residual_identity_evidence,
+        )
+        if post_decomposition_evidence is not None:
+            cancer_type_evidence = post_decomposition_evidence
+        if (
+            post_decomposition_scope
+            and post_decomposition_report_code
+            and post_decomposition_report_code != previous_cancer_code
+        ):
+            selected_scope = post_decomposition_scope
+            report_scope_cancer_type = post_decomposition_report_code
+            _propagate_report_scope_selection(
+                analysis,
+                df_expr,
+                report_scope_cancer_type=report_scope_cancer_type,
+                selected_scope=selected_scope,
+                rna_inferred_cancer_type=rna_inferred_cancer_type,
+                rna_inferred_cancer_name=rna_inferred_cancer_name,
+                analysis_cancer_type=analysis_cancer_type,
+                fusion_scope_inference=fusion_scope_inference,
+                rare_scope_inference=rare_scope_inference,
+                fine_scope_inference=fine_scope_inference,
+            )
+            # Scope propagation recomputes purity for the new entity. Reapply
+            # the sample-level degradation uncertainty to that replacement
+            # object; the helper is idempotent if recomputation failed and the
+            # original widened object remains in place.
+            apply_sample_context_to_purity(analysis, sample_context)
+            purity = analysis["purity"]
+            cancer_type_context = _synchronize_cancer_type_context(
+                analysis,
+                supplied_cancer_type=None,
+            )
+            cancer_code = cancer_type_context.code_for("report")
+            reference_cancer_code = cancer_type_context.code_for("cohort")
+            inferred_site_context = _infer_likely_met_site_context(
+                analysis,
+                explicit_site_hint=site_hint,
+                explicit_met_site=met_site,
+                tumor_context=tumor_context,
+                decomposition_templates=template_overrides,
+            )
+            if inferred_site_context:
+                analysis["inferred_site_context"] = inferred_site_context
+            else:
+                analysis.pop("inferred_site_context", None)
+            if sample_tpm_by_symbol is not None:
+                therapy_scores = score_therapy_signatures(
+                    sample_tpm_by_symbol,
+                    reference_cancer_code,
+                )
+                analysis["therapy_response_scores"] = therapy_scores
+                try:
+                    from .tumor_type_ontology import tumor_type_sanity_check
+
+                    analysis["tumor_type_sanity"] = tumor_type_sanity_check(
+                        cancer_code,
+                        sample_tpm_by_symbol,
+                    )
+                except (KeyError, TypeError, ValueError):
+                    _LOGGER.warning(
+                        "post-decomposition tumor-type sanity check failed",
+                        exc_info=True,
+                    )
+                if plot_ctx.enabled:
+                    try:
+                        from .plot_therapy import plot_therapy_pathway_state
+
+                        plot_therapy_pathway_state(
+                            therapy_response_scores=therapy_scores,
+                            cancer_code=reference_cancer_code,
+                            disease_state_caption=compose_disease_state_narrative(
+                                analysis
+                            ),
+                            save_to_filename=pathway_state_png,
+                            save_dpi=output_dpi,
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        _LOGGER.warning(
+                            "post-decomposition therapy-state plot failed",
+                            exc_info=True,
+                        )
+            print(
+                "[analysis] Residual identity completed an independent "
+                f"evidence majority: {previous_cancer_code} → {cancer_code}"
+            )
+            run.note_step(
+                "residual_identity_adjudication",
+                outputs={
+                    "previous_cancer_type": previous_cancer_code,
+                    "cancer_type": cancer_code,
+                    "selected_by": selected_scope.get("selected_by"),
+                    "residual_identity": residual_identity_evidence.get(
+                        "candidate_code"
+                    ),
+                },
+            )
     decomp_results = _prioritize_report_compatible_decomposition(
         decomp_results,
         reference_code=reference_cancer_code,
@@ -3062,6 +3184,31 @@ def _analyze_body(run: AnalyzeRun):
     # BEFORE the ReportView freeze so every headline read (figure, brief, markdown) sees
     # the same finalized number by construction. See ``_finalize_fused_purity``.
     _finalize_fused_purity(analysis)
+    # Finalization may replace the interval after the earlier sample-context
+    # pass. Reapply degradation uncertainty to the definitive interval before
+    # freezing the report view. The helper detects an unchanged already-widened
+    # interval and is therefore safe for samples whose purity was not replaced.
+    if apply_sample_context_to_purity(analysis, sample_context):
+        final_purity = analysis.get("purity") or {}
+        decomp_cap = (
+            (final_purity.get("components") or {}).get(
+                "decomposition_interval_cap"
+            )
+            or {}
+        ).get("constrained_upper")
+        estimate, lower, upper = _clamp_interval_to_cap(
+            final_purity["overall_estimate"],
+            final_purity["overall_lower"],
+            final_purity["overall_upper"],
+            decomp_cap,
+        )
+        final_purity["overall_estimate"] = estimate
+        final_purity["overall_lower"] = lower
+        final_purity["overall_upper"] = upper
+        degradation_caveat = final_purity.get("degradation_caveat")
+        if isinstance(degradation_caveat, dict):
+            degradation_caveat["widened_lower"] = round(float(lower), 4)
+            degradation_caveat["widened_upper"] = round(float(upper), 4)
 
     # Build the frozen ReportView snapshot now that purity is finalized
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -5686,6 +5833,123 @@ def _veto_local_reference_lineage_flip(
     return report_scope_cancer_type
 
 
+def _propagate_report_scope_selection(
+    analysis,
+    df_expr,
+    *,
+    report_scope_cancer_type,
+    selected_scope,
+    rna_inferred_cancer_type,
+    rna_inferred_cancer_name=None,
+    analysis_cancer_type=None,
+    fusion_scope_inference=None,
+    rare_scope_inference=None,
+    fine_scope_inference=None,
+):
+    """Apply one evidence-selected report scope to the shared analysis state."""
+
+    selected_scope = selected_scope or {}
+    reference_code = (
+        selected_scope.get("reference_cancer_type")
+        or rna_inferred_cancer_type
+    )
+    analysis["reference_cancer_type"] = reference_code
+    analysis["expression_reference_cancer_type"] = (
+        selected_scope.get("expression_reference_cancer_type")
+        or reference_code
+    )
+    analysis["inferred_cancer_type"] = report_scope_cancer_type
+    analysis["reference_cancer_name"] = cancer_code_display_name(
+        reference_code,
+        reference_code or rna_inferred_cancer_name,
+    )
+    analysis["report_scope_cancer_type"] = report_scope_cancer_type
+    analysis["cancer_type"] = report_scope_cancer_type
+    analysis["cancer_name"] = cancer_code_display_name(
+        report_scope_cancer_type,
+        report_scope_cancer_type,
+    )
+    # ``analyze_sample`` binds purity to the pre-evidence ranker winner.
+    # Recompute it whenever an integrated selector changes the final entity.
+    _finalize_purity_for_final_call(
+        analysis,
+        df_expr,
+        report_scope_cancer_type,
+    )
+    if analysis_cancer_type:
+        analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
+    elif fine_scope_inference and fine_scope_inference.get(
+        "reference_cancer_type"
+    ):
+        analysis["report_scope_parent_cancer_type"] = fine_scope_inference[
+            "reference_cancer_type"
+        ]
+    if fusion_scope_inference:
+        analysis["fusion_report_scope_inference"] = fusion_scope_inference
+    if rare_scope_inference:
+        analysis["rare_report_scope_inference"] = rare_scope_inference
+    if fine_scope_inference:
+        analysis["fine_report_scope_inference"] = fine_scope_inference
+
+
+def _scope_residual_identity_to_decomposition_mode(
+    evidence,
+    *,
+    sample_mode,
+):
+    """Prevent a residual from changing the regime that produced it.
+
+    Post-background identity is valid only inside the decomposition regime
+    whose templates generated that residual. A heme residual cannot establish
+    a solid entity, and a solid residual cannot establish a heme entity. Pure
+    population mode is preparation-specific rather than lineage-specific and
+    therefore does not impose this restriction.
+    """
+
+    scoped = dict(evidence or {})
+    candidate_code = str(scoped.get("candidate_code") or "").strip()
+    mode = str(sample_mode or "").strip()
+    if not candidate_code or mode not in {"solid", "heme"}:
+        scoped["adjudication_eligible"] = True
+        return scoped
+
+    try:
+        from .cancer_ontology import cancer_lineage_group
+        from .expression_decomposition import _group_to_mode
+
+        candidate_mode = _group_to_mode(cancer_lineage_group(candidate_code))
+    except (KeyError, TypeError, ValueError):
+        candidate_mode = ""
+
+    candidate_regime = "heme" if candidate_mode == "heme" else "solid"
+    compatible = candidate_regime == mode
+    scoped["adjudication_eligible"] = compatible
+    scoped["decomposition_sample_mode"] = mode
+    scoped["candidate_sample_mode"] = candidate_regime
+    if not compatible:
+        scoped["adjudication_blocker"] = (
+            f"{candidate_code} requires {candidate_regime} decomposition, "
+            f"but the residual was generated in {mode} mode"
+        )
+    return scoped
+
+
+def _synchronize_cancer_type_context(analysis, *, supplied_cancer_type):
+    """Resolve tree roles, sanitize sibling references, and persist the result."""
+
+    context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type=supplied_cancer_type,
+    )
+    _apply_cancer_type_context_roles(analysis, context)
+    context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type=supplied_cancer_type,
+    )
+    analysis["cancer_type_context"] = context.to_dict()
+    return context
+
+
 def _apply_cancer_type_evidence(
     analysis,
     df_expr,
@@ -5695,6 +5959,7 @@ def _apply_cancer_type_evidence(
     report_scope_cancer_type,
     rare_scope_inference,
     fine_scope_inference,
+    residual_identity_evidence=None,
 ):
     """Run the unified cancer-type evidence selector and propagate its output.
 
@@ -5729,6 +5994,7 @@ def _apply_cancer_type_evidence(
             analysis,
             rare_marker_hypotheses=analysis.get("rare_marker_hypotheses"),
             fusion_scope_inference=fusion_scope_inference,
+            residual_identity_evidence=residual_identity_evidence,
         )
     except (KeyError, ValueError, TypeError):
         _LOGGER.warning(
@@ -6258,15 +6524,19 @@ def _cancer_type_context_line(cancer_type_context):
         else:
             line += " No different active subtype node is carried downstream."
         return line
-    relation = (
-        "ancestor analysis context"
-        if cancer_type_context.reference_relationship == "ancestor"
-        else "independent fallback analysis context"
-    )
-    line = (
-        f"- **Cancer label roles**: diagnosis/report node is {report}; "
-        f"{reference} is the {relation} only and is not an alternative diagnosis"
-    )
+    if cancer_type_context.reference_relationship == "ancestor":
+        line = (
+            f"- **Cancer label roles**: diagnosis/report node is {report}; "
+            f"{reference} is the ancestor analysis context only and is not an "
+            "alternative diagnosis"
+        )
+    else:
+        line = (
+            f"- **Cancer label roles**: diagnosis/report node is {report}; "
+            f"{reference} is an independent fallback analysis context. It "
+            "remains an audited competing RNA hypothesis but does not set the "
+            "diagnosis/report node"
+        )
     if expression and expression != reference:
         expression_relation = cancer_type_context.expression_relationship
         expression_role = {
