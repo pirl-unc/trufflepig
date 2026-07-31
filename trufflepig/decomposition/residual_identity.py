@@ -400,6 +400,13 @@ def _unanimous(values: Iterable[str | None]) -> str:
     return cleaned[0] if len(set(cleaned)) == 1 else ""
 
 
+def _conflicting_candidates(values: Iterable[str | None]) -> tuple[str, ...]:
+    """Return distinct non-empty identities when an evidence axis disagrees."""
+
+    candidates = tuple(sorted({_clean(value) for value in values if _clean(value)}))
+    return candidates if len(candidates) > 1 else ()
+
+
 def evaluate_residual_identity(
     decomposition_results: Iterable[Any],
     *,
@@ -546,13 +553,18 @@ def evaluate_residual_identity(
 
     background_models: list[dict[str, Any]] = []
     for (template, components), rows in sorted(grouped.items()):
-        panel_candidate = _unanimous(
-            row.get("panel_candidate") for row in rows
-        )
-        ontology_candidate = _unanimous(
-            row.get("ontology_candidate") for row in rows
-        )
-        if panel_candidate and ontology_candidate:
+        panel_votes = tuple(row.get("panel_candidate") for row in rows)
+        ontology_votes = tuple(row.get("ontology_candidate") for row in rows)
+        panel_candidate = _unanimous(panel_votes)
+        ontology_candidate = _unanimous(ontology_votes)
+        panel_conflicts = _conflicting_candidates(panel_votes)
+        ontology_conflicts = _conflicting_candidates(ontology_votes)
+        if panel_conflicts or ontology_conflicts:
+            # A disagreeing axis is contradictory evidence, not a missing
+            # axis. It must remain an abstention even when the other evidence
+            # view is unanimous across the same candidate-specific residuals.
+            model_candidate = ""
+        elif panel_candidate and ontology_candidate:
             if cancer_codes_entity_compatible(panel_candidate, ontology_candidate):
                 model_candidate = (
                     ontology_candidate
@@ -571,6 +583,8 @@ def evaluate_residual_identity(
                 "candidate_code": model_candidate or None,
                 "panel_candidate": panel_candidate or None,
                 "ontology_candidate": ontology_candidate or None,
+                "panel_conflicting_candidates": list(panel_conflicts),
+                "ontology_conflicting_candidates": list(ontology_conflicts),
                 "rows": rows,
             }
         )

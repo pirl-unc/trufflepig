@@ -148,6 +148,132 @@ def test_residual_identity_requires_invariance_across_candidate_realizations():
     assert model["realizations"] == 3
 
 
+def test_residual_identity_preserves_conflicting_panel_votes(monkeypatch):
+    """A contradictory axis cannot disappear behind a unanimous second axis."""
+    import trufflepig.decomposition.residual_identity as residual_identity
+    import trufflepig.lineage_panels as lineage_panels
+
+    decisions = iter(
+        [
+            {
+                "decisive": True,
+                "top_parent_cohort": "BLCA",
+                "reason": "complete BLCA program",
+            },
+            {
+                "decisive": True,
+                "top_parent_cohort": "CHOL",
+                "reason": "complete CHOL program",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (SimpleNamespace(parent_cohort="BLCA"),),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "complete_program_entity_decision",
+        lambda _rows: next(decisions),
+    )
+
+    def ontology_sanity(code, _residual):
+        if code == "BLCA":
+            return {
+                "status": "coherent",
+                "expected_high": ["UPK2"],
+                "expected_high_detected": ["UPK2"],
+                "expected_low": ["ALB"],
+                "expected_low_present": [],
+            }
+        return {
+            "status": "incomplete",
+            "expected_high": ["MUC5AC"],
+            "expected_high_detected": [],
+            "expected_low": [],
+            "expected_low_present": [],
+        }
+
+    monkeypatch.setattr(
+        residual_identity,
+        "tumor_type_sanity_check",
+        ontology_sanity,
+    )
+
+    evidence = evaluate_residual_identity(
+        [
+            _result("BLCA", tumor_values=_blca_residual()),
+            _result("CHOL", tumor_values=_blca_residual()),
+        ],
+        candidate_codes=["BLCA", "CHOL"],
+        current_code="BLCA",
+    )
+
+    assert evidence["status"] == "ambiguous"
+    assert evidence["candidate_code"] is None
+    model = evidence["background_models"][0]
+    assert model["candidate_code"] is None
+    assert model["panel_conflicting_candidates"] == ["BLCA", "CHOL"]
+    assert model["ontology_candidate"] == "BLCA"
+    assert model["ontology_conflicting_candidates"] == []
+
+
+def test_residual_identity_preserves_conflicting_ontology_votes(monkeypatch):
+    import trufflepig.decomposition.residual_identity as residual_identity
+    import trufflepig.lineage_panels as lineage_panels
+
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (SimpleNamespace(parent_cohort="BLCA"),),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "complete_program_entity_decision",
+        lambda _rows: {
+            "decisive": True,
+            "top_parent_cohort": "BLCA",
+            "reason": "complete BLCA program",
+        },
+    )
+
+    def ontology_sanity(code, residual):
+        first_realization = float(residual.get("UPK1A", 0.0)) > 50.0
+        selected = "BLCA" if first_realization else "CHOL"
+        complete = code == selected
+        return {
+            "status": "coherent" if complete else "incomplete",
+            "expected_high": ["identity-marker"],
+            "expected_high_detected": ["identity-marker"] if complete else [],
+            "expected_low": ["excluded-marker"],
+            "expected_low_present": [],
+        }
+
+    monkeypatch.setattr(
+        residual_identity,
+        "tumor_type_sanity_check",
+        ontology_sanity,
+    )
+
+    evidence = evaluate_residual_identity(
+        [
+            _result("BLCA", tumor_values=_blca_residual()),
+            _result("CHOL", tumor_values=_blca_residual(0.8)),
+        ],
+        candidate_codes=["BLCA", "CHOL"],
+        current_code="BLCA",
+    )
+
+    assert evidence["status"] == "ambiguous"
+    assert evidence["candidate_code"] is None
+    model = evidence["background_models"][0]
+    assert model["candidate_code"] is None
+    assert model["panel_candidate"] == "BLCA"
+    assert model["panel_conflicting_candidates"] == []
+    assert model["ontology_conflicting_candidates"] == ["BLCA", "CHOL"]
+
+
 def test_residual_identity_abstains_when_background_models_disagree():
     """Competing host models must not be collapsed into a plurality."""
 

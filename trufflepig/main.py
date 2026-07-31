@@ -5913,6 +5913,32 @@ def _propagate_report_scope_selection(
 def _synchronize_cancer_type_context(analysis, *, supplied_cancer_type):
     """Resolve tree roles, sanitize sibling references, and persist the result."""
 
+    # Exclusions are derived state relative to the active report node. A
+    # post-selection sibling change can make yesterday's excluded code today's
+    # diagnosis, so retain only codes that are still siblings before rebuilding
+    # context. New sibling exclusions from active reference/expression roles are
+    # added by ``cancer_type_context_from_analysis`` below.
+    report_code = str(
+        analysis.get("report_scope_cancer_type")
+        or analysis.get("cancer_type")
+        or ""
+    ).strip()
+    excluded_values = analysis.get("excluded_sibling_cancer_type_contexts") or ()
+    if isinstance(excluded_values, str):
+        excluded_values = (excluded_values,)
+    current_siblings = sorted(
+        {
+            str(code).strip()
+            for code in excluded_values
+            if str(code).strip()
+            and cancer_type_tree_relationship(report_code, code) == "sibling"
+        }
+    )
+    if current_siblings:
+        analysis["excluded_sibling_cancer_type_contexts"] = current_siblings
+    else:
+        analysis.pop("excluded_sibling_cancer_type_contexts", None)
+
     context = cancer_type_context_from_analysis(
         analysis,
         supplied_cancer_type=supplied_cancer_type,
@@ -6063,6 +6089,8 @@ def _apply_cancer_type_context_roles(analysis, cancer_type_context):
         analysis["excluded_sibling_cancer_type_contexts"] = list(
             cancer_type_context.excluded_sibling_codes
         )
+    else:
+        analysis.pop("excluded_sibling_cancer_type_contexts", None)
     if reference_code:
         analysis["reference_cancer_type"] = reference_code
         analysis["reference_cancer_name"] = cancer_code_display_name(

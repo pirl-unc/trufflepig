@@ -397,6 +397,31 @@ def test_context_roles_never_propagate_a_sibling_subtype():
     assert final_context.code_for("expression") == "BRCA_Basal"
 
 
+def test_context_resynchronization_drops_the_new_report_from_old_exclusions():
+    from trufflepig.main import _synchronize_cancer_type_context
+
+    analysis = {
+        "cancer_type": "READ",
+        "report_scope_cancer_type": "READ",
+        "reference_cancer_type": "READ",
+        "expression_reference_cancer_type": "READ",
+        # READ was excluded while COAD was active; after a sibling change it is
+        # the diagnosis and can no longer remain an exclusion.
+        "excluded_sibling_cancer_type_contexts": ["READ"],
+    }
+
+    context = _synchronize_cancer_type_context(
+        analysis,
+        supplied_cancer_type=None,
+    )
+
+    assert context.code_for("report") == "READ"
+    assert context.excluded_sibling_codes == ()
+    assert "excluded_sibling_cancer_type_contexts" not in analysis
+    assert analysis["cancer_type_tree_roles"]["excluded_siblings"] == []
+    assert analysis["cancer_type_context"]["excluded_sibling_codes"] == ()
+
+
 def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
     from pirlygenes.gene_sets_cancer import rare_cancer_rna_surrogate_rules_df
 
