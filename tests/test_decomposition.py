@@ -146,6 +146,8 @@ def test_tcga_prad_uses_external_purity_anchor():
 
     assert 0.5 < result.purity < 0.85
     assert result.fractions["tumor"] == result.purity
+    assert np.isfinite(result.reconstruction_error)
+    assert result.score > 0.05
 
 
 def test_tcga_coad_primary_beats_lymph_node_template():

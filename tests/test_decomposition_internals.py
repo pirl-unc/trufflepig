@@ -93,6 +93,36 @@ def test_nnls_recovers_known_mix():
     )
 
 
+def test_nnls_fit_is_invariant_to_tpm_scale():
+    """The same mixture in different linear units has the same fit quality."""
+    A = np.array(
+        [
+            [8.0, 1.0],
+            [1.0, 9.0],
+            [6.0, 2.0],
+            [2.0, 7.0],
+        ]
+    )
+    b = A @ np.array([0.65, 0.35]) + np.array([0.1, -0.1, 0.2, -0.2])
+
+    solution, residual = _weighted_constrained_nnls(
+        A,
+        b,
+        sum_to_one_weight=0.0,
+        l2_penalty=0.0,
+    )
+    scaled_solution, scaled_residual = _weighted_constrained_nnls(
+        A * 10_000.0,
+        b * 10_000.0,
+        sum_to_one_weight=0.0,
+        l2_penalty=0.0,
+    )
+
+    assert scaled_solution == pytest.approx(solution)
+    assert scaled_residual == pytest.approx(residual)
+    assert 0.0 < residual < 1.0
+
+
 def test_nnls_empty_matrix():
     """Empty matrix should return empty solution with inf residual."""
     A = np.zeros((0, 3))

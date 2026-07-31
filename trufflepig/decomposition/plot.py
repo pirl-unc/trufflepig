@@ -321,8 +321,8 @@ def plot_decomposition_candidates(
     # Right-side per-row score text. Kept textual (not a second bar) so
     # it's not confused with a width-encoded quantity.
     #
-    # #123: also surface **fit quality** (raw reconstruction_error —
-    # smaller is better) and **median marker support** (how well-
+    # #123: also surface **fit quality** (dimensionless reconstruction
+    # error — smaller is better) and **median marker support** (how well-
     # supported each fitted compartment is by its own markers) so the
     # reader can tell whether a candidate is high-scoring because it
     # actually explains the sample or because the composite score

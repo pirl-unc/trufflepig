@@ -177,8 +177,7 @@ def compute_subtype_signature_stats(
     Filter to a single ``cancer_code`` if the caller knows which cohort
     to evaluate (e.g., per-candidate scoring inside the candidate loop).
     """
-    import pandas as _pd
-
+    from .plot_embedding import _fixed_reference_within_sample_percentiles
     from .tumor_purity import _build_sample_tpm_by_symbol
 
     panels = subtype_signature_panels(top_n=top_n)
@@ -186,10 +185,9 @@ def compute_subtype_signature_stats(
         return {}
 
     sample_raw_by_symbol = _build_sample_tpm_by_symbol(df_gene_expr)
-    within_pct_by_symbol = (
-        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
-        if sample_raw_by_symbol
-        else {}
+    within_pct_by_symbol = _fixed_reference_within_sample_percentiles(
+        sample_raw_by_symbol,
+        panels.values(),
     )
 
     results: dict[str, list[dict]] = {}
@@ -200,7 +198,7 @@ def compute_subtype_signature_stats(
         details: list[dict] = []
         for gene in panel:
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0) or 0.0)
-            within_pct = float(within_pct_by_symbol.get(gene, 0.5))
+            within_pct = float(within_pct_by_symbol.get(gene, 0.0))
             percentiles.append(within_pct)
             details.append(
                 {

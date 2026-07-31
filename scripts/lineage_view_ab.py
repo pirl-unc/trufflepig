@@ -24,7 +24,18 @@ from oncoref.normalization import clean_tpm
 from trufflepig.lineage_evidence import EPITHELIAL_MARKERS
 from trufflepig.lineage_marker_recall import NE_PROGRAM
 from trufflepig.signal_views import signal_report, VIEW_NAMES
-from trufflepig.tumor_purity import _sample_hk_median
+
+
+def _sample_hk_median(sample_tpm):
+    """Legacy HK comparator kept local to this migration benchmark."""
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_names
+
+    values = [
+        float(sample_tpm[gene])
+        for gene in housekeeping_gene_names(core_only=True)
+        if float(sample_tpm.get(gene, 0.0) or 0.0) > 0.0
+    ]
+    return float(np.median(values)) if values else 0.0
 
 
 def _auc(scores, labels):

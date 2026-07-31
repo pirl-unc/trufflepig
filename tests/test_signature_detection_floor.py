@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 import trufflepig.plot_embedding as pe
+import trufflepig.subtype_signature as subtype_signature
 from trufflepig.plot_embedding import _compute_cancer_type_signature_stats
 from trufflepig.reference import pan_cancer_expression
 
@@ -81,6 +82,55 @@ def test_default_signature_uses_a_fixed_reference_rank_universe():
     expected = _scores(complete)
     assert _scores(omitted_zeros) == pytest.approx(expected)
     assert _scores(annotated_zeros) == pytest.approx(expected)
+
+
+def test_subtype_signature_uses_fixed_universe_and_absent_genes_are_not_support(
+    monkeypatch,
+):
+    complete = _cohort_sample("PAAD")
+    expressed = (
+        complete[complete["TPM"].astype(float) > 0]
+        .sort_values("TPM", ascending=False)
+        .drop_duplicates("gene_name")
+    )
+    supported_genes = tuple(expressed["gene_name"].astype(str).head(2))
+    unsupported_genes = ("NOT_MEASURED_SUBTYPE_A", "NOT_MEASURED_SUBTYPE_B")
+    monkeypatch.setattr(
+        subtype_signature,
+        "subtype_signature_panels",
+        lambda **_kwargs: {
+            ("PAAD", "supported"): supported_genes,
+            ("PAAD", "unsupported"): unsupported_genes,
+        },
+    )
+
+    omitted_zeros = complete[complete["TPM"].astype(float) > 0].copy()
+    annotated_zeros = pd.concat(
+        [
+            omitted_zeros,
+            pd.DataFrame(
+                {
+                    "ensembl_gene_id": ["EXTRA_ZERO_1", "EXTRA_ZERO_2"],
+                    "gene_name": ["EXTRA_ZERO_1", "EXTRA_ZERO_2"],
+                    "TPM": [0.0, 0.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    def subtype_scores(frame):
+        rows = subtype_signature.compute_subtype_signature_stats(
+            frame,
+            cancer_code="PAAD",
+        )["PAAD"]
+        return {row["subtype"]: row["score"] for row in rows}
+
+    expected = subtype_scores(complete)
+    assert subtype_scores(omitted_zeros) == pytest.approx(expected)
+    assert subtype_scores(annotated_zeros) == pytest.approx(expected)
+    assert expected["unsupported"] == 0.0
+    assert expected["supported"] > expected["unsupported"]
 
 
 def test_explicit_hk_ab_basis_still_clamps_noise():

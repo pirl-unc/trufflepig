@@ -435,7 +435,13 @@ def _weighted_constrained_nnls(
     sum_to_one_weight=DECOMPOSITION_PARAMETERS["nnls"]["sum_to_one_weight"],
     l2_penalty=DECOMPOSITION_PARAMETERS["nnls"]["l2_penalty"],
 ):
-    """Weighted NNLS with a soft sum-to-one constraint and light ridge penalty."""
+    """Weighted NNLS with a scale-free reconstruction error.
+
+    The established clean-TPM optimization remains unchanged. The returned
+    residual is dimensionless NRMSE (RMSE / observed RMS), making downstream
+    fit scores comparable and preventing clean-TPM magnitudes from collapsing
+    them toward zero without changing the fitted component fractions.
+    """
     from scipy.optimize import nnls
 
     A = np.asarray(A, dtype=float)
@@ -449,6 +455,7 @@ def _weighted_constrained_nnls(
         weights = np.asarray(weights, dtype=float)
         weights = np.where(weights > 0, weights, 1.0)
 
+    observed_scale = float(np.sqrt(np.mean(b**2)))
     A_weighted = A * weights[:, None]
     b_weighted = b * weights
 
@@ -470,7 +477,11 @@ def _weighted_constrained_nnls(
     if total > 0:
         solution = solution / total
 
-    residual = float(np.sqrt(np.mean(((A @ solution) - b) ** 2)))
+    residual_rmse = float(np.sqrt(np.mean(((A @ solution) - b) ** 2)))
+    if observed_scale > 0.0:
+        residual = residual_rmse / observed_scale
+    else:
+        residual = 0.0 if residual_rmse == 0.0 else float("inf")
     return solution, residual
 
 

@@ -406,6 +406,54 @@ def _full_cohort_signature_panels(n=20, min_tpm=5.0, min_log2_vs_mean=1.0):
     return panels
 
 
+def _fixed_reference_within_sample_percentiles(sample_raw_by_symbol, panels):
+    """Rank a sample over the reference gene universe used by signature panels.
+
+    Quantifiers legitimately omit zero-expression rows, while annotation
+    pipelines may append additional zero-only rows. Neither representation
+    choice should alter a signature score. Missing reference genes therefore
+    enter the rank vector as explicit zeros, input-only genes are ignored, and
+    an absent gene contributes zero support rather than the midrank of a large
+    tied-zero block.
+    """
+    if not sample_raw_by_symbol:
+        return {}
+
+    import pandas as pd
+
+    from .tumor_purity import _cached_reference_matrices
+
+    panel_genes = sorted(
+        {str(gene) for panel in panels for gene in panel}
+    )
+    rank_universe = tuple(
+        dict.fromkeys(
+            [
+                *(
+                    str(gene)
+                    for gene in _cached_reference_matrices(normalize=None)[
+                        "expr_matrix"
+                    ].index
+                ),
+                *panel_genes,
+            ]
+        )
+    )
+    rank_values = pd.Series(
+        {
+            gene: max(
+                0.0,
+                float(sample_raw_by_symbol.get(gene, 0.0) or 0.0),
+            )
+            for gene in rank_universe
+        },
+        dtype=float,
+    )
+    percentiles = rank_values.rank(pct=True, method="average")
+    percentiles.loc[rank_values <= 0.0] = 0.0
+    return percentiles.to_dict()
+
+
 def _compute_cancer_type_signature_stats(
     df_gene_expr,
     n_signature_genes=20,
@@ -453,49 +501,10 @@ def _compute_cancer_type_signature_stats(
     )
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
-    # Rank over the fixed reference gene universe used to derive the panels.
-    # Missing reference genes are explicit zeros and input-only annotations are
-    # ignored, so adding or omitting zero rows cannot move a signature score.
-    import pandas as _pd
-
-    if sample_raw_by_symbol:
-        from .tumor_purity import _cached_reference_matrices
-
-        rank_universe = tuple(
-            dict.fromkeys(
-                [
-                    *(
-                        str(gene)
-                        for gene in _cached_reference_matrices(normalize=None)[
-                            "expr_matrix"
-                        ].index
-                    ),
-                    *sorted(
-                        {
-                            str(gene)
-                            for genes in sig.values()
-                            for gene in genes
-                        }
-                    ),
-                ]
-            )
-        )
-        rank_values = _pd.Series(
-            {
-                gene: max(
-                    0.0,
-                    float(sample_raw_by_symbol.get(gene, 0.0) or 0.0),
-                )
-                for gene in rank_universe
-            },
-            dtype=float,
-        )
-        _within_pct = rank_values.rank(
-            pct=True,
-            method="average",
-        ).to_dict()
-    else:
-        _within_pct = {}
+    _within_pct = _fixed_reference_within_sample_percentiles(
+        sample_raw_by_symbol,
+        sig.values(),
+    )
 
     stats = []
     if candidate_codes is None:
@@ -548,7 +557,7 @@ def _compute_cancer_type_signature_stats(
             # Production: cohort_pct == 1, so this is simply within_pct.
             # Explicit A/B bases can additionally ask how high the sample is
             # relative to the reference cohorts.
-            within_pct = float(_within_pct.get(gene, 0.5))
+            within_pct = float(_within_pct.get(gene, 0.0))
             percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)
             detail_sample = sample_hk if basis == "hk" else sample_raw
