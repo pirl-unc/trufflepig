@@ -15,12 +15,10 @@ from ..tumor_purity import CANCER_TO_TISSUE
 # tissues rather than a single HPA cell type.  For the NNLS, the best-
 # matching member tissue is selected as the reference column.
 #
-# Why: HPA single-cell profiles for astrocytes and neurons have
-# housekeeping-gene medians of ~20 nTPM (vs ~350 for immune/stroma),
-# likely from harsh brain-tissue dissociation.  HK-normalisation inflates
-# these references ~17×, making the NNLS think a 75%-brain sample has
-# <1% brain signal.  Bulk tissue references (cerebral_cortex etc.) have
-# normal HK medians (~380) and avoid this distortion entirely.
+# Why: HPA single-cell profiles for astrocytes and neurons carry strong
+# dissociation/acquisition scale effects and are not representative of bulk
+# brain RNA mass. Bulk tissue references (cerebral_cortex etc.) preserve the
+# relevant host-tissue composition for a bulk-sample NNLS fit.
 #
 # The best-match selection within each category captures within-category
 # variation (e.g. a cerebellar met matches cerebellum while a cortical

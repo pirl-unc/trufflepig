@@ -27,9 +27,7 @@ from .templates import (
     get_template_host_tissues,
     matched_normal_component,
 )
-from pirlygenes.gene_sets_cancer import (
-    housekeeping_gene_ids, is_extended_housekeeping_symbol,
-)
+from pirlygenes.gene_sets_cancer import is_extended_housekeeping_symbol
 from trufflepig.reference import (
     pan_cancer_expression,
 )
@@ -145,7 +143,7 @@ DECOMPOSITION_PARAMETERS = {
         # Max marker genes kept per component.  More markers stabilise the fit
         # but increase the chance of including ambiguous genes.
         "top_n_per_component": 12,
-        # HK-normalised expression floor used when the primary marker
+        # Clean-TPM expression floor used when the primary marker
         # selection finds too few rows and falls back to all expressed genes.
         "fallback_expression_floor": 0.05,
     },
@@ -418,7 +416,7 @@ class DecompositionResult:
     component_trace: pd.DataFrame
     marker_trace: pd.DataFrame
     gene_attribution: pd.DataFrame
-    tme_background_hk: dict[str, float]
+    tme_background_tpm: dict[str, float]
     score: float
     description: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -428,17 +426,6 @@ class DecompositionResult:
     purity_source: str = "signature"
     n_measured_in_fit: int = 0
     site_evidence: dict[str, Any] = field(default_factory=dict)
-
-
-def _hk_normalize(values, genes, hk_gene_set):
-    """Normalize an expression vector by its housekeeping-gene median."""
-    hk_vals = [
-        values[i] for i, g in enumerate(genes) if g in hk_gene_set and values[i] > 0
-    ]
-    hk_med = float(np.median(hk_vals)) if hk_vals else 1.0
-    if hk_med <= 0:
-        hk_med = 1.0
-    return values / hk_med, hk_med
 
 
 def _weighted_constrained_nnls(
@@ -490,7 +477,7 @@ def _weighted_constrained_nnls(
 def _select_marker_rows(
     genes,
     symbols,
-    sig_matrix_hk,
+    signature_tpm,
     comp_names,
     cancer_type=None,
     sample_context=None,
@@ -547,12 +534,12 @@ def _select_marker_rows(
     for comp_idx, comp in enumerate(comp_names):
         if comp.startswith("matched_normal_"):
             continue
-        comp_signal = sig_matrix_hk[:, comp_idx]
-        if sig_matrix_hk.shape[1] > 1:
-            other_mask = np.arange(sig_matrix_hk.shape[1]) != comp_idx
-            other_max = sig_matrix_hk[:, other_mask].max(axis=1)
+        comp_signal = signature_tpm[:, comp_idx]
+        if signature_tpm.shape[1] > 1:
+            other_mask = np.arange(signature_tpm.shape[1]) != comp_idx
+            other_max = signature_tpm[:, other_mask].max(axis=1)
         else:
-            other_max = np.zeros(sig_matrix_hk.shape[0], dtype=float)
+            other_max = np.zeros(signature_tpm.shape[0], dtype=float)
 
         specificity = (comp_signal + 1e-6) / (other_max + 1e-6)
         score = comp_signal * np.log2(specificity + 1.0)
@@ -601,7 +588,7 @@ def _select_marker_rows(
                     "gene_id": genes[idx],
                     "symbol": symbols[idx],
                     "specificity": float(specificity[idx]),
-                    "reference_hk": float(comp_signal[idx]),
+                    "reference_tpm": float(comp_signal[idx]),
                     "fit_weight": marker_weight,
                 }
             )
@@ -611,7 +598,7 @@ def _select_marker_rows(
     marker_df = pd.DataFrame(marker_records)
     if not marker_df.empty:
         marker_df = marker_df.sort_values(
-            ["component", "specificity", "reference_hk"],
+            ["component", "specificity", "reference_tpm"],
             ascending=[True, False, False],
         ).reset_index(drop=True)
     return fit_rows, fit_weights, marker_df
@@ -620,22 +607,20 @@ def _select_marker_rows(
 def _build_gene_attribution(
     genes,
     symbols,
-    observed_hk,
-    sample_hk_median,
+    observed_tpm,
     comp_names,
     comp_mix,
     tumor_fraction,
-    sig_matrix_hk,
+    signature_tpm,
 ):
     """Build per-gene attribution on TPM scale."""
-    tme_background_hk = (
-        sig_matrix_hk @ comp_mix if len(comp_mix) else np.zeros(len(genes))
+    tme_background_tpm = max(0.0, 1.0 - tumor_fraction) * (
+        signature_tpm @ comp_mix if len(comp_mix) else np.zeros(len(genes))
     )
 
     rows = []
     for idx, (gid, symbol) in enumerate(zip(genes, symbols)):
-        obs_hk = float(observed_hk[idx])
-        obs_tpm = obs_hk * sample_hk_median
+        obs_tpm = float(observed_tpm[idx])
         if obs_tpm < 0.01:
             continue
 
@@ -646,12 +631,11 @@ def _build_gene_attribution(
         }
         tme_total_tpm = 0.0
         for comp_idx, comp in enumerate(comp_names):
-            attr_hk = (
+            attr_tpm = (
                 (1.0 - tumor_fraction)
                 * float(comp_mix[comp_idx])
-                * float(sig_matrix_hk[idx, comp_idx])
+                * float(signature_tpm[idx, comp_idx])
             )
-            attr_tpm = attr_hk * sample_hk_median
             row[comp] = round(attr_tpm, 2)
             tme_total_tpm += attr_tpm
 
@@ -670,7 +654,7 @@ def _build_gene_attribution(
             drop=True
         )
     tme_by_symbol = {
-        str(symbol): float(value) for symbol, value in zip(symbols, tme_background_hk)
+        str(symbol): float(value) for symbol, value in zip(symbols, tme_background_tpm)
     }
     return attr_df, tme_by_symbol
 
@@ -886,7 +870,6 @@ def _fit_one_hypothesis(
     site_hint_template=None,
 ):
     """Fit one (cancer_type, template) broad-compartment hypothesis."""
-    hk_ids = housekeeping_gene_ids()
     cancer_type = candidate_row["code"]
     purity_result = candidate_row["purity_result"]
 
@@ -1045,7 +1028,7 @@ def _fit_one_hypothesis(
             component_trace=pd.DataFrame(),
             marker_trace=pd.DataFrame(),
             gene_attribution=pd.DataFrame(),
-            tme_background_hk={},
+            tme_background_tpm={},
             score=float(score),
             description=f"{cancer_type} — {TEMPLATES.get(template_name, {}).get('description', template_name)}",
             warnings=warnings,
@@ -1084,20 +1067,10 @@ def _fit_one_hypothesis(
         ]
         sig_raw = sig_raw[measured_mask, :]
         filt_sample_vec = filt_sample_vec[measured_mask]
-    observed_hk, sample_hk_median = _hk_normalize(
-        filt_sample_vec, filt_genes, hk_ids
-    )
-
-    sig_hk = np.zeros_like(sig_raw, dtype=float)
-    for comp_idx in range(sig_raw.shape[1]):
-        sig_hk[:, comp_idx], _ = _hk_normalize(
-            sig_raw[:, comp_idx], filt_genes, hk_ids
-        )
-
     fit_rows, fit_weights, marker_trace = _select_marker_rows(
         filt_genes,
         filt_symbols,
-        sig_hk,
+        sig_raw,
         comp_names,
         cancer_type=cancer_type,
         sample_context=sample_context,
@@ -1110,21 +1083,18 @@ def _fit_one_hypothesis(
             "fallback_expression_floor"
         ]
         fit_rows = list(
-            np.where((observed_hk > floor) | (sig_hk.max(axis=1) > floor))[0]
+            np.where((filt_sample_vec > floor) | (sig_raw.max(axis=1) > floor))[0]
         )
         fit_weights = np.ones(len(fit_rows), dtype=float)
     n_measured_in_fit = int(len(fit_rows))
 
-    A = sig_hk[fit_rows]
-    b = observed_hk[fit_rows]
-    # Weight by 1/observed to minimize proportional (not absolute) error.
-    # Without this, genes spanning 10^-2 to 10^5 HK-units let high-expression
-    # outliers (e.g. Ig genes in plasma-heavy samples) dominate the residual,
-    # leaking hundreds of TPM of "unexplained" immunoglobulin into the tumor
-    # attribution.  The floor at 0.1 prevents noisy low-expression genes from
-    # being over-amplified.
-    combined_weights = fit_weights / np.maximum(b, 0.1)
-    comp_mix, residual = _weighted_constrained_nnls(A, b, weights=combined_weights)
+    A = sig_raw[fit_rows]
+    b = filt_sample_vec[fit_rows]
+    # Clean TPM preserves linear RNA-mixture semantics. Component-specificity
+    # weights choose informative rows; expression-dependent inverse weights
+    # would distort otherwise exact mixtures and reintroduce an arbitrary
+    # abundance floor.
+    comp_mix, residual = _weighted_constrained_nnls(A, b, weights=fit_weights)
 
     if not marker_trace.empty:
         marker_trace = marker_trace.copy()
@@ -1136,29 +1106,21 @@ def _fit_one_hypothesis(
         marker_trace["observed_tpm"] = [
             symbol_to_obs.get(symbol, 0.0) for symbol in marker_symbols
         ]
-        symbol_to_obs_hk = {
-            str(symbol): float(obs)
-            for symbol, obs in zip(filt_symbols, observed_hk)
-        }
-        marker_trace["sample_hk"] = [
-            symbol_to_obs_hk.get(symbol, 0.0) for symbol in marker_symbols
-        ]
-        marker_trace["sample_to_ref_ratio"] = marker_trace["sample_hk"] / marker_trace[
-            "reference_hk"
+        marker_trace["sample_to_ref_ratio"] = marker_trace["observed_tpm"] / marker_trace[
+            "reference_tpm"
         ].replace(0, np.nan)
 
     component_trace = _build_component_trace(
         marker_trace, comp_names, comp_mix, tumor_fraction
     )
-    gene_attr, tme_background_hk = _build_gene_attribution(
+    gene_attr, tme_background_tpm = _build_gene_attribution(
         filt_genes,
         filt_symbols,
-        observed_hk,
-        sample_hk_median,
+        filt_sample_vec,
         comp_names,
         comp_mix,
         tumor_fraction,
-        sig_hk,
+        sig_raw,
     )
 
     fractions = {"tumor": float(tumor_fraction)}
@@ -1324,7 +1286,7 @@ def _fit_one_hypothesis(
         component_trace=component_trace,
         marker_trace=marker_trace,
         gene_attribution=gene_attr,
-        tme_background_hk=tme_background_hk,
+        tme_background_tpm=tme_background_tpm,
         score=float(score),
         description=f"{cancer_type} — {TEMPLATES.get(template_name, {}).get('description', template_name)}",
         warnings=warnings,

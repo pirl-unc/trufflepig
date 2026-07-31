@@ -1,11 +1,10 @@
 """Ledger of expression feature spaces used by production analysis.
 
 The base abundance unit is conformed clean TPM. Housekeeping normalization is
-not a general-purpose default: it is retained only for the NNLS decomposition
-fit, where controlled mixture benchmarks show a clear win. Pre-normalization
-QC separately records the median TPM of housekeeping genes as a scale check;
-that is a QC statistic, not an HK-normalized feature space. Explicit HK A/B
-modes may remain callable, but they are outside the default report path.
+not used by any default decision path. Pre-normalization QC separately records
+the median TPM of housekeeping genes as a scale check; that is a QC statistic,
+not an HK-normalized feature space. Explicit HK A/B modes may remain callable,
+but they are outside the default report path.
 """
 
 from __future__ import annotations
@@ -100,18 +99,14 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
     },
     "decomposition_nnls": {
         "location": "decomposition.engine._fit_one_hypothesis",
-        "current": Basis.HK,
+        "current": Basis.CLEAN_TPM,
         "rationale": (
-            "Retained as the sole decision-path exception. In known-composition mixtures, "
-            "HK inverse-sqrt fitting had the lowest component-attribution MAE, 0.204 versus "
-            "0.231 for z-score, 0.232 for percentile, 0.246 for TPM-fraction, 0.257 for "
-            "raw clean TPM, and 0.299 for log1p. Multiplying HK units by within-sample "
-            "percentiles improved MAE only marginally (0.202), while losing the linear "
-            "mixture interpretation of the fitted coefficients, so it is not the production "
-            "fit. Percentile/log-cohort residual identity remains a sequential, independent "
-            "corroborator after HK NNLS. Marker selection was evaluated in each candidate "
-            "feature space rather than being fixed to HK. This exception should be revisited "
-            "as the known-composition benchmark grows."
+            "Linear clean TPM with component-specificity marker weights preserves RNA-mixture "
+            "additivity. It recovered four exact healthy-component mixtures with mean fraction "
+            "error 5.9e-11, versus 0.013 for the best HK fit and 0.081 for percentile. Earlier "
+            "bulk-cancer dilution scores were invalid as fraction truth because the TCGA cancer "
+            "profiles already contain unknown normal tissue and TME. Percentile/log-cohort "
+            "residual identity remains a sequential, independent corroborator after NNLS."
         ),
     },
     "input_scale_qc": {

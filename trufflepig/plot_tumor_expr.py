@@ -777,12 +777,11 @@ def estimate_tumor_expression_ranges(
 
     # --- Full-coverage TPM-space TME background (fixes issue #45) --------
     #
-    # The decomposition's legacy `tme_background_hk` trace only covers genes
-    # that were in the decomposition's signature panel. For target-list genes
+    # The decomposition's fitted background trace only covers genes that were
+    # in the decomposition's signature panel. For target-list genes
     # like FN1 / COL1A1 / IGKC that AREN'T signature genes but ARE clearly
-    # stromal/immune expressed, `tme_background_hk.get(sym, 0.0)` returns 0
-    # -> no TME subtraction -> `tumor_tpm ~ sample_tpm / purity` which
-    # inflates the "Tumor TPM" reported in the target table.
+    # stromal/immune expressed, a missing trace value would imply no TME
+    # subtraction and inflate `tumor_tpm ~ sample_tpm / purity`.
     #
     # Fix: when we have a decomposition result with a `fractions` dict,
     # build a full-gene signature matrix using the same cell-type /

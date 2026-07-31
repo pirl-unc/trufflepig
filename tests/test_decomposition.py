@@ -1108,7 +1108,7 @@ def test_auto_marker_selection_excludes_mhc_ii_and_ribosomal(monkeypatch):
     fit_rows, _weights, marker_df = _select_marker_rows(
         genes=genes,
         symbols=symbols,
-        sig_matrix_hk=mat,
+        signature_tpm=mat,
         comp_names=["T_cell", "B_cell", "myeloid"],
     )
 

@@ -251,17 +251,16 @@ then use the representation matching the biological question:
   no-reference recall, curated lineage panels, and family panels.
 - Linear clean-TPM mass for purity and tumor/background mixture equations.
 - Whole-profile Spearman for centroid and compartment evidence.
-- Housekeeping normalization only inside the NNLS decomposition fit, where
-  controlled known-mixture tests show a clear advantage over every evaluated
-  non-HK alternative.
+- Linear clean TPM for both NNLS decomposition paths. Component-specificity
+  marker weights focus the fit without changing the additive abundance basis.
 
-The decomposition benchmark also tested multiplying HK units by
-within-sample percentile. Its component-attribution MAE changed only from
-0.204 to 0.202, while the multiplication makes NNLS coefficients cease to be
-fractions of a linear RNA mixture. The production pairing is therefore
-sequential rather than multiplicative: HK-NNLS estimates background
-fractions, then non-HK percentile/log-cohort residual programs independently
-test tumor identity.
+The decisive decomposition benchmark uses exact mixtures of two healthy
+component profiles. Clean TPM with marker-specificity weights recovers their
+fractions essentially exactly (mean absolute error 5.9e-11), versus 0.013 for
+HK and 0.081 for percentile. Earlier bulk-cancer dilution mixtures are retained
+as directional stress tests, not fraction truth, because each TCGA cancer
+profile already includes unknown normal tissue and TME. Percentile/log-cohort
+residual programs independently test tumor identity after the linear fit.
 
 The pre-normalization QC housekeeping median is separate and is not a
 housekeeping-normalized feature. It is the median housekeeping-gene abundance

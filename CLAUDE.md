@@ -98,10 +98,10 @@ drives the call two ways it's stronger at: the `compartment_call` leaf-restricti
 confidence-gated, #83) and centroid-authoritative fine-subtype resolution + veto (`resolve_fine_subtype`
 / `_apply_centroid_fine_subtype_veto`, #98).
 
-**Decomposition** (`decompose_expression`) runs ONCE for the winner. FEATURE SPACE =
-**housekeeping-normalized clean TPM**, retained because it has the lowest component-attribution
-error across the controlled known-mixture benchmark; percentile, log1p, TPM-fraction, z-score, and
-raw clean TPM are regression-tested alternatives. It is lineage-ROUTED by `compartment_call` →
+**Decomposition** uses additive **clean TPM** for both the lineage-routed residual fit
+(`decompose_expression`) and the candidate/template fit (`decompose_sample`). Exact healthy-profile
+mixtures reject HK, percentile, and log transforms for fraction recovery; those nonlinear spaces
+remain evaluation-only alternatives. It is lineage-ROUTED by `compartment_call` →
 one of 4 modes: **solid / mesenchymal / heme / embryonal** (not confident → run top+runner-up, resolve
 by residual `lineage_fit`). Each mode runs an **NNLS background subtraction** over that mode's
 stroma/immune/normal-tissue templates → tumor-specific **residual** = `sample − reconstructed_background`
