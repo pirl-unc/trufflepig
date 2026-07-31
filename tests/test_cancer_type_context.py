@@ -101,7 +101,7 @@ def test_context_excludes_sibling_reference_from_active_report_roles():
     )
 
 
-def test_independent_reference_is_retained_as_an_audited_differential():
+def test_direct_broad_report_reference_replaces_independent_fallback():
     from trufflepig.main import _cancer_type_context_line
 
     context = cancer_type_context_from_analysis(
@@ -115,11 +115,28 @@ def test_independent_reference_is_retained_as_an_audited_differential():
 
     report_line = _cancer_type_context_line(context)
 
-    assert context.reference_relationship == "independent"
-    assert "SARC_PLEOLPS" in report_line
-    assert "is an independent fallback analysis context" in report_line
-    assert "remains an audited competing RNA hypothesis" in report_line
-    assert "does not set the diagnosis/report node" in report_line
+    assert context.code_for("reference") == "CRC"
+    assert context.reference_relationship == "same"
+    assert context.requested_reference_code == "SARC_PLEOLPS"
+    assert "SARC_PLEOLPS" not in report_line
+
+
+def test_synchronized_active_context_does_not_resurrect_requested_sibling():
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "BRCA_Basal",
+            "report_scope_cancer_type": "BRCA_Basal",
+            "reference_cancer_type": "BRCA",
+            "expression_reference_cancer_type": "BRCA_Basal",
+            "requested_reference_cancer_type": "BRCA_HER2",
+            "requested_expression_reference_cancer_type": "BRCA_HER2",
+        }
+    )
+
+    assert context.code_for("reference") == "BRCA"
+    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.requested_reference_code == "BRCA_HER2"
+    assert context.requested_expression_code == "BRCA_HER2"
 
 
 def test_context_labels_descendant_expression_as_reference_only(monkeypatch):

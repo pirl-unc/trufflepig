@@ -107,15 +107,10 @@ def test_mixture_summary_percentile_pick_recovers_subtype(subtype):
     tumor profile. The prior HK TME-weighted concordance confused these mesenchymal subtypes
     (SARC_LPS_UNSPEC was an attractor: production pick accuracy was 6/15); the percentile
     pick over the union panel lifts it to ~14/15. Pins that SYN/LPS no longer collapse."""
-    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
     from trufflepig.tumor_purity import _mixture_cohort_lineage_summary
 
-    pan = pan_cancer_expression(technical_rna_normalize=True)
-    id2sym = dict(zip(pan["Ensembl_Gene_ID"], pan["Symbol"]))
-    hk_syms = [id2sym[g] for g in housekeeping_gene_ids() if g in id2sym]
-
     sample_tpm = _subtype_pseudo_sample_tpm(subtype)
-    summary = _mixture_cohort_lineage_summary("SARC", sample_tpm, hk_syms)
+    summary = _mixture_cohort_lineage_summary("SARC", sample_tpm)
     assert summary is not None, "mixture summary returned None"
     assert summary["code"] == subtype, (
         f"expected pick {subtype}, got {summary['code']} (pick_score="

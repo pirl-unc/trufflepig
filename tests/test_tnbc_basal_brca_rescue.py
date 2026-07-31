@@ -288,7 +288,7 @@ def test_urothelial_panel_blocks_rescue():
     # Confirm the gate is what's blocking it: turn off urothelial panel
     # and the sample (already passing other gates) becomes basal-BRCA-like.
     tpm = _blca_basal_like_tpm()
-    for sym in ("UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B"):
+    for sym in ("UPK1A", "UPK1B", "UPK2", "UPK3A"):
         tpm[sym] = 0.0
     # The synthesized BLCA fixture has MIA=3 / GABRP=0 already passing
     # the basal-positive gate, so with urothelial off the rescue can fire.

@@ -1,12 +1,8 @@
-"""Empirical calibration for the TPM-renormalized decomposition pipeline.
+"""Empirical calibration for cancer ranking and expression decomposition.
 
-PR #41 dropped the ``renormalize_to_million=False`` opt-out that
-decomposition used to run against native-scale pirlygenes references. The
-templates were recalibrated against the new TPM-1e6 footing
-(``met_origin_penalty_*``, ``met_site_dominance_*``, ``fit_score_*``).
-
-This script gives a quantitative regression artifact for that change.
-It runs three calibration tracks:
+This script produces a quantitative regression artifact after changes to
+feature spaces, reference data, candidate adjudication, or host-background
+modeling. It runs three calibration tracks:
 
 1. **TCGA per-sample classification** — for each per-sample TCGA TPM
    profile in ``pirlygenes/eval/eval_tpm.parquet``, run the broad RNA
@@ -799,22 +795,17 @@ def _classify_one(
     classifier.
     """
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
-    from trufflepig.tumor_purity import analyze_sample, rank_cancer_type_candidates
+    from trufflepig.healthy_vs_tumor import assess_healthy_vs_tumor
+    from trufflepig.tumor_purity import analyze_sample
 
-    if include_residual_identity:
-        from trufflepig.healthy_vs_tumor import assess_healthy_vs_tumor
-
-        tissue_signal = assess_healthy_vs_tumor(df_expr)
-        analysis = analyze_sample(df_expr, tissue_signal=tissue_signal)
-        analysis["healthy_vs_tumor"] = tissue_signal
-        trace = list(analysis.get("candidate_trace") or [])
-    else:
-        trace = rank_cancer_type_candidates(
-            df_expr,
-            top_k=5,
-            use_subtype_signatures=False,
-        )
-        analysis = {}
+    # Always evaluate the production evidence path. The residual-identity flag
+    # controls only the later decomposition experiment; it must not silently
+    # remove the healthy/tumor composition screen, shorten the candidate trace,
+    # or otherwise change the cancer-type inputs being calibrated.
+    tissue_signal = assess_healthy_vs_tumor(df_expr)
+    analysis = analyze_sample(df_expr, tissue_signal=tissue_signal)
+    analysis["healthy_vs_tumor"] = tissue_signal
+    trace = list(analysis.get("candidate_trace") or [])
     if not trace:
         return [], {
             "broad_top_code": None,
@@ -868,26 +859,29 @@ def _classify_one(
             decompose_sample,
             evaluate_residual_identity,
             infer_sample_mode,
+            scope_residual_identity_to_decomposition_mode,
         )
 
         candidate_codes: list[str] = []
         for code in (
             pre_residual_cancer_type,
             broad_top_code,
-            *(str(row.get("code") or "") for row in trace[:4]),
+            *(str(row.get("code") or "") for row in trace),
         ):
             code = str(code or "").strip()
             if code and code not in candidate_codes:
                 candidate_codes.append(code)
         sample_mode = infer_sample_mode(
-            candidate_rows=trace,
-            cancer_types=candidate_codes,
+            # Match production: the adjudicated report entity chooses the
+            # biological decomposition regime. The raw ranker trace remains
+            # the candidate differential, not a routing override.
+            cancer_types=[pre_residual_cancer_type],
             sample_mode="auto",
         )
         decompositions = decompose_sample(
             df_expr,
             cancer_types=candidate_codes,
-            top_k=24,
+            top_k=None,
             sample_mode=sample_mode,
             candidate_rows=trace,
         )
@@ -895,6 +889,10 @@ def _classify_one(
             decompositions,
             candidate_codes=candidate_codes,
             current_code=pre_residual_cancer_type,
+        )
+        residual_identity = scope_residual_identity_to_decomposition_mode(
+            residual_identity,
+            sample_mode=sample_mode,
         )
         post_evidence = select_report_scope_from_evidence(
             df_expr,

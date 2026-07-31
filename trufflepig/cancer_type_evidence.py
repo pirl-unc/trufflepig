@@ -153,7 +153,6 @@ _FUSED_EVIDENCE_MIN_SCORE = 0.25
 _FUSED_EVIDENCE_PAN_SIGNATURE_WEIGHT = 0.30
 _FUSED_EVIDENCE_CENTROID_WEIGHT = 0.40
 _FUSED_EVIDENCE_LEARNED_WEIGHT = 1.20
-_FUSED_EVIDENCE_LEARNED_HIERARCHY_WEIGHT = 0.45
 _FUSED_EVIDENCE_STRONG_LEARNED_ENTITY_PROBABILITY = 0.93
 _FUSED_EVIDENCE_STRONG_LEARNED_ENTITY_MARGIN = 0.50
 _FUSED_EVIDENCE_STRONG_LEARNED_ENTITY_SUPPORT = 0.90
@@ -1148,8 +1147,8 @@ def _hypothesis_evidence_channels(
             "out_of_beam_rescue": hypothesis.details.get(
                 "lineage_panel_out_of_beam_rescue"
             ),
-            "marker_coherence": hypothesis.details.get(
-                "lineage_panel_marker_coherence"
+            "parent_marker_coherence": hypothesis.details.get(
+                "lineage_panel_parent_marker_coherence"
             ),
         },
     )
@@ -1388,6 +1387,13 @@ def _add_quality_gated_composition_context_features(
         if rho < _COARSE_REFERENCE_MIN_RHO or code not in _registry_by_code():
             continue
         hypothesis = _hypothesis(hypotheses, code)
+        if hypothesis.details.get(
+            "coarse_reference_structural_tissue_only_ambiguity"
+        ):
+            # The selecting composition pass already established that this is
+            # host/structural context rather than tumor identity. Do not
+            # re-admit the same correlation through a generic context channel.
+            continue
         if (
             code == resolved_top
             and code != broad_top
@@ -3164,9 +3170,8 @@ def _adcc_breast_program_conflict(
     if not panels:
         return {}
     try:
-        sample_hk_median = _sample_hk_median(sample_tpm_by_gene_id)
         evidence_by_panel = {
-            name: score_panel(panel, sample_tpm_by_gene_id, sample_hk_median)
+            name: score_panel(panel, sample_tpm_by_gene_id)
             for name, panel in panels.items()
         }
     except Exception:  # noqa: BLE001
@@ -4100,45 +4105,6 @@ def _registry_by_code() -> dict[str, dict[str, Any]]:
         for _, row in df.iterrows()
         if _clean(row.get("code"))
     }
-
-
-@lru_cache(maxsize=1)
-def _hk_normalization_gene_ids() -> frozenset[str]:
-    """Versionless Ensembl IDs of pirlygenes housekeeping genes.
-    Computed once per process — every sample shares the same HK gene
-    set so there is no point in re-deriving it inside
-    ``_add_lineage_panel_features``.
-
-    Returns ``frozenset()`` when pirlygenes is unavailable; callers
-    should fall back to a naive normalization (e.g.
-    ``sample_hk_median=1.0``).
-    """
-    try:
-        from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
-    except ImportError:
-        return frozenset()
-    try:
-        ids = set(housekeeping_gene_ids())
-    except Exception:  # noqa: BLE001
-        return frozenset()
-    out: set[str] = set()
-    for gid in ids:
-        s = str(gid or "").strip()
-        if not s:
-            continue
-        out.add(s.split(".", 1)[0])
-    return frozenset(out)
-
-
-def _sample_hk_median(sample_tpm_by_gene_id: Mapping[str, float]) -> float:
-    hk_ids = _hk_normalization_gene_ids()
-    if not hk_ids:
-        return 1.0
-    hk_vals = [
-        sample_tpm_by_gene_id.get(g, 0.0) for g in hk_ids
-        if sample_tpm_by_gene_id.get(g, 0.0) > 0
-    ]
-    return float(np.median(hk_vals)) if hk_vals else 1.0
 
 
 def _local_reference_context_codes(
@@ -5417,7 +5383,7 @@ def _learned_prediction_entity_code(code: str) -> str:
     return entity_code
 
 
-def _learned_entity_consensus_candidate(
+def _entity_consensus_candidate_beam(
     hypotheses: dict[str, CancerTypeEvidence],
     selected: CancerTypeEvidence,
     hierarchy_details: Mapping[str, Any],
@@ -5580,6 +5546,20 @@ def _learned_entity_consensus_candidate(
             if residual_origin
             else "learned_expression_view"
         )
+        credible_learned_candidate = bool(
+            entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
+        )
+        origin_features = _entity_consensus_origin_features(
+            candidate,
+            selected,
+            consensus,
+            credible_learned_candidate=credible_learned_candidate,
+            residual_origin=residual_origin,
+        )
+        consensus.update(origin_features)
+        candidate_origin_credible = origin_features[
+            "candidate_origin_credible"
+        ]
         hard_blockers = _persistent_report_label_blockers(candidate)
         if hard_blockers:
             consensus["evidence_decisive_candidate"] = bool(
@@ -5588,7 +5568,10 @@ def _learned_entity_consensus_candidate(
             consensus["decisive_candidate"] = False
             consensus["selection_blocked"] = True
             consensus["candidate_hard_blockers"] = list(hard_blockers)
-        if not consensus.get("decisive_candidate"):
+        if (
+            not consensus.get("decisive_candidate")
+            or not candidate_origin_credible
+        ):
             continue
         nonlearned_support = sum(
             _safe_float(axis.get("candidate_support"))
@@ -5636,6 +5619,11 @@ def _learned_entity_consensus_candidate(
             1.0 + abs(_safe_float(consensus.get("candidate_advantage"))),
         ),
     )
+    if candidate.can_select_report_label:
+        _withdraw_fused_selection_superseded_by_entity_adjudication(
+            selected,
+            candidate.cancer_type,
+        )
     return candidate if candidate.can_select_report_label else None
 
 
@@ -6077,6 +6065,123 @@ def _entity_evidence_consensus(
     }
 
 
+def _entity_consensus_has_candidate_identity_vote(
+    consensus: Mapping[str, Any],
+) -> bool:
+    """Return whether a tumor-identity axis supports the candidate."""
+
+    identity_axes = {
+        _ENTITY_CONSENSUS_MARKER_AXIS,
+        _ENTITY_CONSENSUS_REFERENCE_AXIS,
+        _ENTITY_CONSENSUS_RESIDUAL_AXIS,
+    }
+    return any(
+        _clean(axis.get("axis")) in identity_axes
+        and _clean(axis.get("preference")) == "candidate"
+        for axis in consensus.get("axes") or ()
+        if isinstance(axis, Mapping)
+    )
+
+
+def _entity_consensus_origin_features(
+    candidate: CancerTypeEvidence,
+    selected: CancerTypeEvidence,
+    consensus: Mapping[str, Any],
+    *,
+    credible_learned_candidate: bool,
+    residual_origin: bool = False,
+) -> dict[str, bool]:
+    """Describe whether the candidate has a valid entity origin.
+
+    Family-level context can establish a different lineage, but it cannot
+    distinguish siblings inside one lineage. Same-lineage refinement therefore
+    needs the broad top, a credible learned entity, or an identity-specific
+    marker/reference/residual vote.
+    """
+
+    candidate_lineage = _code_lineage_token(candidate.cancer_type)
+    selected_lineage = _code_lineage_token(selected.cancer_type)
+    same_lineage_as_selected = bool(
+        candidate_lineage
+        and selected_lineage
+        and candidate_lineage == selected_lineage
+    )
+    candidate_has_identity_vote = _entity_consensus_has_candidate_identity_vote(
+        consensus
+    )
+    candidate_has_family_origin = _entity_consensus_has_family_anchored_origin(
+        candidate
+    )
+    candidate_has_residual_vote = bool(
+        residual_origin or consensus.get("candidate_has_residual_vote")
+    )
+    candidate_is_broad_top = candidate.broad_rna_rank == 1
+    candidate_origin_credible = bool(
+        credible_learned_candidate
+        or candidate_has_residual_vote
+        or candidate_has_identity_vote
+        or candidate_is_broad_top
+        or (
+            candidate_has_family_origin
+            and not same_lineage_as_selected
+        )
+    )
+    return {
+        "credible_learned_candidate": bool(credible_learned_candidate),
+        "candidate_has_identity_vote": candidate_has_identity_vote,
+        "candidate_has_family_anchored_origin": candidate_has_family_origin,
+        "candidate_has_residual_origin": candidate_has_residual_vote,
+        "candidate_is_broad_top": candidate_is_broad_top,
+        "same_lineage_as_selected": same_lineage_as_selected,
+        "candidate_origin_credible": candidate_origin_credible,
+    }
+
+
+def _entity_consensus_has_family_anchored_origin(
+    candidate: CancerTypeEvidence,
+) -> bool:
+    """Whether learned family and broad RNA independently establish origin.
+
+    The fused component is present only when the hierarchy's leading family
+    agrees with this candidate's family and the candidate is already a close
+    broad-ranker context. Reusing that admitted component avoids treating a
+    negligible learned entity tail as credible while still allowing
+    entity-level centroid/reference votes to resolve within the established
+    family.
+    """
+
+    components = candidate.details.get("fused_evidence_components") or {}
+    return bool(
+        _safe_float(
+            components.get(
+                "learned_family_anchored_pan_cancer_context"
+            )
+        )
+        > 0
+    )
+
+
+def _withdraw_fused_selection_superseded_by_entity_adjudication(
+    selected: CancerTypeEvidence,
+    replacement_code: str,
+) -> None:
+    """Retain the old fused row as audit evidence, not a second selector."""
+
+    if selected.selected_by != "fused_evidence":
+        return
+    reason = (
+        "entity adjudication superseded fused selection with "
+        f"{replacement_code}"
+    )
+    selected.withdraw_report_label_selector(
+        "fused_evidence",
+        blocking_reasons=(reason,),
+    )
+    selected.details["entity_consensus_superseded_fused_selection"] = (
+        replacement_code
+    )
+
+
 def _persistent_report_label_blockers(
     hypothesis: CancerTypeEvidence,
 ) -> tuple[str, ...]:
@@ -6178,22 +6283,21 @@ def _adjudicate_selection_with_learned_hierarchy(
     never overridden by this expression-only adjudicator.
     """
 
-    if selected is None or selected.selected_by in _DEFINITIVE_SELECTORS:
+    if (
+        selected is None
+        or selected.selected_by in _DEFINITIVE_SELECTORS
+        or (
+            selected.selected_by == "lineage_panel"
+            and selected.details.get(
+                "lineage_panel_identity_program_decisive"
+            )
+        )
+    ):
         return selected
     details = _learned_hierarchy_details(hypotheses, selected)
-    learned_entity_code = _clean(
-        details.get("learned_expression_top_entity_label")
-    )
-    if not learned_entity_code or learned_entity_code not in _registry_by_code():
-        return selected
-    entity_code = learned_entity_code
-    while entity_code and _orthogonal_axes_that_block_report_label(entity_code):
-        parents = _registry_parent_chain(entity_code)
-        entity_code = parents[0] if parents else ""
-    if not entity_code:
-        return selected
-    if entity_code == selected.cancer_type:
-        beam_candidate = _learned_entity_consensus_candidate(
+
+    def consensus_beam() -> CancerTypeEvidence | None:
+        return _entity_consensus_candidate_beam(
             hypotheses,
             selected,
             details,
@@ -6202,6 +6306,24 @@ def _adjudicate_selection_with_learned_hierarchy(
             centroid_confident=centroid_confident,
             residual_identity_evidence=residual_identity_evidence,
         )
+
+    learned_entity_code = _clean(
+        details.get("learned_expression_top_entity_label")
+    )
+    if not learned_entity_code or learned_entity_code not in _registry_by_code():
+        beam_candidate = consensus_beam()
+        if beam_candidate is not None:
+            return beam_candidate
+        return selected
+    entity_code = learned_entity_code
+    while entity_code and _orthogonal_axes_that_block_report_label(entity_code):
+        parents = _registry_parent_chain(entity_code)
+        entity_code = parents[0] if parents else ""
+    if not entity_code:
+        beam_candidate = consensus_beam()
+        return beam_candidate if beam_candidate is not None else selected
+    if entity_code == selected.cancer_type:
+        beam_candidate = consensus_beam()
         return beam_candidate if beam_candidate is not None else selected
 
     entity_support = _safe_float(
@@ -6304,7 +6426,14 @@ def _adjudicate_selection_with_learned_hierarchy(
         entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
         and entity_margin >= _LEARNED_EXPRESSION_MIN_MARGIN
     )
-    consensus["credible_learned_candidate"] = credible_learned_candidate
+    origin_features = _entity_consensus_origin_features(
+        candidate,
+        selected,
+        consensus,
+        credible_learned_candidate=credible_learned_candidate,
+    )
+    consensus.update(origin_features)
+    candidate_origin_credible = origin_features["candidate_origin_credible"]
     hard_blockers = _persistent_report_label_blockers(candidate)
     if hard_blockers:
         consensus["evidence_decisive_candidate"] = bool(
@@ -6320,10 +6449,21 @@ def _adjudicate_selection_with_learned_hierarchy(
     candidate.details["entity_evidence_consensus"] = dict(consensus)
     if hard_blockers:
         return selected
+    selected_consensus_majority = bool(
+        _safe_int(consensus.get("selected_votes")) * 2
+        > _safe_int(consensus.get("available_axis_count"))
+        and _safe_float(consensus.get("candidate_advantage")) < 0
+    )
+    if strong_entity_refinement and selected_consensus_majority:
+        strong_entity_refinement = False
+        candidate.details[
+            "learned_hierarchy_withheld_by_independent_majority"
+        ] = dict(consensus)
     multi_axis_entity_refinement = bool(
         entity_incompatible
         and family_consistent
         and compartment_consistent
+        and candidate_origin_credible
         and consensus.get("decisive_candidate")
         and (
             not lineage_disagreement
@@ -6364,6 +6504,7 @@ def _adjudicate_selection_with_learned_hierarchy(
     )
     lineage_safety = bool(
         lineage_disagreement
+        and not selected_consensus_majority
         and family_consistent
         and (strong_lineage_entity or corroborated_lineage_entity)
     )
@@ -6374,7 +6515,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         and family_consistent
         and compartment_consistent
         and consensus.get("conflicted")
-        and credible_learned_candidate
+        and candidate_origin_credible
         and not strong_entity_refinement
         and not multi_axis_entity_refinement
     ):
@@ -6416,6 +6557,11 @@ def _adjudicate_selection_with_learned_hierarchy(
             blocking_reasons=(),
             priority=(4, 1.0 + abs(_safe_float(consensus.get("candidate_advantage")))),
         )
+        if parent.can_select_report_label:
+            _withdraw_fused_selection_superseded_by_entity_adjudication(
+                selected,
+                parent.cancer_type,
+            )
         return parent if parent.can_select_report_label else selected
 
     if (
@@ -6423,7 +6569,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         and not multi_axis_entity_refinement
         and not lineage_safety
     ):
-        beam_candidate = _learned_entity_consensus_candidate(
+        beam_candidate = _entity_consensus_candidate_beam(
             hypotheses,
             selected,
             details,
@@ -6468,6 +6614,10 @@ def _adjudicate_selection_with_learned_hierarchy(
         priority=(4, 1.0 + entity_support + 0.25 * family_support),
     )
     if candidate.can_select_report_label:
+        _withdraw_fused_selection_superseded_by_entity_adjudication(
+            selected,
+            candidate.cancer_type,
+        )
         _refresh_candidate_mismatch_repair_votes(
             candidate,
             sample_tpm_by_symbol,
@@ -6801,6 +6951,16 @@ def _add_coarse_composition_reference_features(
         and broad_top_code != top_code
         and broad_top_code in close_codes
     )
+    broad_and_composition_share_entity_context = bool(
+        broad_top_code
+        and broad_top_code != top_code
+        and _registry_family_for_code(broad_top_code)
+        and _primary_tissue_key_for_code(broad_top_code)
+        and _registry_family_for_code(broad_top_code)
+        == _registry_family_for_code(top_code)
+        and _primary_tissue_key_for_code(broad_top_code)
+        == _primary_tissue_key_for_code(top_code)
+    )
     has_specificity = (
         margin >= _COARSE_REFERENCE_MIN_MARGIN
         or type_specific_count >= _COARSE_REFERENCE_MIN_TYPE_SPECIFIC_HITS
@@ -6827,6 +6987,14 @@ def _add_coarse_composition_reference_features(
             f"{', '.join(same_tissue_close_codes)}; exact report-label "
             "selection requires cancer-reference separation, type-specific "
             "tumor-up evidence, or an exact-reference selector"
+        )
+    if broad_and_composition_share_entity_context:
+        blockers.append(
+            "composition supports the same tissue and cancer family as the "
+            f"resolved first-pass entity {broad_top_code}, so it cannot by "
+            f"itself distinguish sibling entity {top_code}; preserve the "
+            "resolved entity unless an entity-specific marker, exact "
+            "reference, or learned consensus supports the change"
         )
     if structural_tissue_only_ambiguity:
         blockers.append(
@@ -6927,6 +7095,9 @@ def _add_coarse_composition_reference_features(
             "coarse_reference_crc_family_lock": crc_family_lock,
             "coarse_reference_top_type_specific_hits": top_hit_symbols,
             "coarse_reference_broad_top_code": broad_top_code,
+            "coarse_reference_same_tissue_family_broad_top": (
+                broad_and_composition_share_entity_context
+            ),
             "coarse_reference_broad_fit_label": fit_label,
             "coarse_reference_broad_top_marker_coherence": broad_top_marker_coherence,
         }
@@ -6937,6 +7108,15 @@ def _add_coarse_composition_reference_features(
         selector="coarse_composition_reference",
         blocking_reasons=blockers,
     )
+    if broad_and_composition_share_entity_context:
+        # Same-tissue composition cannot select between sibling entities, but
+        # it remains one legitimate corroborating axis for a later learned or
+        # marker-led entity consensus.
+        hypothesis.admit_adjudication_support(
+            _ENTITY_CONSENSUS_COMPOSITION_AXIS,
+            support,
+            selector="same_tissue_family_composition_context",
+        )
     hypothesis.consider_for_report_label(
         selected_by="coarse_composition_reference",
         can_select=not blockers,
@@ -6953,6 +7133,10 @@ def _family_marker_support(row: Mapping[str, Any]) -> float:
 
 
 def _is_background_like_candidate(row: Mapping[str, Any]) -> bool:
+    # ``family_label`` describes the expression program that drove this row,
+    # not the registry lineage of its code.  A mesenchymal program attached to
+    # an epithelial code (for example UCS) is precisely the situation where
+    # the broad label may be tracking background rather than tumor identity.
     return _clean(row.get("family_label")) in _BACKGROUND_LIKE_FAMILIES
 
 
@@ -7439,6 +7623,12 @@ def _add_local_expression_reference_features(
             context_is_top=context_is_top,
         )
         blockers: list[str] = []
+        if len(markers) < 2 and parent_code:
+            blockers.append(
+                "a single-gene child expression reference is contextual "
+                "evidence, not a coherent program for refining its parent "
+                f"{parent_code}"
+            )
         first_pass_context_blocker = _local_reference_first_pass_context_blocker(
             primary_tissue,
             primary_contexts,
@@ -7740,6 +7930,7 @@ def _add_local_expression_reference_features(
                     float(marker_fraction),
                     4,
                 ),
+                "local_reference_marker_count": len(markers),
                 "local_reference_marker_burden_ratio": round(
                     float(burden_ratio),
                     4,
@@ -8180,8 +8371,7 @@ def _add_lineage_panel_features(
     module, evaluator exception).
 
     Graceful degradation: when ``pirlygenes`` or the pan-cancer
-    expression frame is unavailable, HK normalization falls back to
-    ``sample_hk_median=1.0`` and the cross-code path falls back to
+    expression frame is unavailable, the cross-code path falls back to
     requiring ``fit_quality.label in {"weak", "ambiguous"}``
     (the same-code shortcut still works since it only compares
     string codes, not registry families). This degrades panel
@@ -8230,13 +8420,8 @@ def _add_lineage_panel_features(
                 built[gid] = f_tpm
         sample_tpm_by_gene_id = built
 
-    # Sample-side HK median for normalization. HK genes are pulled
-    # directly by ID from the cached set so the symbol → ID step is
-    # skipped entirely for the normalization path.
-    sample_hk_median = _sample_hk_median(sample_tpm_by_gene_id)
-
     try:
-        evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_gene_id, sample_hk_median)
+        evidence = evaluate_panels(LINEAGE_PANELS, sample_tpm_by_gene_id)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("evaluate_panels failed; skipping selector", exc_info=True)
         return None
@@ -8287,6 +8472,19 @@ def _add_lineage_panel_features(
         )
         return summary
 
+    # A complete phenotype plus explicit multi-marker tissue-identity groups
+    # is qualitatively different from a generic morphology panel. It can
+    # resolve an out-of-beam site call because it establishes origin with
+    # lineage-specific markers rather than re-reading the same whole-profile
+    # similarity that produced the broad ranker, centroid, and composition
+    # calls. ``complete_program_entity_decision`` also requires that no other
+    # cancer entity has a complete competing program.
+    identity_program_decisive = bool(
+        separated_by_complete_program
+        and getattr(panel, "identity_marker_groups", ())
+        and program_decision.get("top_identity_specific")
+    )
+
     # Stamp the winning panel's biological program note onto the
     # summary so brief.py can render the subtype line without
     # importing LINEAGE_PANELS. Single source of truth: the note
@@ -8318,6 +8516,9 @@ def _add_lineage_panel_features(
                 else "complete_program_dominance"
             ),
             "lineage_panel_entity_program_decision": program_decision,
+            "lineage_panel_identity_program_decisive": (
+                identity_program_decisive
+            ),
             "lineage_panel_rationale": top_rationale,
             "lineage_panel_all": [
                 {"name": e.panel_name, "score": round(e.score, 4)}
@@ -8401,13 +8602,17 @@ def _add_lineage_panel_features(
         and top_score >= _LINEAGE_PANEL_OUT_OF_BEAM_MIN_SCORE
         and margin >= _LINEAGE_PANEL_OUT_OF_BEAM_MIN_MARGIN
     )
+    identity_program_rescue = bool(
+        not in_broad_top and identity_program_decisive
+    )
 
     can_promote = bool(
         (in_broad_top and (same_code or broad_uncertain))
         or out_of_beam_rescue
+        or identity_program_rescue
     )
     blockers: list[str] = []
-    if not in_broad_top and not out_of_beam_rescue:
+    if not in_broad_top and not (out_of_beam_rescue or identity_program_rescue):
         blockers.append(
             f"{code} is not among the top-5 first-pass RNA candidates; "
             "lineage panels only refine candidates the first-pass "
@@ -8415,7 +8620,9 @@ def _add_lineage_panel_features(
             "paired with a technical expression-concentration warning or "
             "an expression/code lineage conflict"
         )
-    elif not out_of_beam_rescue and not (same_code or broad_uncertain):
+    elif not (out_of_beam_rescue or identity_program_rescue) and not (
+        same_code or broad_uncertain
+    ):
         blockers.append(
             f"first-pass top-1 ({broad_top_code or 'unknown'}) differs "
             f"from panel parent_cohort ({code}) and the first-pass "
@@ -8423,7 +8630,13 @@ def _add_lineage_panel_features(
             "noted but the first-pass call is preserved"
         )
     consensus_context = _broad_coarse_consensus_context(analysis)
-    if can_promote and not same_code and consensus_context and consensus_context != code:
+    if (
+        can_promote
+        and not same_code
+        and not identity_program_decisive
+        and consensus_context
+        and consensus_context != code
+    ):
         blockers.append(
             "pan-cancer signature-ranker context and coarse reference matching both support "
             f"{consensus_context}; lineage panel {top_panel} is noted as a "
@@ -8432,7 +8645,7 @@ def _add_lineage_panel_features(
         can_promote = False
     conflicting_coarse = (
         _strong_conflicting_coarse_reference(analysis, code)
-        if can_promote and not same_code
+        if can_promote and not same_code and not identity_program_decisive
         else {}
     )
     if conflicting_coarse:
@@ -8446,22 +8659,16 @@ def _add_lineage_panel_features(
             "override"
         )
         can_promote = False
-    if (
-        can_promote
-        and not same_code
-        and not out_of_beam_rescue
-        and marker_coherence
-        and not _marker_coherence_selection_grade(marker_coherence)
-    ):
-        blockers.append(
-            f"{code} marker program is {marker_coherence.get('status')} "
-            f"({marker_coherence.get('detected')}/"
-            f"{marker_coherence.get('total')} expected high markers; "
-            f"{marker_coherence.get('required_for_consistent')} required)"
-        )
-        can_promote = False
+    # The lineage panel is already a complete positive/negative program at
+    # the resolution it names. Do not veto a coherent descendant program with
+    # the generic parent marker set: basal BRCA, for example, is expected to
+    # lack luminal markers that make up much of the broad BRCA sanity panel.
+    # Keep broad parent coherence as audit context, not a second, correlated
+    # gate over the more specific program.
     if marker_coherence:
-        hypothesis.details["lineage_panel_marker_coherence"] = marker_coherence
+        hypothesis.details["lineage_panel_parent_marker_coherence"] = (
+            marker_coherence
+        )
     if out_of_beam_rescue:
         hypothesis.details["lineage_panel_out_of_beam_rescue"] = {
             "score": round(top_score, 4),
@@ -8473,6 +8680,21 @@ def _add_lineage_panel_features(
             "broad_top_unexpected_low_conflict": broad_top_unexpected_low_conflict,
             "panel_marker_coherence": top_rationale,
             "generic_marker_coherence": marker_coherence,
+        }
+    if identity_program_rescue:
+        hypothesis.details["lineage_panel_identity_program_rescue"] = {
+            "program_decision": dict(program_decision),
+            "identity_marker_groups": [
+                list(group) for group in panel.identity_marker_groups
+            ],
+            "identity_marker_hits": list(
+                (summary.get("panels") or [{}])[0].get(
+                    "identity_marker_hits",
+                    (),
+                )
+            ),
+            "broad_top_code": broad_top_code,
+            "role": "specific_tumor_identity_over_shared_morphology",
         }
     # Class-rank policy:
     #   - SAME-CODE REINFORCEMENT (panel agrees with broad top-1) →
@@ -8487,7 +8709,7 @@ def _add_lineage_panel_features(
     #     competes with rare_marker and primary_expression_match, but
     #     fine_reference and local_expression_reference (which use
     #     class 2) still win when they have stronger support.
-    class_rank = 2 if same_code else 1
+    class_rank = 4 if identity_program_decisive else (2 if same_code else 1)
     hypothesis.admit_adjudication_support(
         _ENTITY_CONSENSUS_MARKER_AXIS,
         top_score,
@@ -9237,6 +9459,20 @@ def _pick_selected(
     if definitive:
         return min(definitive, key=_authority_key)
 
+    # A complete, unopposed phenotype whose explicit tissue-identity groups
+    # passed is more specific than whole-profile morphology. Preserve it over
+    # fused/centroid similarity so a basal urothelial tumor is not relabeled as
+    # another squamous cancer merely because shared keratins dominate the
+    # library. Direct molecular evidence still takes precedence above.
+    identity_programs = [
+        row
+        for row in sel
+        if row.selected_by == "lineage_panel"
+        and row.details.get("lineage_panel_identity_program_decisive")
+    ]
+    if identity_programs:
+        return min(identity_programs, key=_authority_key)
+
     winner = min(sel, key=_authority_key)
     if winner.selected_by == "fused_evidence" or winner.details.get("fused_evidence_selected"):
         return winner
@@ -9666,6 +9902,13 @@ def _orthogonal_axes_that_block_report_label(code: str) -> list[dict[str, Any]]:
         axis
         for axis in axes
         if _clean(axis.get("axis")) in _REPORT_LABEL_BLOCKING_ORTHOGONAL_AXES
+        # Registry metadata can describe an etiologic property of a base
+        # diagnosis itself (for example, HPV is defining for CESC). That is
+        # report context, not a child status label to strip away. Orthogonal
+        # axes block selection only when the registry supplies a distinct
+        # diagnosis node that can carry the state.
+        and bool(_clean(axis.get("parent_code")))
+        and _clean(axis.get("base_code")) != _clean(axis.get("code"))
     ]
 
 
@@ -9719,7 +9962,6 @@ def _fused_component_scores(
     )
     refinement_admitted = selected_by == "tumor_label_refinement"
     composition_admitted = selected_by == "coarse_composition_reference"
-    learned_hierarchy = _learned_hierarchy_support(details)
     lineage_panel = _safe_float(details.get("lineage_panel_score"))
     pan_signature_marker_support = _safe_float(
         features.get("pan_cancer_signature_marker_support")
@@ -9801,9 +10043,6 @@ def _fused_component_scores(
         "learned_expression_classifier": (
             _FUSED_EVIDENCE_LEARNED_WEIGHT * hypothesis.learned_expression_support
         ),
-        "learned_hierarchy": (
-            _FUSED_EVIDENCE_LEARNED_HIERARCHY_WEIGHT * learned_hierarchy
-        ),
         "exact_expression_reference": (
             (
                 0.35
@@ -9878,6 +10117,63 @@ def _fused_component_scores(
         for key, value in components.items()
         if _safe_float(value) > 0
     }
+
+
+def _group_fused_evidence_components(
+    components: Mapping[str, float],
+) -> dict[str, float]:
+    """Collapse correlated feature views into independent evidence groups.
+
+    Flat, hierarchical, family-anchored, and compartment-anchored learned
+    scores are views of one trained expression model, not four votes.
+    Likewise, subtype/signature, reference, curated-marker, and composition
+    variants each describe one biological evidence source. Keeping their raw
+    components in the audit is useful, but summing them lets one source
+    overwhelm several genuinely independent lines of evidence.
+    """
+
+    groups = {
+        "learned_expression_model": (
+            "learned_expression_classifier",
+            "learned_compartment_anchored_pan_cancer_context",
+            "learned_family_anchored_pan_cancer_context",
+        ),
+        "pan_cancer_signature": (
+            "pan_cancer_signature_ranker",
+            "pan_cancer_signature_subtype",
+            "pan_cancer_signature_marker_program",
+        ),
+        "expression_reference": (
+            "exact_expression_reference",
+            "signature_anchored_exact_reference",
+            "marker_coherent_expression_reference",
+            "centroid_anchored_expression_reference",
+        ),
+        "curated_marker_program": (
+            "lineage_panel",
+            "contrast_discriminator",
+            "rare_marker",
+            "marker_program",
+        ),
+        "composition_context": (
+            "background_label",
+            "coarse_composition_reference",
+        ),
+    }
+    grouped: dict[str, float] = {}
+    grouped_keys = {key for keys in groups.values() for key in keys}
+    for group, keys in groups.items():
+        support = max(
+            (_safe_float(components.get(key)) for key in keys),
+            default=0.0,
+        )
+        if support > 0:
+            grouped[group] = round(float(support), 4)
+    for key, value in components.items():
+        support = _safe_float(value)
+        if key not in grouped_keys and support > 0:
+            grouped[key] = round(float(support), 4)
+    return grouped
 
 
 def _fused_evidence_eligible(
@@ -10091,6 +10387,16 @@ def _fused_evidence_eligible(
         and _safe_float(components.get("pan_cancer_signature_marker_program"))
         >= _PAN_SIGNATURE_MARKER_PROGRAM_MIN_SUPPORT
     )
+    pan_marker_coherence = (
+        hypothesis.details.get("pan_cancer_signature_marker_coherence") or {}
+    )
+    pan_signature_identity_specific = bool(
+        pan_signature_marker_program
+        and isinstance(pan_marker_coherence, Mapping)
+        and _clean(pan_marker_coherence.get("code"))
+        == hypothesis.cancer_type
+        and _pan_signature_marker_program_selectable(pan_marker_coherence)
+    )
     primary_context_conflict = _dominant_primary_context_competitor(
         hypothesis,
         analysis,
@@ -10120,6 +10426,49 @@ def _fused_evidence_eligible(
             "local expression reference; require coherent marker fraction and "
             "burden before overriding the pan-cancer signature context"
         )
+    identity_specific_override = bool(
+        exact_reference_admitted
+        or lineage_panel_admitted
+        or rare_marker_admitted
+        or contrast_admitted
+        or refinement_admitted
+        or signature_anchor_can_escape_expected_low
+        or centroid_anchored_expression_reference
+        or pan_signature_identity_specific
+    )
+    broad_top_code = _top_code(analysis)
+    unsupported_cross_context_fusion = bool(
+        broad_top_code
+        and broad_top_code != hypothesis.cancer_type
+        and _primary_context_root_for_code(broad_top_code)
+        != _primary_context_root_for_code(hypothesis.cancer_type)
+        and not strong_independent_learned_call
+        and not identity_specific_override
+        and (
+            not hypothesis.can_select_report_label
+            or selected_by == "learned_expression_classifier"
+        )
+    )
+    if unsupported_cross_context_fusion:
+        blockers.append(
+            "fused evidence cannot create a cross-context entity from broad "
+            "signature, centroid, family, or compartment similarity alone; "
+            "require an admitted entity selector, a strong learned entity, "
+            "an entity-specific marker program, or an expression reference"
+        )
+        hypothesis.details[
+            "fused_evidence_unsupported_cross_context_fusion"
+        ] = dict(
+            primary_context_conflict
+            or {
+                "code": broad_top_code,
+                "context": _primary_context_root_for_code(broad_top_code),
+                "candidate_code": hypothesis.cancer_type,
+                "candidate_context": _primary_context_root_for_code(
+                    hypothesis.cancer_type
+                ),
+            }
+        )
     primary_context_override = bool(
         strong_independent_learned_call
         or exact_reference_admitted
@@ -10131,7 +10480,7 @@ def _fused_evidence_eligible(
         or signature_anchor_can_escape_expected_low
         or centroid_anchored_expression_reference
         or learned_family_anchored_context
-        or pan_signature_marker_program
+        or pan_signature_identity_specific
         or hypothesis.direct_fusion_support > 0
     )
     if primary_context_conflict and not primary_context_override:
@@ -10149,56 +10498,6 @@ def _fused_evidence_eligible(
         hypothesis.details["fused_evidence_primary_context_conflict"] = (
             primary_context_conflict
         )
-    independent_channels = sum(
-        1
-        for key, threshold in (
-            ("pan_cancer_signature_ranker", 0.30),
-            (
-                "pan_cancer_signature_marker_program",
-                _PAN_SIGNATURE_MARKER_PROGRAM_MIN_SUPPORT,
-            ),
-            ("centroid_spearman", 0.30),
-            ("learned_expression_classifier", 0.55),
-            ("learned_hierarchy", 0.20),
-            ("learned_compartment_anchored_pan_cancer_context", 0.75),
-            ("learned_family_anchored_pan_cancer_context", _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT),
-            ("exact_expression_reference", 0.20),
-            ("signature_anchored_exact_reference", 0.50),
-            ("marker_coherent_expression_reference", 0.35),
-            ("centroid_anchored_expression_reference", 0.55),
-            ("lineage_panel", 0.35),
-            ("rare_marker", 0.35),
-            ("contrast_discriminator", 0.35),
-            ("marker_program", 0.35),
-            ("background_label", 0.35),
-            ("pan_cancer_signature_subtype", 0.30),
-        )
-        if _safe_float(components.get(key)) >= threshold
-    )
-    non_signature_independent_channels = sum(
-        1
-        for key, threshold in (
-            ("centroid_spearman", 0.30),
-            (
-                "pan_cancer_signature_marker_program",
-                _PAN_SIGNATURE_MARKER_PROGRAM_MIN_SUPPORT,
-            ),
-            ("learned_expression_classifier", 0.55),
-            ("learned_hierarchy", 0.20),
-            ("learned_compartment_anchored_pan_cancer_context", 0.75),
-            ("learned_family_anchored_pan_cancer_context", _FUSED_EVIDENCE_LEARNED_FAMILY_ANCHOR_MIN_COMPONENT),
-            ("exact_expression_reference", 0.20),
-            ("signature_anchored_exact_reference", 0.50),
-            ("marker_coherent_expression_reference", 0.35),
-            ("centroid_anchored_expression_reference", 0.55),
-            ("lineage_panel", 0.35),
-            ("rare_marker", 0.35),
-            ("contrast_discriminator", 0.35),
-            ("marker_program", 0.35),
-            ("background_label", 0.35),
-        )
-        if _safe_float(components.get(key)) >= threshold
-    )
     has_admission_path = bool(
         (
             learned >= _LEARNED_EXPRESSION_STRONG_PROBABILITY
@@ -10254,6 +10553,8 @@ def _fused_evidence_eligible(
         or learned_compartment_anchored_context
         or learned_family_anchored_context
         or pan_signature_marker_program
+        or composition_admitted
+        or contrast_admitted
         or (
             lineage_panel >= _LINEAGE_PANEL_MIN_SCORE
             and hypothesis.can_select_report_label
@@ -10261,19 +10562,6 @@ def _fused_evidence_eligible(
         )
         or refinement_admitted
         or rare_marker_admitted
-        or (
-            independent_channels >= 2
-            and non_signature_independent_channels >= 1
-            and (
-                _safe_float(components.get("learned_expression_classifier")) <= 0
-                or learned_admitted
-                or centroid_support >= 0.45
-                or exact_reference_admitted
-                or signature_anchored_exact_reference
-                or context_free_learned_triplet
-                or strong_learned_entity_call
-            )
-        )
     )
     if not has_admission_path:
         blockers.append(
@@ -10282,7 +10570,7 @@ def _fused_evidence_eligible(
             "centroid-anchored expression reference, learned-compartment "
             "or learned-family anchored pan-cancer context, ranker marker program, "
             "lineage panel, rare marker, contrast discriminator, or "
-            "multi-channel corroboration beyond the pan-cancer signature ranker"
+            "another candidate-specific tumor-identity selector"
         )
     return not blockers, blockers
 
@@ -10291,6 +10579,7 @@ def _add_fused_evidence_features(
     hypotheses: dict[str, CancerTypeEvidence],
     analysis: Mapping[str, Any],
     *,
+    sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
 ) -> None:
@@ -10302,12 +10591,16 @@ def _add_fused_evidence_features(
     )
     scored: list[tuple[float, str, CancerTypeEvidence, list[str]]] = []
     for code, hypothesis in hypotheses.items():
+        hypothesis.details["fused_evidence_preselector"] = (
+            hypothesis.selected_by if hypothesis.can_select_report_label else ""
+        )
         centroid_support = _safe_float(centroid_supports.get(code))
         components = _fused_component_scores(
             hypothesis,
             centroid_support=centroid_support,
         )
-        score = round(float(sum(components.values())), 4)
+        grouped_components = _group_fused_evidence_components(components)
+        score = round(float(sum(grouped_components.values())), 4)
         can_select, blockers = _fused_evidence_eligible(
             hypothesis,
             analysis,
@@ -10317,6 +10610,9 @@ def _add_fused_evidence_features(
         )
         hypothesis.details["fused_evidence_score"] = score
         hypothesis.details["fused_evidence_components"] = dict(components)
+        hypothesis.details["fused_evidence_grouped_components"] = dict(
+            grouped_components
+        )
         hypothesis.details["fused_evidence_centroid_support"] = round(
             float(centroid_support),
             4,
@@ -10390,6 +10686,7 @@ def _add_fused_evidence_features(
         scored.append((score, code, hypothesis, blockers))
     if not scored:
         return
+
     scored.sort(key=lambda item: (-item[0], item[1]))
     for rank, (_score, _code, hypothesis, _blockers) in enumerate(scored, start=1):
         hypothesis.details["fused_evidence_rank"] = rank
@@ -10520,6 +10817,7 @@ def select_report_scope_from_evidence(
     _add_fused_evidence_features(
         hypotheses,
         analysis,
+        sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=_cen,
         centroid_confident=_cen_confident,
     )

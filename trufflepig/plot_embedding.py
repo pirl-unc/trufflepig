@@ -16,7 +16,7 @@ import seaborn as sns
 
 from adjustText import adjust_text
 
-from .common import _guess_gene_cols
+from .common import _guess_gene_cols, build_sample_tpm_by_symbol
 from .plot_data_helpers import _strip_ensembl_version
 from pirlygenes.gene_sets_cancer import (
     housekeeping_gene_ids, therapy_target_gene_id_to_name,
@@ -198,7 +198,7 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
     if cached is not None:
         return {code: list(genes) for code, genes in cached.items()}
 
-    ref_matrices = _cached_reference_matrices(normalize="housekeeping")
+    ref_matrices = _cached_reference_matrices(normalize=None)
     cohort_cols = ref_matrices["cohort_cols"]
     expr_matrix = ref_matrices["expr_matrix"]
     z_matrix = ref_matrices["z_matrix"]
@@ -275,32 +275,17 @@ def _get_cancer_type_signature_panels(n_signature_genes=20):
     return panels
 
 
-# Detection floor (housekeeping-relative) below which a signature gene is treated
-# as not expressed and so cannot contribute positive cross-cancer-percentile
-# evidence — see the "zero-floor percentile inflation" fix below. Anchored at the
-# RNA-seq quantifier-noise boundary: ~0.1× the housekeeping median is ≈1–2 TPM for
-# a typical HK level — below robust detection. The pathological cases sit at
-# ~0.01–0.05 HK (clear noise); genuine markers at ≥1 HK. Set at the noise/detection
-# boundary, not tuned to any sample (it must stay low enough that a genuinely-but-
-# weakly-expressed marker of the true type is NOT clamped).
+# Legacy A/B-only HK detection floor. The production scorer uses within-sample
+# percentile and never evaluates this branch.
 _SIGNATURE_DETECTION_FLOOR_HK = 0.1
 
-# Weight of the within-sample-percentile leg in the combined signature filter. cohort-pct (HK) is
-# DOMINANT; within-pct enters as a [1-w, 1] factor. 0.0 = pure cohort-pct (pre-#7); 1.0 = full product.
-# Set to 1.0 (full product): the ALL-SAMPLES 565 eval (the authority — medoids mislead) showed w=0.5
-# is strictly WORSE than w=1.0 on every metric incl. exact (242 vs 246 exact, 409 vs 414 entity, 523 vs
-# 526 lineage). The single-medoid "COAD>READ recovered exact" smoke was an artifact; on 565 samples the
-# full product wins. (Cohort leg stays HK: switching to raw clean-TPM regressed -4 — HK bridges the
-# different clean-TPM scales of sample vs reference; it is load-bearing here, not redundant.)
+# Optional A/B basis weight. With the production ``within_sample`` basis,
+# cohort_pct is 1.0 and this reduces exactly to the within-sample percentile.
 _WITHIN_PCT_WEIGHT = 1.0
 
 
-# The signature cohort-percentile leg ranks the sample against the FULL ~170-cohort HK reference (120
-# cancer cohorts from cancer_reference_expression + 50 HPA normals) instead of the 33 TCGA cohort
-# medians. HK-normalization bridges the differing clean-TPM scales of the sources (see
-# _full_cohort_hk_reference). LOCKED — validated on ALL 565 samples (+6 entity 414→420, +12 subtype)
-# AND the 118 medoids (+1 lineage), local reports flat at 7/8. The 33-cohort reference dropped 85 of the
-# 118 types (ATRT/BL/SCLC/heme/molecular subtypes) and quantized the percentile to ~1/33 steps.
+# The full cross-cohort references below remain available for explicit
+# normalization A/B experiments. They are not loaded by the default scorer.
 
 
 def _full_cohort_hk_reference():
@@ -426,40 +411,41 @@ def _compute_cancer_type_signature_stats(
     n_signature_genes=20,
     min_fold=2.0,
     candidate_codes=None,
-    cohort_basis="hk",
+    cohort_basis="within_sample",
 ):
     """Score each cancer type by how well the sample matches its signature genes.
 
-    Uses z-score–based gene selection (most specifically expressed genes per
-    cancer type) and midrank percentile scoring — the sample's expression of
-    each signature gene is ranked against the cross-cancer distribution.
-    This is robust to per-sample total-expression differences.
+    Panels are selected from cross-cohort clean-TPM contrasts. The production
+    score is the mean within-sample percentile rank of those panel genes. This
+    separates panel specificity (learned once from reference cohorts) from
+    sample scoring and is robust to library scale and proportional dilution.
+
+    ``cohort_basis="hk"`` and ``"raw"`` are retained only for explicit A/B
+    evaluation; neither is part of the default report path.
     """
     import numpy as np
 
-    from .tumor_purity import _cached_reference_matrices
-
-    sample_raw_by_symbol, sample_hk_by_symbol = _sample_expression_by_symbol(
-        df_gene_expr
-    )
-    # Per-gene score basis: the COMBINED filter cross-cohort-percentile x within-sample-percentile
-    # (two weak filters multiplied). The cohort-percentile leg supplies SPECIFICITY + the score spread
-    # the ranker's margins need; the within-sample-percentile leg supplies purity-ROBUSTNESS (a
-    # within-sample rank of curated markers survives proportional dilution, whereas cross-cohort
-    # percentile is purity-SENSITIVE — dilution shifts where the sample falls in the cohort
-    # distribution). A/B'd on 392 rep samples + dilution (scripts/signature_basis_ab.py) and validated
-    # end-to-end: the medoid AUTO cancer-type lineage rises 95->99/118 vs the HK-percentile basis
-    # (within-sample-pct ALONE regressed -3 because its compressed scores collapse the ranker margins;
-    # the product keeps the spread). Both legs in [0,1] -> product in [0,1].
-    ref_matrices = _cached_reference_matrices(normalize="housekeeping")
-    ref_by_sym = ref_matrices["ref_by_sym"]
-    expr_matrix = ref_matrices["expr_matrix"]
-    # A/B: rank against the full ~170-cohort HK reference (118 cancer + 50 normal) instead of 33.
-    basis = str(cohort_basis or "hk").strip().lower().replace("-", "_")
+    basis = str(cohort_basis or "within_sample").strip().lower().replace("-", "_")
     if basis not in {"hk", "raw", "within_sample"}:
         raise ValueError(
             "cohort_basis must be one of 'hk', 'raw', or 'within_sample'"
         )
+    if basis == "hk":
+        from .tumor_purity import _cached_reference_matrices
+
+        sample_raw_by_symbol, sample_hk_by_symbol = _sample_expression_by_symbol(
+            df_gene_expr
+        )
+        ref_matrices = _cached_reference_matrices(normalize="housekeeping")
+        ref_by_sym = ref_matrices["ref_by_sym"]
+        expr_matrix = ref_matrices["expr_matrix"]
+    else:
+        from .tumor_purity import _build_sample_tpm_by_symbol
+
+        sample_raw_by_symbol = _build_sample_tpm_by_symbol(df_gene_expr)
+        sample_hk_by_symbol = {}
+        ref_by_sym = None
+        expr_matrix = None
     full_ref = (
         _full_cohort_hk_reference()
         if basis == "hk"
@@ -467,14 +453,49 @@ def _compute_cancer_type_signature_stats(
     )
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
-    # Within-sample percentile (average-rank midrank, pct) of the sample's raw clean-TPM, once.
+    # Rank over the fixed reference gene universe used to derive the panels.
+    # Missing reference genes are explicit zeros and input-only annotations are
+    # ignored, so adding or omitting zero rows cannot move a signature score.
     import pandas as _pd
 
-    _within_pct = (
-        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
-        if sample_raw_by_symbol
-        else {}
-    )
+    if sample_raw_by_symbol:
+        from .tumor_purity import _cached_reference_matrices
+
+        rank_universe = tuple(
+            dict.fromkeys(
+                [
+                    *(
+                        str(gene)
+                        for gene in _cached_reference_matrices(normalize=None)[
+                            "expr_matrix"
+                        ].index
+                    ),
+                    *sorted(
+                        {
+                            str(gene)
+                            for genes in sig.values()
+                            for gene in genes
+                        }
+                    ),
+                ]
+            )
+        )
+        rank_values = _pd.Series(
+            {
+                gene: max(
+                    0.0,
+                    float(sample_raw_by_symbol.get(gene, 0.0) or 0.0),
+                )
+                for gene in rank_universe
+            },
+            dtype=float,
+        )
+        _within_pct = rank_values.rank(
+            pct=True,
+            method="average",
+        ).to_dict()
+    else:
+        _within_pct = {}
 
     stats = []
     if candidate_codes is None:
@@ -494,7 +515,11 @@ def _compute_cancer_type_signature_stats(
             sample_basis_value = sample_hk if basis == "hk" else sample_raw
             cohort_hk = 0.0
             cohort_pct = 0.5
-            if gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
+            if (
+                ref_by_sym is not None
+                and gene in ref_by_sym.index
+                and cohort_col in ref_by_sym.columns
+            ):
                 cohort_hk = float(ref_by_sym.loc[gene, cohort_col])
             if basis == "within_sample":
                 ref_vals = np.array([])
@@ -502,7 +527,12 @@ def _compute_cancer_type_signature_stats(
             elif full_ref is not None and gene in full_ref.index:
                 ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort reference
                 ref_vals = ref_vals[~np.isnan(ref_vals)]
-            elif gene in ref_by_sym.index and cohort_col in ref_by_sym.columns:
+            elif (
+                ref_by_sym is not None
+                and expr_matrix is not None
+                and gene in ref_by_sym.index
+                and cohort_col in ref_by_sym.columns
+            ):
                 ref_vals = expr_matrix.loc[gene].values  # midrank cross-cohort percentile (HK, 33)
             else:
                 ref_vals = np.array([])
@@ -515,29 +545,31 @@ def _compute_cancer_type_signature_stats(
                     cohort_pct = min(cohort_pct, 0.5)
                 elif basis == "raw" and sample_raw < 1.0:
                     cohort_pct = min(cohort_pct, 0.5)
-            # COMBINED filter (two weak filters): cross-cohort percentile (specificity + the
-            # discrimination SPREAD the ranker margins need) modulated by within-sample percentile
-            # (dominance, purity-robust — a within-sample rank survives proportional dilution).
-            # cohort-pct DOMINANT; within-pct is a [1-w, 1] factor (w=_WITHIN_PCT_WEIGHT) so it never
-            # zeros the cohort discrimination and the score stays near the cohort-pct scale the
-            # thresholds expect. w=1.0 (full product) — the 565 all-samples eval beat w=0.5 on every
-            # metric (see _WITHIN_PCT_WEIGHT). Both legs [0,1] → result [0,1].
+            # Production: cohort_pct == 1, so this is simply within_pct.
+            # Explicit A/B bases can additionally ask how high the sample is
+            # relative to the reference cohorts.
             within_pct = float(_within_pct.get(gene, 0.5))
             percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)
-            log_diff = abs(np.log2(sample_hk + 1) - np.log2(cohort_hk + 1))
+            detail_sample = sample_hk if basis == "hk" else sample_raw
+            log_diff = (
+                abs(np.log2(detail_sample + 1) - np.log2(cohort_hk + 1))
+                if basis == "hk"
+                else 0.0
+            )
             gene_details.append(
                 {
                     "gene": gene,
                     "sample_raw": sample_raw,
-                    "sample_hk": sample_hk,
-                    "cohort_hk": cohort_hk,
                     "signature_basis": basis,
                     "sample_basis_value": sample_basis_value,
                     "log_diff": log_diff,
                     "percentile": percentile,
                 }
             )
+            if basis == "hk":
+                gene_details[-1]["sample_hk"] = sample_hk
+                gene_details[-1]["cohort_hk"] = cohort_hk
 
         if gene_details:
             score = float(np.mean(percentiles))
@@ -1200,11 +1232,12 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
 
     from .tumor_purity import _cached_reference_matrices
 
-    ref_matrices = _cached_reference_matrices(normalize="housekeeping")
+    ref_matrices = _cached_reference_matrices(normalize=None)
     cohort_cols = ref_matrices["cohort_cols"]
     labels = [c.removesuffix("_TPM") for c in cohort_cols]
 
     expr_matrix = ref_matrices["expr_matrix"]
+    within_reference = expr_matrix.rank(axis=0, pct=True, method="average")
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     # Score each reference cancer type against all signatures
@@ -1217,12 +1250,7 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
             for gene in genes:
                 if gene not in expr_matrix.index:
                     continue
-                val = float(expr_matrix.loc[gene, source_col])
-                ref_vals = expr_matrix.loc[gene].values
-                n = len(ref_vals)
-                below = np.sum(ref_vals < val)
-                equal = np.sum(np.isclose(ref_vals, val, atol=1e-6))
-                pcts.append((below + 0.5 * equal) / n)
+                pcts.append(float(within_reference.loc[gene, source_col]))
             ref_scores[i, j] = float(np.mean(pcts)) if pcts else 0.5
 
     # Score the sample
@@ -1297,19 +1325,30 @@ def _hierarchy_feature_vector(
         _score_host_tissues,
     )
 
+    def _finite_feature(value) -> float:
+        try:
+            value = float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return value if np.isfinite(value) else 0.0
+
     candidate_trace = rank_cancer_type_candidates(
         df_gene_expr,
         candidate_codes=candidate_codes,
         top_k=len(candidate_codes),
     )
     trace_by_code = {row["code"]: row for row in candidate_trace}
-    sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
+    sample_raw_by_symbol = build_sample_tpm_by_symbol(df_gene_expr)
     # Family panels are scored by Ensembl ID (alias-drift immune); pass the
     # ID-keyed clean-TPM sample, not the symbol-keyed one.
     from .common import build_sample_tpm_by_gene_id
 
     sample_raw_by_id = build_sample_tpm_by_gene_id(df_gene_expr)
     family_scores = _score_cancer_family_panels(sample_raw_by_id)
+    family_scores = {
+        family: _finite_feature(score)
+        for family, score in family_scores.items()
+    }
     max_family_score = max(family_scores.values(), default=0.0)
     if max_family_score > 0:
         family_features = [
@@ -1320,7 +1359,7 @@ def _hierarchy_feature_vector(
         family_features = [0.0 for _ in family_labels]
 
     site_scores = {
-        tissue: score
+        tissue: _finite_feature(score)
         for tissue, score, _ in _score_host_tissues(
             sample_raw_by_symbol,
             tissues=site_labels,
@@ -1336,11 +1375,15 @@ def _hierarchy_feature_vector(
         site_features = [0.0 for _ in site_labels]
 
     support_features = [
-        float(trace_by_code.get(code, {}).get("support_fraction_of_top", 0.0))
+        _finite_feature(
+            trace_by_code.get(code, {}).get("support_fraction_of_top", 0.0)
+        )
         for code in candidate_codes
     ]
     best_purity = (
-        float(candidate_trace[0]["purity_estimate"]) if candidate_trace else 0.0
+        _finite_feature(candidate_trace[0].get("purity_estimate"))
+        if candidate_trace
+        else 0.0
     )
     return np.array(
         support_features + family_features + site_features + [best_purity], dtype=float
@@ -1369,8 +1412,8 @@ def _reference_family_feature_matrix(candidate_codes, family_labels):
     if cached is not None:
         return cached
 
-    # Raw clean per-cohort TPM (not housekeeping-normalized): the shared scorer
-    # does its own housekeeping division internally, exactly as on the sample.
+    # Raw clean per-cohort TPM: the shared family scorer compares clean-TPM
+    # abundance and cohort-relative evidence directly.
     ref = pan_cancer_expression(technical_rna_normalize=True)
     gene_ids = ref["Ensembl_Gene_ID"].astype(str).map(_strip_ensembl_version)
     id_valid = gene_ids.notna() & gene_ids.str.strip().str.len().gt(0)
@@ -1477,10 +1520,19 @@ def _cancer_type_hierarchy_matrix(df_gene_expr):
             [[float(TCGA_MEDIAN_PURITY.get(code, 0.5))] for code in ref_labels],
             dtype=float,
         )
-        cached = (
-            np.hstack([ref_matrix, ref_families, ref_sites, ref_purity]),
-            ref_labels,
+        reference_features = np.hstack(
+            [ref_matrix, ref_families, ref_sites, ref_purity]
         )
+        # Some aggregate/reference-only codes have no usable score for a
+        # particular axis. In an embedding, unavailable evidence is zero; NaN
+        # must not poison every pairwise distance.
+        reference_features = np.nan_to_num(
+            reference_features,
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
+        cached = (reference_features, ref_labels)
         _hierarchy_feature_cache[cache_key] = cached
 
     ref_matrix, labels = cached
@@ -2565,7 +2617,6 @@ def plot_cohort_heatmap(
     # Get expression
     ref = pan_cancer_expression(
         genes=gene_symbols,
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     codes = cancer_types()
@@ -2585,9 +2636,9 @@ def plot_cohort_heatmap(
         subtitle = "z-score of log2 expression across cancers"
         cbar_label = "z-score"
     else:
-        cmap, vmin, vmax = "RdBu_r", -5, 5
-        subtitle = "log2 housekeeping-normalized"
-        cbar_label = "log2(HK-normalized)"
+        cmap, vmin, vmax = "YlOrRd", 0, 15
+        subtitle = "log2(clean TPM + 1)"
+        cbar_label = "log2(clean TPM + 1)"
     matrix.columns = codes
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -2667,7 +2718,6 @@ def plot_cohort_pca(
         all_symbols.update(genes)
 
     ref = pan_cancer_expression(
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
@@ -2743,7 +2793,6 @@ def plot_cohort_therapy_targets(
 
     ref = pan_cancer_expression(
         genes=target_symbols,
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     codes = cancer_types()
@@ -2763,9 +2812,9 @@ def plot_cohort_therapy_targets(
         subtitle = "z-score of log2 expression across cancers"
         cbar_label = "z-score"
     else:
-        cmap, vmin, vmax = "YlOrRd", -5, 3
-        subtitle = "log2 housekeeping-normalized"
-        cbar_label = "log2(HK-normalized)"
+        cmap, vmin, vmax = "YlOrRd", 0, 15
+        subtitle = "log2(clean TPM + 1)"
+        cbar_label = "log2(clean TPM + 1)"
     matrix.columns = codes
 
     fig, ax = plt.subplots(figsize=figsize)
@@ -2806,7 +2855,6 @@ def _plot_geneset_by_cancer_heatmap(
     from trufflepig.reference import pan_cancer_expression, cancer_types
     ref = pan_cancer_expression(
         genes=gene_symbols,
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     codes = cancer_types()
@@ -2844,9 +2892,9 @@ def _plot_geneset_by_cancer_heatmap(
         subtitle = "z-score of log2 expression across cancers"
         cbar_label = "z-score"
     else:
-        use_cmap, vmin, vmax = cmap, -5, 3
-        subtitle = "log2 housekeeping-normalized"
-        cbar_label = "log2(HK-normalized)"
+        use_cmap, vmin, vmax = cmap, 0, 15
+        subtitle = "log2(clean TPM + 1)"
+        cbar_label = "log2(clean TPM + 1)"
     matrix.columns = codes
 
     fig, ax = plt.subplots(figsize=figsize)

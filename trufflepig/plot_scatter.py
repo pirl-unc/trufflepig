@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 from adjustText import adjust_text
 
 from .common import _guess_gene_cols
-from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
 from trufflepig.reference import pan_cancer_expression
 from .plot_data_helpers import _strip_ensembl_version
 from .plot_strip import default_gene_sets
@@ -69,14 +68,8 @@ def _prepare_sample_vs_cancer_data(
         verbose=False,  # already logged during strip plot
     )
 
-    # Internally we still HK-normalize the reference so the cross-dataset
-    # scale mismatch (sample TPM totals ~1M; TCGA `*_TPM` cohort medians
-    # total ~250K over the ~20K genes we track) cancels out. For display
-    # we then multiply back by the sample's own HK median TPM — so both
-    # axes end up on a familiar TPM scale that's correctly rescaled to
-    # this sample's sequencing depth.
+    # Both inputs have already been conformed to the shared clean-TPM scale.
     ref = pan_cancer_expression(
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     resolved_reference_code = None
@@ -99,7 +92,7 @@ def _prepare_sample_vs_cancer_data(
         )
     if resolved_reference_code is not None:
         ref_col = f"{resolved_reference_code}_TPM"
-        ref["_ref_hk"] = ref[ref_col].astype(float)
+        ref["_ref_tpm"] = ref[ref_col].astype(float)
         cancer_label = CANCER_TYPE_NAMES.get(
             resolved_reference_code,
             resolved_reference_code,
@@ -114,7 +107,7 @@ def _prepare_sample_vs_cancer_data(
         )
     else:
         cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
-        ref["_ref_hk"] = ref[cohort_cols].astype(float).mean(axis=1)
+        ref["_ref_tpm"] = ref[cohort_cols].astype(float).mean(axis=1)
         cohort_label = "Mean across available pan-cancer cohorts"
         if requested_cancer_type:
             cohort_label += f" (no {requested_cancer_type} pan-cancer cohort)"
@@ -122,7 +115,7 @@ def _prepare_sample_vs_cancer_data(
     ref_lookup = dict(
         zip(
             ref["Ensembl_Gene_ID"].map(_strip_ensembl_version),
-            ref["_ref_hk"],
+            ref["_ref_tpm"],
         )
     )
 
@@ -134,15 +127,6 @@ def _prepare_sample_vs_cancer_data(
     if tpm_col is None:
         raise KeyError(f"No TPM column found. Columns: {list(df.columns)}")
 
-    # Sample's own HK-median TPM. Used as the rescaling factor that
-    # brings the HK-normalized cohort reference back onto this sample's
-    # TPM scale.
-    hk_ids = housekeeping_gene_ids()
-    hk_mask = df[gene_id_col].isin(hk_ids)
-    hk_median_tpm = df.loc[hk_mask, tpm_col].astype(float).median()
-    if not (hk_median_tpm > 0):
-        hk_median_tpm = 1.0
-
     gene_to_category = _create_gene_to_category_list_mapping(cat_to_ids)
     name_from_df = dict(zip(df[gene_id_col].astype(str), df[gene_name_col].astype(str)))
 
@@ -150,12 +134,11 @@ def _prepare_sample_vs_cancer_data(
     for _, row in df.iterrows():
         gid = str(row[gene_id_col])
         tpm = float(row[tpm_col])
-        ref_hk = ref_lookup.get(gid)
-        if ref_hk is None:
+        ref_tpm = ref_lookup.get(gid)
+        if ref_tpm is None:
             continue
-        # Both axes on TPM scale. Reference rescaled via sample's HK median.
         sample_val = tpm
-        cohort_val = float(ref_hk) * hk_median_tpm
+        cohort_val = float(ref_tpm)
         cats = gene_to_category.get(gid, ["other"])
         name = name_from_df.get(gid) or id_to_name.get(gid) or gid
         display_name = aliases.get(name, name)
@@ -168,16 +151,14 @@ def _prepare_sample_vs_cancer_data(
             "gene_id",
             "gene_name",
             "category",
-            "sample_hk",
-            "cohort_hk",
+            "sample_tpm",
+            "cohort_tpm",
         ],
     )
-    # Column names kept (`sample_hk` / `cohort_hk`) for wire-compatibility
-    # with downstream panel code; the stored values are TPM, not % of HK.
-    plot_df["sample_log"] = plot_df["sample_hk"] + 0.001
-    plot_df["cohort_log"] = plot_df["cohort_hk"] + 0.001
-    plot_df["enrichment"] = (plot_df["sample_hk"] + 0.001) / (
-        plot_df["cohort_hk"] + 0.001
+    plot_df["sample_log"] = plot_df["sample_tpm"] + 0.001
+    plot_df["cohort_log"] = plot_df["cohort_tpm"] + 0.001
+    plot_df["enrichment"] = (plot_df["sample_tpm"] + 0.001) / (
+        plot_df["cohort_tpm"] + 0.001
     )
 
     named_cats = list(cat_to_ids.keys())

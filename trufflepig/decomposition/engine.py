@@ -33,6 +33,7 @@ from pirlygenes.gene_sets_cancer import (
 from trufflepig.reference import (
     pan_cancer_expression,
 )
+from ..common import build_sample_tpm_by_symbol
 from ..tumor_purity import rank_cancer_type_candidates, _score_host_tissues
 
 
@@ -88,8 +89,6 @@ DECOMPOSITION_PARAMETERS = {
     # Controls which template set is evaluated.
     "sample_mode": {
         "default": "auto",
-        # TCGA codes that trigger heme-specific templates when mode is "auto"
-        "heme_codes": ["DLBC", "LAML"],
         "tumor_contexts": ["auto", "primary", "met"],
         # Normalised site_hint → template mapping (aliases resolve common names)
         "site_hint_templates": {
@@ -184,24 +183,6 @@ DECOMPOSITION_PARAMETERS = {
         # Penalty = clip(1 - gain × (origin_score - template_score), floor, 1)
         "met_origin_penalty_gain": 1.0,
         "met_origin_penalty_floor": 0.35,
-        # When a metastatic template has both stronger site-context support than
-        # the primary origin and a real site-specific host compartment in the
-        # fitted sample, let that evidence overcome broad-compartment residuals.
-        # This matters after TPM-renormalizing references: liver bulk is no
-        # longer on the old native scale, so hepatocyte-heavy samples should be
-        # routed by host-site evidence rather than by generic immune/stromal fit.
-        "met_site_dominance_min_delta": 0.10,
-        "met_site_dominance_min_extra_fraction": 0.25,
-        "met_site_dominance_gain": 12.0,
-        "met_site_dominance_extra_gain": 2.0,
-        "met_site_dominance_cap": 4.0,
-        # The dominance boost may fire ONLY for a leading tumor hypothesis. site_delta =
-        # met-site-score − origin-score is large whenever the origin tissue is ABSENT — which is true
-        # both for a real met AND for a WRONG primary whose origin simply isn't in the sample (an
-        # esophageal-cancer hypothesis on a colon sample: peritoneum present, esophagus absent → big
-        # delta → spurious 3× boost that lets the weak hypothesis beat the correct primary). A met of
-        # cancer-type X must still be a strong X candidate, so gate the boost on support_fraction_of_top.
-        "met_site_dominance_min_support": 0.90,
         # Extra-component factor rewards met templates whose site-specific
         # host cell (e.g. hepatocyte, astrocyte) is actually detected.
         # factor = base + gain × clip(extra_fraction / full_fraction, 0, 1)
@@ -297,17 +278,20 @@ def infer_sample_mode(candidate_rows=None, cancer_types=None, sample_mode="auto"
     if sample_mode != "auto":
         return sample_mode
 
-    heme_codes = set(DECOMPOSITION_PARAMETERS["sample_mode"]["heme_codes"])
     codes = []
     if candidate_rows:
         codes.extend([row["code"] for row in candidate_rows[:2] if row.get("code")])
     if not codes and cancer_types:
         codes.extend([str(code) for code in cancer_types if code])
 
-    if codes and codes[0] in heme_codes:
-        return "heme"
-    if codes and all(code in heme_codes for code in codes):
-        return "heme"
+    if codes:
+        # Use the cancer ontology shared by the lineage-routed decomposition,
+        # rather than maintaining a second list of selected heme codes here.
+        from ..expression_decomposition import resolve_mode
+
+        mode, _routing, _type_code = resolve_mode(codes[0])
+        if mode == "heme":
+            return "heme"
     return "solid"
 
 
@@ -1100,11 +1084,15 @@ def _fit_one_hypothesis(
         ]
         sig_raw = sig_raw[measured_mask, :]
         filt_sample_vec = filt_sample_vec[measured_mask]
-    observed_hk, sample_hk_median = _hk_normalize(filt_sample_vec, filt_genes, hk_ids)
+    observed_hk, sample_hk_median = _hk_normalize(
+        filt_sample_vec, filt_genes, hk_ids
+    )
 
     sig_hk = np.zeros_like(sig_raw, dtype=float)
     for comp_idx in range(sig_raw.shape[1]):
-        sig_hk[:, comp_idx], _ = _hk_normalize(sig_raw[:, comp_idx], filt_genes, hk_ids)
+        sig_hk[:, comp_idx], _ = _hk_normalize(
+            sig_raw[:, comp_idx], filt_genes, hk_ids
+        )
 
     fit_rows, fit_weights, marker_trace = _select_marker_rows(
         filt_genes,
@@ -1144,13 +1132,14 @@ def _fit_one_hypothesis(
             str(symbol): float(obs)
             for symbol, obs in zip(filt_symbols, filt_sample_vec)
         }
-        symbol_to_obs_hk = {
-            str(symbol): float(obs) for symbol, obs in zip(filt_symbols, observed_hk)
-        }
         marker_symbols = marker_trace["symbol"].astype(str).tolist()
         marker_trace["observed_tpm"] = [
             symbol_to_obs.get(symbol, 0.0) for symbol in marker_symbols
         ]
+        symbol_to_obs_hk = {
+            str(symbol): float(obs)
+            for symbol, obs in zip(filt_symbols, observed_hk)
+        }
         marker_trace["sample_hk"] = [
             symbol_to_obs_hk.get(symbol, 0.0) for symbol in marker_symbols
         ]
@@ -1303,31 +1292,6 @@ def _fit_one_hypothesis(
     ):
         score *= float(site_evidence.get("weak_score_factor", 0.35) or 0.35)
         warnings.append(_WEAK_MET_SITE_WARNING)
-    if template_name.startswith("met_") and extra_components:
-        site_delta = float(template_tissue_score - origin_tissue_score)
-        if (
-            site_evidence.get("site_supported", False)
-            and site_delta >= scoring["met_site_dominance_min_delta"]
-            and extra_sample_fraction >= scoring["met_site_dominance_min_extra_fraction"]
-            and cancer_support >= scoring["met_site_dominance_min_support"]
-        ):
-            extra_delta = float(
-                extra_sample_fraction - scoring["met_site_dominance_min_extra_fraction"]
-            )
-            site_boost = float(
-                np.clip(
-                    1.0
-                    + scoring["met_site_dominance_gain"] * site_delta
-                    + scoring["met_site_dominance_extra_gain"] * max(extra_delta, 0.0),
-                    1.0,
-                    scoring["met_site_dominance_cap"],
-                )
-            )
-            site_evidence["site_dominance_boost"] = site_boost
-            site_evidence["site_delta_vs_origin"] = site_delta
-            site_evidence["extra_delta_for_dominance"] = extra_delta
-            score *= site_boost
-
     # Purity floor penalty (#98): candidates with biologically
     # implausible purity (<2%) get their score collapsed so they
     # don't clutter the candidate list as noise.
@@ -1388,6 +1352,31 @@ def _is_uninformative_met_fit(result) -> bool:
     return any("No non-tumor components in template" in warning for warning in warnings)
 
 
+def _site_dominant_fit(result, *, leading_cancer_support: float) -> bool:
+    """Whether a supported metastatic host is the sample's dominant fitted source.
+
+    This is a structural ordering rule, not a score bonus: the site-specific
+    component must exceed the inferred tumor component and its tissue evidence
+    must exceed the proposed origin tissue. Site evidence may choose the
+    background model for the leading tumor-identity hypothesis, but it may not
+    promote a weaker cancer hypothesis merely because that hypothesis has a
+    convenient host template. This replaces the former collection of tuned
+    dominance thresholds and gains.
+    """
+    template = str(getattr(result, "template", "") or "")
+    evidence = getattr(result, "site_evidence", {}) or {}
+    return bool(
+        template.startswith("met_")
+        and float(getattr(result, "cancer_support_score", 0.0) or 0.0)
+        >= leading_cancer_support
+        and evidence.get("site_supported", False)
+        and float(getattr(result, "template_extra_fraction", 0.0) or 0.0)
+        > float(getattr(result, "purity", 0.0) or 0.0)
+        and float(getattr(result, "template_tissue_score", 0.0) or 0.0)
+        > float(getattr(result, "template_origin_tissue_score", 0.0) or 0.0)
+    )
+
+
 def decompose_sample(
     df_gene_expr,
     cancer_types=None,
@@ -1416,11 +1405,13 @@ def decompose_sample(
     when the per-gene agreement is stable enough; falls back to the
     signature-gene estimator otherwise. Non-epithelial primaries
     (SARC, heme, glioma, etc.) retain the existing behavior unchanged.
-    """
-    from ..plot import _sample_expression_by_symbol
 
+    ``top_k=None`` returns every usable candidate-by-template realization.
+    Callers that test invariance across alternative background models must use
+    that complete beam and apply presentation limits only afterward.
+    """
     if sample_raw_by_symbol is None:
-        sample_raw_by_symbol, _ = _sample_expression_by_symbol(df_gene_expr)
+        sample_raw_by_symbol = build_sample_tpm_by_symbol(df_gene_expr)
     if sample_by_eid is None:
         ref = (
             pan_cancer_expression(technical_rna_normalize=True)
@@ -1505,10 +1496,26 @@ def decompose_sample(
             )
             results.append(result)
 
-    results.sort(key=lambda row: (-row.score, row.cancer_type, row.template))
+    leading_cancer_support = max(
+        float(getattr(result, "cancer_support_score", 0.0) or 0.0)
+        for result in results
+    )
+    results.sort(
+        key=lambda row: (
+            -int(
+                _site_dominant_fit(
+                    row,
+                    leading_cancer_support=leading_cancer_support,
+                )
+            ),
+            -row.score,
+            row.cancer_type,
+            row.template,
+        )
+    )
     informative_results = [
         result for result in results if not _is_uninformative_met_fit(result)
     ]
     if informative_results:
         results = informative_results
-    return results[:top_k]
+    return results if top_k is None else results[:top_k]

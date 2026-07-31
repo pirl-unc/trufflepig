@@ -8,6 +8,7 @@ from trufflepig.brief import (
     build_summary,
     biomarker_expression_is_not_eligibility,
     _format_therapy_bullet,
+    _empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
@@ -30,6 +31,25 @@ def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
             },
         }
     }
+
+
+def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
+    targets = pd.DataFrame([{"symbol": "CDK4", "agent": "palbociclib"}])
+    ranges = pd.DataFrame(
+        [
+            {
+                "symbol": "CDK4",
+                "observed_tpm": 63.0,
+                "attr_tumor_tpm": 53.0,
+                "attr_tumor_fraction": 0.84,
+            }
+        ]
+    )
+
+    message = _empty_therapy_shortlist_message(targets, ranges)
+
+    assert "did not meet the shortlist's" in message
+    assert "non-tumor-supported" not in message
 
 
 def test_subtype_line_suppressed_when_panel_blocked_against_call():
@@ -1706,7 +1726,7 @@ def test_brief_no_internal_jargon():
         "Spearman",
         "x1.10",
         "×1.10",
-        "tme_fold_med",
+        "tme_tpm_med",
         "_combine_purity_estimates",
         "overexplained_tpm",
         "sig_stability",

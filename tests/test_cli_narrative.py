@@ -304,6 +304,30 @@ def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference
     assert "used for cohort-normalized downstream analyses" not in text
 
 
+def test_integrated_evidence_names_descendant_decomposition_without_branch_conflict():
+    analysis = _base_analysis(
+        cancer_type="CRC",
+        reference_cancer_type="CRC",
+        report_scope_cancer_type="CRC",
+        candidate_trace=[
+            {"code": "CRC", "signature_score": 0.7, "support_fraction_of_top": 1.0}
+        ],
+        call_summary={"label_options": ["CRC"], "label_display": "CRC"},
+    )
+    decomposition = SimpleNamespace(
+        cancer_type="READ",
+        template="solid_primary",
+        fractions={"tumor": 0.4, "T_cell": 0.2},
+        warnings=[],
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis, [decomposition]))
+
+    assert "descendant background model within the CRC" in text
+    assert "does not refine the report label" in text
+    assert "diverging from the report-label" not in text
+
+
 def test_integrated_evidence_mmr_skips_unrelated_retained_candidate():
     analysis = _base_analysis(
         cancer_type="GBM",

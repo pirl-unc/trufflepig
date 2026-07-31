@@ -24,6 +24,9 @@ dependencies = [
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
     # >=1.8.136: compact all-source availability lets raw TPM read only the
     # requested per-source shards instead of materializing the 5M-row union.
+    # Newer oncoref provenance releases remain forward-tested, but pirlygenes'
+    # exact oncoref pin must be updated before trufflepig can raise this floor
+    # (pirl-unc/pirlygenes#599).
     "oncoref>=1.8.136,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet

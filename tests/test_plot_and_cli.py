@@ -1697,11 +1697,6 @@ def test_scatter_uses_an_honest_available_reference_fallback(
         "pan_cancer_expression",
         lambda **_kwargs: ref.copy(),
     )
-    monkeypatch.setattr(
-        plot_scatter_mod,
-        "housekeeping_gene_ids",
-        lambda: {"ENSG1"},
-    )
 
     _plot_df, _cats, _colors, _sample_label, cohort_label = (
         plot_scatter_mod._prepare_sample_vs_cancer_data(

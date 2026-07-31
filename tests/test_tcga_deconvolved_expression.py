@@ -1311,7 +1311,6 @@ def test_cancer_expression_uses_trufflepig_reference_surface(monkeypatch):
     assert calls == [
         {
             "genes": ["KLK3"],
-            "normalize": "housekeeping",
             "technical_rna_normalize": True,
         }
     ]
@@ -1326,7 +1325,6 @@ def test_cancer_enriched_genes_preserves_legacy_columns(monkeypatch):
 
     def fake_pan_cancer_expression(**kwargs):
         assert kwargs == {
-            "normalize": "housekeeping",
             "technical_rna_normalize": True,
         }
         return pd.DataFrame(

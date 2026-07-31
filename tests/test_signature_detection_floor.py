@@ -1,19 +1,13 @@
-"""Detection-floor fix for *zero-floor percentile inflation* in the cancer-type
-candidate screen (``plot_embedding._compute_cancer_type_signature_stats``).
+"""Cancer-signature noise handling in the production within-sample space.
 
-Named pathology: a *specific* marker is near-zero across non-target cancers, so
-its cross-cancer reference distribution is a floor of zeros — and ANY nonzero
-sample value, including quantifier noise, clears it and scores ~1.0 percentile,
-false evidence of expression. This inflates rare-marker types (PCPG) and deflates
-stromal/ubiquitous-marker types (SARC). The fix clamps a signature gene the sample
-does not detectably express (sample_hk below ``_SIGNATURE_DETECTION_FLOOR_HK``) to
-the neutral 0.5 so it cannot contribute false positive evidence.
-
-These tests pin the fix directly (the regression it guards against: a future edit
-silently deletes the clamp and the suite stays green).
+Near-zero genes used to clear a zero-heavy cross-cohort distribution and create
+false evidence for rare-marker cancers. The production scorer now uses
+within-sample percentile, where near-zero genes naturally remain low ranked.
+The historical HK clamp remains available only for explicit A/B evaluation.
 """
 
 import pandas as pd
+import pytest
 
 import trufflepig.plot_embedding as pe
 from trufflepig.plot_embedding import _compute_cancer_type_signature_stats
@@ -21,8 +15,6 @@ from trufflepig.reference import pan_cancer_expression
 
 
 def _cohort_sample(code: str) -> pd.DataFrame:
-    """A synthetic sample = a cohort's own clean-TPM column, so it genuinely
-    expresses that type's biology and NOT the markers of unrelated types."""
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")
     return pd.DataFrame(
         {
@@ -33,38 +25,76 @@ def _cohort_sample(code: str) -> pd.DataFrame:
     )
 
 
-def _scores(df) -> dict[str, float]:
-    return {r["code"]: r["score"] for r in _compute_cancer_type_signature_stats(df)}
+def _scores(df, basis="within_sample") -> dict[str, float]:
+    return {
+        row["code"]: row["score"]
+        for row in _compute_cancer_type_signature_stats(
+            df,
+            cohort_basis=basis,
+        )
+    }
 
 
-def test_detection_floor_strips_noise_only_evidence():
-    """An epithelial PAAD sample does not express PCPG's neuroendocrine markers;
-    without the clamp those near-zero values clear the cross-cancer zero floor and
-    inflate PCPG. The clamp strips that inflation, while a type the sample
-    genuinely expresses (PAAD) is essentially unaffected."""
+def test_default_signature_does_not_depend_on_hk_detection_floor():
     df = _cohort_sample("PAAD")
     with_clamp = _scores(df)
 
     saved = pe._SIGNATURE_DETECTION_FLOOR_HK
-    pe._SIGNATURE_DETECTION_FLOOR_HK = 0.0  # disable the clamp
+    pe._SIGNATURE_DETECTION_FLOOR_HK = 0.0
     try:
         without_clamp = _scores(df)
     finally:
         pe._SIGNATURE_DETECTION_FLOOR_HK = saved
 
-    # the noise-driven rare-marker type loses its inflated score ...
-    assert with_clamp["PCPG"] < without_clamp["PCPG"]
-    # ... while the genuinely-expressed type is essentially unaffected and stays dominant.
-    # The clamp may lightly touch a genuine-but-weakly-expressed marker (e.g. FOXL1 sits just
-    # below the HK detection floor in PAAD's own column after the reference refresh), but it
-    # must not meaningfully erode PAAD or dethrone it.
-    assert with_clamp["PAAD"] >= without_clamp["PAAD"] - 0.05
+    assert with_clamp == without_clamp
     assert max(with_clamp, key=with_clamp.get) == "PAAD"
 
 
-def test_detection_floor_lets_expressed_marker_type_outrank_noise():
-    """On a SARC cohort sample, the genuinely-expressed mesenchymal signature must
-    out-score a rare-marker type (PCPG) that would otherwise win on noise — the
-    core of the alvin regression, at the screen level."""
+def test_default_signature_never_loads_hk_feature_space(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise AssertionError("default signature path attempted HK normalization")
+
+    monkeypatch.setattr(pe, "_full_cohort_hk_reference", fail)
+    monkeypatch.setattr(pe, "_sample_expression_by_symbol", fail)
+
+    scores = _scores(_cohort_sample("PAAD"))
+    assert max(scores, key=scores.get) == "PAAD"
+
+
+def test_default_signature_uses_a_fixed_reference_rank_universe():
+    complete = _cohort_sample("PAAD")
+    omitted_zeros = complete[complete["TPM"].astype(float) > 0].copy()
+    annotated_zeros = pd.concat(
+        [
+            omitted_zeros,
+            pd.DataFrame(
+                {
+                    "ensembl_gene_id": ["EXTRA_ZERO_1", "EXTRA_ZERO_2"],
+                    "gene_name": ["EXTRA_ZERO_1", "EXTRA_ZERO_2"],
+                    "TPM": [0.0, 0.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    expected = _scores(complete)
+    assert _scores(omitted_zeros) == pytest.approx(expected)
+    assert _scores(annotated_zeros) == pytest.approx(expected)
+
+
+def test_explicit_hk_ab_basis_still_clamps_noise():
+    df = _cohort_sample("PAAD")
+    with_clamp = _scores(df, "hk")
+    saved = pe._SIGNATURE_DETECTION_FLOOR_HK
+    pe._SIGNATURE_DETECTION_FLOOR_HK = 0.0
+    try:
+        without_clamp = _scores(df, "hk")
+    finally:
+        pe._SIGNATURE_DETECTION_FLOOR_HK = saved
+    assert with_clamp["PCPG"] < without_clamp["PCPG"]
+
+
+def test_expressed_marker_type_outranks_noise_in_default_space():
     scores = _scores(_cohort_sample("SARC"))
     assert scores["SARC"] > scores["PCPG"]

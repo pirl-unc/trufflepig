@@ -289,6 +289,165 @@ def test_complete_urothelial_program_dominates_incomplete_biliary_program(
     assert hypotheses["BLCA"].can_select_report_label is True
 
 
+def test_basal_urothelial_identity_uses_complementary_marker_groups(
+    monkeypatch,
+):
+    """Basal morphology alone is squamous; two uroplakin families establish origin.
+
+    This exercises the biological panel contract rather than a sample-specific
+    score threshold. Loss of UPK1B is allowed when UPK1A supplies that plaque
+    subunit, while UPK2 independently supplies the complementary partner.
+    """
+    from trufflepig import lineage_panels
+
+    panel = next(
+        panel
+        for panel in lineage_panels.LINEAGE_PANELS
+        if panel.name == "BLCA_BASAL"
+    )
+    symbols = {
+        *panel.high_markers,
+        *(symbol for group in panel.identity_marker_groups for symbol in group),
+        *(symbol for symbol, _cap in panel.low_markers),
+    }
+    monkeypatch.setattr(
+        lineage_panels,
+        "_panel_marker_ids",
+        lambda _panel: {symbol: symbol for symbol in symbols},
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "_positive_marker_support",
+        lambda _panel, _gene_id, _observed: (1.0, 10.0),
+    )
+    sample = {
+        "KRT5": 500.0,
+        "KRT14": 700.0,
+        "KRT6A": 450.0,
+        "UPK1A": 12.0,
+        "UPK1B": 0.0,
+        "UPK2": 14.0,
+        "UPK3A": 0.0,
+        "UPK3B": 0.0,
+        "MUCL1": 0.0,
+        "SCGB2A2": 0.0,
+        "FOXA1": 2.0,
+        "GATA3": 8.0,
+    }
+
+    evidence = lineage_panels.score_panel(panel, sample)
+
+    assert evidence.score == pytest.approx(1.0)
+    assert evidence.identity_marker_groups_passed is True
+    assert {symbol for symbol, _tpm in evidence.identity_marker_hits} == {
+        "UPK1A",
+        "UPK2",
+    }
+    assert evidence.high_misses == ()
+    assert evidence.low_violations == ()
+
+    # Shared squamous keratins plus only one canonical uroplakin family do not
+    # establish bladder origin. UPK3B remains deliberately irrelevant because
+    # it is also a mesothelial marker.
+    sample["UPK2"] = 0.0
+    sample["UPK3B"] = 50.0
+    blocked = lineage_panels.score_panel(panel, sample)
+    assert blocked.score == 0.0
+    assert blocked.identity_marker_groups_passed is False
+    assert blocked.identity_marker_group_failures == (
+        ("UPK2", "UPK3A"),
+    )
+
+
+def test_complete_identity_program_can_resolve_out_of_beam_squamous_context(
+    monkeypatch,
+):
+    """Specific tumor identity outranks correlated whole-profile morphology."""
+    from trufflepig import lineage_panels
+
+    urothelial = _panel_evidence(
+        name="BLCA_BASAL",
+        code="BLCA",
+        score=1.0,
+        high_hits=(
+            ("KRT5", 500.0, 100.0),
+            ("KRT14", 700.0, 100.0),
+            ("KRT6A", 450.0, 100.0),
+        ),
+        low_passes=(
+            ("MUCL1", 0.0, 1.0),
+            ("SCGB2A2", 0.0, 1.0),
+            ("FOXA1", 2.0, 200.0),
+            ("GATA3", 8.0, 200.0),
+        ),
+    )
+    urothelial = lineage_panels.PanelEvidence(
+        **{
+            **urothelial.to_dict(),
+            "identity_marker_hits": (("UPK1A", 12.0), ("UPK2", 14.0)),
+        }
+    )
+    hnsc = _panel_evidence(
+        name="HNSC",
+        code="HNSC",
+        score=0.90,
+        high_hits=(("KRT5", 500.0, 100.0),),
+        high_misses=(("KLK10", 0.0, 50.0),),
+        low_passes=(("MUCL1", 0.0, 1.0),),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: (urothelial, hnsc),
+    )
+    hypotheses = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "NSCLC", "support_fraction_of_top": 1.0},
+            {"code": "HNSC", "support_fraction_of_top": 0.88},
+            {"code": "LUSC", "support_fraction_of_top": 0.86},
+            {"code": "CESC", "support_fraction_of_top": 0.82},
+            {"code": "ESCA", "support_fraction_of_top": 0.77},
+        ],
+        "healthy_vs_tumor": SimpleNamespace(
+            top_tcga_cohorts=[
+                ("NSCLC_TPM", 0.92),
+                ("HNSC_TPM", 0.91),
+            ]
+        ),
+    }
+
+    summary = cte._add_lineage_panel_features(
+        hypotheses,
+        {"UPK1A": 12.0, "UPK2": 14.0, "KRT5": 500.0},
+        analysis,
+        sample_tpm_by_gene_id={"test": 1.0},
+    )
+
+    assert summary["entity_program_decision"]["decisive"] is True
+    assert summary["promotion"] == {
+        "promoted": True,
+        "code": "BLCA",
+        "blockers": [],
+    }
+    assert hypotheses["BLCA"].details[
+        "lineage_panel_identity_program_decisive"
+    ] is True
+    assert hypotheses["BLCA"].selection_priority[0] == 4
+
+    # A generic fused morphology call cannot erase the more specific identity
+    # program, but direct molecular evidence would still remain definitive.
+    squamous = cte.CancerTypeEvidence(cancer_type="HNSC")
+    squamous.consider_for_report_label(
+        selected_by="fused_evidence",
+        can_select=True,
+        blocking_reasons=(),
+        priority=(3, 2.0),
+    )
+    hypotheses["HNSC"] = squamous
+    assert cte._pick_selected(hypotheses).cancer_type == "BLCA"
+
+
 def test_two_complete_entity_programs_remain_ambiguous(monkeypatch):
     """A complete panel cannot override a different complete entity panel."""
     from trufflepig import lineage_panels
@@ -789,7 +948,7 @@ def test_gate_blocks_cross_code_same_family_when_broad_confident(monkeypatch):
         ),
     )
 
-    def evaluate_observed_paad(_panels, observed_gene_ids, _sample_hk_median):
+    def evaluate_observed_paad(_panels, observed_gene_ids):
         assert observed_gene_ids == sample_by_gene_id
         return (observed_paad_evidence,)
 
@@ -959,6 +1118,42 @@ def test_strong_panel_can_rescue_out_of_beam_when_expression_lineage_conflicts()
     assert rescue.get("expression_lineage_conflict") is True
 
 
+def test_subtype_panel_is_not_vetoed_by_divergent_parent_marker_program():
+    """A coherent basal program must not be tested as generic/luminal BRCA.
+
+    HCC1395/StringTie now places BRCA inside the broad top five. That must not
+    make the same basal rescue less selectable than when BRCA falls just
+    outside the beam.
+    """
+
+    hyps: dict = {}
+    analysis = {
+        "candidate_trace": [
+            {"code": "HL", "support_score": 0.9},
+            {"code": "T_ALL", "support_score": 0.89},
+            {"code": "ESCA", "support_score": 0.7},
+            {"code": "LUSC", "support_score": 0.6},
+            {"code": "BRCA", "support_score": 0.5},
+        ],
+        "fit_quality": {"label": "ambiguous"},
+        "sample_context": {
+            "signals": {
+                "expression_concentration_level": "extreme",
+                "top_gene_share_of_total_tpm": 0.20,
+            }
+        },
+    }
+
+    cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
+
+    brca = hyps["BRCA"]
+    public = brca.public_dict()
+    assert public["can_select_report_label"] is True
+    assert public["selected_by"] == "lineage_panel"
+    assert public["lineage_panel_top"] == "BRCA_BASAL"
+    assert "lineage_panel_parent_marker_coherence" in public
+
+
 def test_main_propagates_lineage_panel_evidence_to_analysis_dict(monkeypatch):
     """``_apply_cancer_type_evidence`` copies ``lineage_panel_evidence``
     from the cancer_type_evidence return onto the ``analysis`` dict
@@ -1033,7 +1228,7 @@ def test_id_path_and_symbol_path_produce_equivalent_scores():
     if not sample_by_id:
         pytest.skip("pirlygenes unavailable; nothing to compare")
 
-    direct = evaluate_panels(LINEAGE_PANELS, sample_by_id, sample_hk_median=200.0)
+    direct = evaluate_panels(LINEAGE_PANELS, sample_by_id)
 
     # Symbol-fallback path: drive through the selector with sample_tpm_by_symbol
     # only, letting it rebuild the ID view internally.
@@ -1155,7 +1350,7 @@ def test_unresolvable_low_marker_counts_as_violation_not_pass_through():
         pytest.skip("pirlygenes unavailable; nothing to test")
     sample_by_id = {gid: 100.0 if sym == "KRT14" else 0.5 for sym, gid in sym_to_id.items()}
 
-    ev = score_panel(bogus_panel, sample_by_id, sample_hk_median=100.0)
+    ev = score_panel(bogus_panel, sample_by_id)
     bogus_violations = [v for v in ev.low_violations if v[0].startswith("NOT_A_REAL")]
     assert bogus_violations, (
         "Unresolvable low_marker was silently skipped instead of "

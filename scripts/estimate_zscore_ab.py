@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""A/B: does a z-score stromal/immune contrast track tumor purity better than the current
-HK-ratio enrichment (the ESTIMATE surrogate, tumor_purity._geneset_hk_ratio)?
+"""A/B feature-space comparison for stromal/immune dilution signals.
 
 The ESTIMATE surrogate estimates purity from how enriched the stromal/immune gene sets are
 vs a reference. We synthesise a purity gradient — a tumor cohort profile diluted with a TME
@@ -8,6 +7,9 @@ background (a normal stromal/immune-rich tissue) at known fraction f, so true tu
 ≈ (1-f) — and ask which CONTRAST basis is more faithfully monotonic in true purity:
 
   HK-ratio :  sum(geneset) / sum(housekeeping)         (current)
+  raw TPM  :  sum(geneset) on clean TPM
+  log TPM  :  mean(log1p(clean TPM)) over the gene set
+  rank     :  mean within-sample percentile of the gene set
   z-score  : (geneset_mean - cohort_mean) / cohort_sd   (per-gene z, averaged over the set)
 
 Metric = |Spearman(contrast, true_purity)| pooled over types and dilution levels (higher is a
@@ -22,12 +24,11 @@ import numpy as np
 import pandas as pd
 
 from trufflepig.reference import pan_cancer_expression, estimate_signatures
-from trufflepig.tumor_purity import _geneset_hk_ratio
 from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
 
 
 TYPES = ["COAD", "BRCA", "LUAD", "PRAD", "LIHC", "STAD", "KIRC", "PAAD", "HNSC", "BLCA"]
-FRACS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+FRACS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 TME_TISSUES = ["adipose_tissue", "smooth_muscle"]  # structured stromal contaminants
 
 
@@ -65,13 +66,25 @@ def main():
 
     def hk_contrast(col_vals):
         # stromal+immune enrichment over HK (higher => more TME => lower purity)
-        return _geneset_hk_ratio(tme_genes, hk_syms, col_vals)
+        numerator = sum(float(col_vals.get(g, 0.0) or 0.0) for g in tme_genes)
+        denominator = sum(float(col_vals.get(g, 0.0) or 0.0) for g in hk_syms)
+        return numerator / denominator if denominator > 0.0 else 0.0
 
     def raw_contrast(col_vals):
         # stromal+immune sum on CLEAN-TPM (no HK division). clean-TPM already removes depth, so
         # the enrichment-vs-reference should track purity without the HK normalization — the test of
         # whether HK is REDUNDANT for ESTIMATE (the last open HK case).
         return float(sum(col_vals.get(g, 0.0) for g in tme_genes))
+
+    def log_contrast(col_vals):
+        values = [np.log1p(max(float(col_vals.get(g, 0.0)), 0.0)) for g in tme_genes]
+        return float(np.mean(values)) if values else 0.0
+
+    def rank_contrast(col_vals):
+        sample = pd.Series(col_vals, dtype=float).clip(lower=0.0)
+        ranks = sample.rank(method="average", pct=True)
+        values = [float(ranks.get(g, 0.0)) for g in tme_genes]
+        return float(np.mean(values)) if values else 0.0
 
     def sp(a, b):
         ra = pd.Series(a).rank().to_numpy(); rb = pd.Series(b).rank().to_numpy()
@@ -80,28 +93,48 @@ def main():
     def run(contaminant_name, bg_vals):
         # pooled across types, using HK ENRICHMENT (the production method: ratio ÷ the type's own
         # f=0 reference) so type baseline is removed for BOTH methods — the fair comparison.
-        per_type_hk, per_type_z, per_type_raw = [], [], []
+        methods = {
+            "hk": hk_contrast,
+            "raw": raw_contrast,
+            "log1p": log_contrast,
+            "rank": rank_contrast,
+            "zscore": zscore_contrast,
+        }
+        per_type_corr = {name: [] for name in methods}
+        per_type_mae = {name: [] for name in methods}
         for t in tcols:
             tumor = ref[t].astype(float)
-            hk0 = rw0 = None
-            tp_t, hk_t, z_t, raw_t = [], [], [], []
+            tp_t = []
+            values_by_method = {name: [] for name in methods}
             for f in FRACS:
                 mix = (tumor * (1 - f) + pd.Series(bg_vals).reindex(tumor.index).fillna(0.0) * f)
                 mix = mix / mix.sum() * 1e6
                 cv = mix.to_dict()
-                rh = hk_contrast(cv); rr = raw_contrast(cv)
-                if hk0 is None:
-                    hk0 = rh or 1.0; rw0 = rr or 1.0
                 tp_t.append(1 - f)
-                hk_t.append(rh / hk0 if hk0 else 0.0)
-                raw_t.append(rr / rw0 if rw0 else 0.0)
-                z_t.append(zscore_contrast(cv))
-            per_type_hk.append(abs(sp(hk_t, tp_t)))
-            per_type_z.append(abs(sp(z_t, tp_t)))
-            per_type_raw.append(abs(sp(raw_t, tp_t)))
+                for name, scorer in methods.items():
+                    values_by_method[name].append(scorer(cv))
+            truth = np.asarray(tp_t, dtype=float)
+            for name, values in values_by_method.items():
+                per_type_corr[name].append(abs(sp(values, tp_t)))
+                tumor_value = float(values[0])
+                background_value = float(values[-1])
+                span = background_value - tumor_value
+                if abs(span) <= 1e-12:
+                    purity_hat = np.full_like(truth, 0.5)
+                else:
+                    background_fraction = (
+                        np.asarray(values, dtype=float) - tumor_value
+                    ) / span
+                    purity_hat = np.clip(1.0 - background_fraction, 0.0, 1.0)
+                per_type_mae[name].append(
+                    float(np.mean(np.abs(purity_hat - truth)))
+                )
         print(f"  [{contaminant_name}]  mean per-type |Spearman(contrast, purity)|:")
-        print(f"      HK-enrichment {np.mean(per_type_hk):.3f}   raw-cleanTPM-enrichment "
-              f"{np.mean(per_type_raw):.3f}   z-score {np.mean(per_type_z):.3f}")
+        for name in methods:
+            print(
+                f"      {name:7s} corr={np.mean(per_type_corr[name]):.3f} "
+                f"endpoint-calibrated MAE={np.mean(per_type_mae[name]):.3f}"
+            )
 
     print(f"types={len(tcols)} fracs={FRACS} tme_genes={len(tme_genes)}", file=sys.stderr)
     print("\n=== ESTIMATE contrast vs true purity (higher |corr| = better purity signal) ===")

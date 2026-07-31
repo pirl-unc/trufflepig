@@ -305,43 +305,38 @@ def test_lineage_override_rejects_large_upward_jump(monkeypatch):
 
 
 def test_vs_tcga_inf_routes_for_silent_tcga_with_sample_expression():
-    """Genes where the TCGA cohort tumor-component estimate clips to
-    exactly zero but the sample expresses meaningfully must render as
-    ``pct_cancer_median = inf`` (so the plot labels them "absent in
-    TCGA" rather than the quiet gray "0 in TCGA"). Previously the
-    ``tcga_tumor_fold <= 0`` branch routed to None unconditionally."""
+    """Real PRAD-silent CTA expression routes to the absent-cohort state.
+
+    Select a panel of genuine cancer-testis antigens that are zero in the
+    shipped PRAD bulk reference, express that panel in the sample, and assert
+    against the public range-table state. This is more stable than choosing
+    the first zero-valued reference row, whose deconvolved tumor prior may be
+    nonzero even when its bulk median is merely near zero.
+    """
     df = _tcga_sample("PRAD")
-    # Inject a CTA-like gene (silent in PRAD cohort) at high sample TPM.
-    # Use an Ensembl ID known to be in the reference but near-zero in
-    # PRAD_TPM. MAGE-family CTAs typically satisfy this.
     ref = pan_cancer_expression().drop_duplicates(subset="Symbol")
-    ref = ref[ref["PRAD_TPM"].astype(float) < 0.01]
-    if ref.empty:
-        pytest.skip("No silent-in-PRAD gene found in reference")
-    target = ref.iloc[0]
-    target_eid = str(target["Ensembl_Gene_ID"])
-    mask = df["ensembl_gene_id"].astype(str) == target_eid
-    if not mask.any():
-        pytest.skip("Silent-PRAD gene not present in synthetic sample")
+    symbols = ref["Symbol"].fillna("").astype(str)
+    silent_ctas = ref[
+        symbols.str.startswith(("MAGE", "GAGE", "PAGE", "CTAG"))
+        & ref["PRAD_TPM"].astype(float).le(0.001)
+    ]
+    assert len(silent_ctas) >= 5
+    target_ids = set(silent_ctas["Ensembl_Gene_ID"].astype(str))
+    mask = df["ensembl_gene_id"].astype(str).isin(target_ids)
+    assert mask.sum() >= 5
     df.loc[mask, "TPM"] = 50.0
 
     purity = estimate_tumor_purity(df, cancer_type="PRAD")
     ranges = estimate_tumor_expression_ranges(
         df, cancer_type="PRAD", purity_result=purity
     )
-    hit = ranges[ranges["symbol"] == target["Symbol"]]
-    if hit.empty:
-        pytest.skip("Target silent-PRAD gene did not survive ranges filter")
-    val = hit["pct_cancer_median"].iloc[0]
-    assert val is None or np.isinf(val), (
-        f"Expected inf (absent-in-TCGA) or None for a gene silent in TCGA but "
-        f"expressed in the sample; got {val!r}"
-    )
-    # The stronger assertion — it must be inf, not None — only holds when
-    # the gene's median_est comes out > 0.001. Allow None if estimator
-    # chose to clip it, but do NOT allow a finite positive (that would
-    # revive the bug).
-    assert not (isinstance(val, float) and np.isfinite(val) and val > 0)
+    hits = ranges[
+        ranges["symbol"].isin(set(silent_ctas["Symbol"].astype(str)))
+    ]
+    absent = hits[hits["tcga_ref_state"] == "not_in_cohort"]
+    assert not absent.empty
+    assert absent["pct_cancer_median"].map(np.isinf).all()
+    assert absent["median_est"].gt(0.001).all()
 
 
 # ── Panel-construction utilities ────────────────────────────────────────

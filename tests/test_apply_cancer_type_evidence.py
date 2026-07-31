@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import pandas as pd
 
+from trufflepig.decomposition import (
+    scope_residual_identity_to_decomposition_mode,
+)
 from trufflepig.main import (
     _apply_cancer_type_evidence,
-    _scope_residual_identity_to_decomposition_mode,
     _selected_report_scope_basis_label,
 )
 
@@ -395,7 +397,7 @@ def test_residual_identity_stays_within_the_decomposition_regime():
         "candidate_code": "CRC",
         "current_code": "SARC_PLEOLPS",
     }
-    compatible = _scope_residual_identity_to_decomposition_mode(
+    compatible = scope_residual_identity_to_decomposition_mode(
         solid_residual,
         sample_mode="solid",
     )
@@ -407,7 +409,7 @@ def test_residual_identity_stays_within_the_decomposition_regime():
         "candidate_code": "DLBC",
         "current_code": "SARC_PLEOLPS",
     }
-    incompatible = _scope_residual_identity_to_decomposition_mode(
+    incompatible = scope_residual_identity_to_decomposition_mode(
         heme_residual_from_solid_fit,
         sample_mode="solid",
     )

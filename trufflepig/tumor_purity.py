@@ -2,14 +2,10 @@
 
 """Tumor purity estimation from bulk RNA-seq expression data.
 
-Uses within-sample gene-set enrichment ratios to estimate tumor content.
-The key insight: the ratio (gene_set_TPM_sum / housekeeping_TPM_sum) is
-scale-independent because both numerator and denominator come from the
-same sample.
-
-Comparing this ratio to the TCGA cohort reference gives a purity estimate:
-
-    purity ≈ (tumor_signal / HK)_sample / (tumor_signal / HK)_reference
+Uses additive gene-program mass on conformed clean TPM to estimate tumor
+content. Sample, tumor-reference, and normal-background profiles share a
+per-million abundance scale, so the mixture model is evaluated directly in
+that space instead of dividing each profile by a housekeeping subset.
 
 Multiple gene sets are scored independently:
 - Cancer-type signature genes (auto-detected or specified)
@@ -33,7 +29,7 @@ from trufflepig.cancer_ontology import (
 )
 from pirlygenes.gene_sets_cancer import (
 
-    cancer_family_panels, cancer_family_panels_df, housekeeping_gene_ids,
+    cancer_family_panels, cancer_family_panels_df,
 
 )
 
@@ -162,6 +158,10 @@ def _build_family_panels_by_id():
     out = {}
     try:
         df = cancer_family_panels_df()
+        # Negative markers are rule-outs, not positive family evidence. Keep
+        # this ENSG view identical to cancer_family_panels(), which exposes
+        # anchors and confirmatory markers only.
+        df = df[df["role"].astype(str).ne("negative")]
         for family, grp in df.groupby("Family", sort=False):
             out[str(family)] = [
                 _strip_ensembl_version(str(g))
@@ -271,7 +271,7 @@ TUMOR_PURITY_PARAMETERS = {
         "detection_fraction_threshold": 0.05,
     },
     "tumor_specific_markers": {
-        # Difference in HK-normalized expression a candidate must clear over
+        # Difference in clean-TPM expression a candidate must clear over
         # the matched-normal background to be eligible at all. Keeps the
         # filter meaningful for low-abundance but legitimately tumor-biased
         # genes.
@@ -279,7 +279,7 @@ TUMOR_PURITY_PARAMETERS = {
         # Strict tier: maximum share of the cancer signal that can come from
         # matched-normal tissue / broad host background, and minimum
         # cancer-vs-background fold change. A lower bound on z-score and
-        # absolute HK-normalized expression in the cancer type itself.
+        # absolute clean-TPM expression in the cancer type itself.
         "normal_fraction_max": 0.5,
         "tme_fraction_max": 0.5,
         "cancer_expression_min": 0.5,
@@ -346,7 +346,6 @@ TUMOR_PURITY_PARAMETERS = {
         "signature_estimate_conflict_min_gap": 0.4,        # and the disagreement must be large
     },
     "family_scoring": {
-        "presence_scale": 0.15,
         "within_family_base": 0.35,
         "within_family_gain": 0.65,
         "non_family_penalty": 0.85,
@@ -375,7 +374,7 @@ _SIGNATURE_PANEL_CACHE = {}
 _REFERENCE_MATRIX_CACHE = {}
 
 
-def _cached_reference_matrices(normalize="housekeeping"):
+def _cached_reference_matrices(normalize=None):
     """Return cached derived frames for pan-cancer expression.
 
     Returns a dict with:
@@ -402,8 +401,8 @@ def _cached_reference_matrices(normalize="housekeeping"):
     gene_mean = expr_matrix.mean(axis=1)
     gene_std = expr_matrix.std(axis=1).replace(0, np.nan)
     z_matrix = expr_matrix.sub(gene_mean, axis=0).div(gene_std, axis=0).fillna(0)
-    # All three normalization bases available together (see NORMALIZATION_USAGE for who reads which):
-    #   expr_matrix       — HK-ratio / raw scale (legacy default many consumers still read)
+    # All three non-HK views are derived together:
+    #   expr_matrix       — clean TPM / nTPM
     #   z_matrix          — per-gene z-score across cancer types (mean/std over cohort cols)
     #   percentile_matrix — per-gene percentile rank across cancer types (rank-based; robust to
     #                       outliers/scale where z-score's normality assumption is weak)
@@ -490,26 +489,9 @@ def _build_sample_tpm_by_symbol(df_gene_expr):
     return _common_build_sample_tpm(df_gene_expr)
 
 
-def _geneset_hk_ratio(genes, hk_symbols, expr_by_symbol):
-    """Sum of gene set expression / sum of housekeeping expression.
-
-    This ratio is scale-independent (cancels out the per-sample
-    scaling factor since both come from the same sample/column).
-    """
-    gs_sum = sum(expr_by_symbol.get(g, 0) for g in genes)
-    hk_sum = sum(expr_by_symbol.get(g, 0) for g in hk_symbols)
-    if hk_sum <= 0:
-        return 0.0
-    return gs_sum / hk_sum
-
-
-def _sample_hk_median(sample_tpm):
-    """Return the sample housekeeping median on clean TPM scale."""
-    ref = pan_cancer_expression(technical_rna_normalize=True)
-    id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
-    hk_syms = [id_to_sym[gid] for gid in housekeeping_gene_ids() if gid in id_to_sym]
-    sample_hk_vals = [sample_tpm[g] for g in hk_syms if sample_tpm.get(g, 0) > 0]
-    return float(np.median(sample_hk_vals)) if sample_hk_vals else 0.0
+def _geneset_tpm_mass(genes, expr_by_symbol):
+    """Sum a gene program on the shared nonnegative clean-TPM scale."""
+    return float(sum(max(0.0, float(expr_by_symbol.get(g, 0.0) or 0.0)) for g in genes))
 
 
 # Lineage genes per cancer type — genes retained in metastases and specific
@@ -680,14 +662,14 @@ def _cancer_specific_lineage_genes(cancer_code: str) -> list:
 
 
 def _lineage_purity_estimates(
-    cancer_code, sample_tpm, ref_by_sym, hk_syms, tcga_purity
+    cancer_code, sample_tpm, ref_by_sym, tcga_purity
 ):
-    """Estimate purity from cancer-type lineage genes using HK-normalized ratios.
+    """Estimate purity from cancer-type lineage genes in clean TPM.
 
     For each lineage gene, computes:
-        sample_ratio = gene_sample / HK_sample
-        ref_ratio    = gene_TCGA  / HK_TCGA
-        tme_ratio    = median(gene_tissue / HK_tissue) across TME tissues
+        sample_ratio = gene_sample clean TPM
+        ref_ratio    = gene_TCGA clean TPM
+        tme_ratio    = median(gene_tissue nTPM) across TME tissues
         true_tumor_ratio = (ref_ratio - (1-tcga_purity) * tme_ratio) / tcga_purity
         purity = (sample_ratio - tme_ratio) / (true_tumor_ratio - tme_ratio)
 
@@ -744,26 +726,9 @@ def _lineage_purity_estimates(
     }
     tme_cols = [c for c in ntpm_nonrepro if c.removesuffix("_nTPM") in _tme]
 
-    # HK symbols in reference
-    hk_in_ref = [s for s in hk_syms if s in ref_dedup.index]
-
-    # HK medians per column
     cancer_col = f"{cancer_code}_TPM"
     if cancer_col not in ref_dedup.columns:
         return [], unavailable("reference_cohort_unavailable")
-    ref_hk_cancer = ref_dedup.loc[hk_in_ref, cancer_col].astype(float).median()
-    if not np.isfinite(ref_hk_cancer) or ref_hk_cancer <= 0:
-        return [], unavailable("reference_scale_unavailable")
-
-    tme_hk_medians = {}
-    for col in tme_cols:
-        tme_hk_medians[col] = ref_dedup.loc[hk_in_ref, col].astype(float).median()
-
-    # Sample HK (median of expressed HK genes)
-    sample_hk_vals = [sample_tpm[g] for g in hk_syms if sample_tpm.get(g, 0) > 0]
-    sample_hk_med = float(np.median(sample_hk_vals)) if sample_hk_vals else 0.0
-    if sample_hk_med <= 0:
-        return [], unavailable("sample_scale_unavailable")
 
     results = []
     # Parallel list of lineage genes that were genuinely present in the
@@ -787,7 +752,7 @@ def _lineage_purity_estimates(
             )
             continue
 
-        sample_ratio = s_tpm / sample_hk_med
+        sample_ratio = s_tpm
         ref_value = float(ref_dedup.loc[gene, cancer_col])
         if not np.isfinite(ref_value) or ref_value < 0:
             skipped_detected.append(
@@ -798,14 +763,14 @@ def _lineage_purity_estimates(
                 }
             )
             continue
-        ref_ratio = ref_value / ref_hk_cancer
+        ref_ratio = ref_value
 
-        # TME ratio: median across TME tissues (HK-normalized)
-        tme_ratios = []
-        for col in tme_cols:
-            hk_m = tme_hk_medians[col]
-            if hk_m > 0:
-                tme_ratios.append(float(ref_dedup.loc[gene, col]) / hk_m)
+        # TME background on the same per-million abundance scale.
+        tme_ratios = [
+            max(0.0, float(ref_dedup.loc[gene, col]))
+            for col in tme_cols
+            if np.isfinite(float(ref_dedup.loc[gene, col]))
+        ]
         tme_ratio = float(np.median(tme_ratios)) if tme_ratios else 0.0
 
         # Deconvolve TCGA to get true tumor ratio
@@ -950,7 +915,6 @@ def _subtype_lineage_purity_estimates(
     subtype_code,
     panel,
     sample_tpm,
-    hk_syms,
     ref_by_sym=None,
 ):
     """Per-gene purity estimates for a mixture-cohort subtype (#171).
@@ -1000,37 +964,6 @@ def _subtype_lineage_purity_estimates(
     }
     ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     tme_cols = [c for c in ntpm_cols if c.removesuffix("_nTPM") in _tme]
-    hk_in_ref = [s for s in hk_syms if s in ref_dedup.index]
-
-    tme_hk_medians = {
-        col: ref_dedup.loc[hk_in_ref, col].astype(float).median() for col in tme_cols
-    }
-
-    sample_hk_vals = [sample_tpm[g] for g in hk_syms if sample_tpm.get(g, 0) > 0]
-    sample_hk_med = float(np.median(sample_hk_vals)) if sample_hk_vals else 0.0
-    if sample_hk_med <= 0:
-        return [], unavailable("sample_scale_unavailable")
-
-    # The subtype tumor-TPM table has no HK row per se; use the HPA
-    # median of HK genes as the normalizer that converts subtype tumor
-    # TPM into an HK-relative "tumor ratio". This follows the same
-    # normalization spirit as the parent-cohort helper but without a
-    # cohort-specific TPM column.
-    ref_hk_median_cols = [
-        c
-        for c in ntpm_cols
-        if c.removesuffix("_nTPM") not in _tme
-        and c.removesuffix("_nTPM")
-        not in {"testis", "epididymis", "seminal_vesicle", "placenta", "ovary"}
-    ]
-    if not ref_hk_median_cols:
-        return [], unavailable("reference_scale_unavailable")
-    ref_hk_normalizer = float(
-        ref_dedup.loc[hk_in_ref, ref_hk_median_cols].astype(float).median().median()
-    )
-    if not np.isfinite(ref_hk_normalizer) or ref_hk_normalizer <= 0:
-        return [], unavailable("reference_scale_unavailable")
-
     results = []
     skipped_detected = []
     for gene in panel:
@@ -1061,14 +994,14 @@ def _subtype_lineage_purity_estimates(
             )
             continue
 
-        sample_ratio = s_tpm / sample_hk_med
-        tumor_ratio = float(tumor_tpm) / ref_hk_normalizer
+        sample_ratio = s_tpm
+        tumor_ratio = float(tumor_tpm)
 
-        tme_ratios = []
-        for col in tme_cols:
-            hk_m = tme_hk_medians[col]
-            if hk_m > 0:
-                tme_ratios.append(float(ref_dedup.loc[gene, col]) / hk_m)
+        tme_ratios = [
+            max(0.0, float(ref_dedup.loc[gene, col]))
+            for col in tme_cols
+            if np.isfinite(float(ref_dedup.loc[gene, col]))
+        ]
         tme_ratio = float(np.median(tme_ratios)) if tme_ratios else 0.0
 
         if tumor_ratio <= tme_ratio:
@@ -1104,17 +1037,19 @@ def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
     """``{subtype: percentile-cosine pick score}`` over the UNION lineage panel — the
     discriminative basis for choosing among mixture subtypes (#171).
 
-    The default ranker uses ``_summarize_lineage_support`` (a TME-excess-weighted HK cosine),
-    but that subtracts the stromal/TME program — and mesenchymal subtypes (LMS / liposarcoma /
-    synovial …) overlap that program, so the subtraction removes the very markers that
-    distinguish them. Measured on the SARC subtypes (scripts/decomposition_concordance_ab.py +
-    decomposition_production_check.py): the production HK concordance picks the right subtype
-    only 6/15, while a cross-cohort **percentile** cosine of the sample vs each subtype's
-    tumor-only profile, over the union panel, reaches ~14/15. (percentile beats z-score here too
-    — small heavy-tailed marker panels, see normalization_usage Phase 4b.)
+    The primary lineage score measures absolute clean-TPM excess over TME.
+    Mesenchymal subtypes (LMS / liposarcoma / synovial …) overlap the stromal
+    program, so subtracting that program can remove the markers that distinguish
+    them. Measured on the SARC subtypes
+    (scripts/decomposition_concordance_ab.py +
+    decomposition_production_check.py), abundance concordance picks the right
+    subtype only 6/15, while a cross-cohort **percentile** cosine of the sample
+    versus each subtype's tumor-only profile over the union panel reaches
+    approximately 14/15.
 
-    Returns ``{}`` (caller keeps the HK ranking) when the percentile basis can't be built —
-    fewer than two profiled subtypes, or the cohort reference / a tumor profile is missing.
+    Returns ``{}`` (caller keeps the primary clean-TPM ranking) when the
+    percentile basis cannot be built: fewer than two profiled subtypes, or the
+    cohort reference / a tumor profile is missing.
     """
     try:
         from .signal_views import _cohort_reference
@@ -1147,7 +1082,7 @@ def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
             t_norm = float(np.linalg.norm(t_vec))
             scores[sub] = float(s_vec @ t_vec / (s_norm * t_norm)) if t_norm > 0 else 0.0
         return scores
-    except Exception:  # noqa: BLE001 — pick refinement; fall back to the HK ranking
+    except Exception:  # noqa: BLE001 — optional pick refinement
         return {}
 
 
@@ -1175,7 +1110,7 @@ def _cohort_has_refinable_subtypes(parent_code) -> bool:
     return False
 
 
-def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
+def _mixture_cohort_lineage_summary(parent_code, sample_tpm):
     """Evaluate lineage per subtype for a mixture parent; return max (#171).
 
     For each subtype of ``parent_code`` that has both (a) a curated
@@ -1184,10 +1119,10 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
     the lineage support. The subtype is PICKED by the percentile-cosine
     pick score (:func:`_mixture_subtype_pick_scores`) when ≥2 profiled
     subtypes are available — it discriminates the mesenchymal subtypes
-    that the HK concordance confuses (SARC pick accuracy 6/15 → ~14/15) —
-    falling back to the HK ``concordance`` otherwise; ties broken by
+    that the abundance concordance confuses (SARC pick accuracy 6/15 → ~14/15) —
+    falling back to the clean-TPM ``concordance`` otherwise; ties broken by
     detection_fraction then panel size. The reported ``concordance`` /
-    ``support_factor`` remain HK-based (purity values unchanged).
+    ``support_factor`` remain abundance-based.
 
     Returns ``None`` when no subtype qualifies — callers should fall
     back to the parent-level lineage computation.
@@ -1197,8 +1132,7 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
         return None
 
     # Percentile-cosine PICK scores (discriminative; see _mixture_subtype_pick_scores). Used
-    # only to RANK the subtypes — the reported concordance / support_factor stay HK-based, so
-    # purity values are untouched and only the surfaced "subtype: X-consistent" label changes.
+    # only to RANK the subtypes; purity remains a clean-TPM mixture estimate.
     paneled = [
         s for s in subtypes
         if _lineage_genes_map().get(s) and _subtype_tumor_tpm_lookup(s)
@@ -1216,7 +1150,6 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
             subtype_code,
             panel,
             sample_tpm,
-            hk_syms,
         )
         if not per_gene:
             per_subtype.append(
@@ -1241,7 +1174,7 @@ def _mixture_cohort_lineage_summary(parent_code, sample_tpm, hk_syms):
         }
         per_subtype.append(record)
         # Rank by the percentile pick score when available (it discriminates mesenchymal
-        # subtypes the HK concordance confuses); else fall back to the HK concordance.
+        # subtypes the abundance concordance confuses); else use concordance.
         # detection_fraction + panel size remain the tiebreakers.
         detection = record["detection_fraction"] or 0.0
         rank_primary = (
@@ -1329,7 +1262,7 @@ def _build_signature_panel_tiers():
 def _panel_reference_frames(cancer_code, ref_by_sym=None):
     """Assemble per-gene expression vectors used by the panel filter.
 
-    Returns a dict with the cancer-side HK-normalized expression, the
+    Returns a dict with the cancer-side clean-TPM expression, the
     maximum across matched-normal and broad-normal backgrounds (union), the
     max across TME tissues, the combined background, and a z-score over
     cancer types. Returns None if the cancer code has no TPM column.
@@ -1341,7 +1274,7 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     """
     del ref_by_sym  # unused; kept in the signature for call-site compatibility
 
-    cached = _cached_reference_matrices(normalize="housekeeping")
+    cached = _cached_reference_matrices(normalize=None)
     ref_by_sym = cached["ref_by_sym"]
     expr_matrix = cached["expr_matrix"]
     z_matrix = cached["z_matrix"]
@@ -1373,31 +1306,38 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     ]
 
     z_scores = z_matrix[cancer_col]
-    cancer_hk = expr_matrix[cancer_col]
+    cancer_expression = expr_matrix[cancer_col]
 
     def _row_max(cols):
         if not cols:
             return pd.Series(0.0, index=ref_by_sym.index, dtype=float)
         return ref_by_sym[cols].astype(float).max(axis=1)
 
-    matched_normal_hk = _row_max(normal_cols)
-    broad_normal_hk = _row_max(ntpm_nonrepro)
-    normal_hk = pd.concat(
-        [matched_normal_hk.rename("matched"), broad_normal_hk.rename("broad")],
+    matched_normal_expression = _row_max(normal_cols)
+    broad_normal_expression = _row_max(ntpm_nonrepro)
+    normal_expression = pd.concat(
+        [
+            matched_normal_expression.rename("matched"),
+            broad_normal_expression.rename("broad"),
+        ],
         axis=1,
     ).max(axis=1)
-    tme_hk = _row_max(tme_cols)
-    background_hk = pd.concat(
-        [normal_hk.rename("normal"), tme_hk.rename("tme")], axis=1
+    tme_expression = _row_max(tme_cols)
+    background_expression = pd.concat(
+        [
+            normal_expression.rename("normal"),
+            tme_expression.rename("tme"),
+        ],
+        axis=1,
     ).max(axis=1)
 
     return {
         "ref_by_sym": ref_by_sym,
         "z_scores": z_scores,
-        "cancer_hk": cancer_hk,
-        "normal_hk": normal_hk,
-        "tme_hk": tme_hk,
-        "background_hk": background_hk,
+        "cancer_expression": cancer_expression,
+        "normal_expression": normal_expression,
+        "tme_expression": tme_expression,
+        "background_expression": background_expression,
     }
 
 
@@ -1408,7 +1348,7 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
     - drop rearranged-receptor V/D/J/C segments and MHC class II by default
       (configurable, bypassed for hematopoietic / immune-origin cancers
       where those genes are legitimate lineage markers)
-    - require meaningful HK-normalized expression in the target cancer type
+    - require meaningful clean-TPM expression in the target cancer type
     - score genes by cancer-type specificity AND visibility above the union
       of matched-normal, broad-normal (minus reproductive tissues), and TME
     - relax thresholds across three tiers only if the strict tier leaves a
@@ -1429,10 +1369,10 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
         return []
     ref_by_sym = frames["ref_by_sym"]
     z_scores = frames["z_scores"]
-    cancer_hk = frames["cancer_hk"]
-    normal_hk = frames["normal_hk"]
-    tme_hk = frames["tme_hk"]
-    background_hk = frames["background_hk"]
+    cancer_expression = frames["cancer_expression"]
+    normal_expression = frames["normal_expression"]
+    tme_expression = frames["tme_expression"]
+    background_expression = frames["background_expression"]
 
     params = TUMOR_PURITY_PARAMETERS["tumor_specific_markers"]
 
@@ -1440,12 +1380,14 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
     # absolute expression, and cancer-vs-background fold.
     score = (
         z_scores.clip(lower=0.0)
-        * np.log2(cancer_hk + 1.0)
-        * np.log2((cancer_hk + 0.01) / (background_hk + 0.01) + 1.0)
+        * np.log2(cancer_expression + 1.0)
+        * np.log2(
+            (cancer_expression + 0.01) / (background_expression + 0.01) + 1.0
+        )
     )
-    normal_frac = normal_hk / (cancer_hk + 0.001)
-    tme_frac = tme_hk / (cancer_hk + 0.001)
-    specificity = (cancer_hk + 0.001) / (background_hk + 0.001)
+    normal_frac = normal_expression / (cancer_expression + 0.001)
+    tme_frac = tme_expression / (cancer_expression + 0.001)
+    specificity = (cancer_expression + 0.001) / (background_expression + 0.001)
 
     # Build the exclusion mask. Immune-origin cancer types (DLBC, LAML, THYM)
     # bypass the family exclusion entirely — for those, rearranged-receptor
@@ -1467,9 +1409,9 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
     seen = set()
     for tier in _build_signature_panel_tiers():
         keep = (
-            (cancer_hk > tier["expr_min"])
+            (cancer_expression > tier["expr_min"])
             & (z_scores > tier["zscore_min"])
-            & ((cancer_hk - normal_hk) > params["delta_min"])
+            & ((cancer_expression - normal_expression) > params["delta_min"])
             & (normal_frac <= tier["normal_frac_max"])
             & (tme_frac <= tier["tme_frac_max"])
             & (specificity >= tier["specificity_min"])
@@ -1489,7 +1431,7 @@ def _select_tumor_specific_genes_for_panel(cancer_code, n=30, exclude_lineage=Tr
     # never quietly regresses to including MT-* / rearranged receptors just
     # because the tiered filter ran short.
     fallback = score[
-        (cancer_hk > params["fallback_expression_min"]) & ~excluded
+        (cancer_expression > params["fallback_expression_min"]) & ~excluded
     ].sort_values(ascending=False)
     for gene in fallback.index:
         if gene in seen:
@@ -2065,27 +2007,22 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     reference_expression_source = reference_context["reference_expression_source"]
     reference_purity = reference_context["reference_purity"]
 
-    # HK gene symbols
-    hk_ids = housekeeping_gene_ids()
-    id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
-    hk_syms = [id_to_sym[gid] for gid in hk_ids if gid in id_to_sym]
-
     # TCGA reference purity (the TCGA cohort is NOT 100% pure)
     tcga_purity = reference_purity
 
     # ---- Component 1: Cancer-type signature genes ----
     sig_genes = _select_tumor_specific_genes(reference_cancer_code, n=30)
-    sig_sample_ratio = _geneset_hk_ratio(sig_genes, hk_syms, sample_tpm)
-    sig_ref_ratio = _geneset_hk_ratio(sig_genes, hk_syms, ref_expr)
+    sig_sample_ratio = _geneset_tpm_mass(sig_genes, sample_tpm)
+    sig_ref_ratio = _geneset_tpm_mass(sig_genes, ref_expr)
 
     # Per-gene estimates for bounds
     per_gene = []
     for gene in sig_genes:
         s = sample_tpm.get(gene, 0)
-        s_hk = _geneset_hk_ratio([gene], hk_syms, sample_tpm)
-        r_hk = _geneset_hk_ratio([gene], hk_syms, ref_expr)
-        if r_hk > 0.001:
-            raw_p = s_hk / r_hk
+        sample_expression = _geneset_tpm_mass([gene], sample_tpm)
+        reference_expression = _geneset_tpm_mass([gene], ref_expr)
+        if reference_expression > 0.001:
+            raw_p = sample_expression / reference_expression
             # Calibrate: TCGA reference ≈ tcga_purity, not 100%
             calibrated_p = raw_p * tcga_purity
             per_gene.append(
@@ -2122,10 +2059,10 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
         stromal_genes = []
         immune_genes = []
 
-    stromal_sample = _geneset_hk_ratio(stromal_genes, hk_syms, sample_tpm)
-    stromal_ref = _geneset_hk_ratio(stromal_genes, hk_syms, ref_expr)
-    immune_sample = _geneset_hk_ratio(immune_genes, hk_syms, sample_tpm)
-    immune_ref = _geneset_hk_ratio(immune_genes, hk_syms, ref_expr)
+    stromal_sample = _geneset_tpm_mass(stromal_genes, sample_tpm)
+    stromal_ref = _geneset_tpm_mass(stromal_genes, ref_expr)
+    immune_sample = _geneset_tpm_mass(immune_genes, sample_tpm)
+    immune_ref = _geneset_tpm_mass(immune_genes, ref_expr)
 
     # Stromal/immune enrichment relative to TCGA reference.
     # In TCGA, (1 - tcga_purity) is already stroma+immune.
@@ -2147,7 +2084,6 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
             reference_cancer_code,
             _lineage_genes_map().get(reference_cancer_code, []),
             sample_tpm,
-            hk_syms,
             ref_by_sym=ref_by_sym,
         )
     else:
@@ -2155,7 +2091,6 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
             reference_cancer_code,
             sample_tpm,
             ref_by_sym,
-            hk_syms,
             tcga_purity,
         )
     # #171: mixture-cohort modeling. When the parent cohort is a union
@@ -2177,7 +2112,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
         reference_cancer_code
     ):
         mixture = _mixture_cohort_lineage_summary(
-            reference_cancer_code, sample_tpm, hk_syms
+            reference_cancer_code, sample_tpm
         )
         if mixture is not None and mixture.get("lineage_per_gene"):
             parent_support = _summarize_lineage_support(lineage_per_gene)
@@ -2393,7 +2328,7 @@ def plot_tumor_purity(
         overall_label = "Overall fraction proxy"
         left_title = (
             f"{reference_code} reference lineage-signature fraction estimates\n"
-            f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
+            f"(clean TPM vs TCGA reference, calibrated for "
             f"TCGA median purity {tcga_median_text})"
         )
     elif sample_mode == "pure":
@@ -2404,7 +2339,7 @@ def plot_tumor_purity(
         overall_label = "Overall consistency"
         left_title = (
             f"{reference_code} reference lineage-profile consistency estimates\n"
-            f"(gene TPM / HK TPM vs TCGA reference, not interpreted as bulk admixture)"
+            f"(clean TPM vs TCGA reference, not interpreted as bulk admixture)"
         )
     else:
         metric_label = "Purity estimate"
@@ -2414,7 +2349,7 @@ def plot_tumor_purity(
         overall_label = "Overall estimate"
         left_title = (
             f"{reference_code} reference signature gene purity estimates\n"
-            f"(gene TPM / HK TPM vs TCGA reference, calibrated for "
+            f"(clean TPM vs TCGA reference, calibrated for "
             f"TCGA median purity {tcga_median_text})"
         )
 
@@ -2987,25 +2922,10 @@ def _score_host_tissue_details(
     ref_by_sym = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
     ntpm_cols = [c for c in ref.columns if c.endswith("_nTPM")]
     expr = ref_by_sym[ntpm_cols].astype(float)
-    hk_median = _sample_hk_median(sample_tpm_by_symbol)
-    if hk_median <= 0:
-        hk_median = 1.0
-
-    id_to_sym = dict(zip(ref["Ensembl_Gene_ID"], ref["Symbol"]))
-    hk_gene_symbols = [
-        id_to_sym[gid]
-        for gid in housekeeping_gene_ids()
-        if gid in id_to_sym and id_to_sym[gid] in ref_by_sym.index
-    ]
-    if hk_gene_symbols:
-        ref_hk_medians = expr.loc[hk_gene_symbols].median(axis=0).replace(0, np.nan)
-    else:
-        ref_hk_medians = pd.Series(1.0, index=expr.columns, dtype=float)
-    expr_hk = expr.div(ref_hk_medians, axis=1).fillna(0.0)
-
-    gene_mean = expr_hk.mean(axis=1)
-    gene_std = expr_hk.std(axis=1).replace(0, np.nan)
-    z_matrix = expr_hk.sub(gene_mean, axis=0).div(gene_std, axis=0).fillna(0)
+    expr_log = np.log1p(expr.clip(lower=0.0))
+    gene_mean = expr_log.mean(axis=1)
+    gene_std = expr_log.std(axis=1).replace(0, np.nan)
+    z_matrix = expr_log.sub(gene_mean, axis=0).div(gene_std, axis=0).fillna(0)
 
     results = []
     for col in ntpm_cols:
@@ -3020,11 +2940,11 @@ def _score_host_tissue_details(
             and other.removesuffix("_nTPM") in _HOST_SITE_BACKGROUND_TISSUES
         ]
         if background_cols:
-            background_max = expr_hk[background_cols].max(axis=1)
+            background_max = expr[background_cols].max(axis=1)
         else:
             background_max = pd.Series(0.0, index=expr.index)
 
-        tissue_expr = expr_hk[col]
+        tissue_expr = expr[col]
         z_col = z_matrix[col]
         specificity = (tissue_expr + 1e-6) / (background_max + 1e-6)
         score = z_col * np.log2(specificity + 1.0)
@@ -3048,8 +2968,8 @@ def _score_host_tissue_details(
         pcts = []
         gene_details = []
         for gene in sig_genes:
-            s_val = sample_tpm_by_symbol.get(gene, 0.0) / hk_median
-            ref_vals = expr_hk.loc[gene].values
+            s_val = sample_tpm_by_symbol.get(gene, 0.0)
+            ref_vals = expr.loc[gene].values
             n = len(ref_vals)
             below = np.sum(ref_vals < s_val)
             equal = np.sum(np.isclose(ref_vals, s_val, atol=1e-6))
@@ -3091,20 +3011,6 @@ def _score_host_tissues(sample_tpm_by_symbol, tissues=None, top_n=None):
     return [(row["tissue"], row["score"], row["n_genes"]) for row in details]
 
 
-def _sample_hk_median_by_id(sample_tpm_by_id):
-    """Housekeeping median on the clean-TPM scale, keyed by Ensembl gene ID.
-
-    Like :func:`_sample_hk_median` but matches the housekeeping panel by ID, so
-    it shares the symbol-drift immunity of the ID-keyed family scoring (and is
-    simpler — ``housekeeping_gene_ids()`` are already Ensembl IDs).
-    """
-    from .plot_data_helpers import _strip_ensembl_version
-
-    hk_ids = [_strip_ensembl_version(str(gid)) for gid in housekeeping_gene_ids()]
-    vals = [sample_tpm_by_id[g] for g in hk_ids if sample_tpm_by_id.get(g, 0) > 0]
-    return float(np.median(vals)) if vals else 0.0
-
-
 def _score_cancer_family_panels(sample_tpm_by_id):
     """Score broad cancer families before attempting fine subtype ranking.
 
@@ -3118,13 +3024,48 @@ def _score_cancer_family_panels(sample_tpm_by_id):
     # Loud-fail the ENSG-vs-symbol crossing here rather than silently scoring
     # every family as zero (the #65 regression class).
     assert_tpm_keyed_by_gene_id(sample_tpm_by_id, context="cancer-family-panel sample")
-    hk_median = _sample_hk_median_by_id(sample_tpm_by_id)
-    if hk_median <= 0:
+    from scipy.stats import rankdata
+
+    from .reference import pan_cancer_expression
+    from .signal_views import _cohort_reference, signal_report
+
+    reference_frame = (
+        pan_cancer_expression(technical_rna_normalize=True)
+        .drop_duplicates(subset="Ensembl_Gene_ID")
+    )
+    id_to_symbol = dict(
+        zip(reference_frame["Ensembl_Gene_ID"], reference_frame["Symbol"])
+    )
+    sample_tpm_by_symbol = {
+        id_to_symbol[gene_id]: float(value)
+        for gene_id, value in sample_tpm_by_id.items()
+        if gene_id in id_to_symbol
+    }
+    if not sample_tpm_by_symbol:
         return {family: 0.0 for family in _CANCER_FAMILY_PANELS_BY_ID}
+    symbols = list(sample_tpm_by_symbol)
+    ranks = rankdata(
+        [sample_tpm_by_symbol[symbol] for symbol in symbols],
+        method="average",
+    )
+    within_sample_pct = dict(
+        zip(symbols, ranks / max(1, len(symbols)))
+    )
+    cohort_reference = _cohort_reference()
 
     scores = {}
     for family, ids in _CANCER_FAMILY_PANELS_BY_ID.items():
-        values = [sample_tpm_by_id.get(gid, 0.0) / hk_median for gid in ids]
+        values = [
+            signal_report(
+                symbol,
+                (symbol,),
+                sample_tpm_by_symbol,
+                within_sample_pct=within_sample_pct,
+                cohort_reference=cohort_reference,
+            ).confidence
+            for gene_id in ids
+            if (symbol := id_to_symbol.get(gene_id))
+        ]
         if not values:
             scores[family] = 0.0
             continue
@@ -3241,7 +3182,10 @@ _SQUAMOUS_PROGRAM_MARKERS = ("TP63", "SOX2")
 # Urothelial differentiation panel — high in basal/luminal MIBC (BLCA),
 # near zero in BRCA and broad squamous medians. Defense-in-depth gate
 # against a basal-MIBC sample that somehow lands on a squamous top code.
-_UROTHELIAL_MARKERS = ("UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B")
+# UPK3B is expressed by mesothelium (and is part of the MESO lineage panel);
+# unlike UPK1A/1B/2/3A it is not sufficiently specific to establish
+# urothelial origin.
+_UROTHELIAL_MARKERS = ("UPK1A", "UPK1B", "UPK2", "UPK3A")
 _SQUAMOUS_TOP_CODES = {"ESCA", "LUSC", "HNSC", "CESC"}
 
 # Per-gene gate thresholds for the basal/TNBC-vs-squamous discrimination in
@@ -3825,6 +3769,8 @@ def _candidate_codes_from_family_panels(
     downstream evidence, but they must not consume the small expansion quota
     that decides which broad cohorts reach the full ranker.
     """
+    from .signal_views import PRESENT_CONFIDENCE
+
     expanded_family_panels = 0
     max_family_panels = int(family_params["candidate_panel_top_n"])
     candidate_codes = []
@@ -3842,7 +3788,7 @@ def _candidate_codes_from_family_panels(
             continue
         if (
             family in soft_families
-            and top_family_score >= family_params["presence_scale"]
+            and top_family_score >= PRESENT_CONFIDENCE
             and family != top_signature_family
         ):
             continue
@@ -4145,9 +4091,7 @@ def rank_cancer_type_candidates(
     max_family_score = max(hard_family_scores.values(), default=0.0)
     sorted_family_scores = sorted(hard_family_scores.values(), reverse=True)
     top_family_score = sorted_family_scores[0] if sorted_family_scores else 0.0
-    family_presence = float(
-        np.clip(top_family_score / family_params["presence_scale"], 0.0, 1.0)
-    )
+    family_presence = float(np.clip(top_family_score, 0.0, 1.0))
     ranked_families = sorted(
         family_scores.items(),
         key=lambda item: (-item[1], item[0]),
@@ -4452,11 +4396,8 @@ def rank_cancer_type_candidates(
     if sample_tpm:
         from .cancer_type_ontology import lineage_compatibility
         from .lineage_evidence import lineage_exclusion_evidence
-        from .lineage_marker_recall import marker_hk_median
 
-        _lineage_ev = lineage_exclusion_evidence(
-            sample_tpm, marker_hk_median(sample_tpm)
-        )
+        _lineage_ev = lineage_exclusion_evidence(sample_tpm)
         if _lineage_ev.factors:
             for r in rows:
                 # Polyphenotypic tumors (NBL=embryonal+neuroendocrine, DSRCT=mesenchymal+

@@ -798,9 +798,15 @@ def cancer_type_context_from_analysis(
         analysis.get("requested_expression_reference_cancer_type")
         or analysis.get("expression_reference_cancer_type")
     )
-    reference_code = requested_reference_code
+    # ``requested_*`` fields are audit history. Once synchronization has
+    # replaced an invalid sibling or independent fallback, the active fields
+    # must win on the second pass rather than resurrecting the old request.
+    reference_code = _clean(analysis.get("reference_cancer_type"))
     if not reference_code:
-        reference_code = parent_code or report_code
+        reference_code = requested_reference_code or parent_code or report_code
+    expression_code = _clean(analysis.get("expression_reference_cancer_type"))
+    if not expression_code:
+        expression_code = requested_expression_code
 
     excluded_values = analysis.get("excluded_sibling_cancer_type_contexts") or ()
     if isinstance(excluded_values, str):
@@ -828,14 +834,27 @@ def cancer_type_context_from_analysis(
         reference_code = report_code
 
     if (
-        cancer_type_tree_relationship(report_code, requested_expression_code)
+        cancer_type_tree_relationship(report_code, expression_code)
         == "sibling"
     ):
-        excluded_sibling_codes.add(requested_expression_code)
+        excluded_sibling_codes.add(expression_code)
 
     report_direct_options = expression_reference_options(
         report_code, include_fallback=False
     )
+    # An unrelated broad fallback must not remain the active analysis context
+    # when the resolved report entity has its own pan-cancer reference. The
+    # old code remains in ``requested_reference_code`` and in the evidence
+    # differential, but no longer controls decomposition or target ranges.
+    if (
+        cancer_type_tree_relationship(report_code, reference_code)
+        == "independent"
+        and any(
+            record.source_kind == "observed_pan_cancer_reference"
+            for record in report_direct_options
+        )
+    ):
+        reference_code = report_code
     reference_direct_options = expression_reference_options(
         reference_code, include_fallback=False
     )
@@ -846,7 +865,7 @@ def cancer_type_context_from_analysis(
     report_effective = effective_expression_reference(report_code)
     reference_effective = effective_expression_reference(reference_code)
     requested_expression_options = expression_reference_options(
-        requested_expression_code,
+        expression_code,
         include_fallback=False,
     )
     candidates = (

@@ -144,7 +144,6 @@ def test_lineage_estimator_returns_tuple_of_estimates_and_skipped():
         "FAKE_TYPE",
         {},
         {},
-        [],
         0.7,
     )
     assert estimates == []
@@ -198,7 +197,6 @@ def test_lineage_estimator_separates_tme_dominated_from_usable():
             "FAKE",
             sample_tpm,
             {},
-            ["HK"],
             0.7,
         )
     finally:
@@ -231,7 +229,6 @@ def test_lineage_estimator_reports_detected_genes_excluded_from_specific_panel(
         "FAKE",
         {"KEPT": 0.0, "SHARED": 0.03},
         {},
-        [],
         0.7,
     )
 

@@ -245,6 +245,11 @@ def test_infer_sample_mode_prefers_best_heme_candidate():
     assert mode == "heme"
 
 
+@pytest.mark.parametrize("code", ["CML", "FL", "B_ALL"])
+def test_infer_sample_mode_uses_ontology_for_non_tcga_heme_entities(code):
+    assert infer_sample_mode(cancer_types=[code], sample_mode="auto") == "heme"
+
+
 def test_explicit_pure_mode_uses_pure_population_template():
     """Explicit pure mode should bypass bulk-mixture templates."""
     hpa = _load_hpa_cell_types()
@@ -296,6 +301,22 @@ def test_met_site_override_limits_to_requested_template():
 
     assert results
     assert all(row.template == "met_liver" for row in results)
+
+
+def test_unbounded_decomposition_returns_every_usable_realization():
+    """Identity adjudication can inspect the complete structural beam."""
+
+    templates = ["solid_primary", "met_bone", "met_liver"]
+    results = decompose_sample(
+        _tcga_sample("PRAD"),
+        cancer_types=["PRAD"],
+        templates=templates,
+        sample_mode="solid",
+        top_k=None,
+    )
+
+    assert {row.template for row in results} == set(templates)
+    assert len(results) == len(templates)
 
 
 def test_synthetic_coad_colon_mix_tracks_known_purity():

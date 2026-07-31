@@ -239,7 +239,11 @@ fi
 export TRUFFLEPIG_XDIST_APPROVED_WORKERS="$WORKERS"
 
 log "platform=${OS} cpus=${CPUS} cpu_cap=${CPU_CAP} ${mem_note} per_worker=${PER_WORKER_GB}GB"
-log "workers=${WORKERS} → pytest -n ${WORKERS} tests $*"
-
-# Keep this shell alive so its EXIT trap releases the cross-invocation lock.
-pytest -n "$WORKERS" tests "$@"
+if (( $# )); then
+    log "workers=${WORKERS} → pytest -n ${WORKERS} $*"
+    # Keep this shell alive so its EXIT trap releases the cross-invocation lock.
+    pytest -n "$WORKERS" "$@"
+else
+    log "workers=${WORKERS} → pytest -n ${WORKERS} tests"
+    pytest -n "$WORKERS" tests
+fi

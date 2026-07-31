@@ -52,10 +52,6 @@ from .tumor_evidence import (
 from .reasoning import DerivedFlags, compute_derived_flags, run_step0_rules
 
 
-# One-shot warning flag for NaN-input log2 coercion. Set on first hit
-# so subsequent samples in the same process don't spam the log.
-_NAN_LOG2_WARNED = False
-
 _MIN_REFERENCE_GENES = 2000
 
 # Coordinate cell-cycle / mitosis panel — sourced from the public API
@@ -512,10 +508,15 @@ def _extract_sample_tpm_by_symbol(df_expr: pd.DataFrame) -> dict[str, float]:
     if symbols is None:
         return {}
 
-    tpm_vals = df_expr[tpm_col].astype(float).tolist()
+    tpm_vals = pd.to_numeric(df_expr[tpm_col], errors="coerce").tolist()
     out: dict[str, float] = {}
     for sym, tpm in zip(symbols, tpm_vals):
-        if not sym or str(sym).strip() == "":
+        if (
+            not sym
+            or str(sym).strip() == ""
+            or not np.isfinite(tpm)
+            or float(tpm) < 0
+        ):
             continue
         out[str(sym)] = out.get(str(sym), 0.0) + float(tpm)
     return out
@@ -662,26 +663,11 @@ def assess_tissue_composition(df_expr: pd.DataFrame) -> TissueCompositionSignal:
             oncofetal_top_hits=oncofetal_top_hits,
         )
 
-    # ``nan_to_num`` so missing-symbol → NaN values don't trigger
-    # ``RuntimeWarning: invalid value encountered in log2`` on the
-    # +1.0 ones. Matches the reference-vector handling on line 637.
-    # NaN reaching this point indicates an upstream symbol-mapping
-    # bug — warn once (then suppress) so it's visible without
-    # spamming the log of every subsequent sample.
-    _sample_vals = np.array([sample_by_symbol[s] for s in shared_symbols])
-    _nan_count = int(np.isnan(_sample_vals).sum()) if _sample_vals.size else 0
-    if _nan_count and not _NAN_LOG2_WARNED:
-        import warnings as _warnings
-        _warnings.warn(
-            f"healthy_vs_tumor: {_nan_count} of {_sample_vals.size} sample values "
-            "are NaN at log2 step; coerced to 0. NaN here suggests an upstream "
-            "symbol-mapping bug — investigate sample_by_symbol construction. "
-            "Further occurrences this process will be silent.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        globals()["_NAN_LOG2_WARNED"] = True
-    sample_log = np.log2(np.nan_to_num(_sample_vals) + 1.0)
+    # Missing abundance cells were excluded while building the sample map.
+    # Values reaching this transform are measured, finite TPMs rather than
+    # fabricated zero measurements.
+    sample_vals = np.array([sample_by_symbol[s] for s in shared_symbols])
+    sample_log = np.log2(sample_vals + 1.0)
 
     def _top_matches(cols: list[str], k: int = 3) -> list[tuple[str, float]]:
         scored = []

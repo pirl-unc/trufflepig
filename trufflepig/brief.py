@@ -2492,8 +2492,9 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     parts: list[str] = []
     if n_in_input_present:
         parts.append(
-            f"{n_in_input_present} measured and present but filtered as "
-            "non-tumor-supported"
+            f"{n_in_input_present} measured and present but did not meet the "
+            "shortlist's tumor-source, subtype, disease-state, HLA, or "
+            "reliability criteria"
         )
     if n_in_input_low:
         parts.append(

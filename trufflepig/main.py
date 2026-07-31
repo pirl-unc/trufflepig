@@ -39,6 +39,7 @@ from .analyze import (
     build_analysis_parameters,
     build_analyze_paths,
     cancer_type_context_from_analysis,
+    cancer_type_tree_relationship,
     decomposition_purity_stability,
     discover_output_artifacts,
     reconcile_decomposition_purity,
@@ -106,6 +107,7 @@ from .decomposition import (
     plot_decomposition_candidates,
     plot_decomposition_component_breakdown,
     plot_decomposition_composition,
+    scope_residual_identity_to_decomposition_mode,
 )
 from .sample_context import (
     heuristic_support_label,
@@ -1837,6 +1839,43 @@ def compare_analyze(
     print(f"[report] Wrote {output_path}")
 
 
+def _render_therapy_pathway_state(
+    *,
+    enabled,
+    prefix,
+    therapy_scores,
+    cancer_code,
+    disease_state_caption,
+    output_dpi,
+):
+    """Render the current pathway state and remove any stale prior artifact."""
+
+    if not enabled:
+        return None
+    output_path = Path(
+        f"{prefix}-therapy-pathway-state.png"
+        if prefix
+        else "therapy-pathway-state.png"
+    )
+    try:
+        from .plot_therapy import plot_therapy_pathway_state
+
+        figure = plot_therapy_pathway_state(
+            therapy_response_scores=therapy_scores,
+            cancer_code=cancer_code,
+            disease_state_caption=disease_state_caption,
+            save_to_filename=str(output_path),
+            save_dpi=output_dpi,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional report artifact
+        print(f"[warn] Therapy-pathway state plot failed: {exc}")
+        figure = None
+    if figure is None:
+        output_path.unlink(missing_ok=True)
+        return None
+    return str(output_path)
+
+
 def _analyze_body(run: AnalyzeRun):
     config = run.config
     resolution = run.inputs
@@ -2399,9 +2438,11 @@ def _analyze_body(run: AnalyzeRun):
     # without having to re-derive it from the raw sample_context.
     apply_sample_context_to_purity(analysis, sample_context)
     analysis["sample_mode"] = infer_sample_mode(
-        candidate_rows=analysis.get("candidate_trace"),
-        cancer_types=[rna_inferred_cancer_type]
-        if rna_inferred_cancer_type
+        # Decomposition follows the adjudicated cancer call. The ranker trace
+        # remains a differential, but must not route a BRCA report through
+        # heme templates merely because a quantifier artifact put HL first.
+        cancer_types=[analysis.get("cancer_type") or rna_inferred_cancer_type]
+        if (analysis.get("cancer_type") or rna_inferred_cancer_type)
         else ([analysis_cancer_type] if analysis_cancer_type else None),
         sample_mode=sample_mode,
     )
@@ -2617,29 +2658,14 @@ def _analyze_body(run: AnalyzeRun):
     # EMT / hypoxia / IFN axis, caption restating the synthesis
     # sentence. Emitted only when at least one axis has a measurable
     # up/down geomean; skipped for empty therapy-scores dicts.
-    pathway_state_png = (
-        "%s-therapy-pathway-state.png" % prefix
-        if prefix
-        else "therapy-pathway-state.png"
+    pathway_state_png = _render_therapy_pathway_state(
+        enabled=plot_ctx.enabled,
+        prefix=prefix,
+        therapy_scores=therapy_scores,
+        cancer_code=reference_cancer_code,
+        disease_state_caption=compose_disease_state_narrative(analysis),
+        output_dpi=output_dpi,
     )
-    if plot_ctx.enabled:
-        try:
-            from .plot_therapy import plot_therapy_pathway_state
-
-            fig_ps = plot_therapy_pathway_state(
-                therapy_response_scores=therapy_scores,
-                cancer_code=reference_cancer_code,
-                disease_state_caption=compose_disease_state_narrative(analysis),
-                save_to_filename=pathway_state_png,
-                save_dpi=output_dpi,
-            )
-            if fig_ps is None:
-                pathway_state_png = None
-        except Exception as _tps_err:
-            print(f"[warn] Therapy-pathway state plot failed: {_tps_err}")
-            pathway_state_png = None
-    else:
-        pathway_state_png = None
 
     print("[analysis] Running broad-compartment decomposition...")
     decomp_png = None
@@ -2664,7 +2690,7 @@ def _analyze_body(run: AnalyzeRun):
             continue
         if _has_operational_analysis_reference(code):
             scoped_decomposition_codes.append(code)
-    for code in (*scoped_decomposition_codes, *candidate_trace_codes[:4]):
+    for code in (*scoped_decomposition_codes, *candidate_trace_codes):
         code = str(code or "").strip()
         if code and code not in candidate_codes:
             candidate_codes.append(code)
@@ -2730,10 +2756,10 @@ def _analyze_body(run: AnalyzeRun):
         ),
     )
 
-    decomp_results = decompose_sample(
+    complete_decomp_results = decompose_sample(
         df_expr,
         cancer_types=candidate_codes or [cancer_code],
-        top_k=24,
+        top_k=None,
         sample_mode=analysis["sample_mode"],
         tumor_context=decomposition_tumor_context,
         site_hint=decomposition_site_hint,
@@ -2746,12 +2772,12 @@ def _analyze_body(run: AnalyzeRun):
         candidate_rows=analysis.get("candidate_trace"),
     )
     residual_identity_evidence = evaluate_residual_identity(
-        decomp_results,
+        complete_decomp_results,
         candidate_codes=candidate_codes,
         current_code=cancer_code,
     )
     residual_identity_evidence = (
-        _scope_residual_identity_to_decomposition_mode(
+        scope_residual_identity_to_decomposition_mode(
             residual_identity_evidence,
             sample_mode=analysis["sample_mode"],
         )
@@ -2861,24 +2887,16 @@ def _analyze_body(run: AnalyzeRun):
                         "post-decomposition tumor-type sanity check failed",
                         exc_info=True,
                     )
-                if plot_ctx.enabled:
-                    try:
-                        from .plot_therapy import plot_therapy_pathway_state
-
-                        plot_therapy_pathway_state(
-                            therapy_response_scores=therapy_scores,
-                            cancer_code=reference_cancer_code,
-                            disease_state_caption=compose_disease_state_narrative(
-                                analysis
-                            ),
-                            save_to_filename=pathway_state_png,
-                            save_dpi=output_dpi,
-                        )
-                    except (KeyError, TypeError, ValueError):
-                        _LOGGER.warning(
-                            "post-decomposition therapy-state plot failed",
-                            exc_info=True,
-                        )
+                pathway_state_png = _render_therapy_pathway_state(
+                    enabled=plot_ctx.enabled,
+                    prefix=prefix,
+                    therapy_scores=therapy_scores,
+                    cancer_code=reference_cancer_code,
+                    disease_state_caption=compose_disease_state_narrative(
+                        analysis
+                    ),
+                    output_dpi=output_dpi,
+                )
             print(
                 "[analysis] Residual identity completed an independent "
                 f"evidence majority: {previous_cancer_code} → {cancer_code}"
@@ -2895,12 +2913,12 @@ def _analyze_body(run: AnalyzeRun):
                 },
             )
     decomp_results = _prioritize_report_compatible_decomposition(
-        decomp_results,
+        complete_decomp_results,
         reference_code=reference_cancer_code,
         report_code=cancer_code,
         enabled=True,
         analysis=analysis,
-    )
+    )[:24]
     call_summary = _summarize_sample_call(
         analysis,
         decomp_results,
@@ -5892,48 +5910,6 @@ def _propagate_report_scope_selection(
         analysis["fine_report_scope_inference"] = fine_scope_inference
 
 
-def _scope_residual_identity_to_decomposition_mode(
-    evidence,
-    *,
-    sample_mode,
-):
-    """Prevent a residual from changing the regime that produced it.
-
-    Post-background identity is valid only inside the decomposition regime
-    whose templates generated that residual. A heme residual cannot establish
-    a solid entity, and a solid residual cannot establish a heme entity. Pure
-    population mode is preparation-specific rather than lineage-specific and
-    therefore does not impose this restriction.
-    """
-
-    scoped = dict(evidence or {})
-    candidate_code = str(scoped.get("candidate_code") or "").strip()
-    mode = str(sample_mode or "").strip()
-    if not candidate_code or mode not in {"solid", "heme"}:
-        scoped["adjudication_eligible"] = True
-        return scoped
-
-    try:
-        from .cancer_ontology import cancer_lineage_group
-        from .expression_decomposition import _group_to_mode
-
-        candidate_mode = _group_to_mode(cancer_lineage_group(candidate_code))
-    except (KeyError, TypeError, ValueError):
-        candidate_mode = ""
-
-    candidate_regime = "heme" if candidate_mode == "heme" else "solid"
-    compatible = candidate_regime == mode
-    scoped["adjudication_eligible"] = compatible
-    scoped["decomposition_sample_mode"] = mode
-    scoped["candidate_sample_mode"] = candidate_regime
-    if not compatible:
-        scoped["adjudication_blocker"] = (
-            f"{candidate_code} requires {candidate_regime} decomposition, "
-            f"but the residual was generated in {mode} mode"
-        )
-    return scoped
-
-
 def _synchronize_cancer_type_context(analysis, *, supplied_cancer_type):
     """Resolve tree roles, sanitize sibling references, and persist the result."""
 
@@ -7335,12 +7311,27 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
 
     if best_decomp is not None:
         comp_bits = _composition_highlights(best_decomp)
+        decomp_relationship = cancer_type_tree_relationship(
+            cancer_code,
+            best_decomp.cancer_type,
+        )
         sentence = (
             f"- **Decomposition line**: best fit is "
             f"{_hypothesis_display_label(best_decomp, primary_code=cancer_code, analysis=analysis)}"
         )
-        if best_decomp.cancer_type == cancer_code:
+        if decomp_relationship == "same":
             sentence += ", consistent with the active report label"
+        elif decomp_relationship == "descendant":
+            sentence += (
+                f"; {_cancer_label(best_decomp.cancer_type)} is a descendant "
+                f"background model within the {_cancer_label(cancer_code)} branch "
+                "and does not refine the report label"
+            )
+        elif decomp_relationship == "ancestor":
+            sentence += (
+                f"; {_cancer_label(best_decomp.cancer_type)} is the broader "
+                f"ancestor context for the {_cancer_label(cancer_code)} report label"
+            )
         elif (
             cancer_type_context.uses_distinct_reference
             and best_decomp.cancer_type == reference_cancer_code
@@ -8630,10 +8621,10 @@ def _generate_text_reports(
             "match; the top row is the pan-cancer signature-ranker leader, which may differ from the "
             "active report label when stronger orthogonal evidence selects another row.\n\n"
             "- **Signature** (0–1): raw match quality between the sample's expression and "
-            "this candidate's broad reference signature, computed from z-scored expression "
-            "of cancer-type-enriched genes. Interpretable on its own — higher means the "
-            "candidate pattern is strongly present. Does not account for purity or lineage "
-            "concordance.\n"
+            "this candidate's broad reference signature, computed as the mean fixed-universe "
+            "within-sample percentile of cancer-type-enriched genes. Interpretable on its "
+            "own — higher means the candidate program dominates the sample transcriptome. "
+            "Does not account for purity or lineage concordance.\n"
             "- **Geomean** (0–1): the geometric mean of the five factors that feed the "
             "ranking (signature × purity × lineage support × signature stability × family "
             "factor). Stays bounded on [0, 1] so it's comparable across samples, unlike "
@@ -8922,7 +8913,7 @@ def _generate_text_reports(
             "Purity was refined using cancer-type lineage genes — genes with "
             "known high expression in this tumor type and low TME background. "
             "Each gene independently estimates purity by comparing the sample's "
-            "HK-normalized expression to the TCGA reference (adjusted for "
+            "clean-TPM expression to the TCGA reference (adjusted for "
             "TCGA cohort purity).\n"
         )
 
@@ -9022,10 +9013,6 @@ def _generate_text_reports(
                 explanation = (
                     "not specific enough to this cancer type for purity "
                     "calibration"
-                )
-            elif reason == "sample_scale_unavailable":
-                explanation = (
-                    "sample housekeeping scale is unavailable for calibration"
                 )
             else:
                 explanation = (
@@ -9355,7 +9342,7 @@ def _build_target_report(
             "even when most of the signal is stromal. Treat the "
             "`tme_explainable=true` column in the TSV as the primary "
             "filter for therapy-target safety; cross-check any "
-            "`median_est` > 30 TPM against `tme_fold_med` before acting.\n"
+            "`median_est` > 30 TPM against `tme_tpm_med` before acting.\n"
         )
 
     # Sample-context caveat (step 1 propagation): when the sample was
@@ -10168,7 +10155,7 @@ def _build_target_report(
         lines.append(f"- **Matched-normal split**: {matched_normal_summary}")
         lines.append(
             "- **Per-gene provenance**: see TSV `estimation_path` "
-            "(`tme_only`, `matched_normal_split`, `clamped`, `tme_fold_fallback`)."
+            "(`tme_only`, `matched_normal_split`, `clamped`, `tme_tpm_fallback`)."
         )
 
     context_cautions = []
@@ -10749,7 +10736,7 @@ def plot_cancer_cohorts(
         fn(save_to_filename=out, save_dpi=output_dpi)
         png_files.append(out)
 
-    # Heatmaps: emit both z-score and HK-normalized versions
+    # Heatmaps: emit both cross-cancer z-score and absolute clean-TPM versions
     heatmap_plots = [
         ("heatmap", plot_cohort_heatmap),
         ("therapy-targets", plot_cohort_therapy_targets),
@@ -10757,7 +10744,7 @@ def plot_cancer_cohorts(
         ("ctas", plot_cohort_ctas),
     ]
     for name, fn in heatmap_plots:
-        for suffix, zs in [("zscore", True), ("hk", False)]:
+        for suffix, zs in [("zscore", True), ("clean-tpm", False)]:
             out = f"{prefix}-{name}-{suffix}.png"
             fn(save_to_filename=out, save_dpi=output_dpi, zscore=zs)
             png_files.append(out)

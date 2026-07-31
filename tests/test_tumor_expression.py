@@ -117,13 +117,13 @@ def test_lineage_genes_has_no_duplicates():
 def test_lineage_unknown_cancer_type_returns_empty():
     # Returns (estimates, skipped_detected); both empty when cancer
     # type isn't in the lineage panel registry.
-    estimates, skipped = _lineage_purity_estimates("FAKE_TYPE", {}, {}, [], 0.7)
+    estimates, skipped = _lineage_purity_estimates("FAKE_TYPE", {}, {}, 0.7)
     assert estimates == []
     assert skipped == []
 
 
 def test_lineage_empty_sample_returns_empty():
-    estimates, skipped = _lineage_purity_estimates("PRAD", {}, {}, [], 0.69)
+    estimates, skipped = _lineage_purity_estimates("PRAD", {}, {}, 0.69)
     assert estimates == []
     assert skipped == []
 
@@ -360,9 +360,9 @@ def test_ranges_dataframe_columns():
         "symbol",
         "category",
         "observed_tpm",
-        "tme_fold_lo",
-        "tme_fold_med",
-        "tme_fold_hi",
+        "tme_tpm_lo",
+        "tme_tpm_med",
+        "tme_tpm_hi",
         "max_healthy_tpm",
         "tme_explainable",
         "cohort_prior_tpm",
@@ -838,45 +838,22 @@ def test_ranges_empty_input():
 
 
 def test_ranges_pct_cancer_median_steap1_near_one():
-    """STEAP1 at ~TCGA PRAD levels should have pct_cancer_median near 1.0."""
+    """STEAP1 at the PRAD clean-TPM median should have a fold near 1.0."""
     from trufflepig.plot import estimate_tumor_expression_ranges
-    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
     from trufflepig.reference import pan_cancer_expression
     import pandas as pd
 
-    # Construct a fake sample where STEAP1 is at roughly the same
-    # HK-normalized level as TCGA PRAD.
+    # At 100% purity, the sample and cohort are directly comparable in clean TPM.
     ref = pan_cancer_expression()
     ref_dedup = ref.drop_duplicates(subset="Symbol").set_index("Symbol")
-    hk_ids = housekeeping_gene_ids()
-    ref_flat = ref.drop_duplicates(subset="Ensembl_Gene_ID")
-    id_to_sym = dict(zip(ref_flat["Ensembl_Gene_ID"], ref_flat["Symbol"]))
-    hk_syms = {id_to_sym[gid] for gid in hk_ids if gid in id_to_sym}
-    hk_in_ref = sorted(hk_syms & set(ref_dedup.index))
-
-    # STEAP1 TCGA PRAD fold
-    prad_hk = ref_dedup.loc[hk_in_ref, "PRAD_TPM"].astype(float).median()
     steap1_prad = float(ref_dedup.loc["STEAP1", "PRAD_TPM"])
-    steap1_fold = steap1_prad / prad_hk
-
-    # Build a sample with the same fold, at 100% purity (so we can check)
-    sample_hk_med = 500.0
-    steap1_tpm = steap1_fold * sample_hk_med
-
-    # Need some HK genes too
-    rows = []
-    for sym in list(hk_in_ref)[:10]:
-        eid = ref_flat[ref_flat["Symbol"] == sym]["Ensembl_Gene_ID"].iloc[0]
-        rows.append({"ensembl_gene_id": eid, "gene_symbol": sym, "TPM": sample_hk_med})
-    # Add STEAP1
-    rows.append(
+    df = pd.DataFrame(
         {
-            "ensembl_gene_id": "ENSG00000205542",
-            "gene_symbol": "STEAP1",
-            "TPM": steap1_tpm,
+            "ensembl_gene_id": ["ENSG00000205542"],
+            "gene_symbol": ["STEAP1"],
+            "TPM": [steap1_prad],
         }
     )
-    df = pd.DataFrame(rows)
 
     purity_result = {
         "overall_lower": 0.90,
@@ -887,7 +864,6 @@ def test_ranges_pct_cancer_median_steap1_near_one():
     steap_row = result[result["symbol"] == "STEAP1"]
     if not steap_row.empty:
         pct = steap_row.iloc[0]["pct_cancer_median"]
-        # Should be close to 1.0 (within 50% either direction)
         assert pct is not None, "pct_cancer_median should not be None"
         assert 0.5 < pct < 2.0, f"Expected ~1.0, got {pct}"
 
@@ -1117,7 +1093,7 @@ def test_tme_dominant_flag_reads_attribution_when_available():
             "attribution": {"fibroblast": 80.0},
             "attr_tumor_tpm": 20.0,
             "attr_tumor_fraction": 0.20,
-            "tme_fold_med": 0.05,  # would NOT trigger the legacy fold rule
+            "tme_tpm_med": 0.05,  # would NOT trigger the legacy fold rule
         }
     )
     attribution = row["attribution"]

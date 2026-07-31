@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 
 from .common import (
     _guess_gene_cols,
+    build_sample_tpm_by_symbol,
     ensembl_id_to_symbol_map,
     VS_TCGA_REF_FLOOR_TPM,
 )
@@ -391,6 +392,11 @@ _SM_LEAKAGE_MIN_TUMOR_FRACTION = 0.30
 
 
 def _sample_expression_by_symbol(df_gene_expr):
+    """Return clean-TPM and legacy HK views for explicit A/B diagnostics.
+
+    Production consumers that need sample abundance use
+    :func:`common.build_sample_tpm_by_symbol` and do not call this helper.
+    """
     import pandas as pd
     from trufflepig.clean_tpm import assert_clean_tpm
 
@@ -477,7 +483,7 @@ def estimate_tumor_expression(
     cancer_code = resolve_cancer_type(cancer_type)
 
     # Sample expression
-    sample_raw, _ = _sample_expression_by_symbol(df_gene_expr)
+    sample_raw = build_sample_tpm_by_symbol(df_gene_expr)
 
     # Reference data
     ref = pan_cancer_expression(technical_rna_normalize=True)
@@ -700,8 +706,8 @@ def estimate_tumor_expression_ranges(
         surface_protein_gene_ids,
     )
 
-    from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
     from .decomposition.templates import EPITHELIAL_MATCHED_NORMAL_TISSUE
+    from .tumor_purity import _build_sample_tpm_by_symbol
     from .tumor_purity import TCGA_MEDIAN_PURITY
 
     cancer_code = resolve_cancer_type(cancer_type)
@@ -713,17 +719,11 @@ def estimate_tumor_expression_ranges(
     )
     epithelial_context = cancer_code in EPITHELIAL_MATCHED_NORMAL_TISSUE
 
-    # --- Sample expression (clean TPM and HK-normalized) ---
-    sample_raw, sample_hk = _sample_expression_by_symbol(df_gene_expr)
+    # --- Sample expression on the conformed clean-TPM scale ---
+    sample_raw = _build_sample_tpm_by_symbol(df_gene_expr)
 
-    # Sample HK median (for converting back from fold-HK to TPM)
-    hk_ids = housekeeping_gene_ids()
     ref_full = pan_cancer_expression(technical_rna_normalize=True)
     ref_flat = ref_full.drop_duplicates(subset="Ensembl_Gene_ID")
-    id_to_sym = dict(zip(ref_flat["Ensembl_Gene_ID"], ref_flat["Symbol"]))
-    hk_syms = {id_to_sym[gid] for gid in hk_ids if gid in id_to_sym}
-    sample_hk_vals = [sample_raw[s] for s in hk_syms if sample_raw.get(s, 0) > 0]
-    sample_hk_median = float(np.median(sample_hk_vals)) if sample_hk_vals else 1.0
 
     # --- Reference data ---
     ref_dedup = _cached_reference_by_symbol(ref_full)
@@ -752,23 +752,6 @@ def estimate_tumor_expression_ranges(
     # the tumor). So a gene's background is floored below by its host-organ expression (#13).
     host_tme_cols = [c for c in tme_cols if c.removesuffix("_nTPM") in host_tissues]
 
-    # --- HK-normalize reference columns ---
-    # Each column (nTPM tissue or TCGA cohort TPM) gets its own HK median.
-    hk_in_ref = sorted(hk_syms & set(ref_dedup.index))
-    ref_hk_medians = {}
-    for col in tme_cols + cohort_cols:
-        ref_hk_medians[col] = ref_dedup.loc[hk_in_ref, col].astype(float).median()
-
-    # TME reference in HK-fold space: per gene, per tissue or decomposition.
-    # When decomposition hypotheses are available, use their inferred
-    # non-tumor background profile instead of a generic TME tissue panel.
-    decomp_backgrounds = []
-    if decomposition_results:
-        for result in decomposition_results:
-            bg = getattr(result, "tme_background_hk", None)
-            if bg:
-                decomp_backgrounds.append(bg)
-
     # Per-gene max across healthy tissues (precomputed vector; used to
     # flag rows where sample signal could be entirely TME-explained).
     # Vectorized once here to avoid a per-gene `.loc[].max()` inside the
@@ -794,8 +777,8 @@ def estimate_tumor_expression_ranges(
 
     # --- Full-coverage TPM-space TME background (fixes issue #45) --------
     #
-    # The decomposition's `tme_background_hk` dict only covers genes that
-    # were in the decomposition's signature panel. For target-list genes
+    # The decomposition's legacy `tme_background_hk` trace only covers genes
+    # that were in the decomposition's signature panel. For target-list genes
     # like FN1 / COL1A1 / IGKC that AREN'T signature genes but ARE clearly
     # stromal/immune expressed, `tme_background_hk.get(sym, 0.0)` returns 0
     # -> no TME subtraction -> `tumor_tpm ~ sample_tpm / purity` which
@@ -809,8 +792,8 @@ def estimate_tumor_expression_ranges(
     #
     # This gives a per-gene TPM-scale TME background for every gene in
     # the reference, not just signature genes. The formula in the loop
-    # prefers this TPM-space path when available and falls back to the
-    # HK-fold path when it isn't.
+    # uses this TPM-space path. When it is unavailable, the report uses the
+    # bounded clean-TPM tissue reference below rather than the legacy HK trace.
     #
     # Matched-normal split (issue #50): when the decomposition included a
     # `matched_normal_<tissue>` component (epithelial primaries with
@@ -946,11 +929,10 @@ def estimate_tumor_expression_ranges(
                     per_comp[comp] = round(float(comp_after), 2)
                     per_compartment_tpm_by_symbol[gene] = per_comp
 
-    # --- Purity-adjusted TCGA (HK-normalized, then deconvolved) ---
+    # --- Purity-adjusted TCGA in clean TPM ---
     # For each TCGA cohort TPM column, compute:
-    #   tcga_hk = cohort TPM / cohort TPM HK median
-    #   tme_hk  = median TME tissue fold (same as sample TME reference)
-    #   tcga_tumor_hk = (tcga_hk - (1-tcga_purity) * tme_hk) / tcga_purity
+    #   tcga_tumor_tpm = (cohort_tpm - (1-tcga_purity) * tme_tpm)
+    #                    / tcga_purity
     # We'll compute this per-gene in the loop.
 
     # --- Purity bounds ---
@@ -1082,33 +1064,27 @@ def estimate_tumor_expression_ranges(
         if observed < 0.01:
             continue
 
-        # HK-normalize sample
-        sample_fold = observed / sample_hk_median
-
-        # TME background in HK-fold space.
-        if decomp_backgrounds:
-            tme_folds = [float(bg.get(symbol, 0.0)) for bg in decomp_backgrounds]
-        else:
-            tme_folds = []
-            for col in tme_cols:
-                hk_m = ref_hk_medians.get(col, 0)
-                if hk_m > 0:
-                    tme_folds.append(float(ref_dedup.loc[symbol, col]) / hk_m)
-        if not tme_folds:
-            tme_folds = [0.0]
-        tme_fold_lo = float(np.percentile(tme_folds, 25))
-        tme_fold_med = float(np.median(tme_folds))
-        tme_fold_hi = float(np.percentile(tme_folds, 75))
+        # TME background in clean TPM. The fitted full-gene decomposition
+        # background is preferred below; these tissue values are the fallback.
+        tme_tpms = [
+            max(0.0, float(ref_dedup.loc[symbol, col]))
+            for col in tme_cols
+            if np.isfinite(float(ref_dedup.loc[symbol, col]))
+        ]
+        if not tme_tpms:
+            tme_tpms = [0.0]
+        tme_tpm_lo = float(np.percentile(tme_tpms, 25))
+        tme_tpm_med = float(np.median(tme_tpms))
+        tme_tpm_hi = float(np.percentile(tme_tpms, 75))
         # Floor the background by the met host organ (see host_tme_cols) — a median can't
         # represent the dominant host tissue from a single column.
-        if host_tme_cols and not decomp_backgrounds:
-            host_fold = max(
-                (float(ref_dedup.loc[symbol, col]) / ref_hk_medians[col]
-                 for col in host_tme_cols if ref_hk_medians.get(col, 0) > 0),
+        if host_tme_cols:
+            host_tpm = max(
+                (float(ref_dedup.loc[symbol, col]) for col in host_tme_cols),
                 default=0.0,
             )
-            tme_fold_med = max(tme_fold_med, host_fold)
-            tme_fold_hi = max(tme_fold_hi, host_fold)
+            tme_tpm_med = max(tme_tpm_med, host_tpm)
+            tme_tpm_hi = max(tme_tpm_hi, host_tpm)
 
         # TME-explainability flag: the max TPM this gene reaches in ANY
         # single healthy reference tissue. Used below to decide how
@@ -1126,40 +1102,36 @@ def estimate_tumor_expression_ranges(
         # Bayes shrinkage of the sample-based estimate at low purity.
         cancer_col = f"{cancer_code}_TPM"
         cohort_prior_tpm = 0.0
-        tcga_tumor_fold = 0.0
+        tcga_tumor_tpm = 0.0
         expression_reference_source = "pan_cancer_deconvolved"
         expression_reference_kind = "deconvolved_tumor_reference"
         expression_reference_used = cancer_code
-        # Raw cohort median TPM in HK-normalized space (before TME
-        # deconvolution). Kept separate so a downstream renderer can
+        # Raw cohort median TPM before TME deconvolution. Kept separate
+        # so a downstream renderer can
         # distinguish "cohort genuinely doesn't express this gene" from
         # "cohort median was TME-only and got subtracted to zero" —
         # both currently collapse to ∞× fold, which is degenerate for
         # a clinician-facing table.
-        tcga_fold_raw = 0.0
         tcga_cohort_tpm_raw = None  # None = gene not in ref (not_measurable)
         if symbol in exact_ref_tpm:
             expression_reference_source = exact_ref_source
             expression_reference_kind = exact_ref_kind
             expression_reference_used = expression_reference_code
             cohort_prior_tpm = max(0.0, float(exact_ref_tpm.get(symbol, 0.0)))
-            tcga_tumor_fold = cohort_prior_tpm / sample_hk_median
-            tcga_fold_raw = tcga_tumor_fold
+            tcga_tumor_tpm = cohort_prior_tpm
             tcga_cohort_tpm_raw = cohort_prior_tpm
-        elif (
-            cancer_col in ref_dedup.columns
-            and cancer_col in ref_hk_medians
-            and ref_hk_medians[cancer_col] > 0
-        ):
-            cancer_hk_m = ref_hk_medians[cancer_col]
-            tcga_fold = float(ref_dedup.loc[symbol, cancer_col]) / cancer_hk_m
-            tcga_fold_raw = tcga_fold
+        elif cancer_col in ref_dedup.columns:
             tcga_cohort_tpm_raw = float(ref_dedup.loc[symbol, cancer_col])
             tcga_p = TCGA_MEDIAN_PURITY.get(cancer_code, 0.7)
-            tcga_tumor_fold = max(
-                0.0, (tcga_fold - (1 - tcga_p) * tme_fold_med) / tcga_p
+            tcga_tumor_tpm = max(
+                0.0,
+                (
+                    tcga_cohort_tpm_raw
+                    - (1 - tcga_p) * tme_tpm_med
+                )
+                / tcga_p,
             )
-            cohort_prior_tpm = tcga_tumor_fold * sample_hk_median
+            cohort_prior_tpm = tcga_tumor_tpm
 
         # Empirical-Bayes shrinkage weight. At high purity the sample-
         # based estimate is reliable (w_sample -> 1). At low purity the
@@ -1186,7 +1158,7 @@ def estimate_tumor_expression_ranges(
 
         # 9-point estimate grid. TPM-space path (preferred) uses the
         # decomposition's per-gene expected TME contribution directly.
-        # HK-fold path is the fallback when no decomposition is
+        # Tissue clean-TPM path is the fallback when no decomposition is
         # available or the gene is absent from the reference. Every
         # grid point is shrunk toward the cohort prior and clamped at
         # `observed_tpm` when tme_explainable=True (tumor cells can't
@@ -1213,10 +1185,9 @@ def estimate_tumor_expression_ranges(
                     raw = max(0.0, (observed - bg_tpm)) / p
                     estimates.append(_apply_priors(raw, p))
         else:
-            for bg in [tme_fold_lo, tme_fold_med, tme_fold_hi]:
+            for bg in [tme_tpm_lo, tme_tpm_med, tme_tpm_hi]:
                 for p in [p_lo, p_med, p_hi]:
-                    tumor_fold = max(0.0, (sample_fold - (1 - p) * bg) / p)
-                    raw = tumor_fold * sample_hk_median
+                    raw = max(0.0, (observed - (1 - p) * bg) / p)
                     estimates.append(_apply_priors(raw, p))
         estimates.sort()
         median_est = float(np.median(estimates))
@@ -1230,7 +1201,7 @@ def estimate_tumor_expression_ranges(
         tcga_percentile = float((below + 0.5 * equal) / n)
 
         # Ratio vs purity-adjusted TCGA median for matched cancer type.
-        # Uses the already-computed cohort tumor fold above.
+        # Uses the already-computed cohort tumor TPM above.
         #
         # Three outcomes, each consumed by a distinct plot label:
         #   - finite positive -> fold-change vs TCGA ("0.3x", "1.5x", ...)
@@ -1243,13 +1214,12 @@ def estimate_tumor_expression_ranges(
         #                       Rendered as a gray "0 in TCGA" -- nothing to
         #                       compare.
         #
-        # `tcga_tumor_fold` clips to exactly 0.0 whenever the TCGA cohort
+        # `tcga_tumor_tpm` clips to exactly 0.0 whenever the TCGA cohort
         # median is explainable by TME alone; previously the <= 0 branch
         # collapsed to None unconditionally, so a CTA with <cancer>_TPM
         # median ~ 0 and strong sample expression rendered as a quiet gray
         # label instead of the intended red "absent in TCGA" alert. The
         # sample-side check below restores the intended semantics.
-        our_tumor_fold = median_est / sample_hk_median
         # Three diagnostic states for the cohort-reference comparison:
         #   "finite"        — cohort has detectable tumor component,
         #                     fold = sample / cohort
@@ -1261,12 +1231,12 @@ def estimate_tumor_expression_ranges(
         #   "both_absent"   — neither sample nor cohort expresses
         # The tumor-expression table can use the state to render a more
         # informative label than ∞×.
-        if tcga_tumor_fold > 0.001:
-            vs_tcga = float(our_tumor_fold / tcga_tumor_fold)
+        if tcga_tumor_tpm > 0.001:
+            vs_tcga = float(median_est / tcga_tumor_tpm)
             tcga_ref_state = "finite"
-        elif our_tumor_fold > 0.001:
+        elif median_est > 0.001:
             vs_tcga = float("inf")
-            if tcga_fold_raw <= 0.001:
+            if not tcga_cohort_tpm_raw or tcga_cohort_tpm_raw <= 0.001:
                 tcga_ref_state = "not_in_cohort"
             else:
                 tcga_ref_state = "tme_explained"
@@ -1327,7 +1297,7 @@ def estimate_tumor_expression_ranges(
         elif tme_bg_tpm_by_symbol is not None and symbol in tme_bg_tpm_by_symbol:
             estimation_path = "tme_only"
         else:
-            estimation_path = "tme_fold_fallback"
+            estimation_path = "tme_tpm_fallback"
 
         # #60: mark extended-housekeeping symbols so downstream
         # target tables can filter them out without silently dropping
@@ -1674,9 +1644,10 @@ def estimate_tumor_expression_ranges(
         if attribution or breadth_floor > 0:
             tme_dominant = observed > 0 and attr_tumor_fraction < 0.30
         else:
-            tme_dominant = observed > 0 and round(
-                tme_fold_med, 4
-            ) * sample_hk_median >= round(0.7 * observed, 4)
+            tme_dominant = (
+                observed > 0
+                and round(tme_tpm_med, 4) >= round(0.7 * observed, 4)
+            )
         low_confidence_tumor = tme_dominant or broadly_expressed
         if source_marker_non_tumor_prior:
             low_confidence_tumor = True
@@ -1687,9 +1658,9 @@ def estimate_tumor_expression_ranges(
                 "symbol": symbol,
                 "category": category,
                 "observed_tpm": round(observed, 2),
-                "tme_fold_lo": round(tme_fold_lo, 4),
-                "tme_fold_med": round(tme_fold_med, 4),
-                "tme_fold_hi": round(tme_fold_hi, 4),
+                "tme_tpm_lo": round(tme_tpm_lo, 4),
+                "tme_tpm_med": round(tme_tpm_med, 4),
+                "tme_tpm_hi": round(tme_tpm_hi, 4),
                 "max_healthy_tpm": round(max_healthy_tpm, 2),
                 "tme_explainable": bool(tme_explainable),
                 "tme_dominant": tme_dominant,

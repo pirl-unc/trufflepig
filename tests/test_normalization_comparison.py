@@ -1,7 +1,7 @@
 """Rigorous comparison of normalization × weighting strategies for NNLS decomposition.
 
-Tests 12 combinations (4 normalizations × 3 weightings) across 6 samples with
-known or strongly expected composition.  The goal is to find the strategy that
+Tests feature-space × weighting combinations across synthetic and reference
+mixtures with known or strongly expected composition. The goal is to find the strategy that
 minimises proportional reconstruction error AND attribution leakage (e.g. Ig
 genes misattributed to tumor because the NNLS residual on high-expression
 genes dominates the objective).
@@ -11,6 +11,10 @@ Normalization options (applied to both A and b):
   zscore     – per-gene z-score across the K reference components
   hk_zscore  – HK-normalise first, then z-score across components
   raw        – no normalisation (TPM as-is, marker selection only)
+  tpm_fraction – clean TPM rescaled to unit sum over the measured fit universe
+  log1p      – log1p(clean TPM)
+  percentile – within-vector percentile rank for sample and each component
+  hk_percentile_product – HK units multiplied by within-vector percentile
 
 Weighting options (per-row weight in the NNLS system):
   uniform    – only the marker-specificity weight (no expression adjustment)
@@ -33,6 +37,7 @@ from trufflepig.decomposition.signature import (
 from trufflepig.decomposition.templates import get_template_components
 from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
 from trufflepig.reference import pan_cancer_expression
+from trufflepig.normalization_usage import Basis, NORMALIZATION_USAGE
 from trufflepig.tumor_purity import estimate_tumor_purity
 
 
@@ -89,7 +94,16 @@ def _mix_samples(parts):
 
 # ── Core fitting with configurable normalization/weighting ───────────────
 
-NORMALIZATIONS = ["hk", "zscore", "hk_zscore", "raw"]
+NORMALIZATIONS = [
+    "hk",
+    "zscore",
+    "hk_zscore",
+    "hk_percentile_product",
+    "raw",
+    "tpm_fraction",
+    "log1p",
+    "percentile",
+]
 WEIGHTINGS = ["uniform", "inv_sqrt", "inv_b"]
 IG_GENES = {
     "IGKC",
@@ -111,9 +125,46 @@ IG_GENES = {
 def _apply_normalization(sample_vec, sig_raw, genes, normalization):
     """Return (normalized_sample, normalized_sig, hk_median)."""
     hk_ids = housekeeping_gene_ids()
+    sample_vec = np.nan_to_num(
+        sample_vec, nan=0.0, posinf=0.0, neginf=0.0
+    )
+    sig_raw = np.nan_to_num(
+        sig_raw, nan=0.0, posinf=0.0, neginf=0.0
+    )
 
     if normalization == "raw":
         return sample_vec.copy(), sig_raw.copy(), 1.0
+
+    if normalization == "tpm_fraction":
+        clean_sample = np.nan_to_num(sample_vec, nan=0.0, posinf=0.0, neginf=0.0)
+        clean_sig = np.nan_to_num(sig_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        sample_total = float(clean_sample.sum())
+        if sample_total > 0.0:
+            clean_sample = clean_sample / sample_total * 1_000_000.0
+        component_totals = clean_sig.sum(axis=0)
+        for k, total in enumerate(component_totals):
+            if total > 0.0:
+                clean_sig[:, k] = clean_sig[:, k] / total * 1_000_000.0
+        return clean_sample, clean_sig, 1.0
+
+    if normalization == "log1p":
+        return np.log1p(sample_vec), np.log1p(sig_raw), 1.0
+
+    if normalization == "percentile":
+        from scipy.stats import rankdata
+
+        clean_sample = np.nan_to_num(sample_vec, nan=0.0, posinf=0.0, neginf=0.0)
+        clean_sig = np.nan_to_num(sig_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        obs_rank = (
+            rankdata(clean_sample, method="average") / max(len(clean_sample), 1)
+        )
+        sig_rank = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_rank[:, k] = (
+                rankdata(clean_sig[:, k], method="average")
+                / max(sig_raw.shape[0], 1)
+            )
+        return obs_rank, sig_rank, 1.0
 
     if normalization == "hk":
         obs_hk, hk_med = _hk_normalize(sample_vec, genes, hk_ids)
@@ -121,6 +172,27 @@ def _apply_normalization(sample_vec, sig_raw, genes, normalization):
         for k in range(sig_raw.shape[1]):
             sig_hk[:, k], _ = _hk_normalize(sig_raw[:, k], genes, hk_ids)
         return obs_hk, sig_hk, hk_med
+
+    if normalization == "hk_percentile_product":
+        # This is the natural multiplicative interpretation of "pair HK with
+        # percentile".  It is benchmark-only: multiplying by ranks destroys
+        # the linear-mixture interpretation that makes NNLS fractions useful,
+        # so production should adopt it only if it wins decisively.
+        from scipy.stats import rankdata
+
+        obs_hk, hk_med = _hk_normalize(sample_vec, genes, hk_ids)
+        sig_hk = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_hk[:, k], _ = _hk_normalize(sig_raw[:, k], genes, hk_ids)
+        obs_rank = rankdata(sample_vec, method="average") / max(
+            len(sample_vec), 1
+        )
+        sig_rank = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_rank[:, k] = rankdata(
+                sig_raw[:, k], method="average"
+            ) / max(sig_raw.shape[0], 1)
+        return obs_hk * obs_rank, sig_hk * sig_rank, hk_med
 
     if normalization == "zscore":
         # Z-score each gene across the K reference components.
@@ -208,13 +280,22 @@ def _fit_combo(df_sample, template_name, cancer_type, purity, normalization, wei
         filt_sample_vec, sig_raw, filt_genes, normalization
     )
 
-    # Select markers (always on HK space for consistency of marker selection)
-    obs_hk_for_markers, _ = _hk_normalize(filt_sample_vec, filt_genes, hk_ids)
-    sig_hk_for_markers = np.zeros_like(sig_raw, dtype=float)
-    for k in range(sig_raw.shape[1]):
-        sig_hk_for_markers[:, k], _ = _hk_normalize(sig_raw[:, k], filt_genes, hk_ids)
+    # Select markers in the feature space under test. Z-scoring creates
+    # negative values that do not define reference specificity, so its
+    # no-HK marker set comes from clean TPM. HK-zscore deliberately retains
+    # HK marker selection because it is itself an HK strategy.
+    if normalization == "zscore":
+        marker_matrix = sig_raw
+    elif normalization in {"hk_zscore", "hk_percentile_product"}:
+        marker_matrix = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            marker_matrix[:, k], _ = _hk_normalize(
+                sig_raw[:, k], filt_genes, hk_ids
+            )
+    else:
+        marker_matrix = sig_norm
     fit_rows, fit_weights, _ = _select_marker_rows(
-        filt_genes, filt_symbols, sig_hk_for_markers, comp_names
+        filt_genes, filt_symbols, marker_matrix, comp_names
     )
     if not fit_rows:
         fit_rows = list(range(len(filt_genes)))
@@ -307,6 +388,7 @@ def _get_samples():
         "template": "solid_primary",
         "cancer_type": "COAD",
         "expected_purity_range": (0.15, 0.45),
+        "expected_components": {"matched_normal_colon": 0.70},
         "description": "30% CRC + 70% colon normal",
     }
 
@@ -321,6 +403,7 @@ def _get_samples():
         "template": "met_liver",
         "cancer_type": "COAD",
         "expected_purity_range": (0.15, 0.45),
+        "expected_components": {"hepatocyte": 0.70},
         "description": "30% CRC + 70% liver (met_liver template)",
     }
 
@@ -331,6 +414,7 @@ def _get_samples():
         "cancer_type": "THYM",
         "expected_purity_range": (-0.01, 0.01),  # purity_override=0
         "purity_override": 0.0,
+        "expected_components": {"T_cell": 1.0},
         "description": "Pure HPA T-cell profile (purity=0)",
     }
 
@@ -348,6 +432,7 @@ def _get_samples():
         "template": "solid_primary",
         "cancer_type": "COAD",
         "expected_purity_range": (0.05, 0.35),
+        "expected_components": {"plasma": 0.80},
         "description": "20% COAD + 80% plasma cells (Ig leakage test)",
     }
 
@@ -362,7 +447,26 @@ def _get_samples():
         "template": "met_brain",
         "cancer_type": "LUAD",
         "expected_purity_range": (0.10, 0.40),
+        "expected_component_groups": {("astrocyte", "neuron"): 0.75},
         "description": "25% LUAD + 75% brain (met_brain template)",
+    }
+
+    # 7. Immune-rich prostate — matched-normal prostate must not absorb
+    # lymph-node signal that belongs to the immune compartments.
+    SAMPLES["PRAD_lymph_20"] = {
+        "df": _mix_samples(
+            [
+                (0.2, _tcga_sample("PRAD")),
+                (0.8, _normal_tissue_sample("lymph_node")),
+            ]
+        ),
+        "template": "solid_primary",
+        "cancer_type": "PRAD",
+        "expected_purity_range": (0.05, 0.30),
+        "expected_component_groups": {
+            ("B_cell", "T_cell", "plasma", "NK", "myeloid"): 0.80
+        },
+        "description": "20% PRAD + 80% lymph node",
     }
 
     return SAMPLES
@@ -392,12 +496,32 @@ def run_comparison():
             for wt in WEIGHTINGS:
                 try:
                     result = _fit_combo(df, template, cancer_type, purity, norm, wt)
+                    component_error = []
+                    for component, expected in spec.get(
+                        "expected_components", {}
+                    ).items():
+                        component_error.append(
+                            abs(float(result["fractions"].get(component, 0.0)) - expected)
+                        )
+                    for components, expected in spec.get(
+                        "expected_component_groups", {}
+                    ).items():
+                        observed = sum(
+                            float(result["fractions"].get(component, 0.0))
+                            for component in components
+                        )
+                        component_error.append(abs(observed - expected))
                     rows.append(
                         {
                             "sample": sample_name,
                             "normalization": norm,
                             "weighting": wt,
                             "purity": round(purity, 3),
+                            "component_mae": (
+                                float(np.mean(component_error))
+                                if component_error
+                                else np.nan
+                            ),
                             **{
                                 f"f_{k}": round(v, 4)
                                 for k, v in result["fractions"].items()
@@ -427,7 +551,7 @@ def run_comparison():
 
 
 def test_comparison_runs_without_errors():
-    """All 72 normalization × weighting × sample combos should run."""
+    """Every normalization × weighting × sample combination should run."""
     df = run_comparison()
     if "error" in df.columns:
         errors = df[df["error"].notna()]
@@ -435,6 +559,43 @@ def test_comparison_runs_without_errors():
             print("\n=== ERRORS ===")
             print(errors.to_string(index=False))
         assert errors.empty, f"{len(errors)} combos failed"
+
+    # HK remains in production only while it wins a broad known-mixture
+    # comparison decisively. A tie or inconclusive result favors removal.
+    mean_error = (
+        df.groupby(["normalization", "weighting"], as_index=False)[
+            "component_mae"
+        ]
+        .mean()
+        .dropna()
+    )
+    hk_best = mean_error.loc[
+        mean_error["normalization"] == "hk", "component_mae"
+    ].min()
+    non_hk_best = mean_error.loc[
+        ~mean_error["normalization"].isin(
+            {"hk", "hk_zscore", "hk_percentile_product"}
+        ),
+        "component_mae",
+    ].min()
+    assert hk_best < non_hk_best, mean_error.sort_values(
+        "component_mae"
+    ).to_string(index=False)
+
+
+def test_normalization_policy_has_one_hk_decision_path():
+    """HK remains only where the known-mixture comparison says it wins."""
+
+    hk_consumers = {
+        consumer
+        for consumer, record in NORMALIZATION_USAGE.items()
+        if record.get("current") == Basis.HK
+    }
+    assert hk_consumers == {"decomposition_nnls"}
+    assert (
+        NORMALIZATION_USAGE["input_scale_qc"]["current"]
+        == "input_linear_tpm_housekeeping_median_qc"
+    )
 
 
 def print_comparison_table_for_manual_review():
@@ -495,6 +656,11 @@ def print_comparison_table_for_manual_review():
             mean_resid = (
                 sub["residual"].mean() if "residual" in sub.columns else float("nan")
             )
+            mean_component_mae = (
+                sub["component_mae"].mean()
+                if "component_mae" in sub.columns
+                else float("nan")
+            )
 
             combo_scores.append(
                 {
@@ -503,10 +669,13 @@ def print_comparison_table_for_manual_review():
                     "mean_prop_error": round(mean_prop, 4),
                     "mean_ig_tumor_tpm": round(mean_ig_leak, 1),
                     "mean_residual": round(mean_resid, 4),
+                    "mean_component_mae": round(mean_component_mae, 4),
                 }
             )
 
-    ranking = pd.DataFrame(combo_scores).sort_values("mean_prop_error")
+    ranking = pd.DataFrame(combo_scores).sort_values(
+        ["mean_component_mae", "mean_prop_error"]
+    )
     print(ranking.to_string(index=False))
 
 

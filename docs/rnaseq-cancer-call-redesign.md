@@ -39,9 +39,11 @@ for a full replacement classifier:
   better explained by a dominant normal tissue. This closes the COAD+liver
   issue by treating LIHC/liver as background unless LIHC-distinctive tumor
   markers corroborate it.
-- Decomposition met-site scoring now lets strong host-site evidence plus a
-  large fitted site-specific component overcome generic solid-primary residual
-  fit. The applied boost is recorded in `site_evidence`.
+- Decomposition keeps tumor identity and host modeling separate. For the
+  leading tumor hypothesis, a supported metastatic template is preferred when
+  its fitted site-specific component exceeds tumor and its tissue evidence
+  exceeds the proposed origin. Host fit cannot promote a weaker cancer
+  hypothesis; the structural evidence is recorded in `site_evidence`.
 - Centroid report-scope corroboration is marker-gated for same-lineage subtype
   swaps. It remains useful for broad/selectable rare entities, but it cannot
   slide SARC_RMS_ERMS to a sibling sarcoma subtype on a small whole-profile
@@ -213,25 +215,61 @@ against curated cancer-type signature panels. For each signature gene, it
 computes:
 
 ```text
-score_gene = cohort_percentile_HK_reference * within_sample_percentile
+score_gene = within_sample_percentile(clean TPM)
 ```
 
-The cohort-percentile leg ranks the sample's HK-normalized expression against
-the full approximately 170-column reference set: broad cancer cohorts plus
-HPA normal tissues. The within-sample percentile leg makes the signal more
-robust to dilution. The cancer-type score is the mean over the panel.
+Cross-cohort clean-TPM contrasts determine which genes belong to each panel;
+sample scoring then uses no cohort-abundance comparison and asks whether those
+cancer-specific genes dominate this transcriptome. Ranks are computed over a
+fixed reference gene universe so annotation-only zero rows cannot move the
+score. The cancer-type score is the panel mean.
+This separation prevents a zero-heavy cohort distribution or a housekeeping
+denominator from manufacturing sample evidence and is robust to proportional
+dilution.
 
 This is now explicitly the `pan_cancer_signature_ranker`, not an authoritative
-`primary_expression_match`. Its HK cohort-percentile basis is legacy and useful
-as candidate-generation/corroborating evidence, but it cannot select a report
-label by itself. The A/B harness
-`scripts/eval_pan_cancer_signature_ranker_ab.py` compares the HK basis against
-raw clean-TPM/nTPM cohort percentiles, within-sample percentiles, the learned
-classifier, centroid Spearman, and the fused report selector.
+`primary_expression_match`, and it cannot select a report label by itself.
+Explicit raw and HK cohort bases remain available only in evaluation harnesses.
+On 592 representative samples, the isolated within-sample score essentially
+matched the former HK-combined score undiluted (0.302 versus 0.304), improved
+lineage accuracy (0.767 versus 0.764), and was more robust at 70% background
+dilution (0.257 versus 0.242). HK was therefore not unequivocally superior and
+does not justify a default-path dependency.
 
 Molecular subtype cohorts are mostly kept out of the broad candidate space so
 they do not leak into primary cancer-type routing. Separate subtype scoring
-exists for selected broad types such as BRCA, HNSC, and LUAD.
+exists for selected broad types such as BRCA, HNSC, and LUAD and uses the same
+within-sample feature space.
+
+### Normalization policy
+
+Every analysis-facing sample is first conformed to clean TPM. Decision features
+then use the representation matching the biological question:
+
+- Within-sample percentile for broad and subtype signatures.
+- Log1p(clean TPM) plus cross-cancer cohort percentile for lineage programs,
+  no-reference recall, curated lineage panels, and family panels.
+- Linear clean-TPM mass for purity and tumor/background mixture equations.
+- Whole-profile Spearman for centroid and compartment evidence.
+- Housekeeping normalization only inside the NNLS decomposition fit, where
+  controlled known-mixture tests show a clear advantage over every evaluated
+  non-HK alternative.
+
+The decomposition benchmark also tested multiplying HK units by
+within-sample percentile. Its component-attribution MAE changed only from
+0.204 to 0.202, while the multiplication makes NNLS coefficients cease to be
+fractions of a linear RNA mixture. The production pairing is therefore
+sequential rather than multiplicative: HK-NNLS estimates background
+fractions, then non-HK percentile/log-cohort residual programs independently
+test tumor identity.
+
+The pre-normalization QC housekeeping median is separate and is not a
+housekeeping-normalized feature. It is the median housekeeping-gene abundance
+measured on input-derived linear TPM after log-scale detection and gene
+aggregation, before technical-RNA rescue and clean-TPM reference conformance.
+Together with total TPM and concentration checks, it can flag an accidental
+log scale, collapsed complexity, or implausibly low absolute RNA scale that
+later normalization could hide. It does not contribute to the cancer call.
 
 ### 4. Whole-profile centroid and compartment call
 
@@ -481,11 +519,34 @@ upstream cancer-support score as identity evidence.
 
 For every usable tumor residual it evaluates curated expected-high and
 expected-low lineage panels plus ontology sanity programs. Candidate-specific
-fits are first grouped by structural background model. A residual identity is
-eligible only when every realization within each model agrees and every model
-agrees with the others. Discordant models remain explicitly `ambiguous`;
-same-branch sibling ambiguity resolves only to the deepest shared registry
-parent.
+fits are first grouped by structural background model. Identity evaluation
+uses the complete candidate-by-template beam; the 24-row report limit is
+applied only afterward for presentation. A residual identity is eligible only
+when every realization within each model agrees and every model agrees with
+the others. Discordant models remain explicitly `ambiguous`; same-branch
+sibling ambiguity resolves only to the deepest shared registry parent.
+
+Residual evidence is selectable only inside the biological regime that
+generated it: a solid residual cannot establish a heme diagnosis, and a heme
+residual cannot establish a solid diagnosis. Production and calibration call
+the same ontology-backed mode guard, so evaluation cannot credit a transition
+that the report pipeline would reject.
+
+The initial decomposition regime follows the adjudicated report entity rather
+than the raw ranker leader. This matters for concentrated or otherwise
+quantifier-sensitive profiles: if a complete basal-breast marker program
+resolves an artifactual heme leader to `BRCA`, decomposition starts in solid
+mode. A subtype-specific positive/negative program is evaluated at that
+subtype's resolution; it is not vetoed by a broader parent marker set that may
+represent a different sibling biology (for example, luminal markers are not
+required for a coherent basal-breast program).
+
+After adjudication, an unrelated fallback ceases to be an active analysis
+context whenever the resolved entity has its own broad reference. The old
+ranker label remains in the differential, while decomposition, purity, target
+attribution, and therapy curation stay on the resolved branch. Ancestor or
+descendant decomposition rows are named explicitly as such and do not silently
+refine the report label.
 
 The result is one independent entity-consensus axis, not a direct selector.
 An invariant residual may add one parent-level entity to the small consensus

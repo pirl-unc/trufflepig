@@ -7,6 +7,8 @@ the coarse cancer_hint fall where expected.
 Does NOT depend on external cohort files so CI can run offline.
 """
 
+import warnings
+
 import pandas as pd
 
 from trufflepig.reference import pan_cancer_expression
@@ -107,6 +109,18 @@ def test_top_matches_are_three_entries():
     r = assess_tissue_composition(_as_df(sample))
     assert len(r.top_normal_tissues) == 3
     assert len(r.top_tcga_cohorts) == 3
+
+
+def test_missing_sample_abundances_are_excluded_before_composition_scoring():
+    """Unavailable reference cells are not fabricated as measured zero TPM."""
+    ref = _ref()
+    sample = ref["amygdala_nTPM"].astype(float).to_dict()
+
+    with warnings.catch_warnings(record=True) as caught:
+        r = assess_tissue_composition(_as_df(sample))
+
+    assert r.n_reference_genes == int(ref["amygdala_nTPM"].notna().sum())
+    assert not any("NaN at log2 step" in str(item.message) for item in caught)
 
 
 def test_insufficient_reference_overlap_returns_neutral_signal():

@@ -19,8 +19,6 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-import numpy as np
-
 from ..cancer_ontology import cancer_codes_entity_compatible, registry_parent_code
 from ..tumor_type_ontology import tumor_type_ontology, tumor_type_sanity_check
 
@@ -38,6 +36,54 @@ _ATTRIBUTION_METADATA_COLUMNS = frozenset(
 
 def _clean(value: Any) -> str:
     return str(value or "").strip()
+
+
+def scope_residual_identity_to_decomposition_mode(
+    evidence: Mapping[str, Any] | None,
+    *,
+    sample_mode: str,
+) -> dict[str, Any]:
+    """Make residual evidence selectable only in the regime that produced it.
+
+    Heme and solid decompositions subtract different biological populations,
+    so their residuals are not interchangeable. Pure-population mode describes
+    sample preparation rather than lineage and therefore remains unrestricted.
+    """
+
+    scoped = dict(evidence or {})
+    candidate_code = _clean(scoped.get("candidate_code"))
+    mode = _clean(sample_mode)
+    if not candidate_code or mode not in {"solid", "heme"}:
+        scoped["adjudication_eligible"] = True
+        scoped.pop("adjudication_blocker", None)
+        return scoped
+
+    try:
+        from ..expression_decomposition import resolve_mode
+
+        candidate_mode, _routing, _type_code = resolve_mode(candidate_code)
+    except (ImportError, KeyError, TypeError, ValueError):
+        candidate_mode = None
+
+    candidate_regime = (
+        "heme"
+        if candidate_mode == "heme"
+        else "solid"
+        if candidate_mode
+        else "unknown"
+    )
+    compatible = candidate_regime == mode
+    scoped["adjudication_eligible"] = compatible
+    scoped["decomposition_sample_mode"] = mode
+    scoped["candidate_sample_mode"] = candidate_regime
+    if compatible:
+        scoped.pop("adjudication_blocker", None)
+    else:
+        scoped["adjudication_blocker"] = (
+            f"{candidate_code} requires {candidate_regime} decomposition, "
+            f"but the residual was generated in {mode} mode"
+        )
+    return scoped
 
 
 def _residual_views(gene_attribution) -> tuple[dict[str, float], dict[str, float]]:
@@ -74,25 +120,6 @@ def _residual_views(gene_attribution) -> tuple[dict[str, float], dict[str, float
         if symbol:
             by_symbol[symbol] = max(value, by_symbol.get(symbol, 0.0))
     return by_id, by_symbol
-
-
-def _sample_hk_median(sample_tpm_by_gene_id: Mapping[str, float]) -> float:
-    try:
-        from pirlygenes import housekeeping_gene_ids
-
-        hk_ids = {
-            _clean(gene_id).split(".", 1)[0]
-            for gene_id in housekeeping_gene_ids()
-            if _clean(gene_id)
-        }
-    except (ImportError, AttributeError, TypeError, ValueError):
-        return 1.0
-    values = [
-        float(sample_tpm_by_gene_id.get(gene_id, 0.0) or 0.0)
-        for gene_id in hk_ids
-        if float(sample_tpm_by_gene_id.get(gene_id, 0.0) or 0.0) > 0
-    ]
-    return float(np.median(values)) if values else 1.0
 
 
 def _background_model_key(result) -> tuple[str, tuple[str, ...]]:
@@ -430,7 +457,6 @@ def evaluate_residual_identity(
                 evaluate_panels(
                     LINEAGE_PANELS,
                     by_id,
-                    _sample_hk_median(by_id),
                 ),
                 candidates,
             )

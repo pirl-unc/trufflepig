@@ -9,7 +9,7 @@ from trufflepig.lineage_evidence import (
     lineage_exclusion_evidence,
 )
 
-HK = 100.0
+SCALE = 100.0
 # synthetic cross-cohort background for the epithelial markers (low) — keeps the
 # tests fast (no reference-matrix load) and deterministic.
 COHORT = {g: np.array([1.0, 2.0, 1.0, 0.0, 2.0, 1.0, 3.0, 1.0, 0.0, 2.0]) for g in EPITHELIAL_MARKERS}
@@ -20,12 +20,14 @@ def _sample(marker_ratio):
     low background — so within-sample percentile is high when markers are high."""
     d = {f"FILL{i}": 1.0 for i in range(30)}
     for g in EPITHELIAL_MARKERS:
-        d[g] = marker_ratio * HK
+        d[g] = marker_ratio * SCALE
     return d
 
 
 def _ev(marker_ratio, **kw):
-    return lineage_exclusion_evidence(_sample(marker_ratio), HK, cohort_reference=COHORT, **kw)
+    return lineage_exclusion_evidence(
+        _sample(marker_ratio), cohort_reference=COHORT, **kw
+    )
 
 
 def test_epithelial_absent_demotes_epithelial_branch():
@@ -65,10 +67,15 @@ def test_demotion_is_confidence_proportional():
         assert strong.factors["mesenchymal"] <= weak.factors["mesenchymal"]
 
 
-def test_fingerprint_reports_all_five_views():
+def test_fingerprint_reports_non_hk_views():
     ev = _ev(4.0)
     note = ev.notes[0]
-    for token in ("HK", "within-sample pct", "log1p(TPM)", "cohort-pct", "cohort-z"):
+    for token in (
+        "log1p(clean TPM)",
+        "within-sample pct",
+        "cohort-pct",
+        "cohort-z",
+    ):
         assert token in note, note
 
 
@@ -91,7 +98,7 @@ def _multi_program_sample(ratios):
     cohort = {}
     for lineage, markers in _PROG_BY_LINEAGE.items():
         for g in markers:
-            d[g] = ratios.get(lineage, 0.0) * HK
+            d[g] = ratios.get(lineage, 0.0) * SCALE
             cohort[g] = _np.array([1.0, 2.0, 1.0, 0.0, 2.0, 1.0, 3.0, 1.0, 0.0, 2.0])
     return d, cohort
 
@@ -102,8 +109,10 @@ def test_cofiring_specific_programs_do_not_cancel():
     the original wrong top survived). With relative-margin reasoning the stronger
     lineage stays intact, the weaker is demoted only by their gap, and an
     unsupported lineage is demoted by the full margin."""
-    d, cohort = _multi_program_sample({"neuroendocrine": 8.0, "melanocytic": 3.0})
-    f = lineage_exclusion_evidence(d, HK, cohort_reference=cohort).factors
+    d, cohort = _multi_program_sample(
+        {"neuroendocrine": 0.4, "melanocytic": 0.1}
+    )
+    f = lineage_exclusion_evidence(d, cohort_reference=cohort).factors
     # both programs must clear threshold for this to be a real co-fire test
     assert f, "neither specific program fired — raise the ratios"
     # stronger lineage (NE) is intact; weaker (melanocytic) only mildly demoted
@@ -119,6 +128,6 @@ def test_single_specific_program_demotes_all_others_decisively():
     """One program firing alone behaves as a decisive single call (margin == its
     confidence for every other lineage)."""
     d, cohort = _multi_program_sample({"neuroendocrine": 8.0})
-    f = lineage_exclusion_evidence(d, HK, cohort_reference=cohort).factors
+    f = lineage_exclusion_evidence(d, cohort_reference=cohort).factors
     assert f.get("neuroendocrine", 1.0) == 1.0
     assert f.get("epithelial", 1.0) < 1.0 and f.get("mesenchymal", 1.0) < 1.0
