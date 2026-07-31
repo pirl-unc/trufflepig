@@ -634,6 +634,7 @@ def test_soft_tissue_decomposition_separates_crc_from_smooth_muscle_host():
 
     attribution = result.gene_attribution.set_index("symbol")
     assert "smooth_muscle" in result.fractions
+    assert result.component_reference_tissues["smooth_muscle"] == "smooth_muscle"
     assert result.fractions["smooth_muscle"] > result.fractions["tumor"]
     assert attribution.loc["DES", "smooth_muscle"] > attribution.loc["DES", "tumor"]
     for marker in ("CDX2", "SATB2", "CDH17", "VIL1"):

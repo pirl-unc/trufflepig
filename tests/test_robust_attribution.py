@@ -149,7 +149,12 @@ def test_activated_tme_refinement_updates_source_attribution(monkeypatch):
     import trufflepig.decomposition.signature as signature
     from trufflepig.plot_tumor_expr import estimate_tumor_expression_ranges
 
-    def fake_signature_matrix(components, gene_subset=None, sample_by_eid=None):
+    def fake_signature_matrix(
+        components,
+        gene_subset=None,
+        sample_by_eid=None,
+        component_reference_tissues=None,
+    ):
         assert components == ["fibroblast"]
         return (
             ["ENSG00000078098"],
@@ -189,6 +194,57 @@ def test_activated_tme_refinement_updates_source_attribution(monkeypatch):
     assert row["tme_tpm_before_subtype_refinement"] == 0.1
     assert row["attribution"]["fibroblast"] == 1.0
     assert row["attr_top_compartment_tpm"] == 1.0
+
+
+def test_target_attribution_reuses_fitted_composite_tissue(monkeypatch):
+    """Full-gene attribution must not replace the physical reference NNLS fit."""
+
+    import trufflepig.decomposition.signature as signature
+    from trufflepig.plot_tumor_expr import estimate_tumor_expression_ranges
+
+    captured = {}
+
+    def fake_signature_matrix(
+        components,
+        gene_subset=None,
+        sample_by_eid=None,
+        component_reference_tissues=None,
+    ):
+        captured["sample_by_eid"] = sample_by_eid
+        captured["component_reference_tissues"] = component_reference_tissues
+        return (
+            ["ENSG00000148773"],
+            ["MKI67"],
+            np.array([[10.0]], dtype=float),
+            list(components),
+        )
+
+    monkeypatch.setattr(signature, "build_signature_matrix", fake_signature_matrix)
+
+    class Result:
+        fractions = {"tumor": 0.2, "smooth_muscle": 0.8}
+        matched_normal_tissue = None
+        matched_normal_fraction = 0.0
+        component_reference_tissues = {"smooth_muscle": "smooth_muscle"}
+
+    df = pd.DataFrame(
+        {
+            "ensembl_gene_id": ["ENSG00000148773"],
+            "gene_symbol": ["MKI67"],
+            "TPM": [20.0],
+        }
+    )
+    estimate_tumor_expression_ranges(
+        df,
+        "PRAD",
+        {"overall_lower": 0.2, "overall_estimate": 0.2, "overall_upper": 0.2},
+        decomposition_results=[Result()],
+    )
+
+    assert captured["sample_by_eid"] == {"ENSG00000148773": 20.0}
+    assert captured["component_reference_tissues"] == {
+        "smooth_muscle": "smooth_muscle"
+    }
 
 
 def test_matched_normal_over_predicted_downgrades_and_tags():

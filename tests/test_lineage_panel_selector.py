@@ -1356,3 +1356,72 @@ def test_unresolvable_low_marker_counts_as_violation_not_pass_through():
         "Unresolvable low_marker was silently skipped instead of "
         "counting as a violation. Pessimistic semantics broken."
     )
+
+
+def test_custom_panel_loads_its_own_reference_markers(monkeypatch):
+    """Public panel scoring is bounded by the supplied panel, not global data."""
+
+    from trufflepig import lineage_panels
+    from trufflepig import reference
+
+    panel = lineage_panels.LineagePanel(
+        name="CUSTOM_PROLIFERATIVE",
+        parent_cohort="CUSTOM",
+        high_markers=("MKI67",),
+        low_markers=(("ACTB", 1000.0),),
+        obligate=("MKI67",),
+    )
+    marker_ids = {
+        "MKI67": "ENSG00000148773",
+        "ACTB": "ENSG00000075624",
+    }
+    requested = []
+
+    def fake_reference_expression(*, genes, normalize):
+        requested.extend(genes)
+        assert normalize == "tpm_clean"
+        rows = []
+        for code, mki67, actb in (
+            ("CUSTOM", 10.0, 100.0),
+            ("OTHER_A", 1.0, 100.0),
+            ("OTHER_B", 0.1, 100.0),
+        ):
+            rows.extend(
+                [
+                    {
+                        "cancer_code": code,
+                        "Ensembl_Gene_ID": marker_ids["MKI67"],
+                        "expression": mki67,
+                        "normalization": "TPM_clean",
+                    },
+                    {
+                        "cancer_code": code,
+                        "Ensembl_Gene_ID": marker_ids["ACTB"],
+                        "expression": actb,
+                        "normalization": "TPM_clean",
+                    },
+                ]
+            )
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(lineage_panels, "_panel_marker_ids", lambda _panel: marker_ids)
+    monkeypatch.setattr(
+        reference,
+        "cancer_reference_expression",
+        fake_reference_expression,
+    )
+    lineage_panels._cohort_medians_by_gene_id.cache_clear()
+    lineage_panels._cohort_values_by_gene_id.cache_clear()
+
+    evidence = lineage_panels.score_panel(
+        panel,
+        {
+            marker_ids["MKI67"]: 20.0,
+            marker_ids["ACTB"]: 1.0,
+        },
+    )
+
+    assert set(requested) == {"MKI67", "ACTB"}
+    assert evidence.obligate_passed is True
+    assert evidence.high_hits == (("MKI67", 20.0, 10.0),)
+    assert evidence.score == pytest.approx(1.0)

@@ -830,6 +830,7 @@ def cancer_type_context_from_analysis(
     elif reference_relationship == "descendant":
         # A descendant can provide a fine expression cohort, but it cannot be
         # called the broad/coarse reference for its parent diagnosis.
+        expression_code = expression_code or reference_code
         requested_expression_code = requested_expression_code or reference_code
         reference_code = report_code
 

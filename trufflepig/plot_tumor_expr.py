@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 
 from .common import (
     _guess_gene_cols,
+    build_sample_tpm_by_gene_id,
     build_sample_tpm_by_symbol,
     ensembl_id_to_symbol_map,
     VS_TCGA_REF_FLOOR_TPM,
@@ -810,6 +811,7 @@ def estimate_tumor_expression_ranges(
     per_compartment_tpm_by_symbol = None  # #108: per-gene per-compartment TPM
     top_fractions = {}
     if decomposition_results:
+        sample_by_eid = build_sample_tpm_by_gene_id(df_gene_expr)
         top_result = decomposition_results[0]
         top_fractions = getattr(top_result, "fractions", None) or {}
         non_tumor_components = [
@@ -833,7 +835,12 @@ def estimate_tumor_expression_ranges(
                 _genes, sym_list, matrix, _cols = build_signature_matrix(
                     non_tumor_components,
                     gene_subset=None,
-                    sample_by_eid=None,
+                    sample_by_eid=sample_by_eid,
+                    component_reference_tissues=getattr(
+                        top_result,
+                        "component_reference_tissues",
+                        None,
+                    ),
                 )
                 non_tumor_fracs = np.array(
                     [float(top_fractions[c]) for c in non_tumor_components],

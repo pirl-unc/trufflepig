@@ -5244,17 +5244,17 @@ def _learned_entity_support_for_code(
     for vote in votes:
         if not isinstance(vote, Mapping) or _clean(vote.get("stage")) != "entity":
             continue
-        for item in vote.get("top_predictions") or []:
-            if not isinstance(item, Mapping):
-                continue
-            label = _clean(item.get("label") or item.get("code"))
-            if label:
-                supports[label] = max(
-                    supports.get(label, 0.0),
-                    _safe_float(item.get("probability")),
-                )
+        for label, value in _aggregate_learned_predictions_by_entity(
+            vote.get("top_predictions") or []
+        ).items():
+            # Multiple hierarchy votes are related views of the same profile.
+            # Sum mutually exclusive leaves within a view, then retain the
+            # strongest view instead of counting related views twice.
+            supports[label] = max(supports.get(label, 0.0), value)
     if not supports:
-        top_label = _clean(details.get("learned_expression_top_entity_label"))
+        top_label = _learned_prediction_entity_code(
+            details.get("learned_expression_top_entity_label")
+        )
         if top_label:
             supports[top_label] = _safe_float(
                 details.get("learned_expression_top_entity_support")
@@ -5275,27 +5275,40 @@ def _learned_entity_support_for_code(
     return float(max(support, descendant_support))
 
 
+def _aggregate_learned_predictions_by_entity(
+    predictions: Any,
+) -> dict[str, float]:
+    """Sum one softmax view after rolling its leaves to report entities.
+
+    Predictions within a classifier view are mutually exclusive outcomes. If
+    several leaves represent the same report entity (for example ``COAD_MSI``
+    and ``COAD_MSS``), their probability mass belongs to that entity before a
+    leader is selected. Related hierarchy and flat views remain separate and
+    are combined by maximum elsewhere.
+    """
+
+    supports: dict[str, float] = {}
+    for item in predictions or []:
+        if not isinstance(item, Mapping):
+            continue
+        raw_code = _clean(item.get("code") or item.get("label"))
+        entity_code = _learned_prediction_entity_code(raw_code)
+        if not entity_code:
+            continue
+        supports[entity_code] = supports.get(entity_code, 0.0) + _safe_float(
+            item.get("probability")
+        )
+    return supports
+
+
 def _flat_learned_entity_supports(
     details: Mapping[str, Any],
 ) -> dict[str, float]:
     """Collapse flat leaf predictions to entity support without double counting."""
 
-    try:
-        from .expression_classifier import _learned_entity_for_code
-    except ImportError:
-        return {}
-    supports: dict[str, float] = {}
-    for item in details.get("learned_expression_flat_top_predictions") or []:
-        if not isinstance(item, Mapping):
-            continue
-        raw_code = _clean(item.get("code") or item.get("label"))
-        entity_code = _clean(_learned_entity_for_code(raw_code))
-        if entity_code:
-            supports[entity_code] = max(
-                supports.get(entity_code, 0.0),
-                _safe_float(item.get("probability")),
-            )
-    return supports
+    return _aggregate_learned_predictions_by_entity(
+        details.get("learned_expression_flat_top_predictions") or []
+    )
 
 
 def _learned_entity_prediction_codes(
@@ -5339,19 +5352,19 @@ def _learned_entity_prediction_codes(
             if isinstance(item, Mapping)
             and _clean(item.get("label") or item.get("code"))
         ]
-        if predictions:
-            leader = max(
-                predictions,
-                key=lambda item: _safe_float(item.get("probability")),
+        entity_supports = _aggregate_learned_predictions_by_entity(predictions)
+        if entity_supports:
+            entity_code, entity_support = max(
+                entity_supports.items(),
+                key=lambda item: item[1],
             )
-            add_leader(
-                leader.get("label") or leader.get("code"),
-                leader.get("probability"),
-            )
+            add_leader(entity_code, entity_support)
         break
     if not order:
         add_leader(
-            details.get("learned_expression_top_entity_label"),
+            _learned_prediction_entity_code(
+                details.get("learned_expression_top_entity_label")
+            ),
             details.get("learned_expression_top_entity_support"),
         )
 

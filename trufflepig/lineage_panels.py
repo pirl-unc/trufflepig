@@ -162,33 +162,53 @@ class PanelEvidence:
 # one Ensembl-lookup path in the whole codebase.
 
 
-@lru_cache(maxsize=1)
-def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
+def _marker_symbols_for_panels(
+    panels: tuple[LineagePanel, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                symbol
+                for panel in panels
+                for symbol in (
+                    *panel.high_markers,
+                    *panel.obligate,
+                    *(s for group in panel.identity_marker_groups for s in group),
+                    *(s for s, _ in panel.low_markers),
+                )
+            }
+        )
+    )
+
+
+def _reference_symbols_for_panel(panel: LineagePanel) -> tuple[str, ...]:
+    """Use one shared key for built-ins and an exact key for custom panels."""
+
+    built_in_panels = tuple(globals().get("LINEAGE_PANELS", ()))
+    panels = built_in_panels if panel in built_in_panels else (panel,)
+    return _marker_symbols_for_panels(panels)
+
+
+@lru_cache(maxsize=64)
+def _cohort_medians_by_gene_id(
+    symbols: tuple[str, ...] = (),
+) -> dict[tuple[str, str], float]:
     """Map ``(cohort_code, versionless_gene_id) → median TPM_clean``.
 
-    Only curated panel genes are requested from the bounded artifact accessor.
-    This preserves the full cohort distribution without materializing the
-    multi-million-row all-gene reference in every report process.
+    The cache key is the marker universe being evaluated. Calls without an
+    explicit universe retain the shared built-in-panel path; public custom
+    panels use their own bounded symbol tuple.
     """
+
     from .common import _versionless_gene_id
     from .reference import cancer_reference_expression
 
-    panels = globals().get("LINEAGE_PANELS", ())
-    symbols = sorted(
-        {
-            symbol
-            for panel in panels
-            for symbol in (
-                *panel.high_markers,
-                *panel.obligate,
-                *(s for group in panel.identity_marker_groups for s in group),
-                *(s for s, _ in panel.low_markers),
-            )
-        }
-    )
+    if not symbols:
+        panels = tuple(globals().get("LINEAGE_PANELS", ()))
+        symbols = _marker_symbols_for_panels(panels)
     if not symbols:
         return {}
-    df = cancer_reference_expression(genes=symbols, normalize="tpm_clean")
+    df = cancer_reference_expression(genes=list(symbols), normalize="tpm_clean")
     df = df[df["normalization"] == "TPM_clean"]
     df = df.assign(
         _gene_id=df["Ensembl_Gene_ID"].map(_versionless_gene_id),
@@ -204,11 +224,13 @@ def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
     }
 
 
-@lru_cache(maxsize=1)
-def _cohort_values_by_gene_id() -> dict[str, tuple[float, ...]]:
+@lru_cache(maxsize=64)
+def _cohort_values_by_gene_id(
+    symbols: tuple[str, ...] = (),
+) -> dict[str, tuple[float, ...]]:
     """Sorted clean-TPM medians across all reference cohorts, per gene."""
     values: dict[str, list[float]] = {}
-    for (_, gene_id), value in _cohort_medians_by_gene_id().items():
+    for (_, gene_id), value in _cohort_medians_by_gene_id(symbols).items():
         if math.isfinite(value):
             values.setdefault(gene_id, []).append(max(0.0, float(value)))
     return {
@@ -217,28 +239,43 @@ def _cohort_values_by_gene_id() -> dict[str, tuple[float, ...]]:
     }
 
 
-def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:
+def _cohort_median_by_id(
+    cohort: str,
+    gene_id: str,
+    reference_symbols: tuple[str, ...] = (),
+) -> float | None:
     if not gene_id:
         return None
-    return _cohort_medians_by_gene_id().get((cohort, gene_id))
+    return _cohort_medians_by_gene_id(reference_symbols).get((cohort, gene_id))
 
 
 def _panel_reference_cohorts(panel: LineagePanel) -> tuple[str, ...]:
     return panel.reference_cohorts or (panel.parent_cohort,)
 
 
-def _panel_cohort_median(panel: LineagePanel, gene_id: str) -> float | None:
+def _panel_cohort_median(
+    panel: LineagePanel,
+    gene_id: str,
+    reference_symbols: tuple[str, ...] = (),
+) -> float | None:
+    reference_symbols = reference_symbols or _reference_symbols_for_panel(panel)
     values = [
         value
         for cohort in _panel_reference_cohorts(panel)
-        if (value := _cohort_median_by_id(cohort, gene_id)) is not None
+        if (
+            value := _cohort_median_by_id(cohort, gene_id, reference_symbols)
+        ) is not None
     ]
     return float(median(values)) if values else None
 
 
-def _cohort_percentile(gene_id: str, value: float) -> float:
+def _cohort_percentile(
+    gene_id: str,
+    value: float,
+    reference_symbols: tuple[str, ...] = (),
+) -> float:
     """Midrank percentile of ``value`` among clean-TPM cohort medians."""
-    values = _cohort_values_by_gene_id().get(gene_id, ())
+    values = _cohort_values_by_gene_id(reference_symbols).get(gene_id, ())
     if not values:
         return 0.0
     left = bisect_left(values, value)
@@ -252,7 +289,8 @@ def _positive_marker_support(
     observed_tpm: float,
 ) -> tuple[float, float | None]:
     """Integrate absolute burden and cross-cancer specificity for one marker."""
-    reference_tpm = _panel_cohort_median(panel, gene_id)
+    reference_symbols = _reference_symbols_for_panel(panel)
+    reference_tpm = _panel_cohort_median(panel, gene_id, reference_symbols)
     if reference_tpm is None:
         return 0.0, None
     reference_tpm = max(0.0, float(reference_tpm))
@@ -263,8 +301,16 @@ def _positive_marker_support(
         if reference_log > 0.0
         else float(observed_tpm > 0.0)
     )
-    reference_percentile = _cohort_percentile(gene_id, reference_tpm)
-    sample_percentile = _cohort_percentile(gene_id, observed_tpm)
+    reference_percentile = _cohort_percentile(
+        gene_id,
+        reference_tpm,
+        reference_symbols,
+    )
+    sample_percentile = _cohort_percentile(
+        gene_id,
+        observed_tpm,
+        reference_symbols,
+    )
     cohort_support = min(
         1.0,
         sample_percentile / reference_percentile,

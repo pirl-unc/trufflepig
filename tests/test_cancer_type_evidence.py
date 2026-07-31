@@ -1392,6 +1392,51 @@ def test_flat_learned_view_can_supply_a_corroborated_entity_beam_candidate():
     assert consensus["candidate_nonlearned_votes"] == 3
 
 
+def test_learned_entity_leader_aggregates_mutually_exclusive_child_labels():
+    """Entity selection sums sibling softmax leaves before choosing a leader."""
+
+    from trufflepig.cancer_type_evidence import (
+        _learned_entity_prediction_codes,
+        _learned_entity_support_for_code,
+    )
+
+    details = {
+        "learned_expression_hierarchy_votes": [
+            {
+                "stage": "entity",
+                "top_predictions": [
+                    {"label": "COAD_MSI", "probability": 0.35},
+                    {"label": "COAD_MSS", "probability": 0.30},
+                    {"label": "STAD", "probability": 0.40},
+                ],
+            }
+        ]
+    }
+
+    predictions = _learned_entity_prediction_codes(details)
+    assert predictions[0][0] == "COAD"
+    assert predictions[0][1] == pytest.approx(0.65)
+    assert _learned_entity_support_for_code(details, "COAD") == pytest.approx(0.65)
+
+
+def test_flat_learned_entity_leader_aggregates_child_labels():
+    """The quantifier-robust flat view obeys the same report-entity roll-up."""
+
+    from trufflepig.cancer_type_evidence import _learned_entity_prediction_codes
+
+    details = {
+        "learned_expression_flat_top_predictions": [
+            {"code": "COAD_MSI", "probability": 0.35},
+            {"code": "COAD_MSS", "probability": 0.30},
+            {"code": "STAD", "probability": 0.40},
+        ]
+    }
+
+    predictions = _learned_entity_prediction_codes(details)
+    assert predictions[0][0] == "COAD"
+    assert predictions[0][1] == pytest.approx(0.65)
+
+
 def test_residual_identity_completes_an_integrated_entity_consensus():
     """Post-background identity is one vote, not a standalone selector."""
 
@@ -2890,8 +2935,10 @@ def test_structural_sarcoma_composition_yields_to_learned_crc_family(monkeypatch
         "classify_expression",
         lambda _sample, top_k=5: [
             ("READ_MSS", 0.12),
-            ("SARC_PEC", 0.11),
-            ("SARC", 0.10),
+            # After report-entity roll-up the two SARC leaves must remain below
+            # READ, matching this fixture's stated learned-CRC premise.
+            ("SARC_PEC", 0.05),
+            ("SARC", 0.04),
             ("COAD_MSS", 0.09),
         ],
     )

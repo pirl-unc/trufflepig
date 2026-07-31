@@ -146,22 +146,31 @@ def test_context_labels_descendant_expression_as_reference_only(monkeypatch):
         source_kind="deconvolved_tumor_reference",
         source="TCGA_BRCA_PAM50",
     )
+    her2_record = ExpressionReferenceRecord(
+        requested_code="BRCA_HER2",
+        reference_code="BRCA_HER2",
+        source_kind="deconvolved_tumor_reference",
+        source="TCGA_BRCA_PAM50",
+    )
     monkeypatch.setattr(
         context_module,
         "_direct_expression_reference_records",
-        lambda: {"BRCA_Basal": (basal_record,)},
+        lambda: {
+            "BRCA_Basal": (basal_record,),
+            "BRCA_HER2": (her2_record,),
+        },
     )
 
     context = cancer_type_context_from_analysis(
         {
             "cancer_type": "BRCA",
-            "reference_cancer_type": "BRCA_Basal",
+            "reference_cancer_type": "BRCA_HER2",
         }
     )
 
     assert context.code_for("report") == "BRCA"
     assert context.code_for("reference") == "BRCA"
-    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.code_for("expression") == "BRCA_HER2"
     assert context.reference_relationship == "same"
     assert context.expression_relationship == "descendant"
     lines = "\n".join(context.markdown_lines())

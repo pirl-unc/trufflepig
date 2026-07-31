@@ -426,6 +426,7 @@ class DecompositionResult:
     purity_source: str = "signature"
     n_measured_in_fit: int = 0
     site_evidence: dict[str, Any] = field(default_factory=dict)
+    component_reference_tissues: dict[str, str] = field(default_factory=dict)
 
 
 def _weighted_constrained_nnls(
@@ -1056,10 +1057,17 @@ def _fit_one_hypothesis(
         )
 
     gene_subset = set(sample_by_eid.keys())
-    filt_genes, filt_symbols, sig_raw, _ = build_signature_matrix(
+    (
+        filt_genes,
+        filt_symbols,
+        sig_raw,
+        _,
+        component_reference_tissues,
+    ) = build_signature_matrix(
         comp_names,
         gene_subset=gene_subset,
         sample_by_eid=sample_by_eid,
+        return_reference_tissues=True,
     )
     filt_sample_vec = np.array(
         [
@@ -1311,6 +1319,7 @@ def _fit_one_hypothesis(
         purity_source=purity_source,
         n_measured_in_fit=n_measured_in_fit,
         site_evidence=site_evidence,
+        component_reference_tissues=component_reference_tissues,
     )
 
 

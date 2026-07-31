@@ -402,7 +402,13 @@ def _select_best_category_tissue(category, sample_by_eid, genes, bulk_indexed):
     return available_tissues[best_idx], available_cols[best_idx]
 
 
-def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
+def build_signature_matrix(
+    components,
+    gene_subset=None,
+    sample_by_eid=None,
+    component_reference_tissues=None,
+    return_reference_tissues=False,
+):
     """Build a signature matrix for the given component list.
 
     Parameters
@@ -415,6 +421,12 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
         Sample expression {ensembl_id: TPM}.  Used for composite tissue
         categories to select the best-matching member tissue.  If None,
         composite categories fall back to the first member tissue.
+    component_reference_tissues : mapping, optional
+        Previously selected ``{component: physical_tissue}`` identities. When
+        supplied, composite components reuse the exact reference fitted by the
+        decomposition rather than selecting again over a different gene set.
+    return_reference_tissues : bool, optional
+        Append the selected physical-tissue mapping to the return tuple.
 
     Returns
     -------
@@ -439,6 +451,8 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
     symbols = [symbol_map.get(gene_id, gene_id) for gene_id in genes]
 
     cols = []
+    selected_reference_tissues = {}
+    component_reference_tissues = component_reference_tissues or {}
     for comp in components:
         # Priority 0: ``matched_normal_<tissue>`` — used by
         # ``get_template_components`` for solid_primary + cancer_type
@@ -502,17 +516,21 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
         # Priority 1: composite tissue category (best-match selection)
         category = COMPONENT_TO_CATEGORY.get(comp)
         if category is not None:
-            if sample_by_eid is not None:
-                _tissue, tissue_col = _select_best_category_tissue(
+            selected_tissue = component_reference_tissues.get(comp)
+            if selected_tissue in TISSUE_CATEGORIES[category]:
+                tissue_col = f"{selected_tissue}_nTPM"
+            elif sample_by_eid is not None:
+                selected_tissue, tissue_col = _select_best_category_tissue(
                     category,
                     sample_by_eid,
                     genes,
                     bulk,
                 )
             else:
-                first_tissue = TISSUE_CATEGORIES[category][0]
-                tissue_col = f"{first_tissue}_nTPM"
+                selected_tissue = TISSUE_CATEGORIES[category][0]
+                tissue_col = f"{selected_tissue}_nTPM"
             if tissue_col in bulk.columns:
+                selected_reference_tissues[comp] = selected_tissue
                 vals = bulk[tissue_col].astype(float).reindex(genes).fillna(0.0).values
                 cols.append(vals)
                 continue
@@ -560,4 +578,7 @@ def build_signature_matrix(components, gene_subset=None, sample_by_eid=None):
         cols.append(np.zeros(len(genes)))
 
     matrix = np.column_stack(cols)
-    return genes, symbols, matrix, list(components)
+    result = (genes, symbols, matrix, list(components))
+    if return_reference_tissues:
+        return (*result, selected_reference_tissues)
+    return result
