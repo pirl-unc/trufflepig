@@ -20,6 +20,8 @@ from trufflepig.decomposition import (
 )
 from trufflepig.main import (
     _apply_cancer_type_evidence,
+    _fit_report_scope_decompositions,
+    _propagate_report_scope_selection,
     _selected_report_scope_basis_label,
 )
 
@@ -389,6 +391,142 @@ def test_helper_forwards_post_decomposition_identity_evidence(monkeypatch):
     assert evidence["residual_identity_evidence"] is residual
     assert selected is fake_selected
     assert report_code == "ACC"
+
+
+def test_residual_selection_clears_superseded_report_basis(monkeypatch):
+    """A second-pass winner cannot inherit the old rare/fine narrative."""
+
+    import trufflepig.cancer_type_evidence as cte_module
+    from trufflepig.brief import _cancer_type_basis_line
+
+    selected = {
+        "cancer_type": "BLCA",
+        "reference_cancer_type": "BLCA",
+        "expression_reference_cancer_type": "BLCA",
+        "selected_by": "entity_evidence_consensus",
+        "evidence_sources": ["residual_identity", "lineage_panel"],
+    }
+    monkeypatch.setattr(
+        cte_module,
+        "select_report_scope_from_evidence",
+        lambda *args, **kwargs: {
+            "selected": selected,
+            "primary_expression_context": {"cancer_type": "BLCA"},
+        },
+    )
+    stale_rare = {"cancer_type": "NUTM", "surrogate": "NUTM1"}
+    stale_fine = {
+        "cancer_type": "CHOL",
+        "reference_cancer_type": "CHOL",
+    }
+    analysis = _analysis(("CHOL", 1.0), ("BLCA", 0.95))
+    analysis.update(
+        {
+            "rare_report_scope_inference": stale_rare,
+            "fine_report_scope_inference": stale_fine,
+            "cancer_type_source": "auto-detected",
+        }
+    )
+
+    (
+        _evidence,
+        returned_selection,
+        report_code,
+        rare_inference,
+        fine_inference,
+    ) = _apply_cancer_type_evidence(
+        analysis,
+        _empty_expression_frame(),
+        rna_inferred_cancer_type="CHOL",
+        fusion_scope_inference=None,
+        report_scope_cancer_type="CHOL",
+        rare_scope_inference=stale_rare,
+        fine_scope_inference=stale_fine,
+        residual_identity_evidence={"status": "candidate", "candidate_code": "BLCA"},
+    )
+
+    assert rare_inference is None
+    assert fine_inference is None
+    assert "rare_report_scope_inference" not in analysis
+    assert "fine_report_scope_inference" not in analysis
+    _propagate_report_scope_selection(
+        analysis,
+        _empty_expression_frame(),
+        report_scope_cancer_type=report_code,
+        selected_scope=returned_selection,
+        rna_inferred_cancer_type="CHOL",
+        rare_scope_inference=rare_inference,
+        fine_scope_inference=fine_inference,
+    )
+
+    assert "rare_report_scope_inference" not in analysis
+    assert "fine_report_scope_inference" not in analysis
+    basis = _cancer_type_basis_line(analysis, "BLCA")
+    assert "RNA-inferred hypothesis" in basis
+    assert "rare-cancer hypothesis" not in basis
+    assert "fine label" not in basis
+
+
+def test_report_scope_decomposition_refit_uses_final_purity_and_site(monkeypatch):
+    """The shared fit entry point consumes synchronized post-selection state."""
+
+    from types import SimpleNamespace
+
+    import trufflepig.main as main_module
+
+    stale_purity = {"cancer_type": "CHOL", "overall_estimate": 0.25}
+    final_purity = {"cancer_type": "BLCA", "overall_estimate": 0.60}
+    analysis = {
+        "cancer_type": "BLCA",
+        "expression_reference_cancer_type": "BLCA",
+        "purity": final_purity,
+        "candidate_trace": [
+            {"code": "CHOL", "purity_result": stale_purity},
+            {"code": "BLCA", "purity_result": final_purity},
+        ],
+    }
+    captured = {}
+
+    def fake_decompose(_df_expr, **kwargs):
+        captured.update(kwargs)
+        final_row = next(
+            row for row in kwargs["candidate_rows"] if row["code"] == "BLCA"
+        )
+        return [
+            SimpleNamespace(
+                cancer_type="BLCA",
+                purity_result=final_row["purity_result"],
+                fractions={"tumor": 0.60, "hepatocyte": 0.40},
+            )
+        ]
+
+    monkeypatch.setattr(main_module, "decompose_sample", fake_decompose)
+    monkeypatch.setattr(
+        main_module,
+        "_has_operational_analysis_reference",
+        lambda _code: True,
+    )
+
+    results, candidate_codes, context = _fit_report_scope_decompositions(
+        _empty_expression_frame(),
+        analysis,
+        report_code="BLCA",
+        reference_code="BLCA",
+        sample_mode="solid",
+        tumor_context="auto",
+        explicit_site_hint=None,
+        inferred_site_context={"site": "liver"},
+        template_overrides=(),
+        sample_context={"degradation_severity": "none"},
+    )
+
+    assert results[0].purity_result is final_purity
+    assert candidate_codes == ["BLCA", "CHOL"]
+    assert captured["cancer_types"] == ["BLCA", "CHOL"]
+    assert captured["candidate_rows"] is analysis["candidate_trace"]
+    assert captured["site_hint"] == "liver"
+    assert captured["tumor_context"] == "met"
+    assert context == {"site_hint": "liver", "tumor_context": "met"}
 
 
 def test_residual_identity_stays_within_the_decomposition_regime():

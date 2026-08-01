@@ -14,20 +14,17 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    # >=5.23.45: pairwise cancer-type discriminators carry an explicit
-    # hypothesis-only, contradiction-safe promotion policy. Trufflepig consumes
-    # that policy instead of treating pairwise evidence as a global classifier.
-    "pirlygenes>=5.23.45,<6",
+    # >=5.23.46: pairwise cancer-type discriminators carry the explicit
+    # hypothesis-only promotion policy and pin the compact oncoref 1.8.169
+    # acquisition/provenance API used by trufflepig's reference wrapper.
+    "pirlygenes>=5.23.46,<6",
     # oncoref is the canonical cancer-type ontology + normalization source (imported
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    # >=1.8.136: compact all-source availability lets raw TPM read only the
-    # requested per-source shards instead of materializing the 5M-row union.
-    # Newer oncoref provenance releases remain forward-tested, but pirlygenes'
-    # exact oncoref pin must be updated before trufflepig can raise this floor
-    # (pirl-unc/pirlygenes#599).
-    "oncoref>=1.8.136,<2",
+    # >=1.8.169: compact all-source availability and acquisition provenance are
+    # aligned with pirlygenes 5.23.46 without materializing the 5M-row union.
+    "oncoref>=1.8.169,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
     # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype

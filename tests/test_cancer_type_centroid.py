@@ -225,7 +225,7 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
 
 
 def test_member_union_ancestry_keeps_resolved_child_above_parent():
-    """A confident LUAD branch may promote NSCLC, but must not broaden to it."""
+    """A confident LUAD profile must not broaden to an aggregate NSCLC label."""
     from trufflepig.tumor_purity import rank_cancer_type_candidates
 
     rows = rank_cancer_type_candidates(
@@ -239,16 +239,8 @@ def test_member_union_ancestry_keeps_resolved_child_above_parent():
     assert [row["code"] for row in rows].index("LUAD") < [
         row["code"] for row in rows
     ].index("NSCLC")
-    assert by_code["LUAD"]["centroid_member_union_branch_promoted"] is True
-    assert by_code["NSCLC"]["centroid_member_union_branch_promoted"] is True
-    assert by_code["LUAD"]["centroid_member_union_branch_role"] == "resolved_child"
-    assert by_code["NSCLC"]["centroid_member_union_branch_role"] == "aggregate_parent"
-    assert by_code["LUAD"]["support_rank_tier"] > by_code["NSCLC"][
-        "support_rank_tier"
-    ]
     assert by_code["LUAD"]["support_fraction_of_top"] == pytest.approx(1.0)
     assert by_code["NSCLC"]["support_fraction_of_top"] < 1.0
-    assert by_code["NSCLC"]["winning_subtype"] == "LUAD"
 
 
 def test_ranker_does_not_hallmark_veto_on_unconfident_compartment(monkeypatch):

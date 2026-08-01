@@ -7569,12 +7569,13 @@ def _add_local_expression_reference_features(
                 )
             )
         primary_tissue = _clean(panel.get("primary_tissue")).lower()
+        coherent_code_marker_program = bool(
+            code_marker_coherence
+            and _marker_coherence_selection_grade(code_marker_coherence)
+            and _marker_coherence_unexpected_low_count(code_marker_coherence) == 0
+        )
         marker_program_allows_signature_anchor = bool(
-            not code_marker_coherence
-            or (
-                _marker_coherence_selection_grade(code_marker_coherence)
-                and _marker_coherence_unexpected_low_count(code_marker_coherence) == 0
-            )
+            not code_marker_coherence or coherent_code_marker_program
         )
         signature_anchor_support = (
             0.0
@@ -7636,6 +7637,25 @@ def _add_local_expression_reference_features(
             context_is_top=context_is_top,
         )
         blockers: list[str] = []
+        competing_composition_code = next(
+            (
+                candidate_code
+                for candidate_code, candidate in sorted(hypotheses.items())
+                if candidate_code != code
+                and candidate.can_select_report_label
+                and candidate.selected_by == "coarse_composition_reference"
+                and _broad_lineage_for_code(candidate_code)
+                != _broad_lineage_for_code(code)
+            ),
+            "",
+        )
+        if competing_composition_code and not coherent_code_marker_program:
+            blockers.append(
+                "cross-lineage exact-reference refinement conflicts with an "
+                "independently selectable composition identity "
+                f"({competing_composition_code}) and lacks a coherent "
+                "code-specific expected-high/expected-low marker program"
+            )
         if len(markers) < 2 and parent_code:
             blockers.append(
                 "a single-gene child expression reference is contextual "
@@ -7959,6 +7979,12 @@ def _add_local_expression_reference_features(
                     marker_coherence_supported_reference
                 ),
                 "local_reference_signature_anchored": bool(signature_anchored),
+                "local_reference_competing_composition_code": (
+                    competing_composition_code
+                ),
+                "local_reference_coherent_code_marker_program": bool(
+                    coherent_code_marker_program
+                ),
                 "local_reference_signature_anchor_support": round(
                     float(signature_anchor_support),
                     4,

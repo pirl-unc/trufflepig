@@ -3820,7 +3820,9 @@ def _finalize_candidate_rank_support(rows, *, compartment_restricted: bool):
     for row in rows:
         raw = float(row.get("support_score") or 0.0)
         branch_role = row.get("centroid_member_union_branch_role")
-        if branch_role == "resolved_child":
+        if row.get("hierarchy_conflict_parent_abstention"):
+            rank_tier = 4
+        elif branch_role == "resolved_child":
             rank_tier = 3
         elif (
             branch_role == "aggregate_parent"
@@ -4480,6 +4482,48 @@ def rank_cancer_type_candidates(
                 row["winning_subtype"] = resolve_fine_subtype(
                     row["code"], cen_corr, current_subtype=row.get("winning_subtype")
                 )
+
+            # If the leading leaf, its marker/lineage subtype, and the
+            # whole-profile centroid resolve to three different descendants,
+            # the evidence does not support any one leaf. Prefer their nearest
+            # shared ancestor when that parent is already in the candidate set.
+            # This is an ontology abstention, not a score threshold: it handles
+            # discordant sibling programs across cancer families without
+            # inventing sample-specific rescue parameters.
+            if rows and cen_top_code:
+                from .analyze.cancer_type_context import nearest_common_ancestor
+
+                leading = rows[0]
+                identity_codes = tuple(
+                    dict.fromkeys(
+                        str(code or "").strip()
+                        for code in (
+                            leading.get("code"),
+                            leading.get("winning_subtype"),
+                            cen_top_code,
+                        )
+                        if str(code or "").strip()
+                    )
+                )
+                if len(identity_codes) == 3:
+                    common = nearest_common_ancestor(
+                        identity_codes[0], identity_codes[1]
+                    )
+                    common = nearest_common_ancestor(common, identity_codes[2])
+                    parent_row = next(
+                        (
+                            row
+                            for row in rows
+                            if row.get("code") == common
+                            and common != leading.get("code")
+                        ),
+                        None,
+                    )
+                    if parent_row is not None:
+                        parent_row["hierarchy_conflict_parent_abstention"] = True
+                        parent_row["hierarchy_conflicting_child_codes"] = list(
+                            identity_codes
+                        )
 
             # A ``member_union`` parent is the scoreable representation of its
             # children, not a competing biological entity. When the confident

@@ -3388,6 +3388,102 @@ def test_composition_reference_beats_status_child_when_broad_fit_is_ambiguous(mo
     assert brca["local_reference_conflicting_coarse_reference"]["code"] == "BLCA"
 
 
+def test_cross_lineage_local_reference_yields_to_coherent_composition_identity(
+    monkeypatch,
+):
+    """A correlated exact cohort cannot outrank contradictory marker biology."""
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ACTA2", "TFE3", "MITF", "MLANA", "PMEL")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_PEC": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "family": "sarcoma",
+                "primary_tissue": "soft_tissue",
+                "source_cohort": "PEC_TEST",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "curated",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_marker_coherence",
+        lambda code, _sample: {
+            "code": code,
+            "status": "mixed",
+            "detected": 5,
+            "total": 5,
+            "required_for_consistent": 3,
+            "detected_fraction": 1.0,
+            "unexpected_low_detected": 4,
+            "unexpected_low_genes": ["KRT8", "EPCAM", "KRT18", "PTPRC"],
+        }
+        if code == "SARC_PEC"
+        else {},
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_expression_classifier_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_learned_hierarchy_candidate_features",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda _sample: (pd.Series(dtype=float), False),
+    )
+    signal = SimpleNamespace(
+        cancer_hint="tumor-consistent",
+        top_tcga_cohorts=[
+            ("PRAD_TPM", 0.79),
+            ("BRCA_TPM", 0.78),
+            ("SARC_TPM", 0.77),
+        ],
+        type_specific_cohort="PRAD_TPM",
+        type_specific_hits=[
+            ("KLK3", 200.0),
+            ("KLK2", 100.0),
+            ("NKX3-1", 80.0),
+        ],
+    )
+
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 100.0 for gene in markers}),
+        {
+            "cancer_type": "SARC",
+            "fit_quality": {"label": "ambiguous"},
+            "healthy_vs_tumor": signal,
+            "candidate_trace": [
+                {"code": "SARC", "support_fraction_of_top": 1.0},
+                {"code": "PRAD", "support_fraction_of_top": 0.80},
+            ],
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "PRAD"
+    assert result["selected"]["selected_by"] == "coarse_composition_reference"
+    pecoma = next(
+        row for row in result["evidence"] if row["cancer_type"] == "SARC_PEC"
+    )
+    assert pecoma["can_select_report_label"] is False
+    assert pecoma["local_reference_competing_composition_code"] == "PRAD"
+    assert any(
+        "independently selectable composition identity" in reason
+        for reason in pecoma["blocking_reasons"]
+    )
+
+
 def test_background_like_top_label_can_yield_to_supported_tumor_label():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 

@@ -246,7 +246,7 @@ def test_context_uses_documented_fallback_for_noncohort_scope():
     assert context.code_for("report") == "NET_NONPANCREATIC"
     assert not context.report_has_expression_ref
     assert context.code_for("expression") == "NET"
-    assert context.best_expression_source_kind == "observed_pan_cancer_reference"
+    assert context.best_expression_source_kind == "computed_member_union_reference"
     assert context.best_expression_fallback_reason == "registry parent"
     assert not context.best_expression_direct
 
@@ -254,13 +254,25 @@ def test_context_uses_documented_fallback_for_noncohort_scope():
 def test_grouping_uses_its_typed_member_union_reference():
     # Groupings with member-union references are direct classifier targets; they
     # no longer borrow one child cohort as a temporary stand-in.
-    for code in ("BTC", "SGC", "NET"):
+    for code in ("CRC", "NET"):
         record = effective_expression_reference(code)
         assert record is not None
         assert record.reference_code == code
-        assert record.source_kind == "observed_pan_cancer_reference"
+        assert record.source_kind == "computed_member_union_reference"
         assert record.fallback_reason == ""
         assert record.direct
+
+
+def test_unavailable_member_union_does_not_claim_a_direct_reference():
+    # The registry can describe an intended member union before the installed
+    # artifact can load it. In that case retain the safe, in-branch member
+    # fallback instead of advertising an unavailable direct reference.
+    for code in ("BTC", "SGC"):
+        record = effective_expression_reference(code)
+        assert record is not None
+        assert record.reference_code != code
+        assert record.fallback_reason == "member cohort"
+        assert not record.direct
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():
@@ -408,8 +420,9 @@ def test_expression_reference_options_canonicalize_source_codes():
             # member-union parent supplies a deterministic broad reference.
             "NET_NONPANCREATIC",
             "NET",
-            "observed_pan_cancer_reference",
-            "pan_cancer",
+            "computed_member_union_reference",
+            "DRMETRICS_ALCALA_2019_LNEN + GSE118014_ALVAREZ_2018 + "
+            "GSE98894_ALVAREZ_2018_NET",
             "ensembl_symbol",
             False,
             "registry parent",

@@ -844,14 +844,21 @@ def cancer_type_context_from_analysis(
         report_code, include_fallback=False
     )
     # An unrelated broad fallback must not remain the active analysis context
-    # when the resolved report entity has its own pan-cancer reference. The
-    # old code remains in ``requested_reference_code`` and in the evidence
-    # differential, but no longer controls decomposition or target ranges.
+    # when the resolved report entity has its own broad classifier reference.
+    # This includes physical pan-cancer columns and computed member unions, but
+    # not a fine observed-bulk cohort such as NUTM that still needs its LUSC
+    # context for broad decomposition. The old code remains in
+    # ``requested_reference_code`` and in the evidence differential, but no
+    # longer controls decomposition or target ranges.
     if (
         cancer_type_tree_relationship(report_code, reference_code)
         == "independent"
         and any(
-            record.source_kind == "observed_pan_cancer_reference"
+            record.source_kind
+            in {
+                "observed_pan_cancer_reference",
+                "computed_member_union_reference",
+            }
             for record in report_direct_options
         )
     ):

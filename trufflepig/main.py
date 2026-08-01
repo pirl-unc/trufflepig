@@ -2672,36 +2672,6 @@ def _analyze_body(run: AnalyzeRun):
     composition_png = None
     components_png = None
     candidates_png = None
-    candidate_codes = []
-    candidate_trace_codes = [
-        str(row.get("code") or "").strip()
-        for row in analysis.get("candidate_trace", [])
-        if row.get("code")
-    ]
-    expression_reference_code = str(
-        analysis.get("expression_reference_cancer_type") or ""
-    ).strip()
-    scoped_decomposition_codes = [reference_cancer_code]
-    for code in (expression_reference_code, cancer_code):
-        code = str(code or "").strip()
-        if not code or code in scoped_decomposition_codes:
-            continue
-        if _is_defining_fusion_label(code):
-            continue
-        if _has_operational_analysis_reference(code):
-            scoped_decomposition_codes.append(code)
-    for code in (*scoped_decomposition_codes, *candidate_trace_codes):
-        code = str(code or "").strip()
-        if code and code not in candidate_codes:
-            candidate_codes.append(code)
-    decomposition_site_hint = site_hint or (
-        inferred_site_context.get("site") if inferred_site_context else None
-    )
-    decomposition_tumor_context = (
-        "met"
-        if inferred_site_context and tumor_context == "auto" and not template_overrides
-        else tumor_context
-    )
     candidate_tsv = (
         "%s-cancer-candidates.tsv" % prefix if prefix else "cancer-candidates.tsv"
     )
@@ -2756,20 +2726,21 @@ def _analyze_body(run: AnalyzeRun):
         ),
     )
 
-    complete_decomp_results = decompose_sample(
+    (
+        complete_decomp_results,
+        candidate_codes,
+        _decomposition_context,
+    ) = _fit_report_scope_decompositions(
         df_expr,
-        cancer_types=candidate_codes or [cancer_code],
-        top_k=None,
+        analysis,
+        report_code=cancer_code,
+        reference_code=reference_cancer_code,
         sample_mode=analysis["sample_mode"],
-        tumor_context=decomposition_tumor_context,
-        site_hint=decomposition_site_hint,
-        templates=template_overrides or None,
+        tumor_context=tumor_context,
+        explicit_site_hint=site_hint,
+        inferred_site_context=inferred_site_context,
+        template_overrides=template_overrides,
         sample_context=sample_context,
-        # #85: hand off the already-ranked candidate rows so
-        # decompose_sample reuses analyze_sample's work instead of
-        # re-ranking (which internally re-runs estimate_tumor_purity
-        # per candidate).
-        candidate_rows=analysis.get("candidate_trace"),
     )
     residual_identity_evidence = evaluate_residual_identity(
         complete_decomp_results,
@@ -2869,6 +2840,33 @@ def _analyze_body(run: AnalyzeRun):
                 analysis["inferred_site_context"] = inferred_site_context
             else:
                 analysis.pop("inferred_site_context", None)
+            # The first decomposition beam was fitted for the pre-adjudication
+            # entity, purity, and site context. Once residual evidence changes
+            # the report scope, rebuild the entire beam from the synchronized
+            # final state before purity reconciliation or target attribution.
+            (
+                complete_decomp_results,
+                candidate_codes,
+                refit_context,
+            ) = _fit_report_scope_decompositions(
+                df_expr,
+                analysis,
+                report_code=cancer_code,
+                reference_code=reference_cancer_code,
+                sample_mode=analysis["sample_mode"],
+                tumor_context=tumor_context,
+                explicit_site_hint=site_hint,
+                inferred_site_context=inferred_site_context,
+                template_overrides=template_overrides,
+                sample_context=sample_context,
+            )
+            analysis["post_residual_decomposition_refit"] = {
+                "previous_cancer_type": previous_cancer_code,
+                "report_cancer_type": cancer_code,
+                "reference_cancer_type": reference_cancer_code,
+                "candidate_codes": list(candidate_codes),
+                **refit_context,
+            }
             if sample_tpm_by_symbol is not None:
                 therapy_scores = score_therapy_signatures(
                     sample_tpm_by_symbol,
@@ -5246,6 +5244,69 @@ def _prioritize_report_compatible_decomposition(
     return [selected] + [row for row in decomp_results if row is not selected]
 
 
+def _fit_report_scope_decompositions(
+    df_expr,
+    analysis,
+    *,
+    report_code,
+    reference_code,
+    sample_mode,
+    tumor_context,
+    explicit_site_hint,
+    inferred_site_context,
+    template_overrides,
+    sample_context,
+):
+    """Fit the complete decomposition beam for one synchronized report scope."""
+
+    candidate_codes = []
+    reference_code = str(reference_code or "").strip()
+    report_code = str(report_code or "").strip()
+    if reference_code:
+        candidate_codes.append(reference_code)
+
+    expression_code = str(
+        analysis.get("expression_reference_cancer_type") or ""
+    ).strip()
+    for code in (expression_code, report_code):
+        if not code or code in candidate_codes or _is_defining_fusion_label(code):
+            continue
+        if _has_operational_analysis_reference(code):
+            candidate_codes.append(code)
+
+    for row in analysis.get("candidate_trace") or []:
+        code = str(row.get("code") or "").strip()
+        if code and code not in candidate_codes:
+            candidate_codes.append(code)
+
+    inferred_site_context = inferred_site_context or {}
+    decomposition_site_hint = explicit_site_hint or inferred_site_context.get("site")
+    decomposition_tumor_context = (
+        "met"
+        if inferred_site_context
+        and tumor_context == "auto"
+        and not template_overrides
+        else tumor_context
+    )
+    results = decompose_sample(
+        df_expr,
+        cancer_types=candidate_codes or [report_code],
+        top_k=None,
+        sample_mode=sample_mode,
+        tumor_context=decomposition_tumor_context,
+        site_hint=decomposition_site_hint,
+        templates=template_overrides or None,
+        sample_context=sample_context,
+        # Reuse the ranker trace, including the final entity's recomputed purity.
+        # Missing explicitly requested entities are filled by decompose_sample.
+        candidate_rows=analysis.get("candidate_trace"),
+    )
+    return results, candidate_codes, {
+        "site_hint": decomposition_site_hint,
+        "tumor_context": decomposition_tumor_context,
+    }
+
+
 def _attach_lineage_panel_decomposition_attribution(
     analysis,
     decomp_results,
@@ -5906,8 +5967,12 @@ def _propagate_report_scope_selection(
         analysis["fusion_report_scope_inference"] = fusion_scope_inference
     if rare_scope_inference:
         analysis["rare_report_scope_inference"] = rare_scope_inference
+    else:
+        analysis.pop("rare_report_scope_inference", None)
     if fine_scope_inference:
         analysis["fine_report_scope_inference"] = fine_scope_inference
+    else:
+        analysis.pop("fine_report_scope_inference", None)
 
 
 def _synchronize_cancer_type_context(analysis, *, supplied_cancer_type):
@@ -6022,6 +6087,13 @@ def _apply_cancer_type_evidence(
         analysis["lineage_panel_evidence"] = panel_evidence
     selected_scope = (cancer_type_evidence or {}).get("selected")
     if selected_scope and selected_scope.get("cancer_type"):
+        # These report-basis slots describe the current winning selector, not
+        # historical evidence. A second adjudication pass must not carry a
+        # superseded rare/fine rationale into the new entity's narrative.
+        rare_scope_inference = None
+        fine_scope_inference = None
+        analysis.pop("rare_report_scope_inference", None)
+        analysis.pop("fine_report_scope_inference", None)
         analysis["inferred_cancer_type"] = selected_scope["cancer_type"]
         analysis["expression_reference_cancer_type"] = (
             selected_scope.get("expression_reference_cancer_type")
