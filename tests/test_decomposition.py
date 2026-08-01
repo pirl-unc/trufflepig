@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from trufflepig.decomposition import (
+    decompose_identity_backgrounds,
     decompose_sample,
     evaluate_residual_identity,
     infer_sample_mode,
@@ -649,6 +650,97 @@ def test_soft_tissue_decomposition_separates_crc_from_smooth_muscle_host():
     )
     assert identity["status"] == "candidate"
     assert identity["candidate_code"] == "CRC"
+
+
+def test_candidate_independent_model_resolves_crc_from_muscularis():
+    """A normal-tissue screen, not a tentative tumor label, supplies the host.
+
+    DES remains a contradiction in bulk but becomes attributable to purified
+    smooth muscle, while the complete CRC positive/negative program remains in
+    the residual.
+    """
+
+    df = _mix_samples(
+        [
+            (0.4, _tcga_sample("COAD")),
+            (0.6, _normal_tissue_sample("smooth_muscle")),
+        ]
+    )
+    identity_models = decompose_identity_backgrounds(df, sample_mode="solid")
+
+    assert identity_models
+    assert all(row.model_role == "identity_background" for row in identity_models)
+    structural = next(
+        row
+        for row in identity_models
+        if row.template == "identity_structural_background"
+    )
+    assert "smooth_muscle_identity" in structural.fractions
+
+    evidence = evaluate_residual_identity(
+        identity_models,
+        candidate_codes=["COAD", "READ", "SARC_DDLPS"],
+        current_code="SARC_DDLPS",
+    )
+
+    assert evidence["status"] == "candidate"
+    assert evidence["candidate_code"] == "CRC"
+    assert evidence["panel_candidate_code"] == "CRC"
+    assert evidence["ontology_candidate_code"] == "CRC"
+    assert evidence["source_resolved_identity"] is True
+    assert "DES" in evidence["background_attributed_expected_low_genes"]
+
+
+def test_hollow_organ_identity_model_includes_mucosa_and_muscularis():
+    """Composition supplies both layers without consulting a cancer code."""
+
+    df = _mix_samples(
+        [
+            (0.3, _tcga_sample("COAD")),
+            (0.4, _normal_tissue_sample("colon")),
+            (0.3, _normal_tissue_sample("smooth_muscle")),
+        ]
+    )
+    identity_models = decompose_identity_backgrounds(df, sample_mode="solid")
+    structural = next(
+        row
+        for row in identity_models
+        if row.template == "identity_structural_background"
+    )
+
+    assert "smooth_muscle_identity" in structural.fractions
+    assert any(
+        component.startswith("matched_normal_")
+        for component in structural.fractions
+    )
+
+
+def test_identity_background_cannot_manufacture_crc_without_crc_program():
+    """Smooth muscle subtraction alone is not affirmative CRC evidence."""
+
+    identity_models = decompose_identity_backgrounds(
+        _normal_tissue_sample("smooth_muscle"),
+        sample_mode="solid",
+    )
+    evidence = evaluate_residual_identity(
+        identity_models,
+        candidate_codes=["COAD", "READ", "SARC_LMS"],
+        current_code="SARC_LMS",
+    )
+
+    assert evidence.get("candidate_code") != "CRC"
+    assert evidence.get("source_resolved_identity") is not True
+
+
+def test_identity_background_abstains_without_gene_identity_columns(caplog):
+    incomplete = pd.DataFrame({"value": [1.0]})
+
+    with caplog.at_level("WARNING"):
+        result = decompose_identity_backgrounds(incomplete, sample_mode="solid")
+
+    assert result == []
+    assert "Residual-identity decomposition skipped" in caplog.text
+    assert "gene identity columns are unavailable" in caplog.text
 
 
 def test_synthetic_low_purity_crc_purity_matches_expected_scale():

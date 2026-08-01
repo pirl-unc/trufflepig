@@ -88,6 +88,16 @@ class LineagePanel:
     ordinary ``high_markers`` still describe the phenotype within it.
     """
 
+    background_attribution_markers: tuple[tuple[str, str], ...] = ()
+    """Expected-low markers that can originate in a named normal component.
+
+    These remain ordinary low-marker violations in bulk RNA.  Residual-identity
+    analysis may clear one only when a candidate-independent decomposition
+    identifies the named component as the dominant fitted background.  This
+    keeps a host-tissue transcript from masquerading as tumor-cell evidence
+    without weakening the bulk panel or adding a sample-specific threshold.
+    """
+
     description: str = ""
     references: tuple[str, ...] = ()
 
@@ -927,6 +937,11 @@ _CRC_PANEL = LineagePanel(
         ("DES", 10.0),
     ),
     obligate=("CDX2",),
+    identity_marker_groups=(
+        ("SATB2", "CDX2"),
+        ("CDH17", "VIL1"),
+    ),
+    background_attribution_markers=(("DES", "smooth_muscle"),),
     description="Colorectal adenocarcinoma — shared colon/rectal identity",
     references=("WHO Classification of Tumours, Digestive System Tumours",),
     program_note=(

@@ -152,6 +152,11 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
     monkeypatch.setattr(decomposition, "decompose_sample", fake_decompose)
     monkeypatch.setattr(
         decomposition,
+        "decompose_identity_backgrounds",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        decomposition,
         "evaluate_residual_identity",
         fake_residual,
     )

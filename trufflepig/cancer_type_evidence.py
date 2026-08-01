@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -5538,6 +5538,8 @@ def _entity_consensus_candidate_beam(
             )
         _attach_entity_descendant_reference_support(hypotheses, candidate)
         _attach_entity_descendant_reference_support(hypotheses, selected)
+        _attach_entity_descendant_ranker_support(hypotheses, candidate)
+        _attach_entity_descendant_ranker_support(hypotheses, selected)
         consensus = _entity_evidence_consensus(
             candidate,
             selected,
@@ -5683,6 +5685,60 @@ def _attach_entity_descendant_reference_support(
     entity.details["entity_descendant_exact_reference_code"] = best_code
 
 
+def _attach_entity_descendant_ranker_support(
+    hypotheses: Mapping[str, CancerTypeEvidence],
+    entity: CancerTypeEvidence,
+) -> None:
+    """Roll observed child ranker evidence up to an aggregate report entity.
+
+    Grouping nodes such as CRC have loadable COAD/READ children rather than a
+    separate first-pass row.  Entity adjudication must compare the parent's
+    best observed child with the selected leaf, not treat the parent as having
+    zero signature evidence merely because its references live below it.
+    """
+
+    descendants = [
+        child
+        for child in hypotheses.values()
+        if child is not entity
+        and "pan_cancer_signature_ranker" in child.evidence_sources
+        and _code_has_registry_ancestor(
+            child.cancer_type,
+            entity.cancer_type,
+        )
+    ]
+    if not descendants:
+        return
+    best = max(
+        descendants,
+        key=lambda row: (
+            _raw_signature_support(row),
+            row.broad_rna_support,
+            -row.broad_rna_rank,
+        ),
+    )
+    best_signature = _raw_signature_support(best)
+    entity.broad_rna_support = max(
+        entity.broad_rna_support,
+        max(row.broad_rna_support for row in descendants),
+    )
+    positive_ranks = [row.broad_rna_rank for row in descendants if row.broad_rna_rank]
+    if positive_ranks:
+        rank_candidates = list(positive_ranks)
+        if entity.broad_rna_rank:
+            rank_candidates.append(entity.broad_rna_rank)
+        entity.broad_rna_rank = min(rank_candidates)
+    if "signature_score" not in entity.details and best_signature > 0:
+        entity.details["signature_score"] = best_signature
+    entity.details["entity_descendant_pan_cancer_signature_code"] = (
+        best.cancer_type
+    )
+    entity.details["entity_descendant_pan_cancer_signature_score"] = round(
+        best_signature,
+        4,
+    )
+
+
 def _entity_marker_program_support(
     hypothesis: CancerTypeEvidence,
     sample_tpm_by_symbol: Mapping[str, float] | None,
@@ -5813,6 +5869,70 @@ def _residual_identity_is_structurally_invariant(
         and _safe_int(model.get("realizations"), 0) > 0
         for model in models
     )
+
+
+def _residual_identity_is_source_resolved(
+    residual_identity_evidence: Mapping[str, Any] | None,
+    cancer_code: str,
+) -> bool:
+    """Whether decomposition resolved a complete tumor program from host RNA."""
+
+    if not isinstance(residual_identity_evidence, Mapping):
+        return False
+    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
+    return bool(
+        residual_identity_evidence.get("source_resolved_identity")
+        and residual_identity_evidence.get("adjudication_eligible") is not False
+        and _same_registry_branch(residual_code, cancer_code)
+        and _residual_identity_is_structurally_invariant(
+            residual_identity_evidence
+        )
+    )
+
+
+def _source_resolved_identity_corroborators(
+    candidate: CancerTypeEvidence,
+    selected: CancerTypeEvidence,
+    hierarchy_details: Mapping[str, Any],
+    axes: Iterable[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """Independent bulk views that agree with a source-resolved residual.
+
+    The residual object already integrates the curated positive/negative
+    program with candidate-independent background subtraction, so the bulk
+    marker axis is intentionally not counted again.  A separate whole-profile,
+    reference, composition, or learned-family result must still agree before a
+    cross-entity label can change.
+    """
+
+    corroborators = [
+        _clean(axis.get("axis"))
+        for axis in axes
+        if _clean(axis.get("preference")) == "candidate"
+        and _clean(axis.get("axis"))
+        not in {
+            _ENTITY_CONSENSUS_MARKER_AXIS,
+            _ENTITY_CONSENSUS_RESIDUAL_AXIS,
+        }
+    ]
+    top_family = _clean(
+        hierarchy_details.get("learned_expression_top_family_label")
+    )
+    if top_family:
+        try:
+            from .expression_classifier import _learned_family_for_code
+        except ImportError:
+            candidate_family = selected_family = ""
+        else:
+            candidate_family = _clean(
+                _learned_family_for_code(candidate.cancer_type)
+            )
+            selected_family = _clean(
+                _learned_family_for_code(selected.cancer_type)
+            )
+        if top_family == candidate_family and top_family != selected_family:
+            corroborators.append("learned_family_leader")
+    return tuple(dict.fromkeys(corroborators))
 
 
 def _qualified_residual_identity_candidate(
@@ -6050,12 +6170,39 @@ def _entity_evidence_consensus(
         if candidate_has_learned_vote
         else _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
     )
-    decisive_candidate = bool(
+    majority_decisive_candidate = bool(
         candidate_has_originating_axis
         and candidate_votes >= _ENTITY_CONSENSUS_MIN_SUPPORTING_AXES
         and candidate_nonlearned_votes >= required_nonlearned_votes
         and candidate_votes * 2 > available_axis_count
         and candidate_advantage > 0
+    )
+    source_resolved_identity = _residual_identity_is_source_resolved(
+        residual_identity_evidence,
+        candidate.cancer_type,
+    )
+    source_resolved_corroborators = (
+        _source_resolved_identity_corroborators(
+            candidate,
+            selected,
+            hierarchy_details,
+            axes,
+        )
+        if source_resolved_identity and candidate_has_residual_vote
+        else ()
+    )
+    # This is not a plurality exception.  A source-resolved residual is a
+    # compound identity selector: every positive/negative tumor program agreed
+    # across a candidate-independent background beam, and a separate bulk view
+    # must corroborate it.  It is therefore adjudicated alongside, rather than
+    # pretending to be several independent votes inside, the majority rule.
+    source_resolved_decisive_candidate = bool(
+        source_resolved_identity
+        and candidate_has_residual_vote
+        and source_resolved_corroborators
+    )
+    decisive_candidate = bool(
+        majority_decisive_candidate or source_resolved_decisive_candidate
     )
     return {
         "schema_version": 1,
@@ -6069,11 +6216,21 @@ def _entity_evidence_consensus(
         "candidate_advantage": round(float(candidate_advantage), 4),
         "candidate_has_learned_vote": candidate_has_learned_vote,
         "candidate_has_residual_vote": candidate_has_residual_vote,
+        "majority_decisive_candidate": majority_decisive_candidate,
+        "source_resolved_identity": source_resolved_identity,
+        "source_resolved_identity_decisive": (
+            source_resolved_decisive_candidate
+        ),
+        "source_resolved_identity_corroborators": list(
+            source_resolved_corroborators
+        ),
         "decisive_candidate": decisive_candidate,
         "conflicted": bool(candidate_votes > 0 and selected_votes > 0),
         "decision_rule": (
             "a learned-view or invariant-residual entity plus independent "
-            "evidence groups; candidate must win the available-axis majority"
+            "evidence groups must win the available-axis majority; a complete "
+            "source-resolved residual may instead select only with separate "
+            "bulk corroboration"
         ),
     }
 
@@ -9631,6 +9788,62 @@ def _fallback_context_selected(
                     blocking_reasons=(),
                     priority=(4, 1.0 + alternative.broad_rna_support),
                 )
+                return abstention
+    # The ranker already exposes calibrated ordinal tiers.  If several sibling
+    # leaves occupy the same leading tier and no selector could admit one of
+    # them, the evidence supports their parent, not the alphabetically or
+    # numerically first leaf.  This is an ontology abstention, not a new score
+    # threshold, and prevents false leaf precision such as a three-way tied
+    # liposarcoma result becoming DDLPS by fallback alone.
+    top_tier = hypothesis.details.get("support_rank_tier")
+    parent_chain = _registry_parent_chain(top_code)
+    parent_code = parent_chain[0] if parent_chain else ""
+    if top_tier is not None and parent_code:
+        tied_siblings = [
+            row
+            for row in hypotheses.values()
+            if row.cancer_type != top_code
+            and "pan_cancer_signature_ranker" in row.evidence_sources
+            and (_registry_parent_chain(row.cancer_type) or ("",))[0]
+            == parent_code
+            and row.details.get("support_rank_tier") == top_tier
+        ]
+        parent_row = _registry_row_for_code(parent_code) or {}
+        if tied_siblings and _safe_bool(
+            parent_row.get("is_classification_target"),
+            default=True,
+        ):
+            abstention = _hypothesis(hypotheses, parent_code)
+            abstention.add_source("entity_evidence_consensus")
+            abstention.expression_reference_cancer_type = parent_code
+            abstention.reference_cancer_type = parent_code
+            abstention.broad_rna_support = max(
+                [hypothesis.broad_rna_support]
+                + [row.broad_rna_support for row in tied_siblings]
+            )
+            abstention.broad_rna_rank = hypothesis.broad_rna_rank
+            tied_codes = [top_code, *(row.cancer_type for row in tied_siblings)]
+            abstention.details["fallback_context_adjudication"] = {
+                "mode": "tied_sibling_parent_abstention",
+                "abstention_code": parent_code,
+                "support_rank_tier": top_tier,
+                "tied_sibling_codes": tied_codes,
+            }
+            abstention.details["entity_consensus_adjudication_mode"] = (
+                "tied_sibling_parent_abstention"
+            )
+            abstention.basis = (
+                f"no tumor-identity selector resolved the leading tied siblings "
+                f"{', '.join(tied_codes)}; report scope abstained to their "
+                f"shared parent {parent_code}"
+            )
+            abstention.consider_for_report_label(
+                selected_by="entity_evidence_consensus",
+                can_select=True,
+                blocking_reasons=(),
+                priority=(4, 1.0 + abstention.broad_rna_support),
+            )
+            if abstention.can_select_report_label:
                 return abstention
     hypothesis.report_label_candidate = True
     # This is a BLOCKED fallback context row (no label was selectable) admitted via the

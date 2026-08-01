@@ -477,6 +477,68 @@ _CANCER_NORMAL_TISSUES = {
 }
 
 
+def _member_union_reference_codes(cancer_code, available_columns):
+    """Physical child cohorts that jointly represent a member-union node.
+
+    Grouping nodes such as ``CRC`` are valid report entities but do not have a
+    fabricated ``CRC_TPM`` column: their expression reference is the union of
+    the real member cohorts (COAD and READ).  Keep that distinction explicit
+    and derive the aggregate only for registry nodes typed ``member_union``.
+    Direct physical children are preferred so nested molecular subtypes do not
+    count the same samples twice; recursive descendants are only a fallback for
+    a member-union whose direct children are themselves groupings.
+    """
+    try:
+        from .cancer_ontology import cancer_type_registry, cancer_type_subtypes_of
+
+        registry = cancer_type_registry().set_index("code", drop=False)
+        if cancer_code not in registry.index:
+            return ()
+        if str(registry.loc[cancer_code].get("reference_source") or "") != "member_union":
+            return ()
+
+        def physical_members(recursive):
+            members = []
+            for code in cancer_type_subtypes_of(cancer_code, recursive=recursive):
+                column = f"{code}_TPM"
+                if column not in available_columns or code not in registry.index:
+                    continue
+                source = str(registry.loc[code].get("reference_source") or "")
+                if source != "member_union":
+                    members.append(str(code))
+            return tuple(sorted(set(members)))
+
+        return physical_members(False) or physical_members(True)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return ()
+
+
+def _member_union_reference(cancer_code, ref_by_sym):
+    """Equal-cohort aggregate expression and purity for a member-union node.
+
+    The reference columns are cohort medians, not sample-level observations, so
+    an equal-cohort median is the neutral parent representation: it does not let
+    the larger child cohort silently turn a parent-level call into that leaf.
+    """
+    members = _member_union_reference_codes(cancer_code, ref_by_sym.columns)
+    if not members:
+        return None
+    columns = [f"{code}_TPM" for code in members]
+    expression = ref_by_sym[columns].astype(float).median(axis=1, skipna=True)
+    purities = [
+        float(TCGA_MEDIAN_PURITY[code])
+        for code in members
+        if code in TCGA_MEDIAN_PURITY
+    ]
+    return {
+        "member_codes": members,
+        "expression": expression,
+        "reference_purity": (
+            float(np.median(purities)) if purities else _DEFAULT_MEDIAN_PURITY
+        ),
+    }
+
+
 # -------------------- helpers --------------------
 
 
@@ -1280,8 +1342,18 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     z_matrix = cached["z_matrix"]
 
     cancer_col = f"{cancer_code}_TPM"
-    if cancer_col not in expr_matrix.columns:
-        return None
+    member_codes = ()
+    if cancer_col in expr_matrix.columns:
+        cancer_expression = expr_matrix[cancer_col]
+        z_scores = z_matrix[cancer_col]
+    else:
+        member_union = _member_union_reference(cancer_code, ref_by_sym)
+        if member_union is None:
+            return None
+        member_codes = member_union["member_codes"]
+        member_cols = [f"{code}_TPM" for code in member_codes]
+        cancer_expression = expr_matrix[member_cols].median(axis=1, skipna=True)
+        z_scores = z_matrix[member_cols].median(axis=1, skipna=True)
 
     ntpm_cols = [c for c in ref_by_sym.columns if c.endswith("_nTPM")]
     ntpm_nonrepro = [
@@ -1291,6 +1363,11 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
     ]
 
     matched_tissues = list(_CANCER_NORMAL_TISSUES.get(cancer_code, []))
+    for member_code in member_codes:
+        matched_tissues.extend(_CANCER_NORMAL_TISSUES.get(member_code, []))
+        member_tissue = CANCER_TO_TISSUE.get(member_code)
+        if member_tissue:
+            matched_tissues.append(member_tissue)
     tissue = CANCER_TO_TISSUE.get(cancer_code)
     if tissue and tissue not in matched_tissues:
         matched_tissues.append(tissue)
@@ -1304,9 +1381,6 @@ def _panel_reference_frames(cancer_code, ref_by_sym=None):
         for t in sorted(_HOST_SITE_BACKGROUND_TISSUES)
         if f"{t}_nTPM" in ref_by_sym.columns
     ]
-
-    z_scores = z_matrix[cancer_col]
-    cancer_expression = expr_matrix[cancer_col]
 
     def _row_max(cols):
         if not cols:
@@ -1677,7 +1751,7 @@ _BROAD_PURITY_REFERENCE_FALLBACKS = {
     "SARC_OS": "SARC",
 }
 _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES = frozenset(
-    {"pan_cancer", "parent_pan_cancer"}
+    {"pan_cancer", "parent_pan_cancer", "member_union_pan_cancer"}
 )
 
 
@@ -1719,6 +1793,16 @@ def _resolve_purity_reference(cancer_code, ref_by_sym):
             "reference_expression_source": "pan_cancer",
             "reference_purity": TCGA_MEDIAN_PURITY.get(cancer_code, _DEFAULT_MEDIAN_PURITY),
             "ref_expr": ref_by_sym[cancer_col].to_dict(),
+        }
+
+    member_union = _member_union_reference(cancer_code, ref_by_sym)
+    if member_union is not None:
+        return {
+            "reference_cancer_code": cancer_code,
+            "reference_expression_source": "member_union_pan_cancer",
+            "reference_purity": member_union["reference_purity"],
+            "reference_member_codes": member_union["member_codes"],
+            "ref_expr": member_union["expression"].to_dict(),
         }
 
     local_ref_expr = _subtype_tumor_tpm_lookup(cancer_code)
@@ -2205,6 +2289,7 @@ def estimate_tumor_purity(df_gene_expr, cancer_type=None, *, include_decompositi
     return {
         "cancer_type": cancer_code,
         "reference_cancer_type": reference_cancer_code,
+        "reference_member_codes": reference_context.get("reference_member_codes"),
         "cancer_type_score": cancer_score,
         "purity_consistency": purity_consistency,
         "tissue": CANCER_TO_TISSUE.get(reference_cancer_code),

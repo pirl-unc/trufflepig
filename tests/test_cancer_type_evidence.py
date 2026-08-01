@@ -1692,6 +1692,72 @@ def test_invariant_residual_consensus_does_not_require_a_learned_entity():
     assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
 
 
+def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
+    """Host-resolved identity is compound evidence, not duplicated marker votes."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC_DDLPS", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(
+        {
+            "learned_expression_top_family_label": "CRC",
+            "learned_expression_top_entity_label": "SARC_DDLPS",
+            "learned_expression_top_entity_probability": 0.40,
+        }
+    )
+    candidate = CancerTypeEvidence(
+        cancer_type="CRC",
+        broad_rna_support=0.79,
+        details={"signature_score": 0.79},
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC_DDLPS": selected, "CRC": candidate},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": "CRC",
+            "ontology_candidate_code": "CRC",
+            "decision_basis": "panel_and_ontology",
+            "source_resolved_identity": True,
+            "current_code": "SARC_DDLPS",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 1,
+                    "template": "identity_background",
+                },
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 1,
+                    "template": "identity_structural_background",
+                },
+            ],
+        },
+    )
+
+    assert result is candidate
+    assert result.selected_by == "entity_evidence_consensus"
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["source_resolved_identity_corroborators"] == [
+        "learned_family_leader"
+    ]
+    # The CRC panel is already part of residual identity and must not appear as
+    # a second independent marker vote.
+    marker_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "curated_marker_program"
+    )
+    assert marker_axis["available"] is False
+
+
 def test_residual_identity_preserves_explicit_entity_blockers():
     """Even a full RNA majority cannot erase a persistent safety veto."""
 
@@ -8444,6 +8510,54 @@ def test_fallback_context_selection_resets_stale_selectable_selector():
     assert result.label_basis == "pan_cancer_signature_ranker"
     # The serialized selection the caller reads must carry the ranker so it is not routed to scope.
     assert result.public_dict()["selected_by"] == "pan_cancer_signature_ranker"
+
+
+def test_fallback_context_collapses_unresolved_tied_liposarcoma_children():
+    """A blocked ordinal tie supports the parent, not arbitrary leaf precision."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _fallback_context_selected,
+    )
+
+    hypotheses = {}
+    trace = []
+    for rank, (code, support) in enumerate(
+        (
+            ("SARC_DDLPS", 1.0),
+            ("SARC_WDLPS", 0.982),
+            ("SARC_PLEOLPS", 0.981),
+        ),
+        start=1,
+    ):
+        hypotheses[code] = CancerTypeEvidence(
+            cancer_type=code,
+            broad_rna_support=support,
+            broad_rna_rank=rank,
+            evidence_sources=("pan_cancer_signature_ranker",),
+            details={"support_rank_tier": 1},
+        )
+        trace.append(
+            {
+                "code": code,
+                "support_fraction_of_top": support,
+                "support_rank_tier": 1,
+            }
+        )
+
+    result = _fallback_context_selected(
+        hypotheses,
+        {"candidate_trace": trace},
+    )
+
+    assert result.cancer_type == "SARC_LPS"
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.details["fallback_context_adjudication"]["mode"] == (
+        "tied_sibling_parent_abstention"
+    )
+    assert set(
+        result.details["fallback_context_adjudication"]["tied_sibling_codes"]
+    ) == {"SARC_DDLPS", "SARC_WDLPS", "SARC_PLEOLPS"}
 
 
 def test_fallback_context_abstains_to_structured_crc_parent():

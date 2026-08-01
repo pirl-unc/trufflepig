@@ -99,6 +99,7 @@ from .plot import (
     CANCER_TYPE_NAMES,
 )
 from .decomposition import (
+    decompose_identity_backgrounds,
     decompose_sample,
     epithelial_matched_normal_component,
     evaluate_residual_identity,
@@ -109,6 +110,7 @@ from .decomposition import (
     plot_decomposition_composition,
     scope_residual_identity_to_decomposition_mode,
 )
+from .cancer_ontology import cancer_codes_entity_compatible
 from .sample_context import (
     heuristic_support_label,
     infer_sample_context,
@@ -2780,6 +2782,14 @@ def _analyze_body(run: AnalyzeRun):
         and residual_identity_evidence.get("adjudication_eligible", True)
     ):
         previous_cancer_code = cancer_code
+        previous_selected_scope = selected_scope
+        previous_report_scope_cancer_type = report_scope_cancer_type
+        previous_rare_scope_inference = rare_scope_inference
+        previous_fine_scope_inference = fine_scope_inference
+        previous_cancer_type_evidence = cancer_type_evidence
+        previous_primary_expression_context = analysis.get(
+            "primary_expression_context"
+        )
         (
             post_decomposition_evidence,
             post_decomposition_scope,
@@ -2867,7 +2877,124 @@ def _analyze_body(run: AnalyzeRun):
                 "candidate_codes": list(candidate_codes),
                 **refit_context,
             }
-            if sample_tpm_by_symbol is not None:
+            # Residual evidence is allowed to change the report scope only if
+            # the decomposition rebuilt for that final scope reaches the same
+            # identity conclusion.  This makes adjudication transactional:
+            # purity, site routing, and the candidate beam may all change after
+            # selection, but stale evidence from the discarded model cannot
+            # survive that change.
+            refit_residual_identity = evaluate_residual_identity(
+                complete_decomp_results,
+                candidate_codes=candidate_codes,
+                current_code=cancer_code,
+            )
+            refit_residual_identity = (
+                scope_residual_identity_to_decomposition_mode(
+                    refit_residual_identity,
+                    sample_mode=analysis["sample_mode"],
+                )
+            )
+            refit_confirms_scope = _residual_identity_confirms_report_scope(
+                refit_residual_identity,
+                cancer_code,
+            )
+            if refit_confirms_scope:
+                analysis["post_residual_decomposition_refit"]["accepted"] = True
+                residual_identity_evidence = refit_residual_identity
+                analysis["residual_identity_evidence"] = (
+                    residual_identity_evidence
+                )
+                if isinstance(cancer_type_evidence, dict):
+                    cancer_type_evidence["residual_identity_evidence"] = (
+                        residual_identity_evidence
+                    )
+            else:
+                analysis["post_residual_decomposition_refit"]["accepted"] = False
+                analysis["residual_identity_rejected_after_refit"] = {
+                    "proposed_cancer_type": cancer_code,
+                    "previous_cancer_type": previous_cancer_code,
+                    "initial_evidence": residual_identity_evidence,
+                    "refit_evidence": refit_residual_identity,
+                }
+                residual_identity_evidence = {
+                    **refit_residual_identity,
+                    "adjudication_eligible": False,
+                    "adjudication_blocker": (
+                        "residual identity did not reproduce after the "
+                        "final report-scope decomposition refit"
+                    ),
+                }
+                analysis["residual_identity_evidence"] = (
+                    residual_identity_evidence
+                )
+                cancer_type_evidence = previous_cancer_type_evidence
+                analysis["cancer_type_evidence"] = previous_cancer_type_evidence
+                if isinstance(cancer_type_evidence, dict):
+                    cancer_type_evidence["residual_identity_evidence"] = (
+                        residual_identity_evidence
+                    )
+                selected_scope = previous_selected_scope
+                report_scope_cancer_type = previous_report_scope_cancer_type
+                rare_scope_inference = previous_rare_scope_inference
+                fine_scope_inference = previous_fine_scope_inference
+                if previous_primary_expression_context is None:
+                    analysis.pop("primary_expression_context", None)
+                else:
+                    analysis["primary_expression_context"] = (
+                        previous_primary_expression_context
+                    )
+                _propagate_report_scope_selection(
+                    analysis,
+                    df_expr,
+                    report_scope_cancer_type=previous_cancer_code,
+                    selected_scope=previous_selected_scope,
+                    rna_inferred_cancer_type=rna_inferred_cancer_type,
+                    rna_inferred_cancer_name=rna_inferred_cancer_name,
+                    analysis_cancer_type=analysis_cancer_type,
+                    fusion_scope_inference=fusion_scope_inference,
+                    rare_scope_inference=rare_scope_inference,
+                    fine_scope_inference=fine_scope_inference,
+                )
+                apply_sample_context_to_purity(analysis, sample_context)
+                purity = analysis["purity"]
+                cancer_type_context = _synchronize_cancer_type_context(
+                    analysis,
+                    supplied_cancer_type=None,
+                )
+                cancer_code = cancer_type_context.code_for("report")
+                reference_cancer_code = cancer_type_context.code_for("cohort")
+                inferred_site_context = _infer_likely_met_site_context(
+                    analysis,
+                    explicit_site_hint=site_hint,
+                    explicit_met_site=met_site,
+                    tumor_context=tumor_context,
+                    decomposition_templates=template_overrides,
+                )
+                if inferred_site_context:
+                    analysis["inferred_site_context"] = inferred_site_context
+                else:
+                    analysis.pop("inferred_site_context", None)
+                (
+                    complete_decomp_results,
+                    candidate_codes,
+                    _reverted_refit_context,
+                ) = _fit_report_scope_decompositions(
+                    df_expr,
+                    analysis,
+                    report_code=cancer_code,
+                    reference_code=reference_cancer_code,
+                    sample_mode=analysis["sample_mode"],
+                    tumor_context=tumor_context,
+                    explicit_site_hint=site_hint,
+                    inferred_site_context=inferred_site_context,
+                    template_overrides=template_overrides,
+                    sample_context=sample_context,
+                )
+                print(
+                    "[analysis] Residual identity did not reproduce after "
+                    f"final-scope refit; retained {cancer_code}"
+                )
+            if refit_confirms_scope and sample_tpm_by_symbol is not None:
                 therapy_scores = score_therapy_signatures(
                     sample_tpm_by_symbol,
                     reference_cancer_code,
@@ -2895,21 +3022,54 @@ def _analyze_body(run: AnalyzeRun):
                     ),
                     output_dpi=output_dpi,
                 )
-            print(
-                "[analysis] Residual identity completed an independent "
-                f"evidence majority: {previous_cancer_code} → {cancer_code}"
-            )
-            run.note_step(
-                "residual_identity_adjudication",
-                outputs={
-                    "previous_cancer_type": previous_cancer_code,
-                    "cancer_type": cancer_code,
-                    "selected_by": selected_scope.get("selected_by"),
-                    "residual_identity": residual_identity_evidence.get(
-                        "candidate_code"
-                    ),
-                },
-            )
+            if refit_confirms_scope:
+                print(
+                    "[analysis] Residual identity completed an independent "
+                    f"evidence majority: {previous_cancer_code} → {cancer_code}"
+                )
+                run.note_step(
+                    "residual_identity_adjudication",
+                    outputs={
+                        "previous_cancer_type": previous_cancer_code,
+                        "cancer_type": cancer_code,
+                        "selected_by": selected_scope.get("selected_by"),
+                        "residual_identity": residual_identity_evidence.get(
+                            "candidate_code"
+                        ),
+                    },
+                )
+    # ``cancer_call`` is first recorded before decomposition.  Residual
+    # adjudication may legitimately replace it, so refresh the canonical step
+    # before any machine-readable artifacts are emitted while preserving the
+    # original call as explicit audit metadata.
+    cancer_call_step = run.steps.get("cancer_call")
+    initial_call = (
+        str(cancer_call_step.outputs.get("cancer_type") or "")
+        if cancer_call_step is not None
+        else ""
+    )
+    final_call_outputs = {
+        "cancer_type": cancer_code,
+        "reference_cancer_type": reference_cancer_code,
+        "cancer_type_context": analysis.get("cancer_type_context"),
+        "sample_mode": analysis.get("sample_mode"),
+        "purity": {
+            "overall_estimate": (analysis.get("purity") or {}).get(
+                "overall_estimate"
+            ),
+            "overall_lower": (analysis.get("purity") or {}).get(
+                "overall_lower"
+            ),
+            "overall_upper": (analysis.get("purity") or {}).get(
+                "overall_upper"
+            ),
+        },
+        "inferred_site_context": inferred_site_context,
+    }
+    if initial_call and initial_call != cancer_code:
+        final_call_outputs["initial_cancer_type"] = initial_call
+        final_call_outputs["finalized_after_decomposition"] = True
+    run.note_step("cancer_call", outputs=final_call_outputs)
     decomp_results = _prioritize_report_compatible_decomposition(
         complete_decomp_results,
         reference_code=reference_cancer_code,
@@ -5201,6 +5361,15 @@ def _prioritize_report_compatible_decomposition(
     uncertainty signal, but it should not silently become the background model
     for target subtraction when a reference-compatible fit exists.
     """
+    # Candidate-independent identity backgrounds are deliberately ineligible
+    # for purity, site, target attribution, and report display.  They share the
+    # complete-beam transport only so residual adjudication can inspect them.
+    decomp_results = [
+        row
+        for row in (decomp_results or ())
+        if str(getattr(row, "model_role", "report_decomposition") or "")
+        != "identity_background"
+    ]
     if not decomp_results:
         return decomp_results
     reference_code = str(reference_code or "").strip()
@@ -5301,10 +5470,29 @@ def _fit_report_scope_decompositions(
         # Missing explicitly requested entities are filled by decompose_sample.
         candidate_rows=analysis.get("candidate_trace"),
     )
+    identity_results = decompose_identity_backgrounds(
+        df_expr,
+        sample_mode=sample_mode,
+        sample_context=sample_context,
+    )
+    results.extend(identity_results)
     return results, candidate_codes, {
         "site_hint": decomposition_site_hint,
         "tumor_context": decomposition_tumor_context,
+        "identity_background_models": len(identity_results),
     }
+
+
+def _residual_identity_confirms_report_scope(evidence, report_code):
+    """Require a final-scope refit to corroborate the proposed report branch."""
+
+    candidate_code = str((evidence or {}).get("candidate_code") or "").strip()
+    return bool(
+        (evidence or {}).get("status") == "corroborated"
+        and (evidence or {}).get("adjudication_eligible", True)
+        and candidate_code
+        and cancer_codes_entity_compatible(candidate_code, report_code)
+    )
 
 
 def _attach_lineage_panel_decomposition_attribution(
@@ -5372,7 +5560,8 @@ def _reconcile_purity_after_decomposition(
     lineage-panel override, then cap the interval by the modeled non-tumor mass.
 
     The decomposition's purity is only safe to adopt when its cancer_type matches the
-    classifier AND its template has non-tumor compartments
+    classifier or is a descendant of a deliberately broad classifier/report node, AND
+    its template has non-tumor compartments
     (``should_adopt_decomposition_purity``): a template with no TME compartments trivially
     returns fraction=1.0 (everything maps to tumor by construction), which is not a purity
     measurement — the canonical failure case is a CRC sample the classifier scored at 36%
@@ -8967,6 +9156,35 @@ def _generate_text_reports(
         f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
         f"{tier_suffix}"
     )
+    stability = (analysis.get("decomposition") or {}).get("purity_stability") or {}
+    decomp_code = str(
+        (analysis.get("decomposition") or {}).get("best_cancer_type") or ""
+    )
+    uncertainty_basis = []
+    if decomp_code and decomp_code != str(reference_cancer_code or ""):
+        try:
+            decomp_is_descendant = cancer_codes_entity_compatible(
+                decomp_code, reference_cancer_code
+            )
+        except (KeyError, TypeError, ValueError):
+            decomp_is_descendant = False
+        if decomp_is_descendant:
+            uncertainty_basis.append(
+                f"the {decomp_code} descendant decomposition supplies the quantitative "
+                f"point without refining the {reference_cancer_code} report label"
+            )
+    if stability.get("tme_overexplained"):
+        uncertainty_basis.append(
+            "the fit is marked fragile because background components can over-absorb "
+            "tumor expression"
+        )
+    caveat = purity.get("degradation_caveat") or {}
+    if caveat.get("severity") and caveat.get("severity") != "none":
+        uncertainty_basis.append(
+            f"{caveat.get('severity')} RNA degradation widens the interval"
+        )
+    if uncertainty_basis:
+        lines.append("- **Uncertainty basis**: " + "; ".join(uncertainty_basis) + ".")
     components = purity.get("components", {})
     for comp_name in ("stromal", "immune"):
         comp = components.get(comp_name, {})

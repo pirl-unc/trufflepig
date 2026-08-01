@@ -526,7 +526,11 @@ def test_report_scope_decomposition_refit_uses_final_purity_and_site(monkeypatch
     assert captured["candidate_rows"] is analysis["candidate_trace"]
     assert captured["site_hint"] == "liver"
     assert captured["tumor_context"] == "met"
-    assert context == {"site_hint": "liver", "tumor_context": "met"}
+    assert context == {
+        "site_hint": "liver",
+        "tumor_context": "met",
+        "identity_background_models": 0,
+    }
 
 
 def test_residual_identity_stays_within_the_decomposition_regime():
@@ -554,3 +558,32 @@ def test_residual_identity_stays_within_the_decomposition_regime():
     assert incompatible["adjudication_eligible"] is False
     assert incompatible["candidate_sample_mode"] == "heme"
     assert "requires heme decomposition" in incompatible["adjudication_blocker"]
+
+
+def test_final_scope_refit_must_reproduce_compatible_residual_identity():
+    from trufflepig.main import _residual_identity_confirms_report_scope
+
+    assert _residual_identity_confirms_report_scope(
+        {
+            "status": "corroborated",
+            "candidate_code": "CRC",
+            "adjudication_eligible": True,
+        },
+        "READ",
+    )
+    assert not _residual_identity_confirms_report_scope(
+        {"status": "ambiguous", "candidate_code": "CRC"},
+        "READ",
+    )
+    assert not _residual_identity_confirms_report_scope(
+        {
+            "status": "corroborated",
+            "candidate_code": "CRC",
+            "adjudication_eligible": False,
+        },
+        "READ",
+    )
+    assert not _residual_identity_confirms_report_scope(
+        {"status": "corroborated", "candidate_code": "CRC"},
+        "SARC_DDLPS",
+    )

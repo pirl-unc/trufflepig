@@ -122,6 +122,92 @@ def _residual_views(gene_attribution) -> tuple[dict[str, float], dict[str, float
     return by_id, by_symbol
 
 
+def _semantic_background_component(component: str) -> str:
+    """Collapse identity-only reference names to their biological component."""
+
+    value = _clean(component)
+    return value.removesuffix("_identity")
+
+
+def _dominant_identity_backgrounds(result) -> tuple[str, ...]:
+    """Return the largest fitted normal component in an identity-only model."""
+
+    if _clean(getattr(result, "model_role", "")) != "identity_background":
+        return ()
+    fractions = getattr(result, "fractions", None) or {}
+    backgrounds = {
+        _semantic_background_component(component): float(value or 0.0)
+        for component, value in fractions.items()
+        if _clean(component) != "tumor" and float(value or 0.0) > 0.0
+    }
+    if not backgrounds:
+        return ()
+    largest = max(backgrounds.values())
+    return tuple(
+        sorted(component for component, value in backgrounds.items() if value == largest)
+    )
+
+
+def _background_attributed_panel_symbols(
+    panels: Iterable[Any],
+    components: Iterable[str],
+) -> tuple[str, ...]:
+    component_set = {
+        _semantic_background_component(component) for component in components
+    }
+    return tuple(
+        sorted(
+            {
+                _clean(symbol).upper()
+                for panel in panels
+                for symbol, component in getattr(
+                    panel,
+                    "background_attribution_markers",
+                    (),
+                )
+                if _semantic_background_component(component) in component_set
+                and _clean(symbol)
+            }
+        )
+    )
+
+
+def _background_only_panel_candidate(
+    evidence: Iterable[Any],
+    panels_by_name: Mapping[str, Any],
+) -> str:
+    """Return a complete panel blocked only by attributable background genes."""
+
+    candidates: list[str] = []
+    for row in evidence:
+        panel = panels_by_name.get(_clean(getattr(row, "panel_name", "")))
+        attributable = {
+            _clean(symbol).upper()
+            for symbol, _component in getattr(
+                panel,
+                "background_attribution_markers",
+                (),
+            )
+        } if panel is not None else set()
+        violations = {
+            _clean(item[0]).upper()
+            for item in (getattr(row, "low_violations", ()) or ())
+            if item
+        }
+        if (
+            getattr(row, "obligate_passed", False)
+            and getattr(row, "identity_marker_groups_passed", True)
+            and getattr(row, "high_hits", ())
+            and not getattr(row, "high_misses", ())
+            and violations
+            and violations.issubset(attributable)
+        ):
+            parent = _clean(getattr(row, "parent_cohort", ""))
+            if parent:
+                candidates.append(parent)
+    return candidates[0] if len(set(candidates)) == 1 else ""
+
+
 def _background_model_key(result) -> tuple[str, tuple[str, ...]]:
     """Structural model identity, excluding the candidate cancer label."""
 
@@ -448,6 +534,11 @@ def evaluate_residual_identity(
         complete_program_entity_decision = None
         evaluate_panels = None
 
+    panels_by_name = {
+        _clean(getattr(panel, "name", "")): panel
+        for panel in LINEAGE_PANELS
+    }
+
     grouped: dict[tuple[str, tuple[str, ...]], list[dict[str, Any]]] = defaultdict(
         list
     )
@@ -458,7 +549,23 @@ def evaluate_residual_identity(
         if not by_id and not by_symbol:
             continue
 
+        dominant_backgrounds = _dominant_identity_backgrounds(result)
+        attributed_symbols = _background_attributed_panel_symbols(
+            LINEAGE_PANELS,
+            dominant_backgrounds,
+        )
+        if attributed_symbols:
+            from ..common import panel_symbols_to_gene_ids
+
+            symbol_to_gene = panel_symbols_to_gene_ids(attributed_symbols)
+            for symbol in attributed_symbols:
+                by_symbol[symbol] = 0.0
+                gene_id = _clean(symbol_to_gene.get(symbol)).split(".", 1)[0]
+                if gene_id:
+                    by_id[gene_id] = 0.0
+
         panel_decision: dict[str, Any] = {}
+        background_only_panel_candidate = ""
         if evaluate_panels is not None and complete_program_entity_decision is not None:
             panel_rows = _active_panel_evidence(
                 evaluate_panels(
@@ -468,6 +575,10 @@ def evaluate_residual_identity(
                 candidates,
             )
             if panel_rows:
+                background_only_panel_candidate = _background_only_panel_candidate(
+                    panel_rows,
+                    panels_by_name,
+                )
                 panel_decision = dict(
                     complete_program_entity_decision(panel_rows)
                 )
@@ -523,6 +634,14 @@ def evaluate_residual_identity(
                 ),
                 "panel_decisive": bool(panel_decision.get("decisive")),
                 "panel_reason": _clean(panel_decision.get("reason")),
+                "background_only_panel_candidate": background_only_panel_candidate,
+                "background_attributed_expected_low_genes": list(
+                    attributed_symbols
+                ),
+                "dominant_identity_backgrounds": list(dominant_backgrounds),
+                "decomposition_model_role": _clean(
+                    getattr(result, "model_role", "report_decomposition")
+                ),
                 "ontology_candidate": ontology_candidate,
                 "raw_ontology_candidate": raw_ontology_candidate,
                 "ontology_complete_codes": list(complete_codes),
@@ -554,16 +673,54 @@ def evaluate_residual_identity(
     background_models: list[dict[str, Any]] = []
     for (template, components), rows in sorted(grouped.items()):
         panel_votes = tuple(row.get("panel_candidate") for row in rows)
+        panel_or_background_votes = tuple(
+            row.get("panel_candidate")
+            or row.get("background_only_panel_candidate")
+            for row in rows
+        )
         ontology_votes = tuple(row.get("ontology_candidate") for row in rows)
         panel_candidate = _unanimous(panel_votes)
+        panel_or_background_candidate = _unanimous(panel_or_background_votes)
         ontology_candidate = _unanimous(ontology_votes)
         panel_conflicts = _conflicting_candidates(panel_votes)
         ontology_conflicts = _conflicting_candidates(ontology_votes)
+        identity_only_model = bool(rows) and all(
+            row.get("decomposition_model_role") == "identity_background"
+            for row in rows
+        )
+        effective_panel_candidate = (
+            panel_candidate or panel_or_background_candidate
+        )
         if panel_conflicts or ontology_conflicts:
             # A disagreeing axis is contradictory evidence, not a missing
             # axis. It must remain an abstention even when the other evidence
             # view is unanimous across the same candidate-specific residuals.
             model_candidate = ""
+        elif identity_only_model:
+            # Candidate-independent subtraction is intentionally held to the
+            # strongest standard. A normal reference can leave tiny residuals
+            # that Pareto-rank one ontology program by accident; require a
+            # complete curated panel as well. A bulk panel blocked solely by a
+            # named expected-low background gene may stand in only when the
+            # structural beam independently models that source.
+            if (
+                effective_panel_candidate
+                and ontology_candidate
+                and cancer_codes_entity_compatible(
+                    effective_panel_candidate,
+                    ontology_candidate,
+                )
+            ):
+                model_candidate = (
+                    ontology_candidate
+                    if _is_ancestor(
+                        effective_panel_candidate,
+                        ontology_candidate,
+                    )
+                    else effective_panel_candidate
+                )
+            else:
+                model_candidate = ""
         elif panel_candidate and ontology_candidate:
             if cancer_codes_entity_compatible(panel_candidate, ontology_candidate):
                 model_candidate = (
@@ -579,9 +736,27 @@ def evaluate_residual_identity(
             {
                 "template": template,
                 "components": list(components),
+                "model_role": (
+                    "identity_background"
+                    if identity_only_model
+                    else "report_decomposition"
+                ),
                 "realizations": len(rows),
                 "candidate_code": model_candidate or None,
                 "panel_candidate": panel_candidate or None,
+                "panel_or_background_candidate": (
+                    panel_or_background_candidate or None
+                ),
+                "background_attributed_expected_low_genes": sorted(
+                    {
+                        gene
+                        for row in rows
+                        for gene in row.get(
+                            "background_attributed_expected_low_genes",
+                            (),
+                        )
+                    }
+                ),
                 "ontology_candidate": ontology_candidate or None,
                 "panel_conflicting_candidates": list(panel_conflicts),
                 "ontology_conflicting_candidates": list(ontology_conflicts),
@@ -592,9 +767,60 @@ def evaluate_residual_identity(
     invariant_panel_candidate = _unanimous(
         row.get("panel_candidate") for row in background_models
     )
+    invariant_panel_or_background_candidate = _unanimous(
+        row.get("panel_or_background_candidate")
+        for row in background_models
+    )
+    background_attributed_genes = sorted(
+        {
+            gene
+            for row in background_models
+            for gene in row.get(
+                "background_attributed_expected_low_genes",
+                (),
+            )
+        }
+    )
+    if (
+        not invariant_panel_candidate
+        and invariant_panel_or_background_candidate
+        and background_attributed_genes
+    ):
+        invariant_panel_candidate = invariant_panel_or_background_candidate
     invariant_ontology_candidate = _unanimous(
         row.get("ontology_candidate") for row in background_models
     )
+    identity_background_models = [
+        row
+        for row in background_models
+        if row.get("model_role") == "identity_background"
+    ]
+    source_resolved_panel_candidate = _unanimous(
+        row.get("panel_or_background_candidate")
+        for row in identity_background_models
+    )
+    source_resolved_ontology_candidate = _unanimous(
+        row.get("ontology_candidate") for row in identity_background_models
+    )
+    source_resolved_candidate = _unanimous(
+        row.get("candidate_code") for row in identity_background_models
+    )
+    source_resolved_identity = bool(
+        source_resolved_candidate
+        and source_resolved_panel_candidate
+        and source_resolved_ontology_candidate
+        and cancer_codes_entity_compatible(
+            source_resolved_candidate,
+            source_resolved_panel_candidate,
+        )
+        and cancer_codes_entity_compatible(
+            source_resolved_candidate,
+            source_resolved_ontology_candidate,
+        )
+        and background_attributed_genes
+    )
+    if not invariant_panel_candidate and source_resolved_identity:
+        invariant_panel_candidate = source_resolved_panel_candidate
     candidate = _unanimous(
         row.get("candidate_code") for row in background_models
     )
@@ -632,6 +858,9 @@ def evaluate_residual_identity(
             if invariant_panel_candidate
             else "ontology_program"
         ),
+        "source_resolved_identity": source_resolved_identity,
+        "source_resolved_background_models": len(identity_background_models),
+        "background_attributed_expected_low_genes": background_attributed_genes,
         "current_code": current or None,
         "models_evaluated": len(background_models),
         "realizations_evaluated": realizations,

@@ -101,6 +101,40 @@ def test_lineage_panel_evidence_distinguishes_tumor_residual_from_host():
     assert "tumor residual rather than modeled host/TME background" in line
 
 
+def test_lineage_panel_explains_background_resolved_low_marker_violation():
+    analysis = _lineage_panel_evidence(
+        "CRC",
+        blockers=["top panel is not a complete positive/negative-marker program"],
+    )
+    analysis["lineage_panel_evidence"].update(
+        {
+            "top_rationale": (
+                "6/6 required markers in cohort range; "
+                "low-marker violations: DES=6039>10"
+            ),
+            "decomposition_attribution": {
+                "status": "tumor_residual",
+                "evaluated_marker_count": 6,
+                "tumor_dominant_count": 6,
+            },
+        }
+    )
+    analysis["residual_identity_evidence"] = {
+        "status": "corroborated",
+        "candidate_code": "CRC",
+        "source_resolved_identity": True,
+        "background_attributed_expected_low_genes": ["DES"],
+    }
+
+    line = _lineage_panel_evidence_line(analysis, "CRC") or ""
+
+    assert "bulk panel remains incomplete because of DES" in line
+    assert "normal structural tissue can explain the expected-low violation" in line
+    assert "complete panel and ontology programs agree" in line
+    assert "not a claim that every measured DES transcript is non-tumor" in line
+    assert "noted, did not change the call" not in line
+
+
 def _make_analysis(
     purity_point=0.28,
     ci_low=0.19,

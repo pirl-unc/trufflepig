@@ -1495,6 +1495,34 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     promoted = bool(promotion.get("promoted"))
     promoted_code = str(promotion.get("code") or "").strip()
     blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
+    residual_identity = analysis.get("residual_identity_evidence") or {}
+    residual_candidate = str(
+        residual_identity.get("candidate_code") or ""
+    ).strip()
+    background_attributed_low = [
+        str(gene)
+        for gene in (
+            residual_identity.get(
+                "background_attributed_expected_low_genes"
+            )
+            or []
+        )
+        if gene
+    ]
+    try:
+        from .cancer_ontology import cancer_codes_entity_compatible
+
+        residual_matches_panel = cancer_codes_entity_compatible(
+            residual_candidate,
+            top_panel,
+        )
+    except (ImportError, KeyError, TypeError, ValueError):
+        residual_matches_panel = residual_candidate == top_panel
+    source_resolved = bool(
+        residual_identity.get("source_resolved_identity")
+        and residual_matches_panel
+        and background_attributed_low
+    )
     decomposition_attribution = summary.get("decomposition_attribution") or {}
     attribution_status = str(
         decomposition_attribution.get("status") or ""
@@ -1505,7 +1533,18 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     attribution_tumor = int(
         decomposition_attribution.get("tumor_dominant_count") or 0
     )
-    if promoted and promoted_code:
+    if source_resolved:
+        attributed = ", ".join(background_attributed_low)
+        promoted_clause = (
+            " — the bulk panel remains incomplete because of "
+            f"{attributed}, but candidate-independent background "
+            "decomposition shows that normal structural tissue can explain "
+            "the expected-low violation without removing the CRC identity "
+            "program; the complete panel and ontology programs agree in the "
+            "identity residual (this is not a claim that every measured "
+            f"{attributed} transcript is non-tumor)"
+        )
+    elif promoted and promoted_code:
         promoted_clause = (
             f" — supports the {promoted_code} call"
             if promoted_code == str(cancer_code or "").strip()

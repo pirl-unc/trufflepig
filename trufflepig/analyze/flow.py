@@ -151,17 +151,42 @@ def should_adopt_decomposition_purity(classifier_code: str, decomp_result) -> bo
     """Return whether a decomposition purity can replace classifier purity.
 
     The decomposition fit supplies a tumor/TME subtraction template. It is
-    only a purity estimate when the template agrees with the classifier,
-    has non-tumor components, and exposes a populated purity result.
+    only a purity estimate when the template is the report entity or one of
+    its descendants, has non-tumor components, and exposes a populated purity
+    result. A descendant fit can quantify a deliberately broad report parent
+    (for example READ under CRC) without promoting that child to the headline.
     """
     if decomp_result is None:
         return False
-    if getattr(decomp_result, "cancer_type", None) != classifier_code:
+    decomposition_code = str(getattr(decomp_result, "cancer_type", None) or "")
+    classifier_code = str(classifier_code or "")
+    if decomposition_code != classifier_code and not _is_descendant_code(
+        decomposition_code, classifier_code
+    ):
         return False
     warnings = getattr(decomp_result, "warnings", None) or []
     if any("No non-tumor components in template" in warning for warning in warnings):
         return False
     return bool(getattr(decomp_result, "purity_result", None))
+
+
+def _is_descendant_code(code: str, parent_code: str) -> bool:
+    """Whether ``code`` is below ``parent_code`` in the registry hierarchy."""
+    if not code or not parent_code or code == parent_code:
+        return False
+    try:
+        from trufflepig.cancer_ontology import registry_parent_code
+
+        seen = set()
+        current = code
+        while current and current not in seen:
+            seen.add(current)
+            current = str(registry_parent_code(current) or "")
+            if current == parent_code:
+                return True
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+    return False
 
 
 # Fragility thresholds for the observed decomposition purity (instrumentation, not yet a gate).

@@ -1247,6 +1247,11 @@ def _cancer_type_score_matrix(df_gene_expr, n_signature_genes=20):
 
     expr_matrix = ref_matrices["expr_matrix"]
     within_reference = expr_matrix.rank(axis=0, pct=True, method="average")
+    # Match the sample scorer's fixed-universe rule: a zero-expression gene is
+    # absent evidence, not a positive midrank created by a large tie at zero.
+    # Without this, feeding a reference centroid back through the public sample
+    # path produces a different signature vector from the stored reference.
+    within_reference = within_reference.mask(expr_matrix <= 0.0, 0.0)
     sig = _get_cancer_type_signature_panels(n_signature_genes=n_signature_genes)
 
     # Score each reference cancer type against all signatures

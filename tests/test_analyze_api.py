@@ -760,8 +760,20 @@ def test_should_adopt_decomposition_purity_contract():
         purity_result={"overall_estimate": 1.0},
     )
     missing = SimpleNamespace(cancer_type="COAD", warnings=[], purity_result=None)
+    crc_child = SimpleNamespace(
+        cancer_type="READ",
+        warnings=[],
+        purity_result={"overall_estimate": 0.4},
+    )
+    child_to_parent = SimpleNamespace(
+        cancer_type="CRC",
+        warnings=[],
+        purity_result={"overall_estimate": 0.4},
+    )
 
     assert should_adopt_decomposition_purity("COAD", ok)
+    assert should_adopt_decomposition_purity("CRC", crc_child)
+    assert not should_adopt_decomposition_purity("COAD", child_to_parent)
     assert not should_adopt_decomposition_purity("COAD", mismatch)
     assert not should_adopt_decomposition_purity("COAD", no_tme)
     assert not should_adopt_decomposition_purity("COAD", missing)

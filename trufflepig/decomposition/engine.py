@@ -11,6 +11,7 @@ NNLS on component-enriched marker genes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,9 @@ from trufflepig.reference import (
 )
 from ..common import build_sample_tpm_by_symbol
 from ..tumor_purity import rank_cancer_type_candidates, _score_host_tissues
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # Marker symbols that must never be auto-selected by the specificity-based
@@ -427,6 +431,286 @@ class DecompositionResult:
     n_measured_in_fit: int = 0
     site_evidence: dict[str, Any] = field(default_factory=dict)
     component_reference_tissues: dict[str, str] = field(default_factory=dict)
+    model_role: str = "report_decomposition"
+
+
+_IDENTITY_BASE_COMPONENTS = (
+    "T_cell",
+    "B_cell",
+    "plasma",
+    "NK",
+    "myeloid",
+    "fibroblast",
+    "endothelial",
+)
+
+# Smooth muscle is a normal structural constituent of these organs.  This is
+# anatomy, not a cancer-code rule: the same background model is fitted no
+# matter which tumor hypotheses are in the beam.
+_HOLLOW_ORGAN_TISSUES = frozenset(
+    {
+        "appendix",
+        "cervix",
+        "colon",
+        "duodenum",
+        "endometrium",
+        "esophagus",
+        "rectum",
+        "small_intestine",
+        "smooth_muscle",
+        "stomach",
+        "urinary_bladder",
+    }
+)
+
+
+def _absolute_background_nnls(A, b, weights=None):
+    """Fit physical background fractions without a tumor/purity prior.
+
+    The ordinary report decomposition distributes a separately estimated
+    non-tumor fraction across components.  Identity adjudication must not reuse
+    that candidate-specific purity because doing so would double-count the
+    upstream cancer call.  Clean TPM is linear under RNA mixing, so an
+    unconstrained non-negative fit estimates absolute component fractions
+    directly; only the physical sum-to-one boundary is enforced.
+    """
+
+    from scipy.optimize import nnls
+
+    A = np.asarray(A, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if A.size == 0 or A.shape[1] == 0:
+        return np.zeros(A.shape[1], dtype=float), float("inf")
+    if weights is None:
+        weights = np.ones(A.shape[0], dtype=float)
+    else:
+        weights = np.asarray(weights, dtype=float)
+        weights = np.where(weights > 0, weights, 1.0)
+    solution, _ = nnls(A * weights[:, None], b * weights)
+    total = float(solution.sum())
+    if total > 1.0:
+        solution = solution / total
+    observed_scale = float(np.sqrt(np.mean(b**2)))
+    residual_rmse = float(np.sqrt(np.mean(((A @ solution) - b) ** 2)))
+    residual = (
+        residual_rmse / observed_scale
+        if observed_scale > 0.0
+        else (0.0 if residual_rmse == 0.0 else float("inf"))
+    )
+    return solution, residual
+
+
+def _identity_host_components(tissue_scores) -> tuple[str, ...]:
+    """Return composition-derived mucosal/structural identity components."""
+
+    if not tissue_scores:
+        return ()
+    top_tissue = str(tissue_scores[0][0] or "").strip()
+    if top_tissue in _HOLLOW_ORGAN_TISSUES:
+        # Fit the normal tissue selected by the composition screen, not by a
+        # tentative cancer label.  In hollow organs this represents mucosa;
+        # the purified smooth-muscle population represents muscularis.  Avoid
+        # adding two equivalent muscle columns when smooth muscle itself is
+        # the top normal context.
+        components = []
+        if top_tissue != "smooth_muscle":
+            components.append(f"matched_normal_{top_tissue}")
+        components.append("smooth_muscle_identity")
+        return tuple(components)
+    return ()
+
+
+def _fit_identity_background(
+    *,
+    sample_by_eid,
+    components,
+    template_name,
+    sample_context=None,
+    top_tissue="",
+):
+    """Fit one candidate-independent background used only for identity."""
+
+    gene_subset = set(sample_by_eid)
+    (
+        genes,
+        symbols,
+        signature_tpm,
+        _,
+        component_reference_tissues,
+    ) = build_signature_matrix(
+        list(components),
+        gene_subset=gene_subset,
+        sample_by_eid=sample_by_eid,
+        return_reference_tissues=True,
+    )
+    sample_vec = np.asarray(
+        [float(sample_by_eid.get(gene, np.nan)) for gene in genes],
+        dtype=float,
+    )
+    measured = np.isfinite(sample_vec)
+    genes = [gene for gene, keep in zip(genes, measured) if keep]
+    symbols = [symbol for symbol, keep in zip(symbols, measured) if keep]
+    signature_tpm = signature_tpm[measured, :]
+    sample_vec = sample_vec[measured]
+    fit_rows, fit_weights, marker_trace = _select_marker_rows(
+        genes,
+        symbols,
+        signature_tpm,
+        list(components),
+        cancer_type=None,
+        sample_context=sample_context,
+    )
+    if not fit_rows:
+        return None
+    coefficients, residual = _absolute_background_nnls(
+        signature_tpm[fit_rows],
+        sample_vec[fit_rows],
+        weights=fit_weights,
+    )
+    background_fraction = float(np.clip(coefficients.sum(), 0.0, 1.0))
+    tumor_fraction = 1.0 - background_fraction
+    within_background = (
+        coefficients / background_fraction
+        if background_fraction > 0.0
+        else np.zeros_like(coefficients)
+    )
+    if not marker_trace.empty:
+        marker_trace = marker_trace.copy()
+        observed_by_symbol = {
+            str(symbol): float(value)
+            for symbol, value in zip(symbols, sample_vec)
+        }
+        marker_trace["observed_tpm"] = [
+            observed_by_symbol.get(str(symbol), 0.0)
+            for symbol in marker_trace["symbol"]
+        ]
+        marker_trace["sample_to_ref_ratio"] = marker_trace[
+            "observed_tpm"
+        ] / marker_trace["reference_tpm"].replace(0, np.nan)
+    component_trace = _build_component_trace(
+        marker_trace,
+        list(components),
+        within_background,
+        tumor_fraction,
+    )
+    gene_attribution, tme_background_tpm = _build_gene_attribution(
+        genes,
+        symbols,
+        sample_vec,
+        list(components),
+        within_background,
+        tumor_fraction,
+        signature_tpm,
+    )
+    fractions = {"tumor": tumor_fraction}
+    fractions.update(
+        {
+            component: float(coefficient)
+            for component, coefficient in zip(components, coefficients)
+        }
+    )
+    return DecompositionResult(
+        template=template_name,
+        cancer_type="",
+        cancer_signature_score=None,
+        cancer_purity_score=None,
+        cancer_support_score=None,
+        template_tissue_score=None,
+        template_origin_tissue_score=None,
+        template_site_factor=None,
+        template_extra_fraction=background_fraction,
+        fractions=fractions,
+        purity=tumor_fraction,
+        purity_result=None,
+        reconstruction_error=float(residual),
+        component_trace=component_trace,
+        marker_trace=marker_trace,
+        gene_attribution=gene_attribution,
+        tme_background_tpm=tme_background_tpm,
+        score=float(1.0 / (1.0 + residual)),
+        description="Candidate-independent background identity model",
+        n_measured_in_fit=len(fit_rows),
+        site_evidence={
+            "site_supported": True,
+            "status": "identity_background",
+            "basis": "candidate_independent_composition",
+            "top_normal_tissue": str(top_tissue or ""),
+        },
+        component_reference_tissues=component_reference_tissues,
+        model_role="identity_background",
+    )
+
+
+def decompose_identity_backgrounds(
+    df_gene_expr,
+    *,
+    sample_mode="solid",
+    sample_context=None,
+    sample_raw_by_symbol=None,
+    sample_by_eid=None,
+):
+    """Fit the complete candidate-independent background identity beam.
+
+    These results are deliberately separate from report decompositions: they
+    cannot set purity, metastatic site, or target attribution.  They answer
+    only whether a tumor-identity program survives plausible normal/TME
+    subtraction without using a cancer label or candidate purity.
+    """
+
+    if sample_mode not in {"auto", "solid"}:
+        return []
+    if df_gene_expr is None or getattr(df_gene_expr, "empty", False):
+        return []
+    if sample_raw_by_symbol is None:
+        try:
+            sample_raw_by_symbol = build_sample_tpm_by_symbol(df_gene_expr)
+        except (KeyError, TypeError, ValueError) as exc:
+            # This is an optional adjudication channel. A partial frame with
+            # no gene identity cannot support it, so abstain just as we do for
+            # empty input instead of aborting an otherwise valid report path.
+            _LOGGER.warning(
+                "Residual-identity decomposition skipped: gene identity "
+                "columns are unavailable (%s)",
+                exc,
+            )
+            return []
+    if sample_by_eid is None:
+        reference = (
+            pan_cancer_expression(technical_rna_normalize=True)
+            .drop_duplicates(subset="Symbol")
+            .set_index("Symbol")
+        )
+        symbol_to_gene = reference["Ensembl_Gene_ID"].to_dict()
+        sample_by_eid = {
+            gene_id: float(sample_raw_by_symbol[symbol])
+            for symbol, gene_id in symbol_to_gene.items()
+            if symbol in sample_raw_by_symbol and gene_id
+        }
+    tissue_scores = _score_host_tissues(sample_raw_by_symbol, top_n=None)
+    top_tissue = str(tissue_scores[0][0] or "") if tissue_scores else ""
+    component_sets = [
+        ("identity_background", _IDENTITY_BASE_COMPONENTS),
+    ]
+    host_components = _identity_host_components(tissue_scores)
+    if host_components:
+        component_sets.append(
+            (
+                "identity_structural_background",
+                tuple(dict.fromkeys((*_IDENTITY_BASE_COMPONENTS, *host_components))),
+            )
+        )
+    results = []
+    for template_name, components in component_sets:
+        result = _fit_identity_background(
+            sample_by_eid=sample_by_eid,
+            components=components,
+            template_name=template_name,
+            sample_context=sample_context,
+            top_tissue=top_tissue,
+        )
+        if result is not None:
+            results.append(result)
+    return results
 
 
 def _weighted_constrained_nnls(

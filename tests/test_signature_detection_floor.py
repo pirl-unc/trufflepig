@@ -148,3 +148,47 @@ def test_explicit_hk_ab_basis_still_clamps_noise():
 def test_expressed_marker_type_outranks_noise_in_default_space():
     scores = _scores(_cohort_sample("SARC"))
     assert scores["SARC"] > scores["PCPG"]
+
+
+def test_embedding_reference_zeros_are_absent_evidence(monkeypatch):
+    """Reference and sample signature vectors use the same zero rule."""
+
+    import numpy as np
+    import trufflepig.tumor_purity as tumor_purity
+
+    reference = pd.DataFrame(
+        {
+            "A_TPM": [0.0, 10.0],
+            "B_TPM": [0.0, 20.0],
+        },
+        index=["ZERO_MARKER", "EXPRESSED"],
+    )
+    monkeypatch.setattr(
+        tumor_purity,
+        "_cached_reference_matrices",
+        lambda normalize=None: {
+            "cohort_cols": ["A_TPM", "B_TPM"],
+            "expr_matrix": reference,
+        },
+    )
+    monkeypatch.setattr(
+        pe,
+        "_get_cancer_type_signature_panels",
+        lambda n_signature_genes=20: {
+            "A": ["ZERO_MARKER"],
+            "B": ["ZERO_MARKER"],
+        },
+    )
+    monkeypatch.setattr(
+        pe,
+        "_compute_cancer_type_signature_stats",
+        lambda *_args, **_kwargs: [
+            {"code": "A", "score": 0.0},
+            {"code": "B", "score": 0.0},
+        ],
+    )
+
+    matrix, labels = pe._cancer_type_score_matrix(pd.DataFrame())
+
+    assert labels == ["A", "B", "SAMPLE"]
+    assert np.array_equal(matrix, np.zeros((3, 2)))

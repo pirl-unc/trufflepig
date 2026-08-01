@@ -10,6 +10,7 @@ fraction is distributed across reference-supported compartments.
 
 from .engine import (
     decompose_sample,
+    decompose_identity_backgrounds,
     DecompositionResult,
     get_decomposition_parameters,
     infer_sample_mode,
@@ -38,6 +39,7 @@ from .templates import (
 
 __all__ = [
     "decompose_sample",
+    "decompose_identity_backgrounds",
     "DecompositionResult",
     "EPITHELIAL_MATCHED_NORMAL_TISSUE",
     "epithelial_matched_normal_component",

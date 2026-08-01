@@ -33,6 +33,12 @@ COMPONENT_TO_HPA = {
     "fibroblast": ["Fibroblasts"],
     "endothelial": ["Endothelial cells"],
     "smooth_muscle": ["Smooth muscle cells"],
+    # Identity-only decomposition uses the purified cell population directly.
+    # The production ``smooth_muscle`` component is routed through the broader
+    # bulk-muscle category for stable fraction estimation, but that bulk view
+    # can contain epithelial transcripts and is therefore unsuitable for
+    # deciding whether an epithelial marker survived background subtraction.
+    "smooth_muscle_identity": ["Smooth muscle cells"],
     # Site-specific host compartments
     "hepatocyte": ["Hepatocytes"],
     "astrocyte": ["Astrocytes"],

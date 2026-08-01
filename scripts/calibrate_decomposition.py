@@ -856,11 +856,35 @@ def _classify_one(
     residual_identity: dict[str, Any] = {}
     if include_residual_identity:
         from trufflepig.decomposition import (
+            decompose_identity_backgrounds,
             decompose_sample,
             evaluate_residual_identity,
             infer_sample_mode,
             scope_residual_identity_to_decomposition_mode,
         )
+
+        # Match production before fitting residuals: an evidence-refined call
+        # becomes the active report/reference context and receives its own
+        # purity estimate.  Leaving ``analysis`` on the broad ranker winner
+        # makes calibration exercise a decomposition state that users never
+        # see in reports.
+        if selected and pre_residual_cancer_type != broad_top_code:
+            from trufflepig.main import (
+                _propagate_report_scope_selection,
+                _synchronize_cancer_type_context,
+            )
+
+            _propagate_report_scope_selection(
+                analysis,
+                df_expr,
+                report_scope_cancer_type=pre_residual_cancer_type,
+                selected_scope=selected,
+                rna_inferred_cancer_type=broad_top_code,
+            )
+            _synchronize_cancer_type_context(
+                analysis,
+                supplied_cancer_type=None,
+            )
 
         candidate_codes: list[str] = []
         for code in (
@@ -884,6 +908,12 @@ def _classify_one(
             top_k=None,
             sample_mode=sample_mode,
             candidate_rows=trace,
+        )
+        decompositions.extend(
+            decompose_identity_backgrounds(
+                df_expr,
+                sample_mode=sample_mode,
+            )
         )
         residual_identity = evaluate_residual_identity(
             decompositions,
