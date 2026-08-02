@@ -273,6 +273,7 @@ def build_candidate_evidence_block(
     sample_tpm_by_symbol: dict[str, float],
     *,
     top_k: int = 3,
+    analysis: dict | None = None,
 ) -> list[str]:
     """Build the per-candidate evidence-table markdown block.
 
@@ -283,6 +284,8 @@ def build_candidate_evidence_block(
         ``support_override`` (rescue payload), and the per-row
         ``normal_tissue_tiebreaker`` / ``primary_tissue`` fields.
       - ``sample_tpm_by_symbol`` — sample TPM keyed by gene symbol.
+      - ``analysis`` — optional finalized analysis used to suppress a raw
+        winning subtype that integrated evidence explicitly blocked.
 
     Returns a list of markdown lines to extend ``analysis.md`` with.
 
@@ -304,6 +307,7 @@ def build_candidate_evidence_block(
     from .plot_embedding import _get_cancer_type_signature_panels
     from .plot_tumor_expr import _exact_expression_tpm_reference
     from .reference import pan_cancer_expression
+    from .reporting import candidate_winning_subtype_for_analysis
     from .subtype_signature import subtype_signature_panels
 
     panels = _get_cancer_type_signature_panels(n_signature_genes=12)
@@ -365,6 +369,8 @@ def build_candidate_evidence_block(
     for row in candidate_trace[:top_k]:
         code = str(row.get("code") or "")
         subtype = row.get("signature_subtype_promoted") or row.get("winning_subtype")
+        if analysis is not None and code == str(analysis.get("cancer_type") or ""):
+            subtype = candidate_winning_subtype_for_analysis(analysis)
         if subtype and (code, subtype) in sub_panels:
             panel_genes = sub_panels[(code, subtype)]
             title_hint = (

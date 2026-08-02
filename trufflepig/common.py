@@ -407,7 +407,11 @@ def lineage_genes_by_cancer_type_canonical() -> dict:
     """
     from pirlygenes.gene_sets_cancer import lineage_genes_df
 
-    df = lineage_genes_df()
+    # Pirlygenes 5.23.48 adds directional contrast rows. Purity and lineage
+    # presence panels consume expected-high genes only; expected-low genes are
+    # negative evidence and must not become positive coverage markers merely
+    # because they share the same cancer code.
+    df = lineage_genes_df(direction="high")
     canon = canonical_reference_symbols(
         df["Symbol"].tolist(), df["Ensembl_Gene_ID"].tolist()
     )

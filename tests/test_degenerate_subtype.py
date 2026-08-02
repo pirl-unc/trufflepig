@@ -744,6 +744,34 @@ def test_learned_compartment_parent_call_does_not_inherit_trace_subtype():
     assert candidate_winning_subtype_for_analysis(analysis) is None
 
 
+def test_integrated_evidence_blocked_child_does_not_reenter_parent_report():
+    from trufflepig.reporting import candidate_winning_subtype_for_analysis
+
+    analysis = {
+        "cancer_type": "SARC",
+        "candidate_trace": [
+            {"code": "SARC", "winning_subtype": "SARC_PEC"},
+        ],
+        "cancer_type_evidence": {
+            "selected": {
+                "cancer_type": "SARC",
+                "selected_by": "pan_cancer_signature_ranker",
+            },
+            "evidence": [
+                {
+                    "cancer_type": "SARC_PEC",
+                    "can_select_report_label": False,
+                    "blocking_reasons": [
+                        "child reference contradicts an epithelial expected-low program"
+                    ],
+                }
+            ],
+        },
+    }
+
+    assert candidate_winning_subtype_for_analysis(analysis) is None
+
+
 def test_consensus_parent_abstention_does_not_inherit_trace_subtype():
     from trufflepig.reporting import candidate_winning_subtype_for_analysis
 

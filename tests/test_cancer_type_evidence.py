@@ -270,7 +270,7 @@ def test_registry_status_mentions_do_not_create_orthogonal_axes():
         _orthogonal_axes_for_code,
     )
 
-    for code in ("CRC", "COAD", "READ", "STAD", "MM"):
+    for code in ("CRC", "COAD", "READ", "STAD", "MM", "SARC_PEC"):
         assert _orthogonal_axes_for_code(code) == []
 
     assert [
@@ -280,6 +280,10 @@ def test_registry_status_mentions_do_not_create_orthogonal_axes():
         "CRC",
         "COAD",
     ]
+    assert [
+        row.get("code") or row.get("family")
+        for row in _lineage_path_for_code("SARC_PEC")
+    ] == ["sarcoma", "SARC", "SARC_PEC"]
 
 
 def test_broad_only_channels_require_positive_signal():
@@ -6114,7 +6118,7 @@ def test_direct_cml_reference_beats_aml_status_child_parent(monkeypatch):
     assert laml["local_reference_status_child_code"] == "LAML_ELNadv"
 
 
-def test_fusion_driven_subtype_reference_respects_supplied_negative_fusions(
+def test_fusion_driven_subtype_does_not_require_the_subtype_fusion(
     monkeypatch,
 ):
     import trufflepig.cancer_type_evidence as evidence
@@ -6145,7 +6149,7 @@ def test_fusion_driven_subtype_reference_respects_supplied_negative_fusions(
     no_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
     no_fusion = select_report_scope_from_evidence(expression, no_fusion_analysis)
     assert no_fusion["selected"]["cancer_type"] == "SARC_PEC"
-    assert no_fusion["selected"]["local_reference_requires_fusion_confirmation"] is True
+    assert no_fusion["selected"]["local_reference_requires_fusion_confirmation"] is False
 
     matching_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
     matching_fusion_analysis["fusion_inputs_supplied"] = True
@@ -6172,15 +6176,80 @@ def test_fusion_driven_subtype_reference_respects_supplied_negative_fusions(
         negative_fusion_analysis,
     )
 
-    assert negative_fusion["selected"]["cancer_type"] == "SARC"
+    assert negative_fusion["selected"]["cancer_type"] == "SARC_PEC"
     pec = next(
         row for row in negative_fusion["evidence"]
         if row["cancer_type"] == "SARC_PEC"
     )
+    assert pec["can_select_report_label"] is True
+    assert pec["local_reference_explicit_negative_fusion"] is False
+    assert not any("SFPQ-TFE3" in reason for reason in pec["blocking_reasons"])
+
+
+def test_mixed_lineage_local_child_reference_abstains_at_established_parent(
+    monkeypatch,
+):
+    """A local leaf absent from the main beam needs coherent identity evidence.
+
+    This models the Alvin failure generically: a sarcoma child reference has a
+    plausible positive program, but epithelial expected-low genes contradict
+    that precision. The broad sarcoma call remains; the local reference stays
+    available as differential evidence.
+    """
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
+
+    markers = ("ACTA2", "TFE3", "MITF", "PMEL")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "SARC_PEC": {
+                "markers": markers,
+                "ref_medians": {gene: 100.0 for gene in markers},
+                "context_codes": ("SARC",),
+                "parent_code": "SARC",
+                "family": "sarcoma",
+                "primary_tissue": "soft_tissue",
+                "source_cohort": "GSE328026_PECOMA_2026",
+                "reference_kind": "observed_bulk_reference",
+                "expression_source": "GEO",
+                "fusion_driven": "subtype",
+                "fusion_driver": "SFPQ-TFE3; DVL2-TFE3",
+            }
+        },
+    )
+
+    original_marker_coherence = evidence._marker_coherence
+
+    def marker_coherence(code, sample):
+        if code == "SARC_PEC":
+            return {
+                "code": code,
+                "status": "mixed",
+                "detected": 4,
+                "total": 5,
+                "required_for_consistent": 3,
+                "detected_fraction": 0.8,
+                "unexpected_low_detected": 3,
+                "unexpected_low_genes": ["PTPRC", "KRT8", "EPCAM"],
+            }
+        return original_marker_coherence(code, sample)
+
+    monkeypatch.setattr(evidence, "_marker_coherence", marker_coherence)
+    result = select_report_scope_from_evidence(
+        _expression_frame({gene: 90.0 for gene in markers}),
+        _analysis(("SARC", 1.0), ("LUSC", 0.15)),
+    )
+
+    assert result["selected"]["cancer_type"] == "SARC"
+    pec = next(
+        row for row in result["evidence"] if row["cancer_type"] == "SARC_PEC"
+    )
     assert pec["can_select_report_label"] is False
-    assert pec["local_reference_explicit_negative_fusion"] is True
     assert any(
-        "fusion input was supplied" in reason and "SFPQ-TFE3" in reason
+        "contradictory expected-low lineage program" in reason
+        and "epithelial: KRT8, EPCAM" in reason
         for reason in pec["blocking_reasons"]
     )
 

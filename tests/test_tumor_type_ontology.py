@@ -32,6 +32,15 @@ def test_lineage_panels_lose_no_genes_to_alias_drift():
     assert "CD20" not in panels.get("DLBC", [])
 
 
+def test_canonical_lineage_panels_keep_directional_contrasts_out_of_presence_scoring():
+    """Positive lineage consumers must not invert expected-low MMNST evidence."""
+    from trufflepig.common import lineage_genes_by_cancer_type_canonical
+
+    markers = set(lineage_genes_by_cancer_type_canonical()["SARC_MMNST"])
+    assert {"TYR", "PMEL", "MLANA", "DCT", "MITF", "SOX10", "S100B"} <= markers
+    assert markers.isdisjoint({"PMP22", "PMP2", "MPZ", "PRKAR1A"})
+
+
 def test_biomarker_symbols_canonicalized_to_reference_vocabulary():
     """cancer-key-genes biomarker aliases must be recovered into the reference
     vocabulary for the marker-expectation channel (it has no Ensembl column, so

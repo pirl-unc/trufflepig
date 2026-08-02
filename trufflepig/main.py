@@ -9013,6 +9013,7 @@ def _generate_text_reports(
                 candidate_trace,
                 sample_tpm_by_symbol,
                 top_k=3,
+                analysis=analysis,
             )
             if evidence_lines:
                 lines.extend(evidence_lines)

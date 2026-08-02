@@ -272,7 +272,11 @@ _UNEXPECTED_LOW_GENE_LINEAGE: dict[str, str] = {
     "MYOD1": "mesenchymal",
     "MYOG": "mesenchymal",
 }
-_FUSION_DRIVEN_REFERENCE_STATES = frozenset({"defining", "subtype"})
+# Only a defining fusion constrains whether the entity itself may be selected.
+# ``subtype`` means that a molecular subset exists inside the diagnosis (for
+# example TFE3-rearranged PEComa); it does not make that fusion a prerequisite
+# for the broader entity.
+_FUSION_DRIVEN_REFERENCE_STATES = frozenset({"defining"})
 _LOCAL_REFERENCE_SIGNATURE_ANCHOR_BLOCKED_LINEAGES_BY_PRIMARY_TISSUE = {
     "": frozenset({"epithelial"}),
     "soft_tissue": frozenset({"epithelial"}),
@@ -3800,7 +3804,6 @@ def _orthogonal_axes_for_code(
     viral_agent = _clean(row.get("viral_agent"))
     viral_etiology = _clean(row.get("viral_etiology")).lower()
     fusion_driver = _clean(row.get("fusion_driver"))
-    fusion_driven = _clean(row.get("fusion_driven")).lower()
     text = " ".join(
         part.lower()
         for part in (
@@ -3927,9 +3930,6 @@ def _orthogonal_axes_for_code(
             system="transcription-factor dominance",
             state_code=suffix,
         )
-    if fusion_driver and parent_code and fusion_driven == "subtype":
-        add_axis("fusion_driver", fusion_driver, system="fusion")
-
     if (
         not axes
         and parent_code
@@ -7874,6 +7874,31 @@ def _add_local_expression_reference_features(
                 f"({unexpected_low_lineage_conflict['close_candidate_support']:.2f}x "
                 "top support), so the local expression reference is recorded "
                 "as context rather than selecting the report label"
+            )
+        # A child absent from the first-pass beam is being introduced solely by
+        # its local reference here. Expected-low genes that resolve to another
+        # lineage make that leaf internally contradictory even when no close
+        # sibling happened to enter the truncated ranker beam. Preserve the
+        # established parent rather than manufacturing unsupported precision.
+        divergent_expected_low = _marker_coherence_unexpected_low_lineages(
+            code_marker_coherence
+        )
+        if (
+            parent_code
+            and parent_code != code
+            and not has_direct_fusion
+            and divergent_expected_low
+            and not signature_anchored
+        ):
+            blockers.append(
+                "child exact-reference refinement has a contradictory "
+                "expected-low lineage program ("
+                + "; ".join(
+                    f"{lineage}: {', '.join(genes)}"
+                    for lineage, genes in sorted(divergent_expected_low.items())
+                )
+                + "); retain the established parent until independent identity "
+                "evidence resolves the leaf"
             )
         background_compartment_conflict = (
             _local_reference_background_compartment_conflict(
