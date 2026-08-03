@@ -40,7 +40,7 @@ from .reporting import (
     offcontext_known_targets,
     analysis_site_template_for_subtype,
     cancer_code_display_name,
-    cancer_key_genes_lookup_for_analysis,
+    cancer_therapy_panel_for_analysis,
     canonical_target_symbol,
     candidate_winning_subtype_for_analysis,
     clinical_maturity_summary,
@@ -50,7 +50,6 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_interpretation,
     expression_independent_rna_context,
-    filter_current_therapy_targets,
     format_missing_observation_cell,
     format_missing_observation_interp,
     hla_restrictions_for_target_row,
@@ -84,6 +83,7 @@ from .sample_context import (
     library_prep_clause,
     library_prep_display_label,
 )
+from .infantile_spindle import infantile_spindle_guidance_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -803,6 +803,11 @@ def _top_therapies(
         supplied_alteration_rank = (
             0 if supplied_alteration_supports_target_row(t, analysis) else 1
         )
+        if (
+            _brief_truthy(t.get("requires_supplied_alteration"))
+            and supplied_alteration_rank != 0
+        ):
+            continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):
                 continue
@@ -1240,35 +1245,9 @@ def _parent_code_for(code):
 
 
 def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
-    from pirlygenes.gene_sets_cancer import cancer_therapy_targets
-
-    panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
-        cancer_code,
-        analysis,
-        ranges_df=ranges_df,
+    panel_code, panel_subtype, targets_df = cancer_therapy_panel_for_analysis(
+        cancer_code, analysis, ranges_df=ranges_df
     )
-    if panel_subtype:
-        targets_df = cancer_therapy_targets(panel_code, subtype=panel_subtype)
-    else:
-        targets_df = cancer_therapy_targets(panel_code)
-    # Subtype -> parent fallback: a refined call can land on a subtype code
-    # (e.g. HNSC_HPVneg, LAML_ELNfav) that has no curated therapy rows of its
-    # own, which would silently empty the shortlist even though the parent
-    # cohort (HNSC: pembrolizumab/cetuximab; LAML: CD33/FLT3/IDH/venetoclax)
-    # is fully curated. Fall back to the parent panel and report against it;
-    # the existing ``subtype_curation_scope_note`` (fires when panel_code !=
-    # cancer_code) explains the parent-panel use to the reader.
-    if targets_df is None or targets_df.empty:
-        parent = _parent_code_for(panel_code)
-        if parent and parent != panel_code:
-            parent_targets = cancer_therapy_targets(parent)
-            if parent_targets is not None and not parent_targets.empty:
-                panel_code, panel_subtype, targets_df = (
-                    parent,
-                    None,
-                    parent_targets,
-                )
-    targets_df = filter_current_therapy_targets(targets_df)
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 
 
@@ -2724,6 +2703,9 @@ def build_summary(
     alteration_line = _alteration_evidence_line(analysis)
     if alteration_line:
         lines.append(alteration_line)
+    spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
+    if spindle_guidance:
+        lines.append(spindle_guidance)
     lateral_rare_prompts_are_summary_level = not (
         fusion_line
         or alteration_line
@@ -2851,7 +2833,7 @@ def build_summary(
         ranges_df=ranges_df,
     )
     hla_prompts = _missing_hla_prompts(targets_df, ranges_df, analysis)
-    if panel_code in cancer_key_genes_cancer_types():
+    if targets_df is not None and len(targets_df):
         therapy_analysis = dict(analysis)
         if panel_subtype:
             therapy_analysis["_target_panel_subtype"] = panel_subtype
@@ -3024,8 +3006,6 @@ def build_actionable(
     biomarker panel and therapy landscape inline; no pipeline-
     internal jargon.
     """
-    from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
-
     from .report_view import finalized_purity_headline
 
     purity = analysis.get("purity") or {}
@@ -3136,6 +3116,12 @@ def build_actionable(
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
     if fusion_line:
         lines.append(f"\n{fusion_line}")
+    alteration_line = _alteration_evidence_line(analysis)
+    if alteration_line:
+        lines.append(f"\n{alteration_line}")
+    spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
+    if spindle_guidance:
+        lines.append(f"\n{spindle_guidance}")
     # Tissue-composition banner (if non-tumor-consistent) so
     # an actionable reader sees the caveat attached to the
     # working call, not buried in the summary. Same evidence-gated
@@ -3163,7 +3149,7 @@ def build_actionable(
     )
     hla_prompts = _missing_hla_prompts(targets_df, ranges_df, analysis)
     panel_label = _panel_display_label(panel_code, panel_subtype)
-    if panel_code in cancer_key_genes_cancer_types():
+    if targets_df is not None and len(targets_df):
         from .common import ranges_by_symbol
         sym_to_row = ranges_by_symbol(ranges_df)
 

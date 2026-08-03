@@ -136,7 +136,7 @@ from .format import (
 from .reporting import (
     cancer_code_display_name,
     canonical_target_symbol,
-    cancer_key_genes_lookup_for_analysis,
+    cancer_therapy_panel_for_analysis,
     context_expression_band_cell,
     expression_independent_indication,
     expression_independent_interpretation,
@@ -342,7 +342,7 @@ def print_cancer_registry(
     from trufflepig.cancer_ontology import cancer_type_registry
     from pirlygenes.gene_sets_cancer import (
 
-        cancer_biomarker_genes, cancer_therapy_targets,
+        cancer_biomarker_genes,
 
     )
 
@@ -3487,18 +3487,14 @@ def _analyze_body(run: AnalyzeRun):
     if plot_ctx.enabled:
         print("[plot] Generating therapy target tissue expression...")
         try:
-            panel_code_for_tissues, panel_subtype_for_tissues = (
-                cancer_key_genes_lookup_for_analysis(effective_cancer_type, analysis)
-            )
-            target_panel_for_tissues = (
-                cancer_therapy_targets(
-                    panel_code_for_tissues, subtype=panel_subtype_for_tissues
-                )
-                if panel_subtype_for_tissues
-                else cancer_therapy_targets(panel_code_for_tissues)
-            )
-            target_panel_for_tissues = filter_current_therapy_targets(
-                target_panel_for_tissues
+            (
+                panel_code_for_tissues,
+                panel_subtype_for_tissues,
+                target_panel_for_tissues,
+            ) = cancer_therapy_panel_for_analysis(
+                effective_cancer_type,
+                analysis,
+                therapy_targets_loader=cancer_therapy_targets,
             )
             if target_panel_for_tissues is not None and not target_panel_for_tissues.empty:
                 curated_target_symbols.update(
@@ -3886,23 +3882,15 @@ def _analyze_body(run: AnalyzeRun):
         priority_targets_png = None
         priority_target_context_png = None
         try:
-            from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
-
             disease_state_for_priority = compose_disease_state_narrative(analysis)
-            panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
+            panel_code, panel_subtype, target_panel = cancer_therapy_panel_for_analysis(
                 report_cancer_type,
                 analysis,
                 ranges_df=ranges_df,
+                therapy_targets_loader=cancer_therapy_targets,
             )
-            target_panel = None
             actionable_genes = None
-            if panel_code in cancer_key_genes_cancer_types():
-                target_panel = (
-                    cancer_therapy_targets(panel_code, subtype=panel_subtype)
-                    if panel_subtype
-                    else cancer_therapy_targets(panel_code)
-                )
-                target_panel = filter_current_therapy_targets(target_panel)
+            if target_panel is not None and not target_panel.empty:
                 actionable_genes = _select_actionable_plot_genes(
                     ranges_df,
                     panel_code,
@@ -9576,6 +9564,19 @@ def _build_target_report(
 
     lines = [f"# Therapeutic Target Analysis — {cancer_code} ({cancer_name})\n"]
     lines.append(_target_report_mode_intro(sample_mode, cancer_code, p_lo, p_mid, p_hi))
+    from .infantile_spindle import (
+        infantile_spindle_driver_spectrum_markdown,
+        infantile_spindle_guidance_markdown,
+    )
+
+    spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
+    if spindle_guidance:
+        lines.append("\n" + spindle_guidance + "\n")
+    driver_spectrum = infantile_spindle_driver_spectrum_markdown(
+        cancer_code, analysis
+    )
+    if driver_spectrum:
+        lines.append("\n" + driver_spectrum + "\n")
     if reference_cancer_code != cancer_code:
         expr_ref_code = cancer_type_context.code_for("expression")
         expr_ref_source = ""
@@ -9989,20 +9990,23 @@ def _build_target_report(
     # a fallback to the general tables.
     try:
         from pirlygenes.gene_sets_cancer import (
-            cancer_biomarker_genes, cancer_therapy_targets, cancer_key_genes_cancer_types,
+            cancer_biomarker_genes,
+            cancer_key_genes_cancer_types,
         )
 
-        panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
+        panel_code, panel_subtype, targets_df = cancer_therapy_panel_for_analysis(
             cancer_code,
             analysis,
             ranges_df=ranges_df,
+            therapy_targets_loader=cancer_therapy_targets,
         )
         panel_display = (
             f"{panel_code} ({str(panel_subtype).replace('_', ' ')})"
             if panel_subtype
             else panel_code
         )
-        if panel_code in cancer_key_genes_cancer_types():
+        has_upstream_panel = panel_code in cancer_key_genes_cancer_types()
+        if has_upstream_panel or (targets_df is not None and len(targets_df)):
             # ID-based lookup with symbol fallback: biomarker panel
             # comes in as symbols (curated by cancer_biomarker_genes()),
             # we resolve to Ensembl IDs once and query the ID-keyed
@@ -10013,9 +10017,13 @@ def _build_target_report(
                 ranges_by_symbol,
                 panel_symbols_to_gene_ids,
             )
-            biomarker_syms_for_lookup = cancer_biomarker_genes(
-                panel_code, subtype=panel_subtype
-            ) if panel_subtype else cancer_biomarker_genes(panel_code)
+            biomarker_syms_for_lookup = (
+                cancer_biomarker_genes(panel_code, subtype=panel_subtype)
+                if has_upstream_panel and panel_subtype
+                else cancer_biomarker_genes(panel_code)
+                if has_upstream_panel
+                else []
+            )
             _panel_sym_to_id = panel_symbols_to_gene_ids(biomarker_syms_for_lookup)
             _id_to_row = ranges_by_gene_id(ranges_df)
             _sym_to_row_fallback = ranges_by_symbol(ranges_df)
@@ -10050,11 +10058,7 @@ def _build_target_report(
                     )
                     + "\n"
                 )
-            biomarker_syms = (
-                cancer_biomarker_genes(panel_code, subtype=panel_subtype)
-                if panel_subtype
-                else cancer_biomarker_genes(panel_code)
-            )
+            biomarker_syms = biomarker_syms_for_lookup
             if biomarker_syms:
                 lines.append(
                     "| Gene | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Attribution |"
@@ -10114,12 +10118,6 @@ def _build_target_report(
                 "ADAM9 can therefore appear in the expression screen without "
                 "being a priority recommendation for this sample.\n"
             )
-            targets_df = (
-                cancer_therapy_targets(panel_code, subtype=panel_subtype)
-                if panel_subtype
-                else cancer_therapy_targets(panel_code)
-            )
-            targets_df = filter_current_therapy_targets(targets_df)
             panel_target_symbols = {
                 canon
                 for canon in (

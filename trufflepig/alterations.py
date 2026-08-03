@@ -135,6 +135,52 @@ def _clean_gene(value: object) -> str:
     return ""
 
 
+def alteration_record_genes(record: object) -> tuple[str, ...]:
+    """Return every gene named by a normalized alteration record.
+
+    ``AlterationRecord.gene`` remains the primary gene for backwards
+    compatibility, but a fusion is intrinsically a two-gene event.  Loose text
+    inputs such as ``ETV6-NTRK3 fusion`` historically retained only ``ETV6``;
+    target matching therefore missed the therapeutically relevant ``NTRK3``
+    partner.  Recover symbols from the structured gene plus the original event
+    text without interpreting expression as alteration evidence.
+    """
+    if not hasattr(record, "get"):
+        return ()
+    alteration_type = str(record.get("alteration_type") or "").strip().lower()
+    event_text = " ".join(
+        str(record.get(key) or "")
+        for key in ("alteration", "raw_name")
+    ).lower()
+    fusion_like = alteration_type == "fusion" or any(
+        term in event_text for term in ("fusion", "rearrang", "translocation")
+    )
+    values = (
+        record.get("gene"),
+        record.get("alteration"),
+        record.get("raw_name"),
+    )
+    genes: list[str] = []
+    for value in values:
+        text = str(value or "").upper()
+        for match in _GENE_RE.finditer(text):
+            token = match.group(0)
+            candidates = [token]
+            if fusion_like and "-" in token:
+                partners = token.split("-")
+                # Preserve legitimate hyphenated symbols such as MAGE-A4 while
+                # recovering conventional fusion pairs (ETV6-NTRK3,
+                # EML4-ALK, TPM3-NTRK1, ...).
+                if len(partners) == 2 and all(len(part) >= 3 for part in partners):
+                    candidates = partners
+            for candidate in candidates:
+                if candidate in _NON_GENE_TOKENS or candidate.startswith("CHR"):
+                    continue
+                if candidate not in genes:
+                    genes.append(candidate)
+    return tuple(genes)
+
+
 def _find_column(columns: Iterable[object], candidates: set[str]) -> object | None:
     for col in columns:
         if _clean_header(col) in candidates:

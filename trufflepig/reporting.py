@@ -648,6 +648,8 @@ def format_missing_observation_interp(state: str) -> str:
 
 def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
     """Return supplied alteration records matching a target gene symbol."""
+    from .alterations import alteration_record_genes
+
     if not isinstance(analysis, dict):
         return []
     wanted = _clean_text(gene).upper()
@@ -658,8 +660,7 @@ def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
     for record in records:
         if not hasattr(record, "get"):
             continue
-        observed = _clean_text(record.get("gene")).upper()
-        if observed == wanted:
+        if wanted in alteration_record_genes(record):
             matches.append(dict(record))
     return matches
 
@@ -2463,6 +2464,69 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
         pass
 
     return default_code or resolved_code, None
+
+
+def cancer_therapy_panel_for_analysis(
+    cancer_code,
+    analysis,
+    ranges_df=None,
+    *,
+    therapy_targets_loader=None,
+):
+    """Return the complete curated therapy panel for the active report scope.
+
+    Pirlygenes remains the primary disease-curation source.  Trufflepig adds a
+    small alteration-gated layer for infantile spindle tumors whose current
+    upstream panel is empty.  Exact molecular panels take precedence over a
+    generic parent fallback; other uncurated descendants retain the historical
+    parent-panel behavior.
+    """
+    import pandas as pd
+    if therapy_targets_loader is None:
+        from pirlygenes.gene_sets_cancer import cancer_therapy_targets
+
+        therapy_targets_loader = cancer_therapy_targets
+
+    from .infantile_spindle import infantile_spindle_therapy_targets
+
+    panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
+        cancer_code,
+        analysis,
+        ranges_df=ranges_df,
+    )
+    if panel_subtype:
+        targets_df = therapy_targets_loader(panel_code, subtype=panel_subtype)
+    else:
+        targets_df = therapy_targets_loader(panel_code)
+
+    molecular_df = infantile_spindle_therapy_targets(cancer_code, analysis)
+    has_molecular_panel = molecular_df is not None and not molecular_df.empty
+
+    if (targets_df is None or targets_df.empty) and not has_molecular_panel:
+        parent_code = _cancer_registry_parent_codes().get(_clean_text(panel_code), "")
+        if parent_code and parent_code != panel_code:
+            parent_targets = therapy_targets_loader(parent_code)
+            if parent_targets is not None and not parent_targets.empty:
+                panel_code, panel_subtype, targets_df = parent_code, None, parent_targets
+
+    parts = [
+        frame
+        for frame in (targets_df, molecular_df)
+        if frame is not None and not frame.empty
+    ]
+    if not parts:
+        if targets_df is not None:
+            return panel_code, panel_subtype, targets_df.reset_index(drop=True)
+        return panel_code, panel_subtype, pd.DataFrame()
+    targets_df = pd.concat(parts, ignore_index=True, sort=False)
+    dedupe_columns = [
+        col
+        for col in ("cancer_code", "subtype", "symbol", "agent", "indication")
+        if col in targets_df.columns
+    ]
+    if dedupe_columns:
+        targets_df = targets_df.drop_duplicates(subset=dedupe_columns, keep="last")
+    return panel_code, panel_subtype, filter_current_therapy_targets(targets_df)
 
 
 def subtype_key_for_analysis(analysis, ranges_df=None):

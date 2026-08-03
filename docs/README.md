@@ -8,10 +8,13 @@ notes only when you need their implementation detail.
 1. [Cancer-call decision workflow](./CANCER_CALL_DECISION_FLOW.md) — the
    high-level path from an expression table to the final cancer call,
    decomposition, therapy shortlist, and report.
-2. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
+2. [Infantile spindle-cell molecular interpretation](./infantile-spindle-molecular-interpretation.md)
+   — IFS, CMN, NTRK-spindle driver overlap, alteration-gated therapies, and
+   current trial context.
+3. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
    current decision logic is being consolidated and the target staged
    architecture.
-3. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
+4. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
    — how finalized conclusions and uncertainty should flow into every report
    artifact without contradiction.
 
