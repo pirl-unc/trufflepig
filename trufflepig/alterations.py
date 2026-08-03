@@ -17,6 +17,14 @@ import pandas as pd
 
 
 _GENE_RE = re.compile(r"\b[A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,6})?\b")
+_FUSION_PAIR_RE = re.compile(
+    r"\b([A-Z][A-Z0-9]{1,10})\s*(?:::|--|/|-)\s*"
+    r"([A-Z][A-Z0-9]{1,10})\b"
+)
+_NEGATIVE_CALL_RE = re.compile(
+    r"\b(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present)\b",
+    re.IGNORECASE,
+)
 _NON_GENE_TOKENS = {
     "A",
     "AA",
@@ -135,15 +143,77 @@ def _clean_gene(value: object) -> str:
     return ""
 
 
+def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
+    """Whether prose explicitly negates this gene's molecular finding."""
+    if not hasattr(record, "get"):
+        return False
+    wanted = str(gene or "").strip().upper()
+    if not wanted:
+        return False
+    text = " ".join(
+        str(record.get(key) or "")
+        for key in ("alteration", "raw_name", "confidence")
+    )
+    escaped = re.escape(wanted)
+    return bool(
+        re.search(
+            rf"\b{escaped}\b(?:\s+(?:fusion|rearrangement|translocation))?"
+            rf"\s*(?:is\s+)?{_NEGATIVE_CALL_RE.pattern}",
+            text,
+            re.IGNORECASE,
+        )
+        or re.search(
+            rf"\b(?:no|without)\s+(?:evidence\s+of\s+)?(?:an?\s+)?"
+            rf"\b{escaped}\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _explicit_fusion_pair(record: object) -> tuple[str, ...]:
+    """Return one connected, non-negated fusion pair from the event fields."""
+    for key in ("gene", "alteration", "raw_name"):
+        text = str(record.get(key) or "").upper()
+        for match in _FUSION_PAIR_RE.finditer(text):
+            genes = (match.group(1), match.group(2))
+            if not all(len(gene) >= 3 for gene in genes):
+                continue
+            if any(
+                gene in _NON_GENE_TOKENS or gene.startswith("CHR") for gene in genes
+            ):
+                continue
+            clause_end = min(
+                [
+                    boundary
+                    for boundary in (
+                        text.find(",", match.end()),
+                        text.find(";", match.end()),
+                        text.find("\n", match.end()),
+                    )
+                    if boundary >= 0
+                ]
+                or [len(text)]
+            )
+            clause = text[match.start() : clause_end]
+            if _NEGATIVE_CALL_RE.search(clause):
+                continue
+            if any(alteration_record_gene_is_negated(record, gene) for gene in genes):
+                continue
+            return genes
+    return ()
+
+
 def alteration_record_genes(record: object) -> tuple[str, ...]:
-    """Return every gene named by a normalized alteration record.
+    """Return the structured gene and any explicit fusion partner.
 
     ``AlterationRecord.gene`` remains the primary gene for backwards
     compatibility, but a fusion is intrinsically a two-gene event.  Loose text
     inputs such as ``ETV6-NTRK3 fusion`` historically retained only ``ETV6``;
     target matching therefore missed the therapeutically relevant ``NTRK3``
-    partner.  Recover symbols from the structured gene plus the original event
-    text without interpreting expression as alteration evidence.
+    partner. Recover a partner only from a connected pair such as
+    ``ETV6-NTRK3`` or ``ETV6::NTRK3``. Other genes mentioned in commentary are
+    not part of the event, and explicitly negated findings are excluded.
     """
     if not hasattr(record, "get"):
         return ()
@@ -155,30 +225,22 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
     fusion_like = alteration_type == "fusion" or any(
         term in event_text for term in ("fusion", "rearrang", "translocation")
     )
-    values = (
-        record.get("gene"),
-        record.get("alteration"),
-        record.get("raw_name"),
-    )
-    genes: list[str] = []
-    for value in values:
-        text = str(value or "").upper()
-        for match in _GENE_RE.finditer(text):
-            token = match.group(0)
-            candidates = [token]
-            if fusion_like and "-" in token:
-                partners = token.split("-")
-                # Preserve legitimate hyphenated symbols such as MAGE-A4 while
-                # recovering conventional fusion pairs (ETV6-NTRK3,
-                # EML4-ALK, TPM3-NTRK1, ...).
-                if len(partners) == 2 and all(len(part) >= 3 for part in partners):
-                    candidates = partners
-            for candidate in candidates:
-                if candidate in _NON_GENE_TOKENS or candidate.startswith("CHR"):
-                    continue
-                if candidate not in genes:
-                    genes.append(candidate)
-    return tuple(genes)
+    if fusion_like:
+        pair = _explicit_fusion_pair(record)
+        if pair:
+            return pair
+
+    primary_text = str(record.get("gene") or "").upper()
+    primary = _clean_gene(primary_text)
+    if not primary:
+        return ()
+    if fusion_like and _FUSION_PAIR_RE.fullmatch(primary_text.strip()):
+        # A connected pair was present but rejected above (for example because
+        # the event was explicitly reported as not detected).
+        return ()
+    if alteration_record_gene_is_negated(record, primary):
+        return ()
+    return (primary,)
 
 
 def _find_column(columns: Iterable[object], candidates: set[str]) -> object | None:

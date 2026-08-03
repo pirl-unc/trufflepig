@@ -62,6 +62,34 @@ def test_fusion_partner_is_available_to_therapy_matching():
     )
 
 
+def test_fusion_commentary_does_not_create_a_negated_partner():
+    record = _record("ALK fusion, NTRK3 not detected")
+
+    assert alteration_record_genes(record) == ("ALK",)
+    report = build_summary(
+        _analysis("SARC", "ALK fusion, NTRK3 not detected"),
+        _ranges(ALK=80.0, NTRK3=60.0),
+        cancer_code="SARC",
+        disease_state="",
+    )
+    assert "confirmed supplied NTRK fusion" not in report
+    assert "- **NTRK3** — larotrectinib" not in report
+
+
+def test_explicitly_negative_fusion_pair_is_not_confirmed():
+    record = _record("ETV6-NTRK3 fusion not detected")
+
+    assert alteration_record_genes(record) == ()
+    report = build_summary(
+        _analysis("SARC_IFS", "ETV6-NTRK3 fusion not detected"),
+        _ranges(NTRK3=60.0),
+        cancer_code="SARC_IFS",
+        disease_state="",
+    )
+    assert "confirmed supplied NTRK fusion" not in report
+    assert "- **NTRK3** — larotrectinib" not in report
+
+
 def test_ifs_summary_prioritizes_larotrectinib_for_confirmed_ntrk_fusion():
     analysis = _analysis("SARC_IFS", "ETV6-NTRK3 fusion")
 

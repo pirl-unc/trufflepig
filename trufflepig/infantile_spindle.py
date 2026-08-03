@@ -13,7 +13,7 @@ import logging
 
 import pandas as pd
 
-from .alterations import alteration_record_genes
+from .alterations import alteration_record_gene_is_negated, alteration_record_genes
 from .molecular_therapy import NTRK_GENES, ntrk_fusion_therapy_targets, therapy_row
 
 
@@ -75,7 +75,11 @@ def _confirmed_ntrk_fusion_genes(analysis) -> tuple[str, ...]:
         if not _is_fusion(record):
             continue
         for gene in alteration_record_genes(record):
-            if gene in NTRK_GENES and gene not in genes:
+            if (
+                gene in NTRK_GENES
+                and not alteration_record_gene_is_negated(record, gene)
+                and gene not in genes
+            ):
                 genes.append(gene)
     return tuple(genes)
 

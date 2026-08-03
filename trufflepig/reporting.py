@@ -648,7 +648,10 @@ def format_missing_observation_interp(state: str) -> str:
 
 def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
     """Return supplied alteration records matching a target gene symbol."""
-    from .alterations import alteration_record_genes
+    from .alterations import (
+        alteration_record_gene_is_negated,
+        alteration_record_genes,
+    )
 
     if not isinstance(analysis, dict):
         return []
@@ -660,7 +663,10 @@ def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
     for record in records:
         if not hasattr(record, "get"):
             continue
-        if wanted in alteration_record_genes(record):
+        if (
+            wanted in alteration_record_genes(record)
+            and not alteration_record_gene_is_negated(record, wanted)
+        ):
             matches.append(dict(record))
     return matches
 

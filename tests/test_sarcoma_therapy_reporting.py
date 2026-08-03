@@ -60,7 +60,7 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
     assert set(panel["subtype"]) == {"exact_sarcoma_molecular"}
     assert "crizotinib" in set(panel["agent"])
     assert "- **ALK** — crizotinib" in report
-    assert "verified ALK-positive disease" in report
+    assert "verified activating ALK fusion/rearrangement" in report
     assert "imatinib-resistant GIST" not in report
 
     expression_only = build_summary(
@@ -70,6 +70,15 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
         disease_state="",
     )
     assert "- **ALK** — crizotinib" not in expression_only
+
+    for incompatible_event in ("ALK loss", "ALK amplification"):
+        incompatible = build_summary(
+            _analysis("SARC_IMT", incompatible_event),
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+        assert "- **ALK** — crizotinib" not in incompatible
 
 
 def test_exact_report_scope_wins_over_broad_reference_argument():

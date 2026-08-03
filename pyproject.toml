@@ -14,19 +14,17 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    # >=5.23.49: pairwise cancer-type discriminators carry the explicit
-    # hypothesis-only promotion policy and lineage panels expose directional
-    # high/low evidence (used explicitly below rather than mixing contrasts),
-    # while pinning the compact oncoref 1.8.170 reference API.
-    "pirlygenes>=5.23.49,<6",
+    # >=5.23.50: corrected CMN/SCLC/classification policies and regenerated
+    # cohort views, while pinning the compact oncoref 1.8.174 reference API.
+    "pirlygenes>=5.23.50,<6",
     # oncoref is the canonical cancer-type ontology + normalization source (imported
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    # >=1.8.170: compact all-source availability, acquisition provenance, and
-    # tumor-reference accessors are aligned with pirlygenes without
-    # materializing the 5M-row union.
-    "oncoref>=1.8.170,<2",
+    # >=1.8.174: compact all-source availability, acquisition provenance,
+    # complete-union classification policy, and tumor-reference accessors are
+    # aligned with pirlygenes without materializing the 5M-row union.
+    "oncoref>=1.8.174,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
     # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype

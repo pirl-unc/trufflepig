@@ -81,7 +81,17 @@ def test_every_registry_code_has_ontology_marker_expectations():
         if "ontology_level" in reg.columns
         else set()
     )
-    exempt = parent_nodes | grouping_nodes
+    # A validation/source cohort can remain useful for report context without
+    # being eligible as an RNA classification target.  Such codes do not need
+    # a complete positive/negative marker program (CMN is the current example).
+    non_classification_targets = (
+        set(reg.loc[
+            ~reg["is_classification_target"].fillna(True).astype(bool), "code"
+        ].astype(str))
+        if "is_classification_target" in reg.columns
+        else set()
+    )
+    exempt = parent_nodes | grouping_nodes | non_classification_targets
     ontology = tumor_type_ontology()
 
     # Coverage contract: every upstream registry code must have ontology marker

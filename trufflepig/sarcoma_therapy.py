@@ -30,8 +30,9 @@ def sarcoma_subtype_therapy_targets(cancer_code) -> pd.DataFrame:
                 requires_supplied_alteration=True,
                 eligibility_note=(
                     "requires pathologically confirmed unresectable, recurrent, or "
-                    "refractory IMT and verified ALK-positive disease; FDA label covers "
-                    "adults and children age >=1 year"
+                    "refractory IMT and a verified activating ALK fusion/rearrangement "
+                    "consistent with ALK-positive disease; FDA label covers adults and "
+                    "children age >=1 year"
                 ),
                 indication=(
                     "ALK-positive unresectable, recurrent, or refractory inflammatory "
