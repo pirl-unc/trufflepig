@@ -155,6 +155,7 @@ def test_exact_spindle_entities_have_complete_conditional_target_panels():
         assert {"larotrectinib", "entrectinib", "repotrectinib"}.issubset(
             set(panel["agent"])
         )
+        assert set(panel["subtype"]) == {"infantile_spindle_molecular"}
         assert panel["requires_supplied_alteration"].fillna(False).all()
 
 
