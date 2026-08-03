@@ -14,12 +14,12 @@ import logging
 import pandas as pd
 
 from .alterations import alteration_record_genes
+from .molecular_therapy import NTRK_GENES, ntrk_fusion_therapy_targets, therapy_row
 
 
 _LOGGER = logging.getLogger(__name__)
 
 INFANTILE_SPINDLE_CODES = frozenset({"SARC_IFS", "CMN", "SARC_NTRK_SPINDLE"})
-_NTRK_GENES = ("NTRK1", "NTRK2", "NTRK3")
 
 
 def _clean(value) -> str:
@@ -75,7 +75,7 @@ def _confirmed_ntrk_fusion_genes(analysis) -> tuple[str, ...]:
         if not _is_fusion(record):
             continue
         for gene in alteration_record_genes(record):
-            if gene in _NTRK_GENES and gene not in genes:
+            if gene in NTRK_GENES and gene not in genes:
                 genes.append(gene)
     return tuple(genes)
 
@@ -253,20 +253,6 @@ def infantile_spindle_driver_spectrum_markdown(cancer_code, analysis=None) -> st
     return "\n".join(lines)
 
 
-def _therapy_row(code: str, gene: str, agent: str, **values) -> dict:
-    return {
-        "cancer_code": code,
-        "subtype": "infantile_spindle_molecular",
-        "symbol": gene,
-        "ensembl_gene_id": "",
-        "role": "target",
-        "agent": agent,
-        "agent_class": "small_molecule",
-        "requires_supplied_alteration": True,
-        **values,
-    }
-
-
 def infantile_spindle_therapy_targets(cancer_code, analysis=None) -> pd.DataFrame:
     """Alteration-gated therapy rows for IFS/CMN/NTRK-spindle contexts.
 
@@ -280,73 +266,24 @@ def infantile_spindle_therapy_targets(cancer_code, analysis=None) -> pd.DataFram
         return pd.DataFrame()
     confirmed_ntrk = set(_confirmed_ntrk_fusion_genes(analysis))
     exact_context = code in INFANTILE_SPINDLE_CODES
-    ntrk_genes = _NTRK_GENES if exact_context else tuple(sorted(confirmed_ntrk))
-    rows: list[dict] = []
-    for gene in ntrk_genes:
-        rows.extend(
-            [
-                _therapy_row(
-                    code,
-                    gene,
-                    "larotrectinib",
-                    phase="approved",
-                    treatment_path_tier="approved_indication_matched",
-                    line_of_therapy="approved_biomarker_matched",
-                    eligibility_note=(
-                        "requires a verified in-frame NTRK gene fusion and the "
-                        "label-specific advanced/unresectable or morbidity criteria"
-                    ),
-                    indication="NTRK gene fusion-positive solid tumor",
-                    rationale=(
-                        "Tumor-agnostic TRK inhibitor; prospective pediatric IFS study "
-                        "reported 94% objective response within six cycles"
-                    ),
-                    source="FDA label 2025; PMID:39652801; NCT03834961",
-                ),
-                _therapy_row(
-                    code,
-                    gene,
-                    "entrectinib",
-                    phase="approved",
-                    treatment_path_tier="approved_indication_matched",
-                    line_of_therapy="approved_biomarker_matched",
-                    eligibility_note=(
-                        "requires a verified NTRK gene fusion; age >1 month; confirm "
-                        "label-specific advanced/unresectable or morbidity criteria"
-                    ),
-                    indication="NTRK gene fusion-positive solid tumor",
-                    rationale="Tumor-agnostic TRK/ROS1 inhibitor with a pediatric formulation",
-                    source="FDA pediatric indication 2023; FDA label 2024",
-                ),
-                _therapy_row(
-                    code,
-                    gene,
-                    "repotrectinib",
-                    phase="approved",
-                    treatment_path_tier="approved_indication_matched",
-                    line_of_therapy="approved_biomarker_matched",
-                    eligibility_note=(
-                        "requires a verified NTRK gene fusion and age >=12 years; "
-                        "confirm label criteria and prior TRK-inhibitor history"
-                    ),
-                    indication="NTRK gene fusion-positive solid tumor age 12 years or older",
-                    rationale=(
-                        "Next-generation TRK inhibitor with activity in TKI-naive and "
-                        "TKI-pretreated disease; pediatric/young-adult study NCT04094610"
-                    ),
-                    source="FDA accelerated approval 2024; NCT04094610",
-                ),
-            ]
-        )
+    ntrk_genes = NTRK_GENES if exact_context else tuple(sorted(confirmed_ntrk))
+    rows = ntrk_fusion_therapy_targets(
+        code,
+        ntrk_genes,
+        subtype="infantile_spindle_molecular",
+        include_ifs_evidence=True,
+    ).to_dict("records")
     if code == "CMN":
         rows.append(
-            _therapy_row(
+            therapy_row(
                 code,
                 "EGFR",
                 "EGFR TKI review (afatinib; osimertinib secondary)",
+                subtype="infantile_spindle_molecular",
                 phase="off_label",
                 treatment_path_tier="off_label",
                 line_of_therapy="clinical_trial",
+                requires_supplied_alteration=True,
                 eligibility_note=(
                     "requires verified EGFR kinase-domain duplication/internal tandem "
                     "duplication; case-level evidence only; molecular tumor board review"

@@ -2488,6 +2488,7 @@ def cancer_therapy_panel_for_analysis(
         therapy_targets_loader = cancer_therapy_targets
 
     from .infantile_spindle import infantile_spindle_therapy_targets
+    from .sarcoma_therapy import sarcoma_subtype_therapy_targets
 
     panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
         cancer_code,
@@ -2500,6 +2501,13 @@ def cancer_therapy_panel_for_analysis(
         targets_df = therapy_targets_loader(panel_code)
 
     molecular_df = infantile_spindle_therapy_targets(cancer_code, analysis)
+    sarcoma_df = sarcoma_subtype_therapy_targets(cancer_code)
+    if sarcoma_df is not None and not sarcoma_df.empty:
+        molecular_df = pd.concat(
+            [molecular_df, sarcoma_df],
+            ignore_index=True,
+            sort=False,
+        )
     has_molecular_panel = molecular_df is not None and not molecular_df.empty
 
     if (targets_df is None or targets_df.empty) and not has_molecular_panel:
@@ -2507,7 +2515,19 @@ def cancer_therapy_panel_for_analysis(
         if parent_code and parent_code != panel_code:
             parent_targets = therapy_targets_loader(parent_code)
             if parent_targets is not None and not parent_targets.empty:
-                panel_code, panel_subtype, targets_df = parent_code, None, parent_targets
+                # A parent can contain mutually exclusive subtype panels.  An
+                # unmapped child may inherit only genuinely parent-wide rows,
+                # never every sibling's therapies (for example IMT inheriting
+                # GIST, liposarcoma, and MPNST drugs from the SARC table).
+                if "subtype" in parent_targets.columns:
+                    subtype = parent_targets["subtype"].fillna("").astype(str).str.strip()
+                    parent_targets = parent_targets.loc[~subtype.astype(bool)]
+                if not parent_targets.empty:
+                    panel_code, panel_subtype, targets_df = (
+                        parent_code,
+                        None,
+                        parent_targets,
+                    )
 
     parts = [
         frame

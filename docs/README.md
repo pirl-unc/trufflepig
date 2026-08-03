@@ -11,10 +11,13 @@ notes only when you need their implementation detail.
 2. [Infantile spindle-cell molecular interpretation](./infantile-spindle-molecular-interpretation.md)
    — IFS, CMN, NTRK-spindle driver overlap, alteration-gated therapies, and
    current trial context.
-3. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
+3. [Exact spindle-sarcoma therapy panels](./spindle-sarcoma-therapy-panels.md)
+   — diagnosis-specific IMT, DFSP, PEComa, and GIST therapy scope without
+   sibling-panel leakage.
+4. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
    current decision logic is being consolidated and the target staged
    architecture.
-4. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
+5. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
    — how finalized conclusions and uncertainty should flow into every report
    artifact without contradiction.
 

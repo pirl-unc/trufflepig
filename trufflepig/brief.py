@@ -84,6 +84,7 @@ from .sample_context import (
     library_prep_display_label,
 )
 from .infantile_spindle import infantile_spindle_guidance_markdown
+from .sarcoma_therapy import sarcoma_subtype_guidance_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -2706,6 +2707,9 @@ def build_summary(
     spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
     if spindle_guidance:
         lines.append(spindle_guidance)
+    sarcoma_guidance = sarcoma_subtype_guidance_markdown(cancer_code)
+    if sarcoma_guidance:
+        lines.append(sarcoma_guidance)
     lateral_rare_prompts_are_summary_level = not (
         fusion_line
         or alteration_line
@@ -3122,6 +3126,9 @@ def build_actionable(
     spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
     if spindle_guidance:
         lines.append(f"\n{spindle_guidance}")
+    sarcoma_guidance = sarcoma_subtype_guidance_markdown(cancer_code)
+    if sarcoma_guidance:
+        lines.append(f"\n{sarcoma_guidance}")
     # Tissue-composition banner (if non-tumor-consistent) so
     # an actionable reader sees the caveat attached to the
     # working call, not buried in the summary. Same evidence-gated

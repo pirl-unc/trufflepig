@@ -9572,6 +9572,11 @@ def _build_target_report(
     spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
     if spindle_guidance:
         lines.append("\n" + spindle_guidance + "\n")
+    from .sarcoma_therapy import sarcoma_subtype_guidance_markdown
+
+    sarcoma_guidance = sarcoma_subtype_guidance_markdown(cancer_code)
+    if sarcoma_guidance:
+        lines.append("\n" + sarcoma_guidance + "\n")
     driver_spectrum = infantile_spindle_driver_spectrum_markdown(
         cancer_code, analysis
     )
