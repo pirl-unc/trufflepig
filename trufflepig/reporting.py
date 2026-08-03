@@ -2490,8 +2490,16 @@ def cancer_therapy_panel_for_analysis(
     from .infantile_spindle import infantile_spindle_therapy_targets
     from .sarcoma_therapy import sarcoma_subtype_therapy_targets
 
+    active_cancer_code = _clean_text(cancer_code)
+    if isinstance(analysis, dict):
+        active_cancer_code = (
+            _clean_text(analysis.get("report_scope_cancer_type"))
+            or _clean_text(analysis.get("cancer_type"))
+            or active_cancer_code
+        )
+
     panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
-        cancer_code,
+        active_cancer_code,
         analysis,
         ranges_df=ranges_df,
     )
@@ -2500,8 +2508,8 @@ def cancer_therapy_panel_for_analysis(
     else:
         targets_df = therapy_targets_loader(panel_code)
 
-    molecular_df = infantile_spindle_therapy_targets(cancer_code, analysis)
-    sarcoma_df = sarcoma_subtype_therapy_targets(cancer_code)
+    molecular_df = infantile_spindle_therapy_targets(active_cancer_code, analysis)
+    sarcoma_df = sarcoma_subtype_therapy_targets(active_cancer_code)
     if sarcoma_df is not None and not sarcoma_df.empty:
         molecular_df = pd.concat(
             [molecular_df, sarcoma_df],

@@ -2784,6 +2784,9 @@ def _analyze_body(run: AnalyzeRun):
         previous_cancer_code = cancer_code
         previous_selected_scope = selected_scope
         previous_report_scope_cancer_type = report_scope_cancer_type
+        previous_report_scope_parent_cancer_type = analysis.get(
+            "report_scope_parent_cancer_type"
+        )
         previous_rare_scope_inference = rare_scope_inference
         previous_fine_scope_inference = fine_scope_inference
         previous_cancer_type_evidence = cancer_type_evidence
@@ -2954,6 +2957,13 @@ def _analyze_body(run: AnalyzeRun):
                     fusion_scope_inference=fusion_scope_inference,
                     rare_scope_inference=rare_scope_inference,
                     fine_scope_inference=fine_scope_inference,
+                )
+                _restore_report_scope_metadata(
+                    analysis,
+                    report_scope_cancer_type=previous_report_scope_cancer_type,
+                    report_scope_parent_cancer_type=(
+                        previous_report_scope_parent_cancer_type
+                    ),
                 )
                 apply_sample_context_to_purity(analysis, sample_context)
                 purity = analysis["purity"]
@@ -6087,6 +6097,23 @@ def _veto_local_reference_lineage_flip(
     except Exception:  # noqa: BLE001 — refinement guard; never break the analysis
         _LOGGER.warning("local-reference lineage veto failed", exc_info=True)
     return report_scope_cancer_type
+
+
+def _restore_report_scope_metadata(
+    analysis,
+    *,
+    report_scope_cancer_type,
+    report_scope_parent_cancer_type,
+):
+    """Restore whether the pre-adjudication call was explicitly report-scoped."""
+    for key, value in (
+        ("report_scope_cancer_type", report_scope_cancer_type),
+        ("report_scope_parent_cancer_type", report_scope_parent_cancer_type),
+    ):
+        if value:
+            analysis[key] = value
+        else:
+            analysis.pop(key, None)
 
 
 def _propagate_report_scope_selection(

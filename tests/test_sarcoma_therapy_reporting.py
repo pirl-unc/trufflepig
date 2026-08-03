@@ -72,6 +72,27 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
     assert "- **ALK** — crizotinib" not in expression_only
 
 
+def test_exact_report_scope_wins_over_broad_reference_argument():
+    analysis = _analysis("SARC_IMT", "ALK fusion")
+    analysis.update(
+        {
+            "report_scope_cancer_type": "SARC_IMT",
+            "reference_cancer_type": "SARC",
+            "expression_reference_cancer_type": "SARC_IMT",
+        }
+    )
+
+    panel_code, panel_subtype, panel = cancer_therapy_panel_for_analysis(
+        "SARC", analysis
+    )
+
+    assert panel_code == "SARC_IMT"
+    assert panel_subtype is None
+    assert set(panel["subtype"]) == {"exact_sarcoma_molecular"}
+    assert "crizotinib" in set(panel["agent"])
+    assert "imatinib-resistant GIST" not in set(panel["indication"])
+
+
 def test_dfsp_fusion_matches_pdgfb_and_surfaces_only_imatinib():
     analysis = _analysis("SARC_DFSP", "COL1A1-PDGFB fusion")
     _, _, panel = cancer_therapy_panel_for_analysis("SARC_DFSP", analysis)
