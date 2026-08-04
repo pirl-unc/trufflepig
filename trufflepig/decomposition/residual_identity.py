@@ -385,6 +385,24 @@ def _panel_program_vector(row: Any) -> tuple[bool, int, int, int, int]:
     )
 
 
+def _panel_eligible_for_pareto(row: Any) -> bool:
+    """Whether a panel has affirmative identity evidence to compare.
+
+    A failed tissue-identity gate returns an intentionally empty score row.
+    Treating that row as a valid 0/0 high-marker program (and a vacuous 1/1
+    expected-low program) can manufacture a Pareto winner from an all-zero
+    residual. Pareto ordering refines incomplete *positive* programs; it must
+    never turn a gate failure or complete lack of expected-high evidence into
+    an identity vote.
+    """
+
+    return bool(
+        getattr(row, "obligate_passed", False)
+        and getattr(row, "identity_marker_groups_passed", True)
+        and (getattr(row, "high_hits", ()) or ())
+    )
+
+
 def _program_vector_dominates(
     left: tuple[bool, int, int, int, int],
     right: tuple[bool, int, int, int, int],
@@ -417,6 +435,8 @@ def _pareto_panel_candidate(evidence: tuple[Any, ...]) -> str:
         return ""
     by_parent: dict[str, list[Any]] = defaultdict(list)
     for row in evidence:
+        if not _panel_eligible_for_pareto(row):
+            continue
         parent = _clean(getattr(row, "parent_cohort", ""))
         if parent:
             by_parent[parent].append(row)
@@ -582,6 +602,8 @@ def evaluate_residual_identity(
                 panel_decision = dict(
                     complete_program_entity_decision(panel_rows)
                 )
+                if panel_decision.get("decisive"):
+                    panel_decision["decision_basis"] = "complete_program"
                 if not panel_decision.get("decisive"):
                     pareto_panel_candidate = _pareto_panel_candidate(panel_rows)
                     if pareto_panel_candidate:
@@ -633,6 +655,9 @@ def evaluate_residual_identity(
                     else ""
                 ),
                 "panel_decisive": bool(panel_decision.get("decisive")),
+                "panel_decision_basis": _clean(
+                    panel_decision.get("decision_basis")
+                ),
                 "panel_reason": _clean(panel_decision.get("reason")),
                 "background_only_panel_candidate": background_only_panel_candidate,
                 "background_attributed_expected_low_genes": list(
@@ -678,9 +703,27 @@ def evaluate_residual_identity(
             or row.get("background_only_panel_candidate")
             for row in rows
         )
+        complete_panel_votes = tuple(
+            row.get("panel_candidate")
+            if row.get("panel_decision_basis") == "complete_program"
+            else ""
+            for row in rows
+        )
+        complete_panel_or_background_votes = tuple(
+            (
+                row.get("panel_candidate")
+                if row.get("panel_decision_basis") == "complete_program"
+                else row.get("background_only_panel_candidate")
+            )
+            for row in rows
+        )
         ontology_votes = tuple(row.get("ontology_candidate") for row in rows)
         panel_candidate = _unanimous(panel_votes)
         panel_or_background_candidate = _unanimous(panel_or_background_votes)
+        complete_panel_candidate = _unanimous(complete_panel_votes)
+        complete_panel_or_background_candidate = _unanimous(
+            complete_panel_or_background_votes
+        )
         ontology_candidate = _unanimous(ontology_votes)
         panel_conflicts = _conflicting_candidates(panel_votes)
         ontology_conflicts = _conflicting_candidates(ontology_votes)
@@ -688,8 +731,8 @@ def evaluate_residual_identity(
             row.get("decomposition_model_role") == "identity_background"
             for row in rows
         )
-        effective_panel_candidate = (
-            panel_candidate or panel_or_background_candidate
+        complete_identity_panel_candidate = (
+            complete_panel_candidate or complete_panel_or_background_candidate
         )
         if panel_conflicts or ontology_conflicts:
             # A disagreeing axis is contradictory evidence, not a missing
@@ -704,20 +747,20 @@ def evaluate_residual_identity(
             # named expected-low background gene may stand in only when the
             # structural beam independently models that source.
             if (
-                effective_panel_candidate
+                complete_identity_panel_candidate
                 and ontology_candidate
                 and cancer_codes_entity_compatible(
-                    effective_panel_candidate,
+                    complete_identity_panel_candidate,
                     ontology_candidate,
                 )
             ):
                 model_candidate = (
                     ontology_candidate
                     if _is_ancestor(
-                        effective_panel_candidate,
+                        complete_identity_panel_candidate,
                         ontology_candidate,
                     )
-                    else effective_panel_candidate
+                    else complete_identity_panel_candidate
                 )
             else:
                 model_candidate = ""
@@ -746,6 +789,10 @@ def evaluate_residual_identity(
                 "panel_candidate": panel_candidate or None,
                 "panel_or_background_candidate": (
                     panel_or_background_candidate or None
+                ),
+                "complete_panel_candidate": complete_panel_candidate or None,
+                "complete_panel_or_background_candidate": (
+                    complete_panel_or_background_candidate or None
                 ),
                 "background_attributed_expected_low_genes": sorted(
                     {
@@ -796,7 +843,7 @@ def evaluate_residual_identity(
         if row.get("model_role") == "identity_background"
     ]
     source_resolved_panel_candidate = _unanimous(
-        row.get("panel_or_background_candidate")
+        row.get("complete_panel_or_background_candidate")
         for row in identity_background_models
     )
     source_resolved_ontology_candidate = _unanimous(

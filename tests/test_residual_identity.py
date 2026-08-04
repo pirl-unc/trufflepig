@@ -311,6 +311,91 @@ def test_residual_identity_rejects_unsupported_metastatic_backgrounds():
     assert evidence["realizations_evaluated"] == 0
 
 
+def test_residual_identity_does_not_create_a_candidate_from_zero_programs():
+    """Failed identity gates and absent high markers are an abstention."""
+
+    evidence = evaluate_residual_identity(
+        [_result("BLCA", tumor_values={})],
+        candidate_codes=["BLCA", "CHOL"],
+        current_code="CHOL",
+    )
+
+    assert evidence["candidate_code"] is None
+    assert evidence["status"] in {"ambiguous", "not_evaluable"}
+    assert all(
+        row["panel_candidate"] == ""
+        for model in evidence.get("background_models", [])
+        for row in model["rows"]
+    )
+
+
+def test_identity_background_requires_complete_panel_not_pareto_only(monkeypatch):
+    """Candidate-independent subtraction cannot originate an incomplete vote."""
+    import trufflepig.decomposition.residual_identity as residual_identity
+    import trufflepig.lineage_panels as lineage_panels
+
+    panel_rows = (
+        SimpleNamespace(
+            panel_name="BLCA partial",
+            parent_cohort="BLCA",
+            obligate_passed=True,
+            identity_marker_groups_passed=True,
+            high_hits=(("UPK2", 20.0),),
+            high_misses=(("UPK1A", 0.0),),
+            low_passes=(("ALB", 0.0),),
+            low_violations=(),
+            score=0.6,
+        ),
+        SimpleNamespace(
+            panel_name="CHOL absent",
+            parent_cohort="CHOL",
+            obligate_passed=True,
+            identity_marker_groups_passed=True,
+            high_hits=(("MUC1", 6.0),),
+            high_misses=(("MUC5AC", 0.0), ("CFTR", 0.0)),
+            low_passes=(),
+            low_violations=(("UPK2", 20.0),),
+            score=0.1,
+        ),
+    )
+    monkeypatch.setattr(
+        lineage_panels,
+        "evaluate_panels",
+        lambda *_args, **_kwargs: panel_rows,
+    )
+
+    def ontology_sanity(code, _residual):
+        return {
+            "status": "coherent" if code == "BLCA" else "incomplete",
+            "expected_high": ["identity-marker"],
+            "expected_high_detected": ["identity-marker"] if code == "BLCA" else [],
+            "expected_low": ["excluded-marker"],
+            "expected_low_present": [],
+        }
+
+    monkeypatch.setattr(
+        residual_identity,
+        "tumor_type_sanity_check",
+        ontology_sanity,
+    )
+    result = _result("BLCA", tumor_values={"UPK2": 20.0})
+    result.model_role = "identity_background"
+
+    evidence = evaluate_residual_identity(
+        [result],
+        candidate_codes=["BLCA", "CHOL"],
+        current_code="CHOL",
+    )
+
+    assert evidence["status"] == "ambiguous"
+    assert evidence["candidate_code"] is None
+    model = evidence["background_models"][0]
+    assert model["panel_candidate"] == "BLCA"
+    assert model["complete_panel_candidate"] is None
+    assert model["candidate_code"] is None
+    assert model["rows"][0]["panel_decision_basis"] == "pareto_dominance"
+
+
 def test_residual_identity_reports_shared_crc_parent_not_arbitrary_sibling():
     results = [
         _result(

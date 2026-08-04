@@ -4882,6 +4882,7 @@ def _top_learned_stage_margin(
 
 _GLOBAL_LEARNED_AUDIT_FIELDS = (
     "learned_expression_flat_top_predictions",
+    "learned_expression_flat_entity_supports",
     "learned_expression_flat_feature_space",
     "learned_expression_top_entity_label",
     "learned_expression_top_entity_support",
@@ -5068,6 +5069,12 @@ def _add_learned_hierarchy_candidate_features(
         {"code": _clean(code), "probability": round(_safe_float(prob), 4)}
         for code, prob in flat_predictions[:10]
     ]
+    flat_entity_supports = _aggregate_learned_predictions_by_entity(
+        [
+            {"code": _clean(code), "probability": _safe_float(prob)}
+            for code, prob in flat_predictions
+        ]
+    )
     public_votes = [
         _public_learned_vote_dict(vote)
         for vote in hierarchical_votes
@@ -5109,6 +5116,16 @@ def _add_learned_hierarchy_candidate_features(
             {
                 "learned_expression_hierarchy_votes": hypothesis_public_votes,
                 "learned_expression_flat_top_predictions": flat_top_predictions,
+                # Decision support is aggregated from the complete classifier
+                # vector before the top-ten, rounded audit view is produced.
+                # Several subtype/status leaves can represent one report entity;
+                # dropping tail leaves can otherwise change the entity leader.
+                "learned_expression_flat_entity_supports": dict(
+                    sorted(
+                        flat_entity_supports.items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                ),
                 "learned_expression_flat_feature_space": (
                     "within_sample_percentile"
                 ),
@@ -5306,6 +5323,15 @@ def _flat_learned_entity_supports(
 ) -> dict[str, float]:
     """Collapse flat leaf predictions to entity support without double counting."""
 
+    full_supports = details.get("learned_expression_flat_entity_supports")
+    if isinstance(full_supports, Mapping):
+        supports = {
+            _clean(code): _safe_float(value)
+            for code, value in full_supports.items()
+            if _clean(code) and _safe_float(value) > 0
+        }
+        if supports:
+            return supports
     return _aggregate_learned_predictions_by_entity(
         details.get("learned_expression_flat_top_predictions") or []
     )

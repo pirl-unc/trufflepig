@@ -124,10 +124,10 @@ def test_cofiring_specific_programs_do_not_cancel():
     assert f["melanocytic"] > f.get("epithelial", 0.0)
 
 
-def test_single_specific_program_demotes_all_others_decisively():
-    """One program firing alone behaves as a decisive single call (margin == its
-    confidence for every other lineage)."""
+def test_neuroendocrine_program_demotes_only_incompatible_lineages():
+    """Neuroendocrine differentiation is not an anti-neural marker program."""
     d, cohort = _multi_program_sample({"neuroendocrine": 8.0})
     f = lineage_exclusion_evidence(d, cohort_reference=cohort).factors
     assert f.get("neuroendocrine", 1.0) == 1.0
+    assert f.get("neural", 1.0) == 1.0
     assert f.get("epithelial", 1.0) < 1.0 and f.get("mesenchymal", 1.0) < 1.0
