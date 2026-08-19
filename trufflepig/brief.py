@@ -65,6 +65,7 @@ from .reporting import (
     subtype_curation_scope_note,
     therapy_path_context,
     therapy_path_rank,
+    therapy_row_requires_confirmed_eligibility,
     therapy_rna_context_conflict,
     therapy_row_rna_context_inactive,
     therapy_state_caution,
@@ -804,10 +805,7 @@ def _top_therapies(
         supplied_alteration_rank = (
             0 if supplied_alteration_supports_target_row(t, analysis) else 1
         )
-        if (
-            _brief_truthy(t.get("requires_supplied_alteration"))
-            and supplied_alteration_rank != 0
-        ):
+        if therapy_row_requires_confirmed_eligibility(t) and supplied_alteration_rank != 0:
             continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):

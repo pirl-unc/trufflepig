@@ -1,5 +1,7 @@
 """Clinician-facing tests for exact spindle-pattern sarcoma therapy panels."""
 
+import json
+
 import pandas as pd
 
 from trufflepig.alterations import parse_alteration_inputs
@@ -57,10 +59,13 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
 
     assert panel_code == "SARC_IMT"
     assert panel_subtype is None
-    assert set(panel["subtype"]) == {"exact_sarcoma_molecular"}
+    assert set(panel["cancer_code"]) == {"SARC_IMT"}
+    assert panel["subtype"].isna().all()
     assert "crizotinib" in set(panel["agent"])
+    assert panel["agent"].eq("crizotinib").sum() == 1
+    assert "tumor_agnostic_alteration" in set(panel["eligibility_basis"])
     assert "- **ALK** — crizotinib" in report
-    assert "verified activating ALK fusion/rearrangement" in report
+    assert "validated ALK IHC or a molecular method such as FISH" in report
     assert "imatinib-resistant GIST" not in report
 
     expression_only = build_summary(
@@ -70,6 +75,7 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
         disease_state="",
     )
     assert "- **ALK** — crizotinib" not in expression_only
+    assert "- **NTRK" not in expression_only
 
     for incompatible_event in ("ALK loss", "ALK amplification"):
         incompatible = build_summary(
@@ -130,6 +136,38 @@ def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
         assert "- **ALK** — crizotinib" not in report
 
 
+def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path):
+    for index, result_value in enumerate((False, 0, "No")):
+        path = tmp_path / f"alk_machine_result_{index}.json"
+        path.write_text(
+            json.dumps(
+                [
+                    {
+                        "Gene": "ALK",
+                        "Alteration": "rearrangement",
+                        "Result": result_value,
+                    }
+                ]
+            )
+        )
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
+
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["result_status"] == str(result_value)
+        assert "- **ALK** — crizotinib" not in report
+
+
 def test_exact_report_scope_wins_over_broad_reference_argument():
     analysis = _analysis("SARC_IMT", "ALK fusion")
     analysis.update(
@@ -146,7 +184,8 @@ def test_exact_report_scope_wins_over_broad_reference_argument():
 
     assert panel_code == "SARC_IMT"
     assert panel_subtype is None
-    assert set(panel["subtype"]) == {"exact_sarcoma_molecular"}
+    assert set(panel["cancer_code"]) == {"SARC_IMT"}
+    assert panel["subtype"].isna().all()
     assert "crizotinib" in set(panel["agent"])
     assert "imatinib-resistant GIST" not in set(panel["indication"])
 
@@ -165,6 +204,14 @@ def test_dfsp_fusion_matches_pdgfb_and_surfaces_only_imatinib():
     assert "- **PDGFB** — imatinib" in report
     assert "COL1A1-PDGFB" in report
     assert "target RNA is context only" in report
+
+    histology_only = build_summary(
+        _analysis("SARC_DFSP"),
+        _ranges(PDGFB=75.0),
+        cancer_code="SARC_DFSP",
+        disease_state="",
+    )
+    assert "- **PDGFB** — imatinib" in histology_only
 
 
 def test_pecoma_uses_histology_gated_nab_sirolimus_without_expression_gate():

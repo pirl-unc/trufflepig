@@ -25,6 +25,11 @@ _NEGATIVE_CALL_RE = re.compile(
     r"\b(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present)\b",
     re.IGNORECASE,
 )
+_NEGATIVE_RESULT_RE = re.compile(
+    r"(?:false|no|0(?:\.0+)?|not\s+detected|negative|absent|"
+    r"wild[- ]?type|not\s+present)",
+    re.IGNORECASE,
+)
 _FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
 _FUSION_EVENT_RE = re.compile(rf"\b{_FUSION_EVENT_PATTERN}\b", re.IGNORECASE)
 _NON_GENE_TOKENS = {
@@ -128,10 +133,21 @@ def _clean_header(value: object) -> str:
 
 
 def _text(value: object) -> str:
-    text = str(value or "").strip()
-    if text.lower() == "nan":
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "<na>", "none"}:
         return ""
     return text
+
+
+def _result_status_is_negative(value: object) -> bool:
+    """Whether a structured assay result explicitly reports no event."""
+    return any(
+        _NEGATIVE_RESULT_RE.fullmatch(part.strip())
+        for part in re.split(r"[;,|]", _text(value))
+        if part.strip()
+    )
 
 
 def _clean_gene(value: object) -> str:
@@ -154,11 +170,10 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     wanted = str(gene or "").strip().upper()
     if not wanted:
         return False
-    result_status = " ".join(
-        str(record.get(key) or "")
+    if any(
+        _result_status_is_negative(record.get(key))
         for key in ("result_status", "result", "status")
-    )
-    if _NEGATIVE_CALL_RE.search(result_status):
+    ):
         return True
     text = " ".join(
         str(record.get(key) or "")

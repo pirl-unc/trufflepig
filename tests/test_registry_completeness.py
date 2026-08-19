@@ -36,7 +36,6 @@ from trufflepig.reference import (
     heme_tumor_up_vs_matched_normal,
     tumor_up_vs_matched_normal,
 )
-from trufflepig.sarcoma_therapy import EXACT_SARCOMA_THERAPY_CODES
 
 
 _MISSING_MATCHED_NORMAL = frozenset(
@@ -289,7 +288,6 @@ def _leaf_codes_with_coverage():
     biomarker_codes = set(key[key["role"] == "biomarker"]["cancer_code"].dropna())
     therapy_codes = set(key[key["role"] == "target"]["cancer_code"].dropna())
     therapy_codes.update(INFANTILE_SPINDLE_CODES)
-    therapy_codes.update(EXACT_SARCOMA_THERAPY_CODES)
 
     mn_solid = tumor_up_vs_matched_normal()
     mn_heme = heme_tumor_up_vs_matched_normal()

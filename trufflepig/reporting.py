@@ -39,7 +39,7 @@ def _clean_text(value) -> str:
     if value is None:
         return ""
     text = str(value).strip()
-    if text.lower() == "nan":
+    if text.lower() in {"nan", "<na>", "none", "null"}:
         return ""
     return text
 
@@ -691,8 +691,14 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         for key in ("indication", "rationale", "eligibility_note")
         if hasattr(target_row, "get")
     ).lower()
+    eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
     required_types: set[str] = set()
-    if re.search(r"\b(kdd|kinase\s+domain\s+duplication)\b", text):
+    if "alk_positive" in eligibility_basis:
+        # Trufflepig currently accepts molecular alteration files, not an IHC
+        # result channel. An activating ALK rearrangement is therefore the only
+        # supplied evidence that can satisfy an ALK-positive row here.
+        required_types.add("fusion")
+    elif re.search(r"\b(kdd|kinase\s+domain\s+duplication)\b", text):
         required_types.update({"kdd", "internal_tandem_duplication"})
     elif re.search(r"\b(itd|internal\s+tandem\s+duplication)\b", text):
         required_types.add("internal_tandem_duplication")
@@ -729,6 +735,23 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         if "amplification" in required_types and "amplif" in observed_text:
             supported.append(record)
     return supported
+
+
+def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
+    """Whether a therapy row needs non-expression eligibility evidence.
+
+    Pirlygenes 5.23.51 distinguishes histology-only rows from molecular or
+    otherwise biomarker-qualified rows. Unknown future structured bases fail
+    closed; plain histology remains eligible from the established report entity.
+    """
+    if not hasattr(target_row, "get"):
+        return False
+    if _truthy(target_row.get("requires_supplied_alteration")) or _truthy(
+        target_row.get("requires_verified_alteration")
+    ):
+        return True
+    eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
+    return bool(eligibility_basis and eligibility_basis != "histology")
 
 
 def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
@@ -2483,11 +2506,11 @@ def cancer_therapy_panel_for_analysis(
 ):
     """Return the complete curated therapy panel for the active report scope.
 
-    Pirlygenes remains the primary disease-curation source.  Trufflepig adds a
-    small alteration-gated layer for infantile spindle tumors whose current
-    upstream panel is empty.  Exact molecular panels take precedence over a
-    generic parent fallback; other uncurated descendants retain the historical
-    parent-panel behavior.
+    Pirlygenes is the primary disease-curation source. Trufflepig adds a small
+    alteration-gated layer for infantile spindle tumors whose upstream panel is
+    empty. Exact molecular panels take precedence over a generic parent
+    fallback; other uncurated descendants retain the historical parent-panel
+    behavior.
     """
     import pandas as pd
     if therapy_targets_loader is None:
@@ -2496,7 +2519,6 @@ def cancer_therapy_panel_for_analysis(
         therapy_targets_loader = cancer_therapy_targets
 
     from .infantile_spindle import infantile_spindle_therapy_targets
-    from .sarcoma_therapy import sarcoma_subtype_therapy_targets
 
     active_cancer_code = _clean_text(cancer_code)
     if isinstance(analysis, dict):
@@ -2517,13 +2539,6 @@ def cancer_therapy_panel_for_analysis(
         targets_df = therapy_targets_loader(panel_code)
 
     molecular_df = infantile_spindle_therapy_targets(active_cancer_code, analysis)
-    sarcoma_df = sarcoma_subtype_therapy_targets(active_cancer_code)
-    if sarcoma_df is not None and not sarcoma_df.empty:
-        molecular_df = pd.concat(
-            [molecular_df, sarcoma_df],
-            ignore_index=True,
-            sort=False,
-        )
     has_molecular_panel = molecular_df is not None and not molecular_df.empty
 
     if (targets_df is None or targets_df.empty) and not has_molecular_panel:
