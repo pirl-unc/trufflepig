@@ -25,9 +25,7 @@ _NEGATIVE_CALL_RE = re.compile(
     r"\b(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present)\b",
     re.IGNORECASE,
 )
-_FUSION_EVENT_PATTERN = (
-    r"(?:fusion|rearrang(?:e(?:d|ment)?|ing)|translocation)"
-)
+_FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
 _FUSION_EVENT_RE = re.compile(rf"\b{_FUSION_EVENT_PATTERN}\b", re.IGNORECASE)
 _NON_GENE_TOKENS = {
     "A",
@@ -77,6 +75,7 @@ class AlterationRecord:
     confidence: str = ""
     support: dict[str, float] = field(default_factory=dict)
     raw_name: str = ""
+    result_status: str = ""
 
     @property
     def key(self) -> tuple[str, str, str, str, int | None]:
@@ -96,6 +95,7 @@ class AlterationRecord:
             "source_path": self.source_path,
             "row_index": self.row_index,
             "confidence": self.confidence,
+            "result_status": self.result_status,
             "support": dict(self.support),
             "raw_name": self.raw_name,
         }
@@ -154,6 +154,12 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     wanted = str(gene or "").strip().upper()
     if not wanted:
         return False
+    result_status = " ".join(
+        str(record.get(key) or "")
+        for key in ("result_status", "result", "status")
+    )
+    if _NEGATIVE_CALL_RE.search(result_status):
+        return True
     text = " ".join(
         str(record.get(key) or "")
         for key in ("alteration", "raw_name", "confidence")
@@ -283,6 +289,15 @@ _ALTERATION_COLUMNS = {
     "effect",
 }
 _CONFIDENCE_COLUMNS = {"confidence", "filter", "status", "classification", "tier"}
+_RESULT_STATUS_COLUMNS = {
+    "result",
+    "results",
+    "callresult",
+    "callstatus",
+    "assayresult",
+    "testresult",
+    "status",
+}
 _SUPPORT_COLUMNS = {
     "readcount",
     "reads",
@@ -343,6 +358,18 @@ def _confidence_from_row(row) -> str:
     return _text(row.get(col)) if col is not None else ""
 
 
+def _result_status_from_row(row) -> str:
+    """Preserve structured assay outcomes used to veto negative calls."""
+    values: list[str] = []
+    for col, value in row.items():
+        if _clean_header(col) not in _RESULT_STATUS_COLUMNS:
+            continue
+        text = _text(value)
+        if text and text not in values:
+            values.append(text)
+    return "; ".join(values)
+
+
 def _record_from_text_line(
     line: str,
     *,
@@ -395,6 +422,7 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
                 source_path=source_path,
                 row_index=int(idx),
                 confidence=_confidence_from_row(row),
+                result_status=_result_status_from_row(row),
                 support=_support_from_row(row),
                 raw_name=full_text,
             )

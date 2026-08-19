@@ -81,18 +81,53 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
         assert "- **ALK** — crizotinib" not in incompatible
 
 
-def test_imt_rearranged_wording_qualifies_as_an_alk_fusion():
-    analysis = _analysis("SARC_IMT", "ALK rearranged")
+def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():
+    for alteration in ("ALK rearranged", "ALK rearrangements", "ALK translocations"):
+        analysis = _analysis("SARC_IMT", alteration)
 
-    assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
-    report = build_summary(
-        analysis,
-        _ranges(ALK=120.0),
-        cancer_code="SARC_IMT",
-        disease_state="",
+        assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert "- **ALK** — crizotinib" in report
+
+
+def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
+    cases = (
+        ("csv", ",", "Result", "Negative"),
+        ("tsv", "\t", "Status", "Not detected"),
     )
+    for suffix, separator, result_column, result_value in cases:
+        path = tmp_path / f"alk_result.{suffix}"
+        pd.DataFrame(
+            [
+                {
+                    "Gene": "ALK",
+                    "Alteration": "rearrangement",
+                    result_column: result_value,
+                }
+            ]
+        ).to_csv(path, sep=separator, index=False)
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
 
-    assert "- **ALK** — crizotinib" in report
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["result_status"] == result_value
+        assert "- **ALK** — crizotinib" not in report
 
 
 def test_exact_report_scope_wins_over_broad_reference_argument():

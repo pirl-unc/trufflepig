@@ -95,19 +95,24 @@ def test_explicitly_negative_fusion_calls_are_not_confirmed():
         assert "- **NTRK3** — larotrectinib" not in report
 
 
-def test_rearrangement_wording_is_normalized_for_ntrk_therapy_gating():
-    analysis = _analysis("SARC_IFS", "ETV6-NTRK3 rearrangement")
+def test_singular_and_plural_rearrangement_wording_enable_ntrk_therapy():
+    for alteration in (
+        "ETV6-NTRK3 rearrangement",
+        "ETV6-NTRK3 fusions",
+        "ETV6-NTRK3 rearrangements",
+    ):
+        analysis = _analysis("SARC_IFS", alteration)
 
-    assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
-    report = build_summary(
-        analysis,
-        _ranges(NTRK3=20.0),
-        cancer_code="SARC_IFS",
-        disease_state="",
-    )
+        assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
+        report = build_summary(
+            analysis,
+            _ranges(NTRK3=20.0),
+            cancer_code="SARC_IFS",
+            disease_state="",
+        )
 
-    assert "confirmed supplied NTRK fusion involving NTRK3" in report
-    assert "- **NTRK3** — larotrectinib" in report
+        assert "confirmed supplied NTRK fusion involving NTRK3" in report
+        assert "- **NTRK3** — larotrectinib" in report
 
 
 def test_ifs_summary_prioritizes_larotrectinib_for_confirmed_ntrk_fusion():
