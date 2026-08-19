@@ -81,6 +81,20 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
         assert "- **ALK** — crizotinib" not in incompatible
 
 
+def test_imt_rearranged_wording_qualifies_as_an_alk_fusion():
+    analysis = _analysis("SARC_IMT", "ALK rearranged")
+
+    assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
+    report = build_summary(
+        analysis,
+        _ranges(ALK=120.0),
+        cancer_code="SARC_IMT",
+        disease_state="",
+    )
+
+    assert "- **ALK** — crizotinib" in report
+
+
 def test_exact_report_scope_wins_over_broad_reference_argument():
     analysis = _analysis("SARC_IMT", "ALK fusion")
     analysis.update(

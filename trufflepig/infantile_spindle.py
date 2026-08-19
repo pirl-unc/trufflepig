@@ -13,7 +13,11 @@ import logging
 
 import pandas as pd
 
-from .alterations import alteration_record_gene_is_negated, alteration_record_genes
+from .alterations import (
+    alteration_record_gene_is_negated,
+    alteration_record_genes,
+    classify_alteration_type,
+)
 from .molecular_therapy import NTRK_GENES, ntrk_fusion_therapy_targets, therapy_row
 
 
@@ -42,8 +46,9 @@ def _is_fusion(record) -> bool:
         _clean(record.get(key))
         for key in ("alteration_type", "alteration", "raw_name")
     ).lower()
-    return _clean(record.get("alteration_type")).lower() == "fusion" or any(
-        word in text for word in ("fusion", "rearrang", "translocation")
+    return (
+        _clean(record.get("alteration_type")).lower() == "fusion"
+        or classify_alteration_type(text) == "fusion"
     )
 
 

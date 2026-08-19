@@ -25,6 +25,10 @@ _NEGATIVE_CALL_RE = re.compile(
     r"\b(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present)\b",
     re.IGNORECASE,
 )
+_FUSION_EVENT_PATTERN = (
+    r"(?:fusion|rearrang(?:e(?:d|ment)?|ing)|translocation)"
+)
+_FUSION_EVENT_RE = re.compile(rf"\b{_FUSION_EVENT_PATTERN}\b", re.IGNORECASE)
 _NON_GENE_TOKENS = {
     "A",
     "AA",
@@ -157,8 +161,8 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     escaped = re.escape(wanted)
     return bool(
         re.search(
-            rf"\b{escaped}\b(?:\s+(?:fusion|rearrangement|translocation))?"
-            rf"\s*(?:is\s+)?{_NEGATIVE_CALL_RE.pattern}",
+            rf"\b{escaped}\b(?:\s+{_FUSION_EVENT_PATTERN})?"
+            rf"\s*(?:[:=]|[-–—])?\s*(?:is\s+)?{_NEGATIVE_CALL_RE.pattern}",
             text,
             re.IGNORECASE,
         )
@@ -222,8 +226,9 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
         str(record.get(key) or "")
         for key in ("alteration", "raw_name")
     ).lower()
-    fusion_like = alteration_type == "fusion" or any(
-        term in event_text for term in ("fusion", "rearrang", "translocation")
+    fusion_like = (
+        alteration_type == "fusion"
+        or classify_alteration_type(event_text) == "fusion"
     )
     if fusion_like:
         pair = _explicit_fusion_pair(record)
@@ -320,7 +325,7 @@ def classify_alteration_type(text: object) -> str:
         return "kdd"
     if re.search(r"\b(itd|internal\s+tandem\s+duplication|tandem\s+duplication)\b", low):
         return "internal_tandem_duplication"
-    if re.search(r"\b(fusion|rearrang|translocation)\b", low):
+    if _FUSION_EVENT_RE.search(low):
         return "fusion"
     if re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", low):
         return "amplification"

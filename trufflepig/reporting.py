@@ -680,6 +680,8 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
     compatible coarse class is enough to mark the eligibility evidence as
     present, still with clinical verification language in the reports.
     """
+    from .alterations import classify_alteration_type
+
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
     records = supplied_alterations_for_gene(analysis, sym)
     if not records:
@@ -694,7 +696,7 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         required_types.update({"kdd", "internal_tandem_duplication"})
     elif re.search(r"\b(itd|internal\s+tandem\s+duplication)\b", text):
         required_types.add("internal_tandem_duplication")
-    elif re.search(r"\b(fusion|rearrang|translocation)\b", text):
+    elif classify_alteration_type(text) == "fusion":
         required_types.add("fusion")
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
