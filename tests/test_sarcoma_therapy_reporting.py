@@ -137,7 +137,17 @@ def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
 
 
 def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path):
-    for index, result_value in enumerate((False, 0, "No")):
+    non_positive_results = (
+        False,
+        0,
+        "No",
+        "NEG",
+        "Inconclusive",
+        "Failed",
+        "QNS",
+        "Pending",
+    )
+    for index, result_value in enumerate(non_positive_results):
         path = tmp_path / f"alk_machine_result_{index}.json"
         path.write_text(
             json.dumps(

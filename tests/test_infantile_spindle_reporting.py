@@ -68,7 +68,6 @@ def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
         [
             {
                 "Gene": "ETV6::NTRK3",
-                "Alteration": "Fusion",
                 "Result": "Positive",
             }
         ]
@@ -81,6 +80,7 @@ def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
     )
 
     assert record["gene"] == "ETV6"
+    assert record["alteration_type"] == "fusion"
     assert "ETV6::NTRK3" in record["raw_name"]
     assert alteration_record_genes(record) == ("ETV6", "NTRK3")
 

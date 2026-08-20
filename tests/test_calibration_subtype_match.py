@@ -105,6 +105,7 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
     import trufflepig.cancer_type_evidence as cancer_type_evidence
     import trufflepig.decomposition as decomposition
     import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.main as main
     import trufflepig.rare_inference as rare_inference
     import trufflepig.tumor_purity as tumor_purity
 
@@ -150,8 +151,14 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
         }
 
     monkeypatch.setattr(decomposition, "decompose_sample", fake_decompose)
+    monkeypatch.setattr(main, "decompose_sample", fake_decompose)
     monkeypatch.setattr(
         decomposition,
+        "decompose_identity_backgrounds",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        main,
         "decompose_identity_backgrounds",
         lambda *_args, **_kwargs: [],
     )
@@ -197,6 +204,144 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
     assert residual_calls[0]["decomposition_sample_mode"] == "solid"
     assert residual_calls[0]["candidate_sample_mode"] == "heme"
     assert summary["consolidated_cancer_type"] == "SARC"
+
+
+def test_residual_calibration_refits_and_rolls_back_unconfirmed_scope(
+    monkeypatch,
+):
+    """Calibration counts only residual calls that survive the production refit."""
+
+    import trufflepig.cancer_type_evidence as cancer_type_evidence
+    import trufflepig.decomposition as decomposition
+    import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.main as main
+    import trufflepig.rare_inference as rare_inference
+    import trufflepig.tumor_purity as tumor_purity
+
+    trace = [
+        {"code": "CHOL", "support_fraction_of_top": 1.0},
+        {"code": "BLCA", "support_fraction_of_top": 0.95},
+    ]
+    monkeypatch.setattr(
+        healthy_vs_tumor,
+        "assess_healthy_vs_tumor",
+        lambda _frame: {},
+    )
+    monkeypatch.setattr(
+        tumor_purity,
+        "analyze_sample",
+        lambda _frame, tissue_signal=None: {"candidate_trace": trace},
+    )
+    monkeypatch.setattr(
+        rare_inference,
+        "infer_rare_cancer_marker_hypotheses_from_rna",
+        lambda _frame, _analysis: [],
+    )
+    monkeypatch.setattr(
+        decomposition,
+        "infer_sample_mode",
+        lambda **_kwargs: "solid",
+    )
+
+    selection_calls = 0
+
+    def fake_select(_frame, _analysis, **kwargs):
+        nonlocal selection_calls
+        selection_calls += 1
+        if kwargs.get("residual_identity_evidence"):
+            return {
+                "selected": {
+                    "cancer_type": "BLCA",
+                    "selected_by": "entity_consensus",
+                }
+            }
+        return {
+            "selected": {
+                "cancer_type": "CHOL",
+                "selected_by": "fused_evidence",
+            }
+        }
+
+    monkeypatch.setattr(
+        cancer_type_evidence,
+        "select_report_scope_from_evidence",
+        fake_select,
+    )
+
+    fit_scopes = []
+
+    def fake_fit(_frame, _analysis, **kwargs):
+        report_code = kwargs["report_code"]
+        fit_scopes.append(report_code)
+        return [report_code], [report_code, "BLCA"], {}
+
+    monkeypatch.setattr(main, "_fit_report_scope_decompositions", fake_fit)
+
+    identity_calls = 0
+
+    def fake_identity(_results, **_kwargs):
+        nonlocal identity_calls
+        identity_calls += 1
+        if identity_calls == 1:
+            return {
+                "status": "candidate",
+                "candidate_code": "BLCA",
+                "adjudication_eligible": True,
+            }
+        return {
+            "status": "ambiguous",
+            "candidate_code": "",
+            "adjudication_eligible": False,
+        }
+
+    monkeypatch.setattr(
+        decomposition,
+        "evaluate_residual_identity",
+        fake_identity,
+    )
+    monkeypatch.setattr(
+        decomposition,
+        "scope_residual_identity_to_decomposition_mode",
+        lambda evidence, **_kwargs: evidence,
+    )
+
+    def fake_propagate(analysis, _frame, *, report_scope_cancer_type, **_kwargs):
+        analysis["report_scope_cancer_type"] = report_scope_cancer_type
+        analysis["cancer_type"] = report_scope_cancer_type
+        analysis["reference_cancer_type"] = report_scope_cancer_type
+        analysis["expression_reference_cancer_type"] = report_scope_cancer_type
+
+    monkeypatch.setattr(main, "_propagate_report_scope_selection", fake_propagate)
+
+    class FakeContext:
+        def __init__(self, analysis):
+            self.analysis = analysis
+
+        def code_for(self, _role):
+            return str(
+                self.analysis.get("report_scope_cancer_type")
+                or self.analysis.get("cancer_type")
+                or ""
+            )
+
+    monkeypatch.setattr(
+        main,
+        "_synchronize_cancer_type_context",
+        lambda analysis, **_kwargs: FakeContext(analysis),
+    )
+
+    _trace, summary = calib._classify_one(
+        pd.DataFrame(),
+        include_residual_identity=True,
+    )
+
+    assert selection_calls == 2
+    assert fit_scopes == ["CHOL", "BLCA", "CHOL"]
+    assert summary["pre_residual_cancer_type"] == "CHOL"
+    assert summary["consolidated_cancer_type"] == "CHOL"
+    assert summary["residual_identity_refit_performed"] is True
+    assert summary["residual_identity_refit_accepted"] is False
+    assert summary["residual_identity_status"] == "ambiguous"
 
 
 def test_nonresidual_calibration_keeps_production_composition_evidence(

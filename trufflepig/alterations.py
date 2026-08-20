@@ -26,8 +26,15 @@ _NEGATIVE_CALL_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_RESULT_RE = re.compile(
-    r"^\s*(?:(?:false|no|not\s+detected|negative|absent|"
-    r"wild[- ]?type|not\s+present)\b|0(?:\.0+)?(?![\d.]))",
+    r"^\s*(?:(?:false|no|neg(?:ative)?|not\s+detected|absent|"
+    r"wild[- ]?type|not\s+present|inconclusive|failed?|qns|pending|"
+    r"indeterminate|equivocal|insufficient|cancelled?|unknown)\b|"
+    r"0(?:\.0+)?(?![\d.]))",
+    re.IGNORECASE,
+)
+_POSITIVE_RESULT_RE = re.compile(
+    r"^\s*(?:(?:true|yes|positive|detected|present|confirmed|passed?)\b|"
+    r"1(?:\.0+)?(?![\d.]))",
     re.IGNORECASE,
 )
 _FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
@@ -141,13 +148,22 @@ def _text(value: object) -> str:
     return text
 
 
-def _result_status_is_negative(value: object) -> bool:
-    """Whether a structured assay result explicitly reports no event."""
-    return any(
-        _NEGATIVE_RESULT_RE.match(part)
-        for part in re.split(r"[;,|]", _text(value))
-        if part.strip()
-    )
+def _result_status_is_non_positive(value: object) -> bool:
+    """Whether a supplied structured outcome fails to verify the event."""
+    parts = [part for part in re.split(r"[;,|]", _text(value)) if part.strip()]
+    if not parts:
+        return False
+    saw_positive = False
+    for part in parts:
+        if _NEGATIVE_RESULT_RE.match(part):
+            return True
+        if _POSITIVE_RESULT_RE.match(part):
+            saw_positive = True
+        else:
+            # A populated but unknown structured result is not affirmative
+            # evidence. Fail closed for molecular therapy eligibility.
+            return True
+    return not saw_positive
 
 
 def _clean_gene(value: object) -> str:
@@ -171,7 +187,7 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     if not wanted:
         return False
     if any(
-        _result_status_is_negative(record.get(key))
+        _result_status_is_non_positive(record.get(key))
         for key in ("result_status", "result", "status")
     ):
         return True
@@ -202,11 +218,7 @@ def _explicit_fusion_pair(record: object) -> tuple[str, ...]:
         text = str(record.get(key) or "").upper()
         for match in _FUSION_PAIR_RE.finditer(text):
             genes = (match.group(1), match.group(2))
-            if not all(len(gene) >= 3 for gene in genes):
-                continue
-            if any(
-                gene in _NON_GENE_TOKENS or gene.startswith("CHR") for gene in genes
-            ):
+            if not _valid_fusion_pair_genes(genes):
                 continue
             clause_end = min(
                 [
@@ -242,6 +254,9 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
     """
     if not hasattr(record, "get"):
         return ()
+    pair = _explicit_fusion_pair(record)
+    if pair:
+        return pair
     alteration_type = str(record.get("alteration_type") or "").strip().lower()
     event_text = " ".join(
         str(record.get(key) or "")
@@ -251,11 +266,6 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
         alteration_type == "fusion"
         or classify_alteration_type(event_text) == "fusion"
     )
-    if fusion_like:
-        pair = _explicit_fusion_pair(record)
-        if pair:
-            return pair
-
     primary_text = str(record.get("gene") or "").upper()
     primary = _clean_gene(primary_text)
     if not primary:
@@ -267,6 +277,20 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
     if alteration_record_gene_is_negated(record, primary):
         return ()
     return (primary,)
+
+
+def _valid_fusion_pair_genes(genes: tuple[str, str]) -> bool:
+    return all(len(gene) >= 3 for gene in genes) and not any(
+        gene in _NON_GENE_TOKENS or gene.startswith("CHR") for gene in genes
+    )
+
+
+def _has_connected_fusion_pair(value: object) -> bool:
+    text = _text(value).upper()
+    return any(
+        _valid_fusion_pair_genes((match.group(1), match.group(2)))
+        for match in _FUSION_PAIR_RE.finditer(text)
+    )
 
 
 def _find_column(columns: Iterable[object], candidates: set[str]) -> object | None:
@@ -432,11 +456,14 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
         # Keep the complete structured gene cell for connected fusion-pair
         # recovery while retaining ``gene`` as the normalized primary symbol.
         full_text = f"{raw_gene or gene} {alteration}".strip()
+        alteration_type = classify_alteration_type(full_text)
+        if alteration_type == "unknown" and _has_connected_fusion_pair(raw_gene):
+            alteration_type = "fusion"
         records.append(
             AlterationRecord(
                 gene=gene,
                 alteration=alteration or full_text,
-                alteration_type=classify_alteration_type(full_text),
+                alteration_type=alteration_type,
                 source_path=source_path,
                 row_index=int(idx),
                 confidence=_confidence_from_row(row),
