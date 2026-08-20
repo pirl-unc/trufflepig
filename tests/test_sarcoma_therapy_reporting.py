@@ -104,8 +104,8 @@ def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():
 
 def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
     cases = (
-        ("csv", ",", "Result", "Negative"),
-        ("tsv", "\t", "Status", "Not detected"),
+        ("csv", ",", "Result", "Negative (below detection limit)"),
+        ("tsv", "\t", "Status", "Not detected - insufficient support"),
     )
     for suffix, separator, result_column, result_value in cases:
         path = tmp_path / f"alk_result.{suffix}"

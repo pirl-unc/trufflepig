@@ -26,8 +26,8 @@ _NEGATIVE_CALL_RE = re.compile(
     re.IGNORECASE,
 )
 _NEGATIVE_RESULT_RE = re.compile(
-    r"(?:false|no|0(?:\.0+)?|not\s+detected|negative|absent|"
-    r"wild[- ]?type|not\s+present)",
+    r"^\s*(?:(?:false|no|not\s+detected|negative|absent|"
+    r"wild[- ]?type|not\s+present)\b|0(?:\.0+)?(?![\d.]))",
     re.IGNORECASE,
 )
 _FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
@@ -144,7 +144,7 @@ def _text(value: object) -> str:
 def _result_status_is_negative(value: object) -> bool:
     """Whether a structured assay result explicitly reports no event."""
     return any(
-        _NEGATIVE_RESULT_RE.fullmatch(part.strip())
+        _NEGATIVE_RESULT_RE.match(part)
         for part in re.split(r"[;,|]", _text(value))
         if part.strip()
     )
@@ -414,7 +414,8 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
     alteration_col = _find_column(df.columns, _ALTERATION_COLUMNS)
     records: list[AlterationRecord] = []
     for idx, row in df.iterrows():
-        gene = _clean_gene(row.get(gene_col)) if gene_col is not None else ""
+        raw_gene = _text(row.get(gene_col)) if gene_col is not None else ""
+        gene = _clean_gene(raw_gene)
         alteration = _text(row.get(alteration_col)) if alteration_col is not None else ""
         raw_parts = [alteration]
         if not gene:
@@ -428,7 +429,9 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
             ).strip()
         if not gene:
             continue
-        full_text = f"{gene} {alteration}".strip()
+        # Keep the complete structured gene cell for connected fusion-pair
+        # recovery while retaining ``gene`` as the normalized primary symbol.
+        full_text = f"{raw_gene or gene} {alteration}".strip()
         records.append(
             AlterationRecord(
                 gene=gene,

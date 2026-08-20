@@ -62,6 +62,38 @@ def test_fusion_partner_is_available_to_therapy_matching():
     )
 
 
+def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
+    path = tmp_path / "structured_fusion.csv"
+    pd.DataFrame(
+        [
+            {
+                "Gene": "ETV6::NTRK3",
+                "Alteration": "Fusion",
+                "Result": "Positive",
+            }
+        ]
+    ).to_csv(path, index=False)
+    record = parse_alteration_inputs(str(path))[0].public_dict()
+    analysis = _analysis("SARC_IFS")
+    analysis.update(
+        alteration_inputs_supplied=True,
+        alteration_records=[record],
+    )
+
+    assert record["gene"] == "ETV6"
+    assert "ETV6::NTRK3" in record["raw_name"]
+    assert alteration_record_genes(record) == ("ETV6", "NTRK3")
+
+    report = build_summary(
+        analysis,
+        _ranges(NTRK3=20.0),
+        cancer_code="SARC_IFS",
+        disease_state="",
+    )
+    assert "confirmed supplied NTRK fusion involving NTRK3" in report
+    assert "- **NTRK3** — larotrectinib" in report
+
+
 def test_fusion_commentary_does_not_create_a_negated_partner():
     record = _record("ALK fusion, NTRK3 not detected")
 
