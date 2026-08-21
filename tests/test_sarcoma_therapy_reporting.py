@@ -77,7 +77,12 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
     assert "- **ALK** — crizotinib" not in expression_only
     assert "- **NTRK" not in expression_only
 
-    for incompatible_event in ("ALK loss", "ALK amplification"):
+    for incompatible_event in (
+        "ALK loss",
+        "ALK amplification",
+        "ALK fusion failed",
+        "ALK rearrangement inconclusive",
+    ):
         incompatible = build_summary(
             _analysis("SARC_IMT", incompatible_event),
             _ranges(ALK=120.0),
@@ -143,9 +148,18 @@ def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path)
         "No",
         "NEG",
         "Inconclusive",
+        "FAIL",
         "Failed",
+        "Failure",
         "QNS",
         "Pending",
+        "Canceled",
+        "Cancelled",
+        "Not assessed",
+        "No call",
+        "VUS",
+        "Benign",
+        "Likely benign",
     )
     for index, result_value in enumerate(non_positive_results):
         path = tmp_path / f"alk_machine_result_{index}.json"

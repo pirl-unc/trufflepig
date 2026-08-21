@@ -21,14 +21,19 @@ _FUSION_PAIR_RE = re.compile(
     r"\b([A-Z][A-Z0-9]{1,10})\s*(?:::|--|/|-)\s*"
     r"([A-Z][A-Z0-9]{1,10})\b"
 )
+_NON_POSITIVE_CALL_PATTERN = (
+    r"(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present|"
+    r"inconclusive|fail(?:ed|ure)?|qns|pending|indeterminate|equivocal|"
+    r"insufficient|cancel(?:l?ed)?|unknown|not\s+(?:assessed|evaluable)|"
+    r"no\s+call|invalid|vus|(?:variant\s+of\s+)?uncertain\s+significance|"
+    r"(?:likely\s+)?benign|low[- ]?qual(?:ity)?)"
+)
 _NEGATIVE_CALL_RE = re.compile(
-    r"\b(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present)\b",
+    rf"\b{_NON_POSITIVE_CALL_PATTERN}\b",
     re.IGNORECASE,
 )
 _NEGATIVE_RESULT_RE = re.compile(
-    r"^\s*(?:(?:false|no|neg(?:ative)?|not\s+detected|absent|"
-    r"wild[- ]?type|not\s+present|inconclusive|failed?|qns|pending|"
-    r"indeterminate|equivocal|insufficient|cancelled?|unknown)\b|"
+    rf"^\s*(?:(?:false|no|neg|{_NON_POSITIVE_CALL_PATTERN})\b|"
     r"0(?:\.0+)?(?![\d.]))",
     re.IGNORECASE,
 )
