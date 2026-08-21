@@ -5956,7 +5956,19 @@ def _source_resolved_identity_corroborators(
             selected_family = _clean(
                 _learned_family_for_code(selected.cancer_type)
             )
-        if top_family == candidate_family and top_family != selected_family:
+        top_compartment = _clean(
+            hierarchy_details.get("learned_expression_top_compartment_label")
+        )
+        candidate_path_consistent = _learned_hierarchy_path_consistent(
+            candidate.cancer_type,
+            family_label=top_family,
+            compartment_label=top_compartment,
+        )
+        if (
+            top_family == candidate_family
+            and top_family != selected_family
+            and candidate_path_consistent
+        ):
             corroborators.append("learned_family_leader")
     return tuple(dict.fromkeys(corroborators))
 

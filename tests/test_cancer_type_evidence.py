@@ -1775,6 +1775,7 @@ def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
     selected.broad_rna_support = 1.0
     selected.details.update(
         {
+            "learned_expression_top_compartment_label": "epithelial",
             "learned_expression_top_family_label": "CRC",
             "learned_expression_top_entity_label": "SARC_DDLPS",
             "learned_expression_top_entity_probability": 0.40,
@@ -1827,6 +1828,68 @@ def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
         if axis["axis"] == "curated_marker_program"
     )
     assert marker_axis["available"] is False
+
+
+def test_source_resolved_residual_rejects_hierarchy_inconsistent_family_vote():
+    """A child stage cannot corroborate a cross-compartment residual call.
+
+    This exercises the report-label decision seam represented by a
+    smooth-muscle-rich sarcoma: the family view may prefer CRC, but that family
+    is semantically incompatible with the confident mesenchymal compartment.
+    The internally inconsistent child stage must not overturn the selected
+    sarcoma using the source-resolved residual exception.
+    """
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC_DDLPS", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 1.0
+    selected.details.update(
+        {
+            "learned_expression_top_compartment_label": "mesenchymal",
+            "learned_expression_top_family_label": "CRC",
+            "learned_expression_top_entity_label": "SARC_DDLPS",
+            "learned_expression_top_entity_probability": 0.40,
+        }
+    )
+    candidate = CancerTypeEvidence(
+        cancer_type="CRC",
+        broad_rna_support=0.79,
+        details={"signature_score": 0.73},
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC_DDLPS": selected, "CRC": candidate},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": "CRC",
+            "ontology_candidate_code": "CRC",
+            "decision_basis": "panel_and_ontology",
+            "source_resolved_identity": True,
+            "current_code": "SARC_DDLPS",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 1,
+                    "template": "identity_background",
+                },
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 1,
+                    "template": "identity_structural_background",
+                },
+            ],
+        },
+    )
+
+    assert result is selected
+    assert "decomposition_residual_identity" in candidate.evidence_sources
+    assert candidate.can_select_report_label is False
 
 
 def test_residual_identity_preserves_explicit_entity_blockers():
