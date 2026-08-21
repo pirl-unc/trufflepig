@@ -8,6 +8,33 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.24.0 — 2026-08-21 — residual identity and spindle-sarcoma therapy safety
+
+### Cancer identity and decomposition
+
+- Cancer-type evidence now evaluates tumor-residual identity across the complete
+  candidate/template decomposition beam and requires agreement after the final
+  report-scope refit before changing the headline diagnosis.
+- Broad signatures use fixed-universe within-sample percentiles; marker programs
+  use log1p clean TPM plus cohort percentiles; and decomposition, purity, and
+  background arithmetic use linear clean TPM. Housekeeping normalization is no
+  longer part of a default decision path.
+- Metastatic host tissue, sibling references, aggregate parents, and molecular
+  status children are kept distinct from the active tumor entity throughout
+  evidence fusion, purity reconciliation, attribution, and reporting.
+
+### Spindle-sarcoma treatment guidance
+
+- Infantile fibrosarcoma, congenital mesoblastic nephroma, and NTRK-rearranged
+  spindle-cell neoplasms retain distinct diagnostic contexts and require a
+  verified compatible alteration before molecular therapy is shortlisted.
+- Dedicated report-scope panels cover ALK-positive IMT, COL1A1–PDGFB-positive
+  DFSP, and malignant PEComa while preventing sibling sarcoma therapies from
+  leaking into an unrelated subtype.
+- Structured alteration parsing now preserves fusion pairs and fails closed for
+  negative, inconclusive, pending, failed-filter, and low-quality assay results
+  without confusing pathogenicity metadata with assay outcome status.
+
 ## 1.23.0 — 2026-07-21 — ancestry-aware sibling entity reasoning
 
 ### Cancer-type reasoning
