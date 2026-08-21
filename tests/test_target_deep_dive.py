@@ -317,6 +317,12 @@ def test_plot_priority_targets_saves_png(tmp_path):
         if legend is not None
         for text in legend.get_texts()
     )
+    fig.canvas.draw()
+    legend_bbox = ax.get_legend().get_window_extent()
+    assert not any(
+        legend_bbox.overlaps(patch.get_window_extent())
+        for patch in ax.patches
+    )
     # PR-6 (§2.5): the tumor-source-vs-safety-band cue is folded into this (single
     # reader) target figure — one scatter marker per target (shape = source tier,
     # fill = healthy-tissue safety), plus an explanatory caption. Without the fold

@@ -1456,7 +1456,16 @@ def plot_priority_targets(
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.legend(loc="lower right", fontsize=8, frameon=False)
+    # Keep the score legend outside the data rectangle. A lower-right in-axes
+    # legend overlaps the final group whenever a report has only a few
+    # exploratory targets, obscuring exactly the rows it is meant to explain.
+    ax.legend(
+        loc="upper left",
+        bbox_to_anchor=(1.01, 1.0),
+        borderaxespad=0.0,
+        fontsize=8,
+        frameon=False,
+    )
     fig.text(
         0.5,
         0.008,
