@@ -138,6 +138,68 @@ def _expression_frame(tpm_by_symbol):
     return pd.DataFrame(rows)
 
 
+def _isolate_public_selector_test(
+    monkeypatch,
+    evidence,
+    *,
+    keep_learned=False,
+    keep_contrasts=False,
+    keep_signature_markers=False,
+    keep_composition=False,
+):
+    """Keep a selector integration test focused on the evidence it owns.
+
+    The public selector intentionally evaluates every available evidence axis.
+    Tiny synthetic fixtures should not materialize multi-gigabyte references for
+    unrelated axes whose integration has dedicated real-reference tests.
+    """
+    if not keep_learned:
+        monkeypatch.setattr(
+            evidence,
+            "_add_learned_expression_classifier_features",
+            lambda *args, **kwargs: None,
+        )
+        monkeypatch.setattr(
+            evidence,
+            "_add_learned_hierarchy_candidate_features",
+            lambda *args, **kwargs: None,
+        )
+    if not keep_contrasts:
+        monkeypatch.setattr(
+            evidence,
+            "_contrast_discriminator_rows",
+            lambda: (),
+        )
+    if not keep_signature_markers:
+        monkeypatch.setattr(
+            evidence,
+            "_add_pan_cancer_signature_marker_features",
+            lambda *args, **kwargs: None,
+        )
+    if not keep_composition:
+        monkeypatch.setattr(
+            evidence,
+            "_add_coarse_composition_reference_features",
+            lambda *args, **kwargs: None,
+        )
+    monkeypatch.setattr(
+        evidence,
+        "_add_local_expression_reference_features",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_add_lineage_panel_features",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda *args, **kwargs: (None, False),
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
+
+
 def test_nutm_rna_surrogate_promotes_in_squamous_context():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -187,6 +249,11 @@ def test_nutm_rare_marker_outranks_generic_squamous_marker_program(monkeypatch):
 
     monkeypatch.setattr(classifier, "classify_expression", lambda _sample, top_k=5: [])
     monkeypatch.setattr(classifier, "classify_expression_hierarchy", lambda _sample, top_k=5: [])
+    _isolate_public_selector_test(
+        monkeypatch,
+        evidence,
+        keep_signature_markers=True,
+    )
     monkeypatch.setattr(
         evidence,
         "_centroid_supports_for_hypotheses",
@@ -2706,6 +2773,7 @@ def test_weak_fusion_defined_surrogate_does_not_bypass_cross_lineage_marker_conf
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence)
     monkeypatch.setattr(
         evidence,
         "_marker_coherence",
@@ -2778,9 +2846,13 @@ def test_broad_context_is_part_of_unified_evidence_view():
     assert result["evidence"][0]["report_label_candidate"] is True
 
 
-def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call():
+def test_composition_reference_can_rescue_ambiguous_marker_incoherent_broad_call(
+    monkeypatch,
+):
+    import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_composition=True)
     signal = SimpleNamespace(
         cancer_hint="tumor-consistent",
         top_tcga_cohorts=[
@@ -4677,6 +4749,7 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
     import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_learned=True)
     monkeypatch.setattr(
         classifier,
         "classify_expression",
@@ -4774,6 +4847,7 @@ def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(
     import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_learned=True)
     monkeypatch.setattr(
         classifier,
         "classify_expression",
@@ -4846,6 +4920,7 @@ def test_learned_expression_classifier_blocks_background_compartment_flip(monkey
     import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_learned=True)
     monkeypatch.setattr(
         classifier,
         "classify_expression",
@@ -4854,6 +4929,14 @@ def test_learned_expression_classifier_blocks_background_compartment_flip(monkey
             ("READ", 0.02),
             ("STAD", 0.01),
         ],
+    )
+    # This regression owns the flat learned-vote compartment veto. Hierarchy
+    # integration has dedicated tests above; running the real fitted hierarchy
+    # here adds model/reference setup without contributing to the assertion.
+    monkeypatch.setattr(
+        classifier,
+        "classify_expression_hierarchy",
+        lambda _sample, top_k=5: [],
     )
     monkeypatch.setattr(evidence, "_marker_coherence", lambda _code, _sample: {})
 
@@ -7486,12 +7569,25 @@ def test_subtype_deconvolved_expression_without_subtype_column(monkeypatch):
         return no_subtype_df
 
     monkeypatch.setattr(
+        ref_module,
+        "pan_cancer_expression",
+        lambda *args, **kwargs: pd.DataFrame(
+            {"Symbol": ["AFP"], "LIHC_TPM": [1.0]}
+        ),
+    )
+    monkeypatch.setattr(
+        ref_module,
+        "cancer_reference_expression",
+        lambda *args, **kwargs: pd.DataFrame(),
+    )
+    monkeypatch.setattr(
         ref_module, "subtype_deconvolved_expression", fake_subtype
     )
     cte._local_expression_reference_panels.cache_clear()
     # Should not raise even though no "subtype" column is present.
     try:
-        cte._local_expression_reference_panels()
+        panels = cte._local_expression_reference_panels(("LIHC",))
+        assert "HEPB" in panels
     finally:
         cte._local_expression_reference_panels.cache_clear()
 
@@ -7710,6 +7806,26 @@ def test_parent_contrast_can_resolve_an_active_child_entity_context(monkeypatch)
         "_contrast_discriminator_rows",
         _stad_chol_contrast_rows,
     )
+    # Exercise the public selector and real contrast/fused-consensus path while
+    # keeping unrelated whole-profile axes out of this eight-gene contrast
+    # fixture. Their integration is covered by dedicated classifier, centroid,
+    # lineage-panel, and exact-reference tests.
+    monkeypatch.setattr(
+        evidence, "_add_learned_expression_classifier_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_learned_hierarchy_candidate_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_local_expression_reference_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_lineage_panel_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_centroid_and_confidence", lambda *a, **k: (None, False)
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
     analysis = _analysis(("STAD_EBV", 1.0), ("CHOL", 0.78))
     analysis["fit_quality"] = {"label": "ambiguous"}
 
@@ -7757,6 +7873,7 @@ def test_parent_contrast_uses_coherent_child_program_before_cross_code_promotion
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_contrasts=True)
     monkeypatch.setattr(
         evidence,
         "_contrast_discriminator_rows",
@@ -7812,6 +7929,7 @@ def test_parent_contrast_support_does_not_demote_an_agreeing_child(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_contrasts=True)
     monkeypatch.setattr(
         evidence,
         "_contrast_discriminator_rows",
@@ -7944,6 +8062,7 @@ def test_parent_contrast_stays_nonselecting_for_an_unrelated_top_context(monkeyp
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
+    _isolate_public_selector_test(monkeypatch, evidence, keep_contrasts=True)
     monkeypatch.setattr(
         evidence,
         "_contrast_discriminator_rows",

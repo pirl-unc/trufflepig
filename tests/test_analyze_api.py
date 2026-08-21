@@ -303,10 +303,32 @@ def test_concrete_child_with_abstract_umbrella_parent_is_not_promoted():
         assert report_scope is None, concrete
 
 
-def test_nutm1_expression_can_infer_registry_only_report_scope():
+def test_nutm1_expression_can_infer_registry_only_report_scope(monkeypatch):
     import pandas as pd
 
+    import trufflepig.cancer_type_evidence as evidence
     from trufflepig.main import _infer_registry_report_scope_from_rna
+
+    # This test owns rare-marker/report-scope integration. Whole-profile,
+    # centroid, lineage, and exact-reference behavior is covered by their own
+    # real-data tests; running those independent axes on a one-gene fixture
+    # rebuilt all references and added ~3 minutes without changing this result.
+    monkeypatch.setattr(
+        evidence, "_add_learned_expression_classifier_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_learned_hierarchy_candidate_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_local_expression_reference_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_add_lineage_panel_features", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        evidence, "_centroid_and_confidence", lambda *a, **k: (None, False)
+    )
+    monkeypatch.setattr(evidence, "_FINE_REFERENCE_SPECS", ())
 
     df = pd.DataFrame(
         {

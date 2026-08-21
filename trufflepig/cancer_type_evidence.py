@@ -7620,6 +7620,13 @@ def _add_local_expression_reference_features(
     sample_tpm_by_gene_id: Mapping[str, float],
     analysis: Mapping[str, Any],
 ) -> None:
+    # No exact-expression marker program can be evaluated without measured
+    # expression. Return before materializing the shared reference panels;
+    # empty-input adjudication still retains ranker/refinement metadata from
+    # ``analysis`` but no longer pays a large setup cost for an axis that must
+    # abstain.
+    if not sample_tpm_by_symbol and not sample_tpm_by_gene_id:
+        return
     support_by_code = _context_support_by_code(analysis)
     primary_contexts = _primary_context_codes(analysis)
     top = primary_contexts[0] if primary_contexts else _top_code(analysis)

@@ -54,7 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pyensembl/
-          key: pyensembl-75-81-111-112-${{ runner.os }}
+          key: pyensembl-75-81-114-115-${{ runner.os }}
 
       - name: Cache pirlygenes data bundle
         # The ~350 MB pirlygenes reference bundle (pan-cancer-expression etc.) is
@@ -74,19 +74,18 @@ jobs:
         run: |
           # trufflepig resolves gene IDs against every installed Ensembl release
           # and loads pirlygenes' cancer-reference-expression aggregate, whose
-          # source cohorts were annotated at the release-81 (2015) vintage.
-          # ~0.5% of ENSG IDs retire per release, so release 112 alone pushes
-          # test_gene_ids over its 2% unresolvable tolerance; 81 + 111 + 112
-          # keeps the gene-id tests resolving (mirrors pirlygenes CI). Release 75
-          # is the fixed vintage the aneuploidy chromosome-arm gene map is built
-          # against (test_aneuploidy_axis / decomposition aneuploidy tests).
-          pyensembl install --release 112 --species homo_sapiens
-          pyensembl install --release 111 --species homo_sapiens
+          # source cohorts span historical and current annotation vintages.
+          # Releases 114 and 115 cover IDs introduced by the current reference
+          # bundle; releases 75 and 81 retain IDs from legacy cohorts.
+          # Release 75 is also the fixed vintage used by the aneuploidy
+          # chromosome-arm gene map.
+          pyensembl install --release 115 --species homo_sapiens
+          pyensembl install --release 114 --species homo_sapiens
           pyensembl install --release 81 --species homo_sapiens
           pyensembl install --release 75 --species homo_sapiens
           # Fail fast if a release didn't materialize — otherwise the dependent
           # tests would silently *skip* and CI would go green without them.
-          python -c "from pyensembl import EnsemblRelease; assert EnsemblRelease(112).genes_by_name('TP53'); assert EnsemblRelease(111).genes_by_name('TP53'); assert EnsemblRelease(81).genes_by_name('TP53'); assert EnsemblRelease(75).genes_by_name('TP53'); print('Ensembl 75 + 81 + 111 + 112 ready')"
+          python -c "from pyensembl import EnsemblRelease; releases = (75, 81, 114, 115); assert all(EnsemblRelease(r).genes_by_name('TP53') for r in releases); print(f'Ensembl releases {releases} ready')"
 
       - name: Run unit tests
         # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
