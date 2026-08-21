@@ -178,6 +178,99 @@ def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path)
         assert "- **ALK** — crizotinib" not in report
 
 
+def test_structured_pass_alk_results_enable_crizotinib(tmp_path):
+    for index, result_value in enumerate(("PASS", "PASSED")):
+        path = tmp_path / f"alk_pass_result_{index}.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Gene": "ALK",
+                    "Alteration": "rearrangement",
+                    "Status": result_value,
+                }
+            ]
+        ).to_csv(path, index=False)
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
+
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["result_status"] == result_value
+        assert "- **ALK** — crizotinib" in report
+
+
+def test_classification_status_does_not_suppress_verified_alk_event(tmp_path):
+    for index, status in enumerate(("Pathogenic", "Somatic")):
+        path = tmp_path / f"alk_classification_status_{index}.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Gene": "ALK",
+                    "Alteration": "rearrangement",
+                    "Status": status,
+                }
+            ]
+        ).to_csv(path, index=False)
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
+
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["result_status"] == status
+        assert "- **ALK** — crizotinib" in report
+
+
+def test_structured_filter_status_controls_alk_therapy_evidence(tmp_path):
+    for index, (filter_status, expected) in enumerate(
+        (("PASS", True), (".", True), ("FAIL", False), ("LowQual", False))
+    ):
+        path = tmp_path / f"alk_filter_status_{index}.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Gene": "ALK",
+                    "Alteration": "rearrangement",
+                    "Result": "Positive",
+                    "FILTER": filter_status,
+                }
+            ]
+        ).to_csv(path, index=False)
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
+
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["filter_status"] == filter_status
+        assert ("- **ALK** — crizotinib" in report) is expected
+
+
 def test_exact_report_scope_wins_over_broad_reference_argument():
     analysis = _analysis("SARC_IMT", "ALK fusion")
     analysis.update(

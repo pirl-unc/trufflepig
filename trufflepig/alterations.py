@@ -32,11 +32,6 @@ _NEGATIVE_RESULT_RE = re.compile(
     r"0(?:\.0+)?(?![\d.]))",
     re.IGNORECASE,
 )
-_POSITIVE_RESULT_RE = re.compile(
-    r"^\s*(?:(?:true|yes|positive|detected|present|confirmed|passed?)\b|"
-    r"1(?:\.0+)?(?![\d.]))",
-    re.IGNORECASE,
-)
 _FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
 _FUSION_EVENT_RE = re.compile(rf"\b{_FUSION_EVENT_PATTERN}\b", re.IGNORECASE)
 _NON_GENE_TOKENS = {
@@ -88,6 +83,7 @@ class AlterationRecord:
     support: dict[str, float] = field(default_factory=dict)
     raw_name: str = ""
     result_status: str = ""
+    filter_status: str = ""
 
     @property
     def key(self) -> tuple[str, str, str, str, int | None]:
@@ -108,6 +104,7 @@ class AlterationRecord:
             "row_index": self.row_index,
             "confidence": self.confidence,
             "result_status": self.result_status,
+            "filter_status": self.filter_status,
             "support": dict(self.support),
             "raw_name": self.raw_name,
         }
@@ -149,21 +146,26 @@ def _text(value: object) -> str:
 
 
 def _result_status_is_non_positive(value: object) -> bool:
-    """Whether a supplied structured outcome fails to verify the event."""
+    """Whether a structured status explicitly says the event is not usable.
+
+    Generic ``Status`` columns also carry variant classifications such as
+    ``Pathogenic`` and ``Somatic``. Those are neither positive nor negative
+    assay outcomes, so only recognized non-positive vocabulary vetoes a call.
+    """
     parts = [part for part in re.split(r"[;,|]", _text(value)) if part.strip()]
-    if not parts:
-        return False
-    saw_positive = False
-    for part in parts:
-        if _NEGATIVE_RESULT_RE.match(part):
-            return True
-        if _POSITIVE_RESULT_RE.match(part):
-            saw_positive = True
-        else:
-            # A populated but unknown structured result is not affirmative
-            # evidence. Fail closed for molecular therapy eligibility.
-            return True
-    return not saw_positive
+    return any(_NEGATIVE_RESULT_RE.match(part) for part in parts)
+
+
+def _filter_status_is_failed(value: object) -> bool:
+    """Whether a VCF-style FILTER field rejects the event.
+
+    VCF reserves ``PASS`` for calls that pass every filter and ``.`` for calls
+    where filters were not applied. Any named filter (for example ``LowQual``)
+    marks the call as unsuitable for alteration-gated therapy evidence.
+    """
+    parts = [part.strip().lower() for part in re.split(r"[;,|]", _text(value))]
+    parts = [part for part in parts if part]
+    return any(part not in {".", "pass", "passed"} for part in parts)
 
 
 def _clean_gene(value: object) -> str:
@@ -189,6 +191,11 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     if any(
         _result_status_is_non_positive(record.get(key))
         for key in ("result_status", "result", "status")
+    ):
+        return True
+    if any(
+        _filter_status_is_failed(record.get(key))
+        for key in ("filter_status", "filter", "FILTER")
     ):
         return True
     text = " ".join(
@@ -337,6 +344,7 @@ _RESULT_STATUS_COLUMNS = {
     "testresult",
     "status",
 }
+_FILTER_STATUS_COLUMNS = {"filter", "filterstatus", "vcffilter"}
 _SUPPORT_COLUMNS = {
     "readcount",
     "reads",
@@ -409,6 +417,18 @@ def _result_status_from_row(row) -> str:
     return "; ".join(values)
 
 
+def _filter_status_from_row(row) -> str:
+    """Preserve VCF-style filter decisions separately from classifications."""
+    values: list[str] = []
+    for col, value in row.items():
+        if _clean_header(col) not in _FILTER_STATUS_COLUMNS:
+            continue
+        text = _text(value)
+        if text and text not in values:
+            values.append(text)
+    return "; ".join(values)
+
+
 def _record_from_text_line(
     line: str,
     *,
@@ -468,6 +488,7 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
                 row_index=int(idx),
                 confidence=_confidence_from_row(row),
                 result_status=_result_status_from_row(row),
+                filter_status=_filter_status_from_row(row),
                 support=_support_from_row(row),
                 raw_name=full_text,
             )

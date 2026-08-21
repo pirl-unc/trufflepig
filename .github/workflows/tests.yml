@@ -54,7 +54,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pyensembl/
-          key: pyensembl-75-81-114-115-${{ runner.os }}
+          key: pyensembl-75-81-112-114-115-${{ runner.os }}
 
       - name: Cache pirlygenes data bundle
         # The ~350 MB pirlygenes reference bundle (pan-cancer-expression etc.) is
@@ -76,16 +76,18 @@ jobs:
           # and loads pirlygenes' cancer-reference-expression aggregate, whose
           # source cohorts span historical and current annotation vintages.
           # Releases 114 and 115 cover IDs introduced by the current reference
-          # bundle; releases 75 and 81 retain IDs from legacy cohorts.
+          # bundle; release 112 is tsarina's CTA-partition contract; releases
+          # 75 and 81 retain IDs from legacy cohorts.
           # Release 75 is also the fixed vintage used by the aneuploidy
           # chromosome-arm gene map.
           pyensembl install --release 115 --species homo_sapiens
           pyensembl install --release 114 --species homo_sapiens
+          pyensembl install --release 112 --species homo_sapiens
           pyensembl install --release 81 --species homo_sapiens
           pyensembl install --release 75 --species homo_sapiens
           # Fail fast if a release didn't materialize — otherwise the dependent
           # tests would silently *skip* and CI would go green without them.
-          python -c "from pyensembl import EnsemblRelease; releases = (75, 81, 114, 115); assert all(EnsemblRelease(r).genes_by_name('TP53') for r in releases); print(f'Ensembl releases {releases} ready')"
+          python -c "from pyensembl import EnsemblRelease; releases = (75, 81, 112, 114, 115); assert all(EnsemblRelease(r).genes_by_name('TP53') for r in releases); print(f'Ensembl releases {releases} ready')"
 
       - name: Run unit tests
         # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
