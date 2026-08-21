@@ -288,6 +288,15 @@ def best_purity_estimate(
     sig_weight = _METHOD_RELIABILITY["signature"]
     if isinstance(sig_stability, (int, float)):
         sig_weight *= max(float(sig_stability), 0.15)
+    ceiling_excluded = []
+    for name, value in (
+        ("signature", sig.get("purity")),
+        ("lineage", lin_p),
+        ("estimate", comp.get("estimate_purity")),
+    ):
+        if isinstance(value, (int, float)) and float(value) >= 1.0 - _EPS:
+            ceiling_excluded.append(name)
+
     ms = [
         measurement_from_interval("signature", sig.get("purity"), sig.get("lower"), sig.get("upper"),
                                   weight=sig_weight),
@@ -349,6 +358,7 @@ def best_purity_estimate(
         "n_methods": fused["n_methods"],
         "point_source": point_source,
         "method_weights": fused["weights"],
+        "ceiling_excluded_methods": ceiling_excluded,
     }
 
 

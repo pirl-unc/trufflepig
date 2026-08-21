@@ -164,6 +164,14 @@ def should_adopt_decomposition_purity(classifier_code: str, decomp_result) -> bo
         decomposition_code, classifier_code
     ):
         return False
+    fractions = getattr(decomp_result, "fractions", None)
+    if isinstance(fractions, dict) and fractions and not any(
+        str(component) != "tumor" for component in fractions
+    ):
+        return False
+    n_measured = getattr(decomp_result, "n_measured_in_fit", None)
+    if n_measured is not None and int(n_measured or 0) <= 0:
+        return False
     warnings = getattr(decomp_result, "warnings", None) or []
     if any("No non-tumor components in template" in warning for warning in warnings):
         return False

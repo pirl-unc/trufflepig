@@ -850,7 +850,33 @@ def test_all_tumor_when_purity_is_one():
     assert len(results) == 1
     result = results[0]
     assert result.fractions == {"tumor": 1.0}
-    assert "No non-tumor components" in result.warnings[0]
+    assert "no non-tumor mass" in result.warnings[0].lower()
+
+
+def test_saturated_bulk_prior_uses_background_residual_for_template_fit():
+    """A saturated classifier estimate must not turn a bulk specimen into a
+    tumor-only decomposition when the already-computed physical residual says
+    background is present."""
+    row = _candidate_row(code="SARC", purity=1.0)
+    row["purity_result"]["components"] = {
+        "decomposition": {"mode": "solid", "residual_fraction": 0.62}
+    }
+
+    result = decompose_sample(
+        _tcga_sample("SARC"),
+        cancer_types=["SARC"],
+        templates=["solid_primary"],
+        top_k=1,
+        candidate_rows=[row],
+    )[0]
+
+    assert result.purity == pytest.approx(0.62)
+    assert result.n_measured_in_fit > 0
+    assert set(result.fractions) - {"tumor"}
+    assert sum(v for k, v in result.fractions.items() if k != "tumor") == pytest.approx(
+        0.38, abs=0.02
+    )
+    assert not any("No non-tumor" in warning for warning in result.warnings)
 
 
 def test_all_tumor_met_template_is_fit_only_and_suppressed_when_primary_available():
@@ -1139,8 +1165,8 @@ def test_plot_decomposition_candidates_surfaces_fit_and_markers(tmp_path):
     assert any("fit err" in t and "markers" in t for t in texts), (
         f"missing fit/markers annotation; texts: {texts}"
     )
-    assert any("ADOPTED" in t for t in texts), texts
-    assert any("audit only" in t for t in texts), texts
+    assert any("● selected" in t for t in texts), texts
+    assert any("○ comparison" in t for t in texts), texts
 
 
 def test_plot_decomposition_candidates_handles_missing_reconstruction_error(tmp_path):

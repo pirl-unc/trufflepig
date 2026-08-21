@@ -12,6 +12,7 @@ from trufflepig.tumor_purity import plot_purity_method_comparison
 def _purity_result(**overrides):
     base = {
         "cancer_type": "PRAD",
+        "reference_expression_source": "pan_cancer",
         "tcga_median_purity": 0.69,
         "overall_estimate": 0.28,
         "overall_lower": 0.19,
@@ -63,7 +64,7 @@ def test_comparison_plot_renders_all_methods(tmp_path: Path):
     assert any("ESTIMATE stromal" in label for label in labels)
     assert any("ESTIMATE immune" in label for label in labels)
     assert any("ESTIMATE combined" in label for label in labels)
-    assert any("Adopted overall" in label for label in labels)
+    assert "Final estimate" in labels
 
 
 def test_comparison_plot_includes_decomposition_when_provided(tmp_path: Path):
@@ -119,7 +120,7 @@ def test_comparison_plot_highlights_deprioritized_signature(tmp_path: Path):
 
 
 def test_comparison_plot_without_overall_still_renders(tmp_path: Path):
-    """If the pipeline couldn't produce an adopted overall estimate, the
+    """If the pipeline couldn't produce a final overall estimate, the
     plot should show the available methods without a reference line."""
     result = _purity_result()
     result["overall_estimate"] = None
@@ -128,4 +129,4 @@ def test_comparison_plot_without_overall_still_renders(tmp_path: Path):
     out = tmp_path / "cmp_no_overall.png"
     fig = plot_purity_method_comparison(result, save_to_filename=str(out))
     labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
-    assert not any("Adopted overall" in label for label in labels)
+    assert "Final estimate" not in labels

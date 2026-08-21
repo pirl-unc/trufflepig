@@ -2518,8 +2518,9 @@ def _analyze_body(run: AnalyzeRun):
         purity.get("overall_upper"),
     )
     print(
-        f"[analysis] {_purity_metric_label(analysis['sample_mode']).capitalize()}: "
-        f"{purity_text}"
+        "[analysis] Initial non-decomposition "
+        f"{_purity_metric_label(analysis['sample_mode'])} proxy: {purity_text} "
+        "(not the final estimate)"
     )
     print(
         f"[analysis] Stromal enrichment: {render_fold(purity['components']['stromal']['enrichment'])} vs TCGA"
@@ -3133,7 +3134,7 @@ def _analyze_body(run: AnalyzeRun):
                 {"template": d.template, "cancer_type": d.cancer_type, "score": d.score}
                 for d in decomp_results[:5]
             ],
-            # Instrumentation only (nothing consumes this yet): how fragile the adopted
+            # Instrumentation only (nothing consumes this yet): how fragile the selected
             # decomposition purity is across the plausible template hypotheses. See
             # analyze.flow.decomposition_purity_stability.
             "purity_stability": decomposition_purity_stability(decomp_results, best_decomp),
@@ -3157,7 +3158,7 @@ def _analyze_body(run: AnalyzeRun):
         # whose best-fit decomposition template was BRCA / solid_primary
         # with "No non-tumor components in template"; fraction=100%
         # propagated as the headline purity.
-        # Post-decomposition purity reconciliation (adopt decomposition purity ->
+        # Post-decomposition purity reconciliation (use decomposition purity ->
         # lineage-panel override -> interval cap), run once for the winner. Mutates
         # analysis["purity"] in place; refresh the local `purity`, which later
         # rendering still reads. See _reconcile_purity_after_decomposition.
@@ -3395,6 +3396,37 @@ def _analyze_body(run: AnalyzeRun):
         if isinstance(degradation_caveat, dict):
             degradation_caveat["widened_lower"] = round(float(lower), 4)
             degradation_caveat["widened_upper"] = round(float(upper), 4)
+
+    final_purity = analysis.get("purity") or {}
+    final_purity_text = _format_purity_interval(
+        final_purity.get("overall_estimate"),
+        final_purity.get("overall_lower"),
+        final_purity.get("overall_upper"),
+    )
+    final_purity_source = _purity_source_display(
+        final_purity.get("purity_source")
+    )
+    source_suffix = f"; basis: {final_purity_source}" if final_purity_source else ""
+    print(
+        f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])} estimate: "
+        f"{final_purity_text}{source_suffix}"
+    )
+
+    # The cancer-call manifest step is created before decomposition so progress
+    # reporting has an early call.  Purity is finalized later; refresh only that
+    # nested payload now so machine consumers see the same number and interval
+    # as the PDF/markdown rather than the saturated pre-fusion candidate value.
+    cancer_call_step = run.steps.get("cancer_call")
+    if cancer_call_step is not None:
+        final_call_outputs = dict(cancer_call_step.outputs or {})
+        final_purity = analysis.get("purity") or {}
+        final_call_outputs["purity"] = {
+            "overall_estimate": final_purity.get("overall_estimate"),
+            "overall_lower": final_purity.get("overall_lower"),
+            "overall_upper": final_purity.get("overall_upper"),
+            "source": final_purity.get("purity_source"),
+        }
+        run.note_step("cancer_call", outputs=final_call_outputs)
 
     # Build the frozen ReportView snapshot now that purity is finalized
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -4649,8 +4681,8 @@ Prefer the standalone decomposition figures for review and sharing. They replace
 | `*-target-tissues.pdf` | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
 | `*-purity-ctas.png` | Tumor-expression ranges for CTAs |
 | `*-purity-surface.png` | Tumor-expression ranges for surface proteins |
-| `*-reference-mds.png` | Audit-only raw reference map: sample among TCGA cancer medians, subtype references, and normal tissues; does not represent fused evidence selection |
-| `*-reference-neighborhood.png` | Audit-only nearest cancer/subtype/normal reference distance ranking; preserves input feature distance but does not represent fused evidence selection |
+| `*-reference-mds.png` | Reference comparison map: sample among TCGA cancer medians, subtype references, and normal tissues; does not represent the final fused selection |
+| `*-reference-neighborhood.png` | Reference-distance comparison: nearest cancer, subtype, and normal profiles; preserves feature distance but does not represent the final fused selection |
 
 Optional deprecated comparison figures are only emitted with
 `--deprecated-figures` and are written under `figures/deprecated/`. They are
@@ -4728,6 +4760,17 @@ def _purity_metric_label(sample_mode):
     if sample_mode == "pure":
         return "population purity consistency"
     return "tumor purity"
+
+
+def _purity_source_display(source):
+    """Return a concise user-facing name for the final purity basis."""
+    labels = {
+        "background_residual": "background residual",
+        "method_consensus": "quantitative method consensus",
+        "lineage_panel": "lineage-calibrated expression",
+    }
+    normalized = str(source or "").strip()
+    return labels.get(normalized, normalized.replace("_", " "))
 
 
 def _format_percent(value) -> str:
@@ -5332,6 +5375,16 @@ def _decomposition_is_acceptable_background_model(
     analysis=None,
     report_code=None,
 ):
+    """Whether a model is eligible to drive purity and target subtraction.
+
+    A metastatic template can fit an ordinary primary specimen simply because
+    its extra host component absorbs expression.  Fit-derived site evidence is
+    useful as a comparison, but it is not independent evidence that the sample
+    came from that site.  Require an explicit/inferred site context (or an
+    explicitly metastatic run) before such a template can become the selected
+    model.  Primary-compatible templates remain eligible because they do not
+    imply a metastatic site change.
+    """
     template = str(getattr(decomp_result, "template", "") or "")
     if not template.startswith("met_"):
         return True
@@ -5341,7 +5394,32 @@ def _decomposition_is_acceptable_background_model(
         cancer_code=report_code or (analysis or {}).get("cancer_type"),
     ):
         return True
-    return _decomposition_met_site_is_supported(decomp_result, analysis=analysis)
+    analysis = analysis or {}
+    constraints = analysis.get("analysis_constraints") or {}
+    requested_templates = {
+        str(value or "").strip()
+        for value in (constraints.get("decomposition_templates") or [])
+    }
+    if template in requested_templates:
+        return True
+    if str(constraints.get("tumor_context") or "").strip().lower() == "met":
+        return _decomposition_met_site_is_supported(
+            decomp_result, analysis=analysis
+        )
+
+    template_site = _MET_TEMPLATE_TO_SITE_HINT.get(template)
+    independent_sites = {
+        site
+        for site in (
+            _canonical_met_site_hint(constraints.get("site_hint")),
+            _canonical_met_site_hint(constraints.get("met_site")),
+            _canonical_met_site_hint(
+                (analysis.get("inferred_site_context") or {}).get("site")
+            ),
+        )
+        if site
+    }
+    return bool(template_site and template_site in independent_sites)
 
 
 def _prioritize_report_compatible_decomposition(
@@ -5722,7 +5800,23 @@ def _finalize_fused_purity(analysis):
             "method_agreement": best["method_agreement"],
             "n_methods": best["n_methods"],
             "point_source": best["point_source"],
+            "method_weights": best.get("method_weights", {}),
+            "ceiling_excluded_methods": best.get(
+                "ceiling_excluded_methods", []
+            ),
         }
+        if best["point_source"] == "desaturated_fusion":
+            weights = best.get("method_weights") or {}
+            final_source = (
+                "background_residual"
+                if set(weights) == {"decomposition"}
+                else "method_consensus"
+            )
+            final_purity["purity_source"] = final_source
+            components = final_purity.get("components") or {}
+            integration = components.get("integration")
+            if isinstance(integration, dict):
+                integration["source"] = final_source
     except Exception:  # noqa: BLE001 - purity honesty pass must never abort a finished run
         _LOGGER.warning(
             "best_purity_estimate failed; keeping pre-fusion purity", exc_info=True
@@ -5756,9 +5850,6 @@ def _constrain_purity_interval_with_decomposition(purity, decomp_result):
     """Cap impossible 100% purity endpoints when TME is explicitly modeled."""
 
     if not isinstance(purity, dict) or decomp_result is None:
-        return False
-    warnings = getattr(decomp_result, "warnings", None) or []
-    if any("No non-tumor components in template" in warning for warning in warnings):
         return False
     try:
         estimate = float(purity.get("overall_estimate"))
@@ -9172,6 +9263,29 @@ def _generate_text_reports(
         f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
         f"{tier_suffix}"
     )
+    purity_source = str(purity.get("purity_source") or "").strip()
+    if purity_source == "background_residual":
+        residual_fraction = (
+            (purity.get("components") or {})
+            .get("decomposition", {})
+            .get("residual_fraction")
+        )
+        fitted_background = (
+            1.0 - float(residual_fraction)
+            if isinstance(residual_fraction, (int, float))
+            else None
+        )
+        basis = (
+            f" after fitting {fitted_background:.0%} as non-tumor background"
+            if fitted_background is not None
+            else ""
+        )
+        lines.append(
+            "- **Quantitative basis**: background-residual decomposition"
+            f"{basis}. No calibrated tumor-specific signature estimate was "
+            "available; lineage markers support tumor identity but are not "
+            "treated as a purity percentage."
+        )
     stability = (analysis.get("decomposition") or {}).get("purity_stability") or {}
     decomp_code = str(
         (analysis.get("decomposition") or {}).get("best_cancer_type") or ""
@@ -9202,13 +9316,30 @@ def _generate_text_reports(
     if uncertainty_basis:
         lines.append("- **Uncertainty basis**: " + "; ".join(uncertainty_basis) + ".")
     components = purity.get("components", {})
+    purity_reference_source = str(
+        purity.get("reference_expression_source") or ""
+    )
+    bulk_purity_reference = (
+        not purity_reference_source
+        or purity_reference_source
+        in {
+            "pan_cancer",
+            "parent_pan_cancer",
+            "member_union_pan_cancer",
+        }
+    )
+    enrichment_reference_label = (
+        f"{reference_cancer_code} bulk cohort reference"
+        if bulk_purity_reference
+        else f"{reference_cancer_code} tumor-only expression reference"
+    )
     for comp_name in ("stromal", "immune"):
         comp = components.get(comp_name, {})
         if isinstance(comp, dict):
             enrichment = comp.get("enrichment", 0)
             lines.append(
                 f"- **{comp_name.title()}** enrichment: {render_fold(enrichment)} "
-                f"vs {reference_cancer_code} broad reference"
+                f"vs {enrichment_reference_label}"
             )
     integration = components.get("integration", {})
     if integration.get("signature_deprioritized"):
@@ -9242,14 +9373,23 @@ def _generate_text_reports(
     lineage_genes = lineage.get("per_gene", [])
     if lineage_genes:
         lines.append("")
-        lines.append("### Lineage Gene Calibration\n")
-        lines.append(
-            "Purity was refined using cancer-type lineage genes — genes with "
-            "known high expression in this tumor type and low TME background. "
-            "Each gene independently estimates purity by comparing the sample's "
-            "clean-TPM expression to the TCGA reference (adjusted for "
-            "TCGA cohort purity).\n"
-        )
+        if bulk_purity_reference:
+            lines.append("### Lineage Gene Calibration\n")
+            lines.append(
+                "Purity was refined using cancer-type lineage genes — genes with "
+                "known high expression in this tumor type and low TME background. "
+                "Each gene independently estimates purity by comparing the sample's "
+                "clean-TPM expression to the bulk cohort reference (adjusted for "
+                "the cohort's median purity).\n"
+            )
+        else:
+            lines.append("### Lineage Identity Genes\n")
+            lines.append(
+                "These genes support the selected tumor identity by comparing the "
+                "sample with a tumor-only expression reference. They do **not** "
+                "provide a calibrated tumor-purity estimate; the quantitative "
+                "purity above comes from background-residual decomposition.\n"
+            )
 
         # Sort genes into clusters
         sorted_genes = sorted(lineage_genes, key=lambda g: g["purity"], reverse=True)
@@ -9301,16 +9441,24 @@ def _generate_text_reports(
             g for g in all_lineage if g not in found_names and g not in skipped_detected
         ]
 
-        lines.append(
-            "**Purity est.** per row = an independent purity estimate from that "
-            "gene alone: sample expression ÷ the TCGA reference, after TCGA's own "
-            "cohort impurity has been deconvolved from the reference. A value of "
-            "20% means the sample expresses this gene at 20% of pure-tumor levels.\n"
-        )
+        if bulk_purity_reference:
+            lines.append(
+                "**Purity est.** per row = an independent purity estimate from "
+                "that gene alone: sample expression divided by the bulk reference "
+                "after its median cohort impurity is accounted for.\n"
+            )
+            value_heading = "Purity est."
+        else:
+            lines.append(
+                "**Relative expression** per row = sample expression relative to "
+                "the tumor-only reference, capped at 100%. It is identity evidence, "
+                "not a tumor-fraction measurement.\n"
+            )
+            value_heading = "Relative expression"
         lines.append(
             f"**Lineage caveat**: {_lineage_caveat_text(sample_mode, cancer_code_local)}\n"
         )
-        lines.append("| Gene | Purity est. | Interpretation |")
+        lines.append(f"| Gene | {value_heading} | Interpretation |")
         lines.append("|------|------------|----------------|")
         _interp_by_gene = {}
         for g in retained:
@@ -9364,7 +9512,7 @@ def _generate_text_reports(
 
         if retained:
             retained_names = ", ".join(g["gene"] for g in retained)
-            if all(
+            if bulk_purity_reference and all(
                 lineage.get(key) is not None for key in ("purity", "lower", "upper")
             ):
                 lines.append(
@@ -9372,24 +9520,41 @@ def _generate_text_reports(
                     f"IQR {lineage['lower']:.0%}\u2013{lineage['upper']:.0%}): "
                     f"{retained_names}. "
                     "These genes are expressed at levels consistent with their "
-                    "TCGA reference, indicating retained lineage identity (does not distinguish tumor cells from normal cells of the same lineage)."
+                    "bulk cohort reference, indicating retained lineage identity "
+                    "(does not distinguish tumor cells from normal cells of the same lineage)."
                 )
-            else:
+            elif bulk_purity_reference:
                 lines.append(
                     f"**Reliable cluster**: {retained_names}. "
                     "These genes are expressed at levels consistent with their "
-                    "TCGA reference, indicating retained lineage identity (does not distinguish tumor cells from normal cells of the same lineage)."
+                    "bulk cohort reference, indicating retained lineage identity "
+                    "(does not distinguish tumor cells from normal cells of the same lineage)."
+                )
+            else:
+                lines.append(
+                    f"**Identity-consistent cluster**: {retained_names}. "
+                    "These genes are expressed at levels consistent with their "
+                    "tumor-only reference. This supports lineage identity but is "
+                    "not a tumor-fraction measurement."
                 )
         if expressed_below_scale:
             exp_names = ", ".join(g["gene"] for g in expressed_below_scale)
-            lines.append(
-                f"\n**Expressed, below reference scale**: {exp_names}. "
-                "These genes are expressed in this sample (see the bulk TPM in the "
-                "target tables) but give low per-gene purity ratios against a high "
-                "TCGA reference — a reference-scaling effect, not loss of expression. "
-                "They are excluded from the purity estimate as scaling outliers, not "
-                "read as de-differentiation."
-            )
+            if bulk_purity_reference:
+                lines.append(
+                    f"\n**Expressed, below reference scale**: {exp_names}. "
+                    "These genes are expressed in this sample (see the bulk TPM in the "
+                    "target tables) but give low per-gene purity ratios against a high "
+                    "bulk cohort reference — a reference-scaling effect, not loss of "
+                    "expression. They are excluded from the purity estimate as scaling "
+                    "outliers, not read as de-differentiation."
+                )
+            else:
+                lines.append(
+                    f"\n**Expressed, below tumor-reference scale**: {exp_names}. "
+                    "These genes are detected in the sample but are lower than the "
+                    "tumor-only reference. This can reflect reference scaling or "
+                    "biologic variation; it is not used to estimate tumor fraction."
+                )
         if possibly_lost:
             lost_names = ", ".join(g["gene"] for g in possibly_lost)
             lines.append(
@@ -9449,30 +9614,26 @@ def _generate_text_reports(
             lines.append(call_summary["site_note"] + "\n")
         if len(call_summary.get("hypothesis_display", [])) == 2:
             lines.append(
-                "Raw decomposition audit: active report-compatible fit is **"
+                "Decomposition model comparison: selected report-compatible fit is **"
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][0],
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "**; retained raw/nearby fit is **"
+                + "**; closest alternative is **"
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][1],
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "**. This is decomposition context, not a second report label.\n"
+                + "**. The alternative is context, not a second report label.\n"
             )
         if decomp_results:
             lines.append("| Hypothesis | Use | Score | Tumor fraction | Tissue score | Warnings |")
             lines.append("|------------|-----|-------|----------------|--------------|----------|")
             for row in decomp_results[:6]:
                 warnings = "; ".join(row.warnings) if row.warnings else ""
-                use = (
-                    "adopted for target/background attribution"
-                    if row is best_decomp
-                    else "audit only"
-                )
+                use = "selected" if row is best_decomp else "comparison"
                 lines.append(
                     f"| {_hypothesis_display_label(row, primary_code=cancer_code, analysis=analysis)} | "
                     f"{use} | {row.score:.3f} | {row.purity:.3f} | "
@@ -10252,7 +10413,7 @@ def _build_target_report(
                     )
                     if audit_only:
                         interpretation_cell = (
-                            "audit-only negative/background evidence; "
+                            "not sample-supported; negative/background evidence; "
                             + interpretation_cell
                         )
                     return {
@@ -10307,7 +10468,9 @@ def _build_target_report(
                         lines.append(
                             "*No curated therapy row had tumor-supported or clinically reviewable RNA evidence in this sample.*\n"
                         )
-                    lines.append("### Audit-only rows: not tumor-supported in this sample\n")
+                    lines.append(
+                        "### Other curated rows — not supported by this sample\n"
+                    )
                     lines.append(
                         "These rows remain visible as disease-curation provenance or negative evidence. "
                         "They should not be read as expression-supported therapeutic opportunities unless "

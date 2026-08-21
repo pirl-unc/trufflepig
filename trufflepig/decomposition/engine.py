@@ -1226,6 +1226,33 @@ def _fit_one_hypothesis(
     lineage_fraction_info = None
     purity_source = "signature"
     warnings = []
+    candidate_purity = float(purity_result.get("overall_estimate") or 0.5)
+    purity_to_store = dict(purity_result or {})
+    decomposition_component = (
+        (purity_result.get("components") or {}).get("decomposition") or {}
+        if isinstance(purity_result, dict)
+        else {}
+    )
+    residual_prior = decomposition_component.get("residual_fraction")
+    # A point pinned exactly to 100% is a saturated upstream estimate, not
+    # evidence that a bulk specimen contains no background.  The lineage-routed
+    # residual is the physical tumor-vs-background estimate already computed
+    # for the final candidate; use it as the NNLS mass anchor when available so
+    # the full template fit can actually test immune/stromal components.  This
+    # is structural (endpoint replacement), not a sample-specific cutoff.
+    if (
+        purity_override is None
+        and candidate_purity >= 1.0 - 1e-9
+        and isinstance(residual_prior, (int, float))
+        and 0.0 < float(residual_prior) < 1.0
+    ):
+        purity_to_store["pre_residual_purity_estimate"] = candidate_purity
+        candidate_purity = float(residual_prior)
+        purity_to_store["overall_estimate"] = candidate_purity
+        purity_to_store["overall_lower"] = candidate_purity
+        purity_to_store["overall_upper"] = candidate_purity
+        purity_to_store["purity_source"] = "background_residual"
+        purity_source = "background_residual"
     if (
         purity_override is None
         and matched_normal_name is not None
@@ -1242,7 +1269,6 @@ def _fit_one_hypothesis(
             and lineage_fraction_info["stability"] < 1.5
             and lineage_fraction_info["panel_genes_observed"] >= 10
         ):
-            candidate_purity = float(purity_result.get("overall_estimate") or 0.5)
             lineage_estimate = float(lineage_fraction_info["estimate"])
             override_params = DECOMPOSITION_PARAMETERS["lineage_override"]
             upward_delta = lineage_estimate - candidate_purity
@@ -1254,7 +1280,6 @@ def _fit_one_hypothesis(
                 and upward_ratio > override_params["max_upward_ratio"]
             ):
                 tumor_fraction = candidate_purity
-                purity_to_store = dict(purity_result or {})
                 purity_to_store["lineage_tumor_fraction"] = lineage_fraction_info
                 purity_to_store["purity_source"] = purity_source
                 warnings.append(
@@ -1264,15 +1289,13 @@ def _fit_one_hypothesis(
             else:
                 tumor_fraction = lineage_estimate
                 purity_source = "lineage_panel"
-                purity_to_store = dict(purity_result or {})
                 purity_to_store["overall_estimate"] = tumor_fraction
                 purity_to_store["overall_lower"] = float(lineage_fraction_info["lower"])
                 purity_to_store["overall_upper"] = float(lineage_fraction_info["upper"])
                 purity_to_store["lineage_tumor_fraction"] = lineage_fraction_info
                 purity_to_store["purity_source"] = purity_source
         else:
-            tumor_fraction = float(purity_result.get("overall_estimate") or 0.5)
-            purity_to_store = dict(purity_result or {})
+            tumor_fraction = candidate_purity
             if purity_to_store.get("overall_estimate") is None:
                 purity_to_store["overall_estimate"] = tumor_fraction
                 purity_to_store["overall_lower"] = min(0.05, tumor_fraction)
@@ -1293,8 +1316,12 @@ def _fit_one_hypothesis(
             "purity_source": "override",
         }
         purity_source = "override"
-    if not comp_names or tumor_fraction >= 0.999:
-        warnings = ["No non-tumor components in template"]
+    if not comp_names or (purity_override is not None and tumor_fraction >= 0.999):
+        warnings = [
+            "No non-tumor components in template"
+            if not comp_names
+            else "Explicit purity override leaves no non-tumor mass to fit"
+        ]
         site_evidence = {"site_supported": True, "status": "not_site_specific"}
         score = float(candidate_row["support_fraction_of_top"])
         if template_name.startswith("met_"):
@@ -1614,8 +1641,7 @@ def _is_uninformative_met_fit(result) -> bool:
     site_evidence = getattr(result, "site_evidence", {}) or {}
     if str(site_evidence.get("basis") or "") != "no_non_tumor_components":
         return False
-    warnings = [str(warning) for warning in (getattr(result, "warnings", None) or [])]
-    return any("No non-tumor components in template" in warning for warning in warnings)
+    return True
 
 
 def _site_dominant_fit(result, *, leading_cancer_support: float) -> bool:

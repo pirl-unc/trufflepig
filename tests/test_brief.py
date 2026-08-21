@@ -1935,16 +1935,16 @@ def test_actionable_background_dominant_therapy_row_is_audit_only():
         sample_id="pfo017-liver",
     )
     assert "## Therapy Prioritization" in md
-    assert "### Audit-only rows: not tumor-supported in this sample" in md
+    assert "### Other curated rows — not supported by this sample" in md
     therapy_section = md.split("## Therapy Prioritization", 1)[1]
     active_block, audit_block = therapy_section.split(
-        "### Audit-only rows: not tumor-supported in this sample", 1
+        "### Other curated rows — not supported by this sample", 1
     )
     # The host-attributed FGFR3 row is not presented as an active opportunity.
     assert "erdafitinib" not in active_block
     assert "FGFR3" in audit_block
     assert "erdafitinib" in audit_block
-    assert "audit-only negative/background evidence" in audit_block
+    assert "not sample-supported; negative/background evidence" in audit_block
 
 
 def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):

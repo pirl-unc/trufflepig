@@ -590,7 +590,7 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     assert "Fit quality" in detailed
     assert "Integrated evidence synthesis" in detailed
     assert "Cancer-Type Differential" in detailed
-    assert "Raw decomposition audit" in detailed
+    assert "Decomposition model comparison" in detailed
     assert "Residual Tissue-like Programs" in detailed
 
 
@@ -635,6 +635,72 @@ def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
     detailed = (tmp_path / "heme-analysis.md").read_text()
     assert "not a strict tumor-vs-immune split" in detailed
     assert "Lineage / Background Context" in detailed
+
+
+def test_generate_text_reports_separates_rare_identity_from_purity(tmp_path):
+    analysis = {
+        "cancer_type": "NUTM",
+        "cancer_name": "NUT Carcinoma",
+        "cancer_score": 0.8,
+        "family_summary": {},
+        "top_cancers": [("NUTM", 0.8)],
+        "candidate_trace": [],
+        "fit_quality": {"label": "strong", "message": "Fusion-supported call."},
+        "purity": {
+            "cancer_type": "NUTM",
+            "reference_expression_source": "subtype_deconvolved",
+            "purity_source": "background_residual",
+            "overall_estimate": 0.70,
+            "overall_lower": 0.37,
+            "overall_upper": 0.90,
+            "components": {
+                "signature": {"per_gene": [], "purity": None},
+                "lineage": {
+                    "per_gene": [{"gene": "NUTM1", "purity": 0.55}],
+                    "purity": 0.55,
+                    "skipped_detected": [],
+                },
+                "stromal": {"enrichment": 4.0},
+                "immune": {"enrichment": 3.0},
+                "decomposition": {"residual_fraction": 0.70},
+                "integration": {"source": "background_residual"},
+            },
+        },
+        "tissue_scores": [],
+        "mhc1": {},
+        "mhc2": {},
+        "sample_mode": "solid",
+        "call_summary": {
+            "label_options": ["NUTM"],
+            "label_display": "NUTM",
+            "reported_context": "primary",
+            "reported_site": "primary site",
+            "site_indeterminate": False,
+            "site_note": None,
+            "hypothesis_display": [],
+        },
+    }
+    prefix = str(tmp_path / "nutm")
+    cli_mod._generate_text_reports(
+        analysis,
+        {
+            "method": "hierarchy",
+            "feature_kind": "hierarchical_scores",
+            "n_features": 0,
+            "n_types": 1,
+            "families": [],
+        },
+        prefix,
+        decomp_results=[],
+    )
+
+    detailed = (tmp_path / "nutm-analysis.md").read_text()
+    assert "Quantitative basis**: background-residual decomposition" in detailed
+    assert "after fitting 30% as non-tumor background" in detailed
+    assert "### Lineage Identity Genes" in detailed
+    assert "do **not** provide a calibrated tumor-purity estimate" in detailed
+    assert "| Gene | Relative expression | Interpretation |" in detailed
+    assert "sample expression ÷ the TCGA reference" not in detailed
 
 
 def test_generate_text_reports_handles_missing_lineage_summary(
@@ -1534,6 +1600,71 @@ def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     assert fig.axes[1].get_title() == "Fraction / context components"
     assert "TCGA median purity not available" in fig.axes[0].get_title()
     assert "Malignant-lineage fraction estimate" in fig._suptitle.get_text()
+
+
+def test_purity_plots_explain_rare_reference_and_use_physical_residual():
+    """Rare tumor-only references must not manufacture 100% ESTIMATE/NNLS
+    rows or claim that no genes exist when a lineage panel is available."""
+    purity = {
+        "cancer_type": "NUTM",
+        "reference_cancer_type": "NUTM",
+        "reference_expression_source": "subtype_deconvolved",
+        "tcga_median_purity": 1.0,
+        "overall_estimate": 0.70,
+        "overall_lower": 0.37,
+        "overall_upper": 0.90,
+        "purity_source": "background_residual",
+        "components": {
+            "signature": {
+                "per_gene": [],
+                "purity": None,
+                "lower": None,
+                "upper": None,
+                "genes": [],
+            },
+            "lineage": {
+                "per_gene": [{"gene": "NUTM1", "purity": 0.55}],
+                "purity": 0.55,
+                "lower": 0.45,
+                "upper": 0.65,
+                "genes": ["NUTM1"],
+            },
+            "stromal": {"n_genes": 10, "enrichment": 4.0},
+            "immune": {"n_genes": 10, "enrichment": 3.0},
+            "estimate_purity": None,
+            "estimate_purity_raw": 1.0,
+            "estimate_gated_for_reference": True,
+            "decomposition": {"mode": "solid", "residual_fraction": 0.70},
+            # Candidate metadata can be stale after final reconciliation; the
+            # top-level finalized source must control the displayed basis.
+            "integration": {"source": "lineage"},
+        },
+    }
+    frame = pd.DataFrame(
+        {"gene_id": ["ENSG1"], "gene_display_name": ["NUTM1"], "TPM": [1.0]}
+    )
+
+    detail, _ = purity_mod.plot_tumor_purity(
+        frame, cancer_type="NUTM", sample_mode="solid", purity_result=purity
+    )
+    assert "lineage-identity expression" in detail.axes[0].get_title()
+    assert "identity support only" in detail.axes[0].get_title()
+    detail_labels = [label.get_text() for label in detail.axes[1].get_yticklabels()]
+    assert any("Background-residual" in label for label in detail_labels)
+    assert not any("Lineage identity" in label for label in detail_labels)
+    assert not any(
+        "No tumor-specific signature genes" in text.get_text()
+        for text in detail.axes[0].texts
+    )
+
+    methods = purity_mod.plot_purity_method_comparison(purity)
+    labels = [label.get_text() for label in methods.axes[0].get_yticklabels()]
+    assert any("Background-residual fraction" in label for label in labels)
+    assert "Final estimate" in labels
+    assert not any("Lineage panel" in label for label in labels)
+    assert not any("ESTIMATE combined" in label for label in labels)
+    assert "basis: background residual" in methods.axes[0].get_title(loc="left")
+    assert not methods.axes[0].get_legend_handles_labels()[0]
 
 
 def test_plot_sample_summary_is_mode_aware(monkeypatch):

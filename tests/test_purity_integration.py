@@ -227,6 +227,7 @@ def test_best_purity_ceiling_pinned_drops_to_the_decomposition_residual():
     assert out["point_source"] == "desaturated_fusion"
     assert out["overall_estimate"] == pytest.approx(0.57, abs=0.02)  # tracks the physical signal
     assert out["overall_upper"] < 0.98  # no longer pinned at the ceiling
+    assert out["ceiling_excluded_methods"] == ["lineage", "estimate"]
 
 
 def test_best_purity_ceiling_pinned_desaturates_even_when_decomposition_reads_high():

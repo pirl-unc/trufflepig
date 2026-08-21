@@ -3340,7 +3340,7 @@ def build_actionable(
                         reliability = target_reliability_status(expr, target_row=t)
                 # Route host/background-attributed disease-curation rows (e.g. a
                 # BLCA FGFR3/erdafitinib row whose RNA is hepatocyte-attributed)
-                # out of the active-opportunity table and into an audit-only
+                # out of the active-opportunity table and into a non-supported
                 # section — the same partition ``_build_target_report`` applies to
                 # ``*-targets.md`` (issue #105), so the summary, the analysis
                 # markdown, and the PDF agree.
@@ -3350,7 +3350,8 @@ def build_actionable(
                 )
                 if audit_only:
                     interp_cell = (
-                        "audit-only negative/background evidence; " + interp_cell
+                        "not sample-supported; negative/background evidence; "
+                        + interp_cell
                     )
                 phase = _phase_label(str(t.get("phase") or ""))
                 return {
@@ -3406,7 +3407,7 @@ def build_actionable(
                         "reviewable RNA evidence in this sample.*\n"
                     )
                 lines.append(
-                    "### Audit-only rows: not tumor-supported in this sample\n"
+                    "### Other curated rows — not supported by this sample\n"
                 )
                 lines.append(
                     "These rows remain visible as disease-curation provenance or "
