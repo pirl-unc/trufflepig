@@ -3367,7 +3367,7 @@ def _analyze_body(run: AnalyzeRun):
         # skip an optional artifact, so catch broadly and keep the report.
         print(f"[warn] Cancer-type signal matrix failed: {exc}")
 
-    # Final purity pass: honest random-effects interval + anti-saturation guard, run
+    # Final purity pass: preserve the primary interval + anti-saturation guard, run
     # BEFORE the ReportView freeze so every headline read (figure, brief, markdown) sees
     # the same finalized number by construction. See ``_finalize_fused_purity``.
     _finalize_fused_purity(analysis)
@@ -5742,16 +5742,14 @@ def _reconcile_purity_after_decomposition(
 
 
 def _finalize_fused_purity(analysis):
-    """Final purity pass: honest random-effects interval + anti-saturation guard.
+    """Final purity pass: preserve the primary interval + guard saturation.
 
-    After every adoption/override/cap above has settled ``analysis["purity"]``, fuse
-    the per-method estimates (signature / lineage / ESTIMATE / decomposition) with the
-    random-effects model so the reported interval widens automatically when the methods
-    disagree, and guard against a saturated near-100% read that no reliable signal
-    corroborates — the failure mode that made a rare tissue type (e.g. NUT carcinoma)
-    report a spurious 100% purity when its lineage-identity genes and the ESTIMATE
-    surrogate co-saturated to 1.0 while the physical decomposition residual said ~55%.
-    The empirically-best combiner point is preserved except on that guarded case.
+    After every adoption/override/cap above has settled ``analysis["purity"]``, keep
+    that integrated point and interval as the single primary estimate. Component
+    disagreement remains audit metadata instead of being pooled a second time. A
+    point numerically pinned to 100% may be replaced by a non-saturated physical
+    decomposition residual, as in the rare-tumor saturation failure where identity
+    and ESTIMATE maxed out while the residual still measured background.
     Grounded in the HCC1395×HPA in-silico mixture benchmark; see
     ``trufflepig.purity_integration.best_purity_estimate``. Callers run this BEFORE the
     ReportView freeze so every headline read (figure, brief, markdown) sees the same
@@ -5765,7 +5763,7 @@ def _finalize_fused_purity(analysis):
         if not isinstance(final_purity, dict):
             return
         stability = (analysis.get("decomposition") or {}).get("purity_stability")
-        # Decomposition's contribution to the fusion is its RESIDUAL FRACTION — the mass
+        # Decomposition's independent physical cross-check is its RESIDUAL FRACTION — the mass
         # fraction of the tumor-specific residual after background subtraction (CLAUDE.md:
         # "the PRIMARY purity signal"). This is the independent PHYSICAL tumor-vs-background
         # reading, and it is what discriminates a genuinely-pure sample from a lineage-identity
@@ -5789,9 +5787,7 @@ def _finalize_fused_purity(analysis):
         # Preserve the physical decomposition cap. When the adopted decomposition models
         # non-tumor mass, _constrain_purity_interval_with_decomposition may have already
         # capped overall_upper below 1.0 (purity cannot exceed 1 − modeled non-tumor mass).
-        # The random-effects fusion is unaware of that structural bound, so on method
-        # disagreement its pooled upper can widen back above the cap (e.g. 0.84 → 0.97),
-        # re-reporting an impossible near-100% interval. Clamp the fused interval to the cap.
+        # The finalizer must not re-open that structural bound. Clamp the selected interval.
         decomp_cap = (
             (final_purity.get("components") or {}).get("decomposition_interval_cap") or {}
         ).get("constrained_upper")
@@ -5809,18 +5805,14 @@ def _finalize_fused_purity(analysis):
             "method_agreement": best["method_agreement"],
             "n_methods": best["n_methods"],
             "point_source": best["point_source"],
+            "interval_source": best.get("interval_source"),
             "method_weights": best.get("method_weights", {}),
             "ceiling_excluded_methods": best.get(
                 "ceiling_excluded_methods", []
             ),
         }
         if best["point_source"] == "desaturated_fusion":
-            weights = best.get("method_weights") or {}
-            final_source = (
-                "background_residual"
-                if set(weights) == {"decomposition"}
-                else "method_consensus"
-            )
+            final_source = "background_residual"
             final_purity["purity_source"] = final_source
             components = final_purity.get("components") or {}
             integration = components.get("integration")
