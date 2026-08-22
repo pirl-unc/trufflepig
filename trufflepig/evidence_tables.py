@@ -155,7 +155,12 @@ def _per_subtype_evidence_table(
     return lines
 
 
-def _rescue_evidence_table(support_override: dict | None) -> list[str]:
+def _rescue_evidence_table(
+    support_override: dict | None,
+    *,
+    active_for_report: bool = True,
+    report_code: str = "",
+) -> list[str]:
     """Render the rescue's marker readout as a structured table."""
     if not support_override:
         return []
@@ -163,14 +168,24 @@ def _rescue_evidence_table(support_override: dict | None) -> list[str]:
     if kind != "tnbc_basal_brca_misclassification":
         return []
     lines: list[str] = []
-    lines.append("#### TNBC / basal-BRCA misclassification rescue — marker evidence\n")
-    lines.append(
-        "The classifier's broad top picks were the squamous family, but the "
-        "sample shows the basal-mammary cytokeratin program with the luminal "
-        "and squamous programs both off. This is the classic basal-like BRCA "
-        "vs. squamous overlap (Hoadley 2014, Damrauer 2014, Lehmann 2011). "
-        "Markers that flipped the call:\n"
-    )
+    if active_for_report:
+        lines.append("#### TNBC / basal-BRCA misclassification rescue — marker evidence\n")
+        lines.append(
+            "The classifier's broad top picks were the squamous family, but the "
+            "sample shows the basal-mammary cytokeratin program with the luminal "
+            "and squamous programs both off. This is the classic basal-like BRCA "
+            "vs. squamous overlap (Hoadley 2014, Damrauer 2014, Lehmann 2011). "
+            "Markers that changed the report call:\n"
+        )
+    else:
+        active_label = report_code or "the final report entity"
+        lines.append("#### Basal-BRCA differential marker evidence\n")
+        lines.append(
+            "Candidate ranking recognized a basal-mammary program, but integrated "
+            f"evidence retained **{active_label}**. The table below is opposing "
+            "differential evidence; it did not set the report label or therapy "
+            "scope:\n"
+        )
     sections: list[tuple[str, dict[str, Any] | None]] = [
         ("Basal cytokeratin program (elevated)", support_override.get("keratin_tpm")),
         ("Luminal program (suppressed)", support_override.get("luminal_marker_tpm")),
@@ -360,7 +375,24 @@ def build_candidate_evidence_block(
         None,
     )
     if rescue_row:
-        lines.extend(_rescue_evidence_table(rescue_row.get("support_override")))
+        rescue = rescue_row.get("support_override") or {}
+        report_code = str((analysis or {}).get("cancer_type") or "").strip()
+        recommended_code = str(rescue.get("recommended_code") or "").strip()
+        active_for_report = True
+        if report_code and recommended_code:
+            from .cancer_ontology import cancer_codes_entity_compatible
+
+            active_for_report = cancer_codes_entity_compatible(
+                report_code,
+                recommended_code,
+            )
+        lines.extend(
+            _rescue_evidence_table(
+                rescue,
+                active_for_report=active_for_report,
+                report_code=report_code,
+            )
+        )
 
     # Normal-tissue tiebreaker (runs after rescues, so render second).
     lines.extend(_tiebreaker_evidence_table(candidate_trace))

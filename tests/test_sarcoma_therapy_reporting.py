@@ -347,6 +347,39 @@ def test_pecoma_uses_histology_gated_nab_sirolimus_without_expression_gate():
     assert "TSC1/TSC2" in report
 
 
+def test_broad_sarcoma_expression_subtype_does_not_unlock_pecoma_indication():
+    analysis = _analysis("SARC")
+    analysis["candidate_trace"] = [
+        {"code": "SARC", "winning_subtype": "SARC_PEC"},
+    ]
+
+    panel_code, panel_subtype, panel = cancer_therapy_panel_for_analysis(
+        "SARC",
+        analysis,
+    )
+    report = build_summary(
+        analysis,
+        _ranges(TSC1=0.0, TSC2=0.0, MTOR=0.0),
+        cancer_code="SARC",
+        disease_state="",
+    )
+
+    assert panel_code == "SARC"
+    assert panel_subtype is None
+    assert panel.empty
+    assert "nab-sirolimus" not in report
+    assert "pecoma-specific therapy evidence" not in report.lower()
+
+    molecular_analysis = _analysis("SARC", "EGFR kinase domain duplication / KDD")
+    molecular_analysis["candidate_trace"] = analysis["candidate_trace"]
+    _, _, molecular_panel = cancer_therapy_panel_for_analysis(
+        "SARC",
+        molecular_analysis,
+    )
+    assert set(molecular_panel["symbol"]) == {"EGFR"}
+    assert "nab-sirolimus (Fyarro)" not in set(molecular_panel["agent"])
+
+
 def test_unmapped_sarcoma_child_does_not_inherit_sibling_subtype_drugs():
     panel_code, panel_subtype, panel = cancer_therapy_panel_for_analysis(
         "SARC_SFT", _analysis("SARC_SFT")

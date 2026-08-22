@@ -2191,20 +2191,30 @@ def summarize_reliability_reasons(rows, top_n=3):
     return ", ".join(reason for reason, _ in counter.most_common(top_n))
 
 
-def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
-    """Return the final subtype/cancer code implied by the analysis."""
+def subtype_resolution_for_analysis(analysis, ranges_df=None):
+    """Return the subtype decision and its provenance for report consumers.
+
+    A raw expression winner and a subtype established by an independent
+    site/marker tiebreaker are not interchangeable.  Callers that can change
+    clinical scope (notably therapy lookup) must inspect ``status`` rather than
+    treating every ``final_subtype`` as established.
+    """
     try:
         from .analyze import cancer_type_context_from_analysis
 
         cancer_type_context = cancer_type_context_from_analysis(analysis)
         if cancer_type_context.uses_distinct_reference and cancer_type_context.report_code:
-            return cancer_type_context.report_code
+            return {
+                "final_subtype": cancer_type_context.report_code,
+                "status": "report_scope",
+                "reason": "active report scope",
+            }
     except Exception:
         pass
 
     winning_subtype = candidate_winning_subtype_for_analysis(analysis)
     if not winning_subtype:
-        return None
+        return {}
 
     tumor_tpm_by_symbol = analysis.get("tumor_tpm_by_symbol")
     if not tumor_tpm_by_symbol and ranges_df is not None:
@@ -2226,12 +2236,19 @@ def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
             site_template=analysis_site_template_for_subtype(analysis),
             tumor_tpm_by_symbol=tumor_tpm_by_symbol,
         )
-        winning_subtype = (
-            _clean_text(resolution.get("final_subtype")) or winning_subtype
-        )
     except Exception:
-        pass
-    return winning_subtype or None
+        return {
+            "final_subtype": winning_subtype,
+            "status": "unresolved",
+            "reason": "subtype resolver unavailable",
+        }
+    return dict(resolution)
+
+
+def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
+    """Return the final subtype/cancer code implied by the analysis."""
+    resolution = subtype_resolution_for_analysis(analysis, ranges_df=ranges_df)
+    return _clean_text(resolution.get("final_subtype")) or None
 
 
 def analysis_site_template_for_subtype(analysis):
@@ -2528,15 +2545,55 @@ def cancer_therapy_panel_for_analysis(
             or active_cancer_code
         )
 
-    panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
-        active_cancer_code,
-        analysis,
-        ranges_df=ranges_df,
+    # Histology-specific treatment evidence follows the report entity, not an
+    # expression-only child carried for reference/marker interpretation.  A
+    # broad SARC report with a PEComa-like expression pattern must not inherit
+    # the PEComa indication. An independently confirmed/corrected child (for
+    # example an MDM2-amplified sarcoma resolved to osteosarcoma by bone-site
+    # context) can supply the narrower panel.
+    panel_code, panel_subtype = active_cancer_code, None
+    try:
+        from trufflepig.cancer_ontology import cancer_type_registry
+
+        registry = cancer_type_registry()
+        match = registry[registry["code"] == active_cancer_code]
+        is_grouping = bool(
+            not match.empty
+            and str(match.iloc[0].get("ontology_level") or "").strip()
+            == "grouping"
+        )
+    except Exception:
+        is_grouping = False
+
+    if is_grouping:
+        resolution = subtype_resolution_for_analysis(analysis, ranges_df=ranges_df)
+        if resolution.get("status") in {"confirmed", "corrected"}:
+            panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
+                active_cancer_code,
+                analysis,
+                ranges_df=ranges_df,
+            )
+
+    targets_df = (
+        therapy_targets_loader(panel_code, subtype=panel_subtype)
+        if panel_subtype
+        else therapy_targets_loader(panel_code)
     )
-    if panel_subtype:
-        targets_df = therapy_targets_loader(panel_code, subtype=panel_subtype)
-    else:
-        targets_df = therapy_targets_loader(panel_code)
+    if (
+        is_grouping
+        and panel_code == active_cancer_code
+        and targets_df is not None
+        and "subtype" in targets_df.columns
+    ):
+        subtype = targets_df["subtype"].fillna("").astype(str).str.strip()
+        molecular_match = targets_df.apply(
+            lambda row: bool(supplied_alteration_supports_target_row(row, analysis)),
+            axis=1,
+        )
+        # Parent-wide rows are valid for the broad report. A child-specific
+        # row may cross that boundary only when the sample itself supplies the
+        # molecular eligibility event; expression resemblance is insufficient.
+        targets_df = targets_df.loc[~subtype.astype(bool) | molecular_match]
 
     molecular_df = infantile_spindle_therapy_targets(active_cancer_code, analysis)
     has_molecular_panel = molecular_df is not None and not molecular_df.empty

@@ -358,6 +358,26 @@ def test_summary_surfaces_rna_qc_and_prad_stromal_pitfall():
     assert "RNA-inferred PRAD context rescue" in md
 
 
+def test_summary_explains_a_ceiling_purity_estimate():
+    analysis = _make_analysis()
+    analysis["purity"] = {
+        "overall_estimate": 1.0,
+        "overall_lower": 0.83,
+        "overall_upper": 1.0,
+    }
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+
+    assert "**Purity:** 100%" in md
+    assert "not proof of literal 100% tumor cellularity" in md
+
+
 def test_summary_uses_generic_text_for_orphan_context_rescue():
     analysis = _make_analysis()
     analysis["cancer_type"] = "BLCA"

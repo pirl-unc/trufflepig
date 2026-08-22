@@ -445,6 +445,11 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
         {
             "rare_report_scope_inference": stale_rare,
             "fine_report_scope_inference": stale_fine,
+            "cancer_call_rescue": {
+                "kind": "tnbc_basal_brca_misclassification",
+                "recommended_code": "BRCA",
+                "message": "Treat as TNBC / basal-BRCA.",
+            },
             "cancer_type_source": "auto-detected",
         }
     )
@@ -482,6 +487,8 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
 
     assert "rare_report_scope_inference" not in analysis
     assert "fine_report_scope_inference" not in analysis
+    assert "cancer_call_rescue" not in analysis
+    assert analysis["retained_cancer_call_rescue"]["recommended_code"] == "BRCA"
     basis = _cancer_type_basis_line(analysis, "BLCA")
     assert "RNA-inferred hypothesis" in basis
     assert "rare-cancer hypothesis" not in basis

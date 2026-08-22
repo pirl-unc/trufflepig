@@ -5278,6 +5278,15 @@ def _decomposition_met_site_is_supported(decomp_result, *, analysis=None):
     template = str(getattr(decomp_result, "template", "") or "")
     if not template.startswith("met_"):
         return False
+    # ``--met-site`` is specimen metadata, not an inference from the fit.  A
+    # matching template therefore has a known host site even when its component
+    # fit carries an over-explanation warning.  Keep mismatched templates
+    # ineligible so explicit liver metadata cannot bless (for example) a bone
+    # model.
+    constraints = (analysis or {}).get("analysis_constraints") or {}
+    explicit_met_site = _canonical_met_site_hint(constraints.get("met_site"))
+    if explicit_met_site:
+        return _MET_TEMPLATE_TO_SITE_HINT.get(template) == explicit_met_site
     site_evidence = getattr(decomp_result, "site_evidence", None)
     site_supported = _site_evidence_supports_met_site(site_evidence)
     warnings = getattr(decomp_result, "warnings", None) or []
@@ -6243,6 +6252,18 @@ def _propagate_report_scope_selection(
         report_scope_cancer_type,
         report_scope_cancer_type,
     )
+    # Candidate ranking may attach a disease-specific rescue to its temporary
+    # winner.  Once integrated evidence selects an unrelated entity, that
+    # rescue is useful provenance but must not continue to describe the final
+    # report basis (for example, a basal-BRCA rescue on a final NUTM call).
+    call_rescue = analysis.get("cancer_call_rescue") or {}
+    rescue_code = str(call_rescue.get("recommended_code") or "").strip()
+    if rescue_code and not cancer_codes_entity_compatible(
+        report_scope_cancer_type,
+        rescue_code,
+    ):
+        analysis["retained_cancer_call_rescue"] = call_rescue
+        analysis.pop("cancer_call_rescue", None)
     # ``analyze_sample`` binds purity to the pre-evidence ranker winner.
     # Recompute it whenever an integrated selector changes the final entity.
     _finalize_purity_for_final_call(

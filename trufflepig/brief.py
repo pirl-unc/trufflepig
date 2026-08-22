@@ -1302,6 +1302,17 @@ def _caveats_from_purity_tier(
                 "reflects the agreement of the remaining methods rather "
                 "than that single high reading."
             )
+    purity = (analysis or {}).get("purity") or {}
+    try:
+        purity_point = float(purity.get("overall_estimate"))
+    except (TypeError, ValueError):
+        purity_point = None
+    if purity_point is not None and purity_point >= 0.995:
+        out.append(
+            "The RNA model reached its purity ceiling because it did not resolve "
+            "a separable non-tumor fraction; this is not proof of literal 100% "
+            "tumor cellularity."
+        )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", None)
@@ -2834,6 +2845,7 @@ def build_summary(
         analysis,
         ranges_df=ranges_df,
     )
+    top = []
     hla_prompts = _missing_hla_prompts(targets_df, ranges_df, analysis)
     if targets_df is not None and len(targets_df):
         therapy_analysis = dict(analysis)
