@@ -1,6 +1,8 @@
 import importlib.util
+import json
 import logging
 from pathlib import Path
+import sys
 
 
 def _load_regen_module():
@@ -103,3 +105,45 @@ def test_remove_logging_handlers_for_per_run_stream(tmp_path):
     finally:
         logger.handlers[:] = original_handlers
         log_file.close()
+
+
+def test_main_reports_skipped_inputs_separately(monkeypatch, tmp_path, capsys):
+    regen = _load_regen_module()
+    sample = tmp_path / "sample.tsv"
+    sample.write_text("gene\tTPM\nEGFR\t1\n")
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {
+                "runs": [
+                    {
+                        "name": "present",
+                        "input": str(sample),
+                        "command": ["python", "-m", "trufflepig.cli", "run", "--sample", str(sample)],
+                    },
+                    {
+                        "name": "missing",
+                        "input": str(tmp_path / "missing.tsv"),
+                        "command": ["python", "-m", "trufflepig.cli", "run"],
+                    },
+                ]
+            }
+        )
+    )
+    monkeypatch.setattr(regen, "_run", lambda *_args: (0, 1.0))
+    monkeypatch.setattr(regen, "_collect_signal_matrix_artifacts", lambda *_args: None)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "regenerate_local_reports.py",
+            "--source",
+            str(source),
+            "--root",
+            str(tmp_path / "reports"),
+            "--skip-comparisons",
+        ],
+    )
+
+    assert regen.main() == 0
+    assert "ok=1  skipped=1  failed=0" in capsys.readouterr().out
