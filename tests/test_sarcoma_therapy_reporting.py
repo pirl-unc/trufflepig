@@ -6,6 +6,7 @@ import pandas as pd
 
 from trufflepig.alterations import parse_alteration_inputs
 from trufflepig.brief import build_summary
+from trufflepig.fusions import FusionRecord
 from trufflepig.reporting import cancer_therapy_panel_for_analysis
 
 
@@ -90,6 +91,27 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
             disease_state="",
         )
         assert "- **ALK** — crizotinib" not in incompatible
+
+
+def test_dedicated_alk_fusion_input_enables_exact_imt_therapy():
+    analysis = _analysis("SARC_IMT")
+    analysis["fusion_records"] = [
+        FusionRecord(
+            gene_a="TPM3",
+            gene_b="ALK",
+            source_path="arriba.tsv",
+            confidence="high",
+        ).public_dict()
+    ]
+
+    report = build_summary(
+        analysis,
+        _ranges(ALK=120.0),
+        cancer_code="SARC_IMT",
+        disease_state="",
+    )
+
+    assert "- **ALK** — crizotinib" in report
 
 
 def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():

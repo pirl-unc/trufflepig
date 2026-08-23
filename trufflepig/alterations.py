@@ -350,6 +350,174 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
     return (primary,)
 
 
+def _record_dict(record: object) -> dict[str, Any] | None:
+    if hasattr(record, "public_dict"):
+        public = record.public_dict()
+        return dict(public) if hasattr(public, "get") else None
+    if hasattr(record, "get"):
+        return dict(record)
+    return None
+
+
+def _fusion_record_as_alteration(record: object) -> dict[str, Any] | None:
+    """Normalize a dedicated fusion call onto the alteration-record contract."""
+    source = _record_dict(record)
+    if source is None:
+        return None
+    gene_a = _clean_gene(source.get("gene_a"))
+    gene_b = _clean_gene(source.get("gene_b"))
+    if not gene_a or not gene_b or gene_a == gene_b:
+        return None
+    pair = _text(source.get("pair")) or f"{gene_a}--{gene_b}"
+    raw_name = _text(source.get("raw_name")) or pair
+    normalized = dict(source)
+    normalized.update(
+        {
+            "gene": gene_a,
+            "pair": pair,
+            "alteration": f"{pair} fusion",
+            "alteration_type": "fusion",
+            "raw_name": raw_name,
+            "result_status": _text(source.get("result_status"))
+            or _text(source.get("reportable")),
+            "filter_status": _text(source.get("filter_status"))
+            or _text(source.get("confidence")),
+            "filter_semantics": _text(source.get("filter_semantics")) or "generic",
+            "evidence_source_type": "fusion",
+            "evidence_source_types": ["fusion"],
+        }
+    )
+    return normalized
+
+
+def _molecular_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
+    alteration_type = _text(record.get("alteration_type")).lower() or "unknown"
+    if alteration_type == "fusion":
+        for key in ("pair", "gene", "alteration", "raw_name"):
+            match = _FUSION_PAIR_RE.search(_text(record.get(key)).upper())
+            if match:
+                pair = (match.group(1), match.group(2))
+                if _valid_fusion_pair_genes(pair):
+                    return ("fusion", *sorted(pair))
+        gene_a = _clean_gene(record.get("gene_a"))
+        gene_b = _clean_gene(record.get("gene_b"))
+        if gene_a and gene_b and gene_a != gene_b:
+            return ("fusion", *sorted((gene_a, gene_b)))
+    gene = _clean_gene(record.get("gene"))
+    if alteration_type == "fusion" and gene:
+        return ("fusion", gene)
+    alteration = re.sub(
+        r"\s+",
+        " ",
+        _text(record.get("alteration") or record.get("raw_name")).lower(),
+    )
+    return (alteration_type, gene, alteration)
+
+
+def _record_supports_identity(
+    record: dict[str, Any],
+    identity: tuple[object, ...],
+) -> bool:
+    identity_genes = identity[1:] if identity[0] == "fusion" else identity[1:2]
+    genes = [str(value) for value in identity_genes if str(value)]
+    return bool(genes) and all(
+        not alteration_record_gene_is_negated(record, gene) for gene in genes
+    )
+
+
+def _source_types(record: dict[str, Any]) -> set[str]:
+    values = record.get("evidence_source_types") or ()
+    if isinstance(values, str):
+        values = (values,)
+    return {str(value) for value in values if str(value)}
+
+
+def molecular_evidence_records(analysis: object) -> list[dict[str, Any]]:
+    """Return one normalized view of supplied alteration and fusion evidence.
+
+    The dedicated fusion interface remains the authoritative source for fusion
+    classification and fusion-specific reporting. This view lets generic
+    molecular consumers—therapy eligibility and pathway-source reasoning—use
+    the same record contract regardless of which CLI/API input supplied an
+    event. The same biological event supplied through both interfaces is
+    retained once and carries both source types, so it cannot become two votes.
+    """
+    if not isinstance(analysis, dict):
+        return []
+    normalized: list[dict[str, Any]] = []
+    by_identity: dict[tuple[object, ...], dict[str, Any]] = {}
+    sources = (
+        ("alteration", analysis.get("alteration_records") or ()),
+        ("fusion", analysis.get("fusion_records") or ()),
+    )
+    for source_type, records in sources:
+        for record in records:
+            item = (
+                _fusion_record_as_alteration(record)
+                if source_type == "fusion"
+                else _record_dict(record)
+            )
+            if item is None:
+                continue
+            if source_type == "alteration":
+                item.setdefault("evidence_source_type", "alteration")
+                item.setdefault("evidence_source_types", ["alteration"])
+            identity = _molecular_record_identity(item)
+            existing = by_identity.get(identity)
+            if existing is None:
+                by_identity[identity] = item
+                normalized.append(item)
+                continue
+            existing_sources = _source_types(existing)
+            existing_sources.update(_source_types(item))
+            existing["evidence_source_types"] = sorted(existing_sources)
+            if _record_supports_identity(
+                existing,
+                identity,
+            ) != _record_supports_identity(item, identity):
+                existing["result_status"] = (
+                    "inconclusive: conflicting supplied records"
+                )
+                existing["evidence_conflict"] = True
+    return normalized
+
+
+def _record_mentions_gene(record: dict[str, Any], gene: str) -> bool:
+    escaped = re.escape(gene)
+    return any(
+        re.search(rf"\b{escaped}\b", _text(record.get(key)), re.IGNORECASE)
+        for key in ("gene", "gene_a", "gene_b", "pair", "alteration", "raw_name")
+    )
+
+
+def molecular_evidence_for_gene(analysis: object, gene: str) -> list[dict[str, Any]]:
+    """Return positive, non-conflicting supplied evidence for one gene.
+
+    A positive call is withheld when another supplied record explicitly
+    negates the same gene. This prevents the two input interfaces—or repeated
+    assay exports—from turning contradictory molecular results into automatic
+    therapy eligibility.
+    """
+    wanted = _clean_gene(gene)
+    if not wanted:
+        return []
+    records = molecular_evidence_records(analysis)
+    positive = [
+        record
+        for record in records
+        if wanted in alteration_record_genes(record)
+    ]
+    if not positive:
+        return []
+    if any(
+        _record_mentions_gene(record, wanted)
+        and alteration_record_gene_is_negated(record, wanted)
+        for record in records
+    ):
+        return []
+    return positive
+
+
 def _valid_fusion_pair_genes(genes: tuple[str, str]) -> bool:
     return all(len(gene) >= 3 for gene in genes) and not any(
         gene in _NON_GENE_TOKENS or gene.startswith("CHR") for gene in genes

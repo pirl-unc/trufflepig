@@ -247,9 +247,16 @@ def _support_genes_for_score(score: TherapyAxisScore, *, max_genes: int = 5) -> 
 
 
 def _candidate_source_from_alteration(record: Any) -> dict[str, Any] | None:
-    gene = _clean_symbol(_record_value(record, "gene"))
-    if gene not in _MAPK_DRIVER_SOURCE_GENES:
+    from .alterations import alteration_record_genes
+
+    genes = [
+        gene
+        for gene in alteration_record_genes(record)
+        if gene in _MAPK_DRIVER_SOURCE_GENES
+    ]
+    if not genes:
         return None
+    gene = genes[0]
     alteration_type = str(_record_value(record, "alteration_type") or "").strip()
     alteration = str(_record_value(record, "alteration") or "").strip()
     raw_name = str(_record_value(record, "raw_name") or "").strip()
@@ -288,42 +295,29 @@ def _candidate_source_from_alteration(record: Any) -> dict[str, Any] | None:
 
     detail = alteration or raw_name or alteration_type or "alteration"
     source_path = _short_source_path(_record_value(record, "source_path"))
-    if str(detail).strip().upper().startswith(gene):
+    if alteration_type.lower() == "fusion":
+        pair = str(_record_value(record, "pair") or raw_name or alteration).strip()
+        label = f"supplied fusion involving {gene}"
+        if pair:
+            label += f" ({pair})"
+        kind = "supplied_fusion"
+    elif str(detail).strip().upper().startswith(gene):
         label = f"supplied {detail}".strip()
+        kind = "supplied_alteration"
     else:
         label = f"supplied {gene} {detail}".strip()
+        kind = "supplied_alteration"
     if source_path:
-        label += f" ({source_path})"
+        label += (
+            f" from {source_path}"
+            if kind == "supplied_fusion"
+            else f" ({source_path})"
+        )
     return {
-        "kind": "supplied_alteration",
+        "kind": kind,
         "gene": gene,
         "label": label,
         "mechanism": mechanism,
-        "confidence": str(_record_value(record, "confidence") or "supplied").strip()
-        or "supplied",
-    }
-
-
-def _candidate_source_from_fusion(record: Any) -> dict[str, Any] | None:
-    gene_a = _clean_symbol(_record_value(record, "gene_a"))
-    gene_b = _clean_symbol(_record_value(record, "gene_b"))
-    genes = [gene for gene in (gene_a, gene_b) if gene in _MAPK_DRIVER_SOURCE_GENES]
-    if not genes:
-        return None
-    pair = str(_record_value(record, "pair") or "").strip()
-    if not pair and gene_a and gene_b:
-        pair = f"{gene_a}--{gene_b}"
-    source_path = _short_source_path(_record_value(record, "source_path"))
-    label = f"supplied fusion involving {', '.join(genes)}"
-    if pair:
-        label += f" ({pair})"
-    if source_path:
-        label += f" from {source_path}"
-    return {
-        "kind": "supplied_fusion",
-        "gene": genes[0],
-        "label": label,
-        "mechanism": "kinase or MAPK-pathway fusion can drive downstream ERK output",
         "confidence": str(_record_value(record, "confidence") or "supplied").strip()
         or "supplied",
     }
@@ -420,13 +414,20 @@ def infer_mapk_activity_sources(
     if fold is None or fold < min_activity_fold:
         return []
 
+    from .alterations import (
+        alteration_record_genes,
+        molecular_evidence_for_gene,
+        molecular_evidence_records,
+    )
+
     candidate_sources: list[dict[str, Any]] = []
-    for record in analysis.get("alteration_records") or []:
+    for record in molecular_evidence_records(analysis):
+        genes = alteration_record_genes(record)
+        if not genes or any(
+            not molecular_evidence_for_gene(analysis, gene) for gene in genes
+        ):
+            continue
         source = _candidate_source_from_alteration(record)
-        if source:
-            candidate_sources.append(source)
-    for record in analysis.get("fusion_records") or []:
-        source = _candidate_source_from_fusion(record)
         if source:
             candidate_sources.append(source)
     candidate_sources.extend(_candidate_sources_from_rna(ranges_df))

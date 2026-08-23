@@ -14,9 +14,9 @@ import logging
 import pandas as pd
 
 from .alterations import (
-    alteration_record_gene_is_negated,
     alteration_record_genes,
     classify_alteration_type,
+    molecular_evidence_for_gene,
 )
 from .molecular_therapy import NTRK_GENES, ntrk_fusion_therapy_targets, therapy_row
 
@@ -29,16 +29,6 @@ INFANTILE_SPINDLE_CODES = frozenset({"SARC_IFS", "CMN", "SARC_NTRK_SPINDLE"})
 def _clean(value) -> str:
     text = str(value or "").strip()
     return "" if text.lower() == "nan" else text
-
-
-def _alteration_records(analysis) -> list[dict]:
-    if not isinstance(analysis, dict):
-        return []
-    return [
-        dict(record)
-        for record in (analysis.get("alteration_records") or [])
-        if hasattr(record, "get")
-    ]
 
 
 def _is_fusion(record) -> bool:
@@ -76,17 +66,21 @@ def _is_egfr_kdd(record) -> bool:
 
 def _confirmed_ntrk_fusion_genes(analysis) -> tuple[str, ...]:
     genes: list[str] = []
-    for record in _alteration_records(analysis):
-        if not _is_fusion(record):
-            continue
-        for gene in alteration_record_genes(record):
-            if (
-                gene in NTRK_GENES
-                and not alteration_record_gene_is_negated(record, gene)
-                and gene not in genes
-            ):
+    for gene in NTRK_GENES:
+        if any(
+            _is_fusion(record)
+            for record in molecular_evidence_for_gene(analysis, gene)
+        ):
+            if gene not in genes:
                 genes.append(gene)
     return tuple(genes)
+
+
+def _has_confirmed_egfr_kdd(analysis) -> bool:
+    return any(
+        _is_egfr_kdd(record)
+        for record in molecular_evidence_for_gene(analysis, "EGFR")
+    )
 
 
 @lru_cache(maxsize=8)
@@ -119,9 +113,8 @@ def infantile_spindle_context_applies(cancer_code, analysis=None) -> bool:
         return True
     if code != "SARC":
         return False
-    records = _alteration_records(analysis)
-    return bool(_confirmed_ntrk_fusion_genes(analysis)) or any(
-        _is_egfr_kdd(record) for record in records
+    return bool(_confirmed_ntrk_fusion_genes(analysis)) or _has_confirmed_egfr_kdd(
+        analysis
     )
 
 
@@ -137,7 +130,7 @@ def infantile_spindle_guidance(cancer_code, analysis=None) -> dict:
         return {}
 
     ntrk_genes = _confirmed_ntrk_fusion_genes(analysis)
-    egfr_kdd = any(_is_egfr_kdd(record) for record in _alteration_records(analysis))
+    egfr_kdd = _has_confirmed_egfr_kdd(analysis)
     upstream = {
         candidate: _upstream_driver_spectrum(candidate)
         for candidate in ("SARC_IFS", "CMN")

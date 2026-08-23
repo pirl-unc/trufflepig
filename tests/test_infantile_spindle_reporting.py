@@ -4,6 +4,7 @@ import pandas as pd
 
 from trufflepig.alterations import alteration_record_genes, parse_alteration_inputs
 from trufflepig.brief import build_summary
+from trufflepig.fusions import FusionRecord
 import trufflepig.infantile_spindle as spindle
 from trufflepig.reporting import (
     cancer_therapy_panel_for_analysis,
@@ -60,6 +61,28 @@ def test_fusion_partner_is_available_to_therapy_matching():
         },
         {"alteration_records": [record]},
     )
+
+
+def test_dedicated_fusion_input_drives_broad_context_and_matched_therapy():
+    analysis = _analysis("SARC")
+    analysis["fusion_records"] = [
+        FusionRecord(
+            gene_a="ETV6",
+            gene_b="NTRK3",
+            source_path="star-fusion.tsv",
+            confidence="high",
+        ).public_dict()
+    ]
+
+    report = build_summary(
+        analysis,
+        _ranges(NTRK3=20.0),
+        cancer_code="SARC",
+        disease_state="",
+    )
+
+    assert "confirmed supplied NTRK fusion involving NTRK3" in report
+    assert "- **NTRK3** — larotrectinib" in report
 
 
 def test_unknown_fusion_details_do_not_hide_confirmed_therapy_evidence():

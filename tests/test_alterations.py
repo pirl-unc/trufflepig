@@ -6,8 +6,12 @@ import pytest
 from trufflepig.alterations import (
     alteration_record_genes,
     alteration_record_passes_assay_filters,
+    molecular_evidence_for_gene,
+    molecular_evidence_records,
     parse_alteration_inputs,
 )
+from trufflepig.fusions import FusionRecord, parse_fusion_file
+from trufflepig.reporting import supplied_alteration_supports_target_row
 
 
 def _record(value):
@@ -119,3 +123,95 @@ def test_vcf_filter_column_uses_strict_filter_semantics(tmp_path):
     assert record["filter_semantics"] == "vcf"
     assert not alteration_record_passes_assay_filters(record)
     assert alteration_record_genes(record) == ()
+
+
+def test_dedicated_fusion_records_share_the_molecular_evidence_contract():
+    fusion = FusionRecord(
+        gene_a="KIF5B",
+        gene_b="RET",
+        source_path="caller.tsv",
+        confidence="high",
+    ).public_dict()
+
+    records = molecular_evidence_records({"fusion_records": [fusion]})
+
+    assert len(records) == 1
+    assert records[0]["alteration_type"] == "fusion"
+    assert records[0]["evidence_source_types"] == ["fusion"]
+    assert alteration_record_genes(records[0]) == ("KIF5B", "RET")
+    assert supplied_alteration_supports_target_row(
+        {
+            "symbol": "RET",
+            "indication": "RET fusion-positive solid tumor",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        {"fusion_records": [fusion]},
+    )
+
+
+def test_same_fusion_from_two_interfaces_is_one_molecular_event():
+    alteration = _record("ETV6-NTRK3 fusion")
+    fusion = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
+
+    records = molecular_evidence_records(
+        {
+            "alteration_records": [alteration],
+            "fusion_records": [fusion],
+        }
+    )
+
+    assert len(records) == 1
+    assert records[0]["evidence_source_types"] == ["alteration", "fusion"]
+    assert alteration_record_genes(records[0]) == ("ETV6", "NTRK3")
+
+
+def test_conflicting_cross_interface_fusion_calls_do_not_enable_therapy():
+    negative = _record("ETV6-NTRK3 fusion not detected")
+    positive = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
+    analysis = {
+        "alteration_records": [negative],
+        "fusion_records": [positive],
+    }
+
+    records = molecular_evidence_records(analysis)
+
+    assert len(records) == 1
+    assert records[0]["evidence_conflict"] is True
+    assert records[0]["evidence_source_types"] == ["alteration", "fusion"]
+    assert molecular_evidence_for_gene(analysis, "NTRK3") == []
+    assert not supplied_alteration_supports_target_row(
+        {
+            "symbol": "NTRK3",
+            "indication": "NTRK gene fusion-positive solid tumor",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
+
+
+def test_low_confidence_dedicated_fusion_does_not_enable_therapy():
+    analysis = {
+        "fusion_records": [
+            FusionRecord(
+                gene_a="TPM3",
+                gene_b="ALK",
+                confidence="LowQual",
+            ).public_dict()
+        ]
+    }
+
+    assert molecular_evidence_for_gene(analysis, "ALK") == []
+
+
+def test_structured_nonreportable_fusion_fails_closed(tmp_path):
+    path = tmp_path / "fusions.csv"
+    pd.DataFrame(
+        [{"gene5": "TPM3", "gene3": "ALK", "reportable": False}]
+    ).to_csv(path, index=False)
+    record = parse_fusion_file(path)[0]
+
+    assert record.reportable == "False"
+    assert molecular_evidence_for_gene(
+        {"fusion_records": [record.public_dict()]},
+        "ALK",
+    ) == []
