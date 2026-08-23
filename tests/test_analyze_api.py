@@ -752,6 +752,14 @@ def test_apply_sample_context_to_purity_widens_ci():
     assert apply_sample_context_to_purity(analysis, context) is False
     assert analysis["purity"] == widened
 
+    # A decomposition ceiling may tighten only the already-widened upper side.
+    # Reapplying sample context must not widen the lower side a second time.
+    analysis["purity"]["overall_upper"] = 0.58
+    assert apply_sample_context_to_purity(analysis, context) is False
+    assert analysis["purity"]["overall_lower"] == pytest.approx(0.34)
+    assert analysis["purity"]["overall_upper"] == pytest.approx(0.58)
+    assert analysis["purity"]["degradation_caveat"]["widened_upper"] == 0.58
+
     # A downstream purity replacement or fusion can change the interval while
     # retaining metadata. The same context must widen that new final interval
     # exactly once.

@@ -115,12 +115,38 @@ def apply_sample_context_to_purity(analysis: dict[str, Any], sample_context) -> 
     if est is None or lo is None or hi is None:
         return False
     existing_caveat = purity_block.get("degradation_caveat") or {}
-    already_widened = bool(
-        purity_block.get("ci_widening_factor") == round(ci_factor, 3)
-        and existing_caveat.get("widened_lower") == round(float(lo), 4)
-        and existing_caveat.get("widened_upper") == round(float(hi), 4)
+    rounded_lo = round(float(lo), 4)
+    rounded_hi = round(float(hi), 4)
+    prior_widened_lo = existing_caveat.get("widened_lower")
+    prior_widened_hi = existing_caveat.get("widened_upper")
+    same_factor = purity_block.get("ci_widening_factor") == round(ci_factor, 3)
+    # A physical constraint may tighten one side after degradation widening.
+    # An unchanged opposite endpoint proves this is the same widened interval,
+    # not a replacement interval that still needs the context adjustment.
+    constrained_after_widening = bool(
+        same_factor
+        and (
+            (
+                rounded_lo == prior_widened_lo
+                and prior_widened_hi is not None
+                and rounded_hi <= prior_widened_hi
+            )
+            or (
+                rounded_hi == prior_widened_hi
+                and prior_widened_lo is not None
+                and rounded_lo >= prior_widened_lo
+            )
+        )
     )
-    if already_widened:
+    already_widened = bool(
+        same_factor
+        and prior_widened_lo == rounded_lo
+        and prior_widened_hi == rounded_hi
+    )
+    if already_widened or constrained_after_widening:
+        if constrained_after_widening:
+            existing_caveat["widened_lower"] = rounded_lo
+            existing_caveat["widened_upper"] = rounded_hi
         return False
 
     half_lo = max(0.0, est - lo) * ci_factor

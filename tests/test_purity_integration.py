@@ -306,6 +306,35 @@ def test_fragility_flag_does_not_turn_a_single_residual_into_a_vacuous_range():
     assert out["overall_upper"] - out["overall_lower"] < 0.80
 
 
+def test_background_residual_point_gets_a_non_degenerate_measurement_interval():
+    """NNLS produces a point fraction, not zero uncertainty.
+
+    When that residual is the adopted primary purity, a zero-width transport
+    interval should use the existing single-measurement uncertainty model.
+    """
+    purity = {
+        "overall_estimate": 0.70,
+        "overall_lower": 0.70,
+        "overall_upper": 0.70,
+        "purity_source": "background_residual",
+        "components": {
+            "signature": {"purity": None},
+            "lineage": {"purity": 1.0},
+            "estimate_purity": 1.0,
+        },
+    }
+
+    out = best_purity_estimate(
+        purity,
+        decomposition={"overall_estimate": 0.70, "fragile": False},
+    )
+
+    assert out["overall_estimate"] == pytest.approx(0.70)
+    assert out["overall_lower"] < out["overall_estimate"] < out["overall_upper"]
+    assert out["overall_upper"] - out["overall_lower"] < 0.80
+    assert out["interval_source"] == "background_residual"
+
+
 def test_best_purity_corroborated_decomposition_below_ceiling_stays():
     """An 80%-purity sample (nutm1-0026): signature broken-low (0.15) but decomposition residual and
     ESTIMATE both independently say ~0.80. Below the ceiling and corroborated → point preserved."""

@@ -111,6 +111,7 @@ def test_fusion_commentary_does_not_create_a_negated_partner():
 def test_explicitly_negative_fusion_calls_are_not_confirmed():
     for alteration in (
         "ETV6-NTRK3 fusion not detected",
+        "NTRK3::ETV6 fusion not detected",
         "NTRK3 fusion: negative",
         "NTRK3 rearrangement - not detected",
     ):
@@ -125,6 +126,23 @@ def test_explicitly_negative_fusion_calls_are_not_confirmed():
         )
         assert "confirmed supplied NTRK fusion" not in report
         assert "- **NTRK3** — larotrectinib" not in report
+
+
+def test_inline_negative_egfr_event_never_enables_therapy():
+    for alteration in (
+        "EGFR KDD not detected",
+        "EGFR kinase domain duplication: negative",
+    ):
+        record = _record(alteration)
+
+        assert alteration_record_genes(record) == ()
+        report = build_summary(
+            _analysis("CMN", alteration),
+            _ranges(EGFR=583.0),
+            cancer_code="CMN",
+            disease_state="",
+        )
+        assert "- **EGFR**" not in report
 
 
 def test_singular_and_plural_rearrangement_wording_enable_ntrk_therapy():

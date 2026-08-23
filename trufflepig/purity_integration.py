@@ -341,13 +341,21 @@ def best_purity_estimate(
         (measurement for measurement in ms if measurement.name == "decomposition"),
         None,
     )
-    if incoming_is_pinned and residual_measurement is not None:
+    primary_interval_is_degenerate = upper <= lower + _EPS
+    primary_is_background_residual = (
+        purity.get("purity_source") == "background_residual"
+    )
+    if residual_measurement is not None and (
+        incoming_is_pinned
+        or (primary_is_background_residual and primary_interval_is_degenerate)
+    ):
         residual_result = integrate_purity_estimates([residual_measurement])
         if residual_result is not None:
-            point = float(residual_result["overall_estimate"])
+            if incoming_is_pinned:
+                point = float(residual_result["overall_estimate"])
+                point_source = "desaturated_fusion"
             lower = float(residual_result["overall_lower"])
             upper = float(residual_result["overall_upper"])
-            point_source = "desaturated_fusion"
             interval_source = "background_residual"
 
     return {

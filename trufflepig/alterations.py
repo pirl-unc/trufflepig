@@ -203,23 +203,33 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
         for key in ("filter_status", "filter", "FILTER")
     ):
         return True
-    text = " ".join(
+    event_texts = [
         str(record.get(key) or "")
         for key in ("alteration", "raw_name", "confidence")
-    )
+        if str(record.get(key) or "").strip()
+    ]
     escaped = re.escape(wanted)
+    # A negative outcome applies to the complete alteration clause, not only
+    # to a bare gene or fusion token.  This catches ordinary exports such as
+    # ``EGFR KDD not detected`` and ``NTRK3::ETV6 fusion not detected`` while
+    # the clause boundary keeps ``ALK fusion, NTRK3 not detected`` from
+    # negating the independent ALK event.
+    negative_in_gene_clause = any(
+        re.search(rf"\b{escaped}\b", clause, re.IGNORECASE)
+        and _NEGATIVE_CALL_RE.search(clause)
+        for text in event_texts
+        for clause in re.split(r"[,;\n]+", text)
+    )
     return bool(
-        re.search(
-            rf"\b{escaped}\b(?:\s+{_FUSION_EVENT_PATTERN})?"
-            rf"\s*(?:[:=]|[-–—])?\s*(?:is\s+)?{_NEGATIVE_CALL_RE.pattern}",
-            text,
-            re.IGNORECASE,
-        )
-        or re.search(
-            rf"\b(?:no|without)\s+(?:evidence\s+of\s+)?(?:an?\s+)?"
-            rf"\b{escaped}\b",
-            text,
-            re.IGNORECASE,
+        negative_in_gene_clause
+        or any(
+            re.search(
+                rf"\b(?:no|without)\s+(?:evidence\s+of\s+)?(?:an?\s+)?"
+                rf"\b{escaped}\b",
+                text,
+                re.IGNORECASE,
+            )
+            for text in event_texts
         )
     )
 

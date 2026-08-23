@@ -2794,6 +2794,14 @@ def _analyze_body(run: AnalyzeRun):
         previous_primary_expression_context = analysis.get(
             "primary_expression_context"
         )
+        previous_call_rescue_metadata = {
+            key: analysis[key]
+            for key in (
+                "cancer_call_rescue",
+                "retained_cancer_call_rescue",
+            )
+            if key in analysis
+        }
         (
             post_decomposition_evidence,
             post_decomposition_scope,
@@ -2966,6 +2974,17 @@ def _analyze_body(run: AnalyzeRun):
                         previous_report_scope_parent_cancer_type
                     ),
                 )
+                # Scope propagation may move an incompatible rescue into the
+                # retained audit field.  A rejected proposal must restore the
+                # exact pre-adjudication rescue state along with the cancer
+                # scope, rather than leaving metadata from the rolled-back
+                # entity behind.
+                for key in (
+                    "cancer_call_rescue",
+                    "retained_cancer_call_rescue",
+                ):
+                    analysis.pop(key, None)
+                analysis.update(previous_call_rescue_metadata)
                 apply_sample_context_to_purity(analysis, sample_context)
                 purity = analysis["purity"]
                 cancer_type_context = _synchronize_cancer_type_context(
