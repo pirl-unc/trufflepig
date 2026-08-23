@@ -21,20 +21,28 @@ _FUSION_PAIR_RE = re.compile(
     r"\b([A-Z][A-Z0-9]{1,10})\s*(?:::|--|/|-)\s*"
     r"([A-Z][A-Z0-9]{1,10})\b"
 )
-_NON_POSITIVE_CALL_PATTERN = (
+_NON_POSITIVE_EVENT_PATTERN = (
     r"(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present|"
     r"inconclusive|fail(?:ed|ure)?|qns|pending|indeterminate|equivocal|"
-    r"insufficient|cancel(?:l?ed)?|unknown|not\s+(?:assessed|evaluable)|"
+    r"insufficient|cancel(?:l?ed)?|not\s+(?:assessed|evaluable)|"
     r"no\s+call|invalid|vus|(?:variant\s+of\s+)?uncertain\s+significance|"
     r"(?:likely\s+)?benign|low[- ]?qual(?:ity)?)"
 )
-_NEGATIVE_CALL_RE = re.compile(
-    rf"\b{_NON_POSITIVE_CALL_PATTERN}\b",
+_NON_POSITIVE_RESULT_PATTERN = rf"(?:{_NON_POSITIVE_EVENT_PATTERN}|unknown)"
+_NON_POSITIVE_EVENT_RE = re.compile(
+    rf"\b{_NON_POSITIVE_EVENT_PATTERN}\b",
     re.IGNORECASE,
 )
 _NEGATIVE_RESULT_RE = re.compile(
-    rf"^\s*(?:(?:false|no|neg|{_NON_POSITIVE_CALL_PATTERN})\b|"
+    rf"^\s*(?:(?:false|no|neg|{_NON_POSITIVE_RESULT_PATTERN})\b|"
     r"0(?:\.0+)?(?![\d.]))",
+    re.IGNORECASE,
+)
+_EXPLICIT_UNKNOWN_OUTCOME_RE = re.compile(
+    r"\b(?:result|status|call)\b(?:\s+(?:is|was))?\s*"
+    r"(?:[-:=]\s*)?unknown\b|"
+    r"\b(?:fusion|rearrangement|translocation|mutation|variant|kdd|"
+    r"kinase\s+domain\s+duplication)\s*(?:[-:=]\s*|(?:is|was)\s+)unknown\b",
     re.IGNORECASE,
 )
 _FUSION_EVENT_PATTERN = r"(?:fusions?|rearrang(?:e|ed|ements?|ing)|translocations?)"
@@ -89,6 +97,7 @@ class AlterationRecord:
     raw_name: str = ""
     result_status: str = ""
     filter_status: str = ""
+    filter_semantics: str = "generic"
 
     @property
     def key(self) -> tuple[str, str, str, str, int | None]:
@@ -110,6 +119,7 @@ class AlterationRecord:
             "confidence": self.confidence,
             "result_status": self.result_status,
             "filter_status": self.filter_status,
+            "filter_semantics": self.filter_semantics,
             "support": dict(self.support),
             "raw_name": self.raw_name,
         }
@@ -161,16 +171,63 @@ def _result_status_is_non_positive(value: object) -> bool:
     return any(_NEGATIVE_RESULT_RE.match(part) for part in parts)
 
 
-def _filter_status_is_failed(value: object) -> bool:
-    """Whether a VCF-style FILTER field rejects the event.
+def _filter_status_is_failed(value: object, *, vcf_semantics: bool) -> bool:
+    """Whether a filter field explicitly rejects the event.
 
     VCF reserves ``PASS`` for calls that pass every filter and ``.`` for calls
-    where filters were not applied. Any named filter (for example ``LowQual``)
-    marks the call as unsuitable for alteration-gated therapy evidence.
+    where filters were not applied, so every named VCF filter is a rejection.
+    Generic spreadsheet ``Filter`` columns often hold confidence labels such
+    as ``HighConfidence`` or ``Tier 1``; those are rejected only when they use
+    explicit non-positive outcome vocabulary.
     """
     parts = [part.strip().lower() for part in re.split(r"[;,|]", _text(value))]
     parts = [part for part in parts if part]
-    return any(part not in {".", "pass", "passed"} for part in parts)
+    if vcf_semantics:
+        return any(part not in {".", "pass", "passed"} for part in parts)
+    return any(_NEGATIVE_RESULT_RE.match(part) for part in parts)
+
+
+def alteration_record_passes_assay_filters(record: object) -> bool:
+    """Whether a normalized call passes structured result and filter fields.
+
+    This public gate is intentionally disease- and therapy-independent. Free-
+    text event negation remains gene-specific and is handled by
+    :func:`alteration_record_gene_is_negated`.
+    """
+    if not hasattr(record, "get"):
+        return False
+    if any(
+        _result_status_is_non_positive(record.get(key))
+        for key in ("result_status", "result", "status")
+    ):
+        return False
+
+    filter_semantics = str(record.get("filter_semantics") or "").lower()
+    stored_filter_is_vcf = filter_semantics == "vcf" or (
+        not filter_semantics and bool(_text(record.get("filter_status")))
+    )
+    if _filter_status_is_failed(
+        record.get("filter_status"),
+        vcf_semantics=stored_filter_is_vcf,
+    ):
+        return False
+    # Preserve sensible behavior for callers that pass unnormalized records.
+    # Exact uppercase FILTER follows VCF semantics; a generic ``filter`` key
+    # rejects only explicit failure vocabulary.
+    if _filter_status_is_failed(record.get("FILTER"), vcf_semantics=True):
+        return False
+    if _filter_status_is_failed(record.get("filter"), vcf_semantics=False):
+        return False
+    return True
+
+
+def _event_clause_is_non_positive(clause: object) -> bool:
+    """Whether free text explicitly reports that its event is not positive."""
+    text = _text(clause)
+    return bool(
+        _NON_POSITIVE_EVENT_RE.search(text)
+        or _EXPLICIT_UNKNOWN_OUTCOME_RE.search(text)
+    )
 
 
 def _clean_gene(value: object) -> str:
@@ -193,15 +250,7 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     wanted = str(gene or "").strip().upper()
     if not wanted:
         return False
-    if any(
-        _result_status_is_non_positive(record.get(key))
-        for key in ("result_status", "result", "status")
-    ):
-        return True
-    if any(
-        _filter_status_is_failed(record.get(key))
-        for key in ("filter_status", "filter", "FILTER")
-    ):
+    if not alteration_record_passes_assay_filters(record):
         return True
     event_texts = [
         str(record.get(key) or "")
@@ -216,7 +265,7 @@ def alteration_record_gene_is_negated(record: object, gene: str) -> bool:
     # negating the independent ALK event.
     negative_in_gene_clause = any(
         re.search(rf"\b{escaped}\b", clause, re.IGNORECASE)
-        and _NEGATIVE_CALL_RE.search(clause)
+        and _event_clause_is_non_positive(clause)
         for text in event_texts
         for clause in re.split(r"[,;\n]+", text)
     )
@@ -255,7 +304,7 @@ def _explicit_fusion_pair(record: object) -> tuple[str, ...]:
                 or [len(text)]
             )
             clause = text[match.start() : clause_end]
-            if _NEGATIVE_CALL_RE.search(clause):
+            if _event_clause_is_non_positive(clause):
                 continue
             if any(alteration_record_gene_is_negated(record, gene) for gene in genes):
                 continue
@@ -432,16 +481,21 @@ def _result_status_from_row(row) -> str:
     return "; ".join(values)
 
 
-def _filter_status_from_row(row) -> str:
-    """Preserve VCF-style filter decisions separately from classifications."""
+def _filter_status_from_row(row, *, source_path: str) -> tuple[str, str]:
+    """Return the filter value and whether it has strict VCF semantics."""
     values: list[str] = []
+    source_is_vcf = str(source_path).lower().endswith((".vcf", ".vcf.gz"))
+    vcf_semantics = source_is_vcf
     for col, value in row.items():
         if _clean_header(col) not in _FILTER_STATUS_COLUMNS:
             continue
         text = _text(value)
         if text and text not in values:
             values.append(text)
-    return "; ".join(values)
+        raw_col = str(col).strip()
+        if raw_col == "FILTER" or _clean_header(col) == "vcffilter":
+            vcf_semantics = True
+    return "; ".join(values), "vcf" if vcf_semantics else "generic"
 
 
 def _record_from_text_line(
@@ -494,6 +548,10 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
         alteration_type = classify_alteration_type(full_text)
         if alteration_type == "unknown" and _has_connected_fusion_pair(raw_gene):
             alteration_type = "fusion"
+        filter_status, filter_semantics = _filter_status_from_row(
+            row,
+            source_path=source_path,
+        )
         records.append(
             AlterationRecord(
                 gene=gene,
@@ -503,7 +561,8 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
                 row_index=int(idx),
                 confidence=_confidence_from_row(row),
                 result_status=_result_status_from_row(row),
-                filter_status=_filter_status_from_row(row),
+                filter_status=filter_status,
+                filter_semantics=filter_semantics,
                 support=_support_from_row(row),
                 raw_name=full_text,
             )

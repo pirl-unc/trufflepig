@@ -62,6 +62,22 @@ def test_fusion_partner_is_available_to_therapy_matching():
     )
 
 
+def test_unknown_fusion_details_do_not_hide_confirmed_therapy_evidence():
+    for alteration in (
+        "ETV6-NTRK3 fusion breakpoint unknown",
+        "NTRK3 fusion partner unknown",
+    ):
+        report = build_summary(
+            _analysis("SARC_IFS", alteration),
+            _ranges(NTRK3=20.0),
+            cancer_code="SARC_IFS",
+            disease_state="",
+        )
+
+        assert "confirmed supplied NTRK fusion involving NTRK3" in report
+        assert "- **NTRK3** — larotrectinib" in report
+
+
 def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
     path = tmp_path / "structured_fusion.csv"
     pd.DataFrame(

@@ -285,6 +285,37 @@ def test_structured_filter_status_controls_alk_therapy_evidence(tmp_path):
         assert ("- **ALK** — crizotinib" in report) is expected
 
 
+def test_generic_filter_confidence_does_not_suppress_alk_therapy_evidence(tmp_path):
+    for index, filter_value in enumerate(("HighConfidence", "Tier 1")):
+        path = tmp_path / f"alk_confidence_filter_{index}.csv"
+        pd.DataFrame(
+            [
+                {
+                    "Gene": "ALK",
+                    "Alteration": "rearrangement",
+                    "Result": "Positive",
+                    "Filter": filter_value,
+                }
+            ]
+        ).to_csv(path, index=False)
+        record = parse_alteration_inputs(str(path))[0].public_dict()
+        analysis = _analysis("SARC_IMT")
+        analysis.update(
+            alteration_inputs_supplied=True,
+            alteration_records=[record],
+        )
+
+        report = build_summary(
+            analysis,
+            _ranges(ALK=120.0),
+            cancer_code="SARC_IMT",
+            disease_state="",
+        )
+
+        assert record["filter_semantics"] == "generic"
+        assert "- **ALK** — crizotinib" in report
+
+
 def test_exact_report_scope_wins_over_broad_reference_argument():
     analysis = _analysis("SARC_IMT", "ALK fusion")
     analysis.update(
