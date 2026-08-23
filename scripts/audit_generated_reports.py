@@ -250,6 +250,18 @@ def _sample_issues(
     purity_match = _PURITY_INTERVAL.search(summary_text)
     if purity_match:
         purity_lower, purity_upper = map(int, purity_match.groups())
+        if purity_upper == purity_lower:
+            issues.append(
+                {
+                    "sample": sample_id,
+                    "severity": "error",
+                    "category": "degenerate_purity_interval",
+                    "detail": (
+                        f"purity interval {purity_lower}%–{purity_upper}% "
+                        "reports a point estimate as if it had zero uncertainty"
+                    ),
+                }
+            )
         # A nominal interval covering at least four fifths of the entire
         # possible 0–100% domain conveys almost no quantitative information.
         # Treat it as a report bug so 2–98% cannot pass a report audit as

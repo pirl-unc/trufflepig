@@ -195,3 +195,33 @@ def test_full_report_audit_rejects_nearly_uninformative_purity_interval(tmp_path
     )
     assert issue["severity"] == "error"
     assert "2%–98%" in issue["detail"]
+
+
+def test_full_report_audit_rejects_zero_width_purity_interval(tmp_path):
+    paths = _write_report_tree(
+        tmp_path,
+        "**Working cancer call**: READ (Rectum Adenocarcinoma).\n",
+    )
+    paths["summary"].write_text(
+        "\n".join(
+            [
+                "**Cancer call:** READ",
+                "**Purity:** 70% (model interval 70%–70%, degenerate confidence).",
+            ]
+        )
+    )
+
+    issues = _sample_issues(
+        sample_id="sample",
+        expected="READ|CRC",
+        paths=paths,
+        compat=_compat(),
+    )
+
+    issue = next(
+        issue
+        for issue in issues
+        if issue["category"] == "degenerate_purity_interval"
+    )
+    assert issue["severity"] == "error"
+    assert "70%–70%" in issue["detail"]
