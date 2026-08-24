@@ -110,7 +110,7 @@ def test_marker_auto_selection_skips_extended_housekeeping(monkeypatch):
     _, _, marker_df = _select_marker_rows(
         genes=genes,
         symbols=symbols,
-        sig_matrix_hk=mat,
+        signature_tpm=mat,
         comp_names=["T_cell", "B_cell", "myeloid"],
     )
     b_cell_markers = set(marker_df[marker_df["component"] == "B_cell"]["symbol"])
@@ -148,14 +148,14 @@ def test_long_transcript_markers_downweighted_under_ffpe_context(monkeypatch):
     _, weights_no_ctx, df_no_ctx = _select_marker_rows(
         genes=genes,
         symbols=symbols,
-        sig_matrix_hk=mat,
+        signature_tpm=mat,
         comp_names=["T_cell", "fibroblast"],
         sample_context=None,
     )
     _, weights_severe, df_severe = _select_marker_rows(
         genes=genes,
         symbols=symbols,
-        sig_matrix_hk=mat,
+        signature_tpm=mat,
         comp_names=["T_cell", "fibroblast"],
         sample_context=SampleContext(degradation_severity="severe"),
     )

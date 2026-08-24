@@ -114,15 +114,29 @@ def apply_sample_context_to_purity(analysis: dict[str, Any], sample_context) -> 
     hi = purity_block.get("overall_upper")
     if est is None or lo is None or hi is None:
         return False
+    existing_caveat = purity_block.get("degradation_caveat") or {}
+    already_widened = bool(
+        purity_block.get("ci_widening_factor") == round(ci_factor, 3)
+        and existing_caveat.get("widened_lower") == round(float(lo), 4)
+        and existing_caveat.get("widened_upper") == round(float(hi), 4)
+    )
+    if already_widened:
+        return False
 
     half_lo = max(0.0, est - lo) * ci_factor
     half_hi = max(0.0, hi - est) * ci_factor
-    purity_block["overall_lower"] = round(max(0.0, est - half_lo), 4)
-    purity_block["overall_upper"] = round(min(1.0, est + half_hi), 4)
+    widened_lower = round(max(0.0, est - half_lo), 4)
+    widened_upper = round(min(1.0, est + half_hi), 4)
+    purity_block["overall_lower"] = widened_lower
+    purity_block["overall_upper"] = widened_upper
     purity_block["ci_widening_factor"] = round(ci_factor, 3)
     purity_block["degradation_caveat"] = {
         "severity": sample_context.degradation_severity,
         "index": sample_context.degradation_index,
+        "base_lower": round(float(lo), 4),
+        "base_upper": round(float(hi), 4),
+        "widened_lower": widened_lower,
+        "widened_upper": widened_upper,
         "message": (
             f"Purity confidence interval widened x{ci_factor:.2f} "
             f"to reflect {sample_context.degradation_severity} RNA degradation; "
@@ -137,17 +151,42 @@ def should_adopt_decomposition_purity(classifier_code: str, decomp_result) -> bo
     """Return whether a decomposition purity can replace classifier purity.
 
     The decomposition fit supplies a tumor/TME subtraction template. It is
-    only a purity estimate when the template agrees with the classifier,
-    has non-tumor components, and exposes a populated purity result.
+    only a purity estimate when the template is the report entity or one of
+    its descendants, has non-tumor components, and exposes a populated purity
+    result. A descendant fit can quantify a deliberately broad report parent
+    (for example READ under CRC) without promoting that child to the headline.
     """
     if decomp_result is None:
         return False
-    if getattr(decomp_result, "cancer_type", None) != classifier_code:
+    decomposition_code = str(getattr(decomp_result, "cancer_type", None) or "")
+    classifier_code = str(classifier_code or "")
+    if decomposition_code != classifier_code and not _is_descendant_code(
+        decomposition_code, classifier_code
+    ):
         return False
     warnings = getattr(decomp_result, "warnings", None) or []
     if any("No non-tumor components in template" in warning for warning in warnings):
         return False
     return bool(getattr(decomp_result, "purity_result", None))
+
+
+def _is_descendant_code(code: str, parent_code: str) -> bool:
+    """Whether ``code`` is below ``parent_code`` in the registry hierarchy."""
+    if not code or not parent_code or code == parent_code:
+        return False
+    try:
+        from trufflepig.cancer_ontology import registry_parent_code
+
+        seen = set()
+        current = code
+        while current and current not in seen:
+            seen.add(current)
+            current = str(registry_parent_code(current) or "")
+            if current == parent_code:
+                return True
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+    return False
 
 
 # Fragility thresholds for the observed decomposition purity (instrumentation, not yet a gate).

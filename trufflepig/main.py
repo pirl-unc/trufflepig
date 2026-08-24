@@ -39,6 +39,7 @@ from .analyze import (
     build_analysis_parameters,
     build_analyze_paths,
     cancer_type_context_from_analysis,
+    cancer_type_tree_relationship,
     decomposition_purity_stability,
     discover_output_artifacts,
     reconcile_decomposition_purity,
@@ -98,14 +99,18 @@ from .plot import (
     CANCER_TYPE_NAMES,
 )
 from .decomposition import (
+    decompose_identity_backgrounds,
     decompose_sample,
     epithelial_matched_normal_component,
+    evaluate_residual_identity,
     get_decomposition_parameters,
     infer_sample_mode,
     plot_decomposition_candidates,
     plot_decomposition_component_breakdown,
     plot_decomposition_composition,
+    scope_residual_identity_to_decomposition_mode,
 )
+from .cancer_ontology import cancer_codes_entity_compatible
 from .sample_context import (
     heuristic_support_label,
     infer_sample_context,
@@ -1836,6 +1841,43 @@ def compare_analyze(
     print(f"[report] Wrote {output_path}")
 
 
+def _render_therapy_pathway_state(
+    *,
+    enabled,
+    prefix,
+    therapy_scores,
+    cancer_code,
+    disease_state_caption,
+    output_dpi,
+):
+    """Render the current pathway state and remove any stale prior artifact."""
+
+    if not enabled:
+        return None
+    output_path = Path(
+        f"{prefix}-therapy-pathway-state.png"
+        if prefix
+        else "therapy-pathway-state.png"
+    )
+    try:
+        from .plot_therapy import plot_therapy_pathway_state
+
+        figure = plot_therapy_pathway_state(
+            therapy_response_scores=therapy_scores,
+            cancer_code=cancer_code,
+            disease_state_caption=disease_state_caption,
+            save_to_filename=str(output_path),
+            save_dpi=output_dpi,
+        )
+    except Exception as exc:  # noqa: BLE001 - optional report artifact
+        print(f"[warn] Therapy-pathway state plot failed: {exc}")
+        figure = None
+    if figure is None:
+        output_path.unlink(missing_ok=True)
+        return None
+    return str(output_path)
+
+
 def _analyze_body(run: AnalyzeRun):
     config = run.config
     resolution = run.inputs
@@ -2349,7 +2391,8 @@ def _analyze_body(run: AnalyzeRun):
             analysis["rare_marker_hypotheses"] = []
     cancer_type_evidence = None
     selected_scope = None
-    if not cancer_type and not report_scope_cancer_type:
+    allow_auto_scope_refinement = not cancer_type and not report_scope_cancer_type
+    if allow_auto_scope_refinement:
         (
             cancer_type_evidence,
             selected_scope,
@@ -2372,40 +2415,17 @@ def _analyze_body(run: AnalyzeRun):
     if not report_scope_cancer_type:
         selected_scope = None  # veto cleared the evidence selection → fall back to the bulk classifier call
     if report_scope_cancer_type:
-        selected_reference_cancer_type = (
-            (selected_scope or {}).get("reference_cancer_type")
-        ) or rna_inferred_cancer_type
-        analysis["reference_cancer_type"] = selected_reference_cancer_type
-        analysis["expression_reference_cancer_type"] = (
-            (selected_scope or {}).get("expression_reference_cancer_type")
-            or selected_reference_cancer_type
-        )
-        analysis["inferred_cancer_type"] = report_scope_cancer_type
-        analysis["reference_cancer_name"] = cancer_code_display_name(
-            selected_reference_cancer_type,
-            selected_reference_cancer_type or rna_inferred_cancer_name,
-        )
-        analysis["report_scope_cancer_type"] = report_scope_cancer_type
-        # Make the reported PURITY consistent with the final evidence-refined call: analyze_sample
-        # bound purity (+ its one decomposition) to the pre-evidence ranking winner, so an ATRT
-        # scored as LGG had a solid-mode decomposition; once evidence calls ATRT (embryonal) the
-        # reported purity lineage should match. No-op when the winner already equals the final call.
-        _finalize_purity_for_final_call(analysis, df_expr, report_scope_cancer_type)
-        if analysis_cancer_type:
-            analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
-        elif fine_scope_inference and fine_scope_inference.get("reference_cancer_type"):
-            analysis["report_scope_parent_cancer_type"] = fine_scope_inference[
-                "reference_cancer_type"
-            ]
-        if fusion_scope_inference:
-            analysis["fusion_report_scope_inference"] = fusion_scope_inference
-        if rare_scope_inference:
-            analysis["rare_report_scope_inference"] = rare_scope_inference
-        if fine_scope_inference:
-            analysis["fine_report_scope_inference"] = fine_scope_inference
-        analysis["cancer_type"] = report_scope_cancer_type
-        analysis["cancer_name"] = cancer_code_display_name(
-            report_scope_cancer_type, report_scope_cancer_type
+        _propagate_report_scope_selection(
+            analysis,
+            df_expr,
+            report_scope_cancer_type=report_scope_cancer_type,
+            selected_scope=selected_scope,
+            rna_inferred_cancer_type=rna_inferred_cancer_type,
+            rna_inferred_cancer_name=rna_inferred_cancer_name,
+            analysis_cancer_type=analysis_cancer_type,
+            fusion_scope_inference=fusion_scope_inference,
+            rare_scope_inference=rare_scope_inference,
+            fine_scope_inference=fine_scope_inference,
         )
     analysis["cancer_type_source"] = (
         "user-specified" if cancer_type else "auto-detected"
@@ -2420,9 +2440,11 @@ def _analyze_body(run: AnalyzeRun):
     # without having to re-derive it from the raw sample_context.
     apply_sample_context_to_purity(analysis, sample_context)
     analysis["sample_mode"] = infer_sample_mode(
-        candidate_rows=analysis.get("candidate_trace"),
-        cancer_types=[rna_inferred_cancer_type]
-        if rna_inferred_cancer_type
+        # Decomposition follows the adjudicated cancer call. The ranker trace
+        # remains a differential, but must not route a BRCA report through
+        # heme templates merely because a quantifier artifact put HL first.
+        cancer_types=[analysis.get("cancer_type") or rna_inferred_cancer_type]
+        if (analysis.get("cancer_type") or rna_inferred_cancer_type)
         else ([analysis_cancer_type] if analysis_cancer_type else None),
         sample_mode=sample_mode,
     )
@@ -2436,16 +2458,10 @@ def _analyze_body(run: AnalyzeRun):
         hla_types=config.hla_types,
         alterations=config.alterations,
     )
-    cancer_type_context = cancer_type_context_from_analysis(
+    cancer_type_context = _synchronize_cancer_type_context(
         analysis,
         supplied_cancer_type=cancer_type,
     )
-    _apply_cancer_type_context_roles(analysis, cancer_type_context)
-    cancer_type_context = cancer_type_context_from_analysis(
-        analysis,
-        supplied_cancer_type=cancer_type,
-    )
-    analysis["cancer_type_context"] = cancer_type_context.to_dict()
     cancer_code = cancer_type_context.code_for("report")
     reference_cancer_code = cancer_type_context.code_for("cohort")
     inferred_site_context = _infer_likely_met_site_context(
@@ -2644,65 +2660,20 @@ def _analyze_body(run: AnalyzeRun):
     # EMT / hypoxia / IFN axis, caption restating the synthesis
     # sentence. Emitted only when at least one axis has a measurable
     # up/down geomean; skipped for empty therapy-scores dicts.
-    pathway_state_png = (
-        "%s-therapy-pathway-state.png" % prefix
-        if prefix
-        else "therapy-pathway-state.png"
+    pathway_state_png = _render_therapy_pathway_state(
+        enabled=plot_ctx.enabled,
+        prefix=prefix,
+        therapy_scores=therapy_scores,
+        cancer_code=reference_cancer_code,
+        disease_state_caption=compose_disease_state_narrative(analysis),
+        output_dpi=output_dpi,
     )
-    if plot_ctx.enabled:
-        try:
-            from .plot_therapy import plot_therapy_pathway_state
-
-            fig_ps = plot_therapy_pathway_state(
-                therapy_response_scores=therapy_scores,
-                cancer_code=reference_cancer_code,
-                disease_state_caption=compose_disease_state_narrative(analysis),
-                save_to_filename=pathway_state_png,
-                save_dpi=output_dpi,
-            )
-            if fig_ps is None:
-                pathway_state_png = None
-        except Exception as _tps_err:
-            print(f"[warn] Therapy-pathway state plot failed: {_tps_err}")
-            pathway_state_png = None
-    else:
-        pathway_state_png = None
 
     print("[analysis] Running broad-compartment decomposition...")
     decomp_png = None
     composition_png = None
     components_png = None
     candidates_png = None
-    candidate_codes = []
-    candidate_trace_codes = [
-        str(row.get("code") or "").strip()
-        for row in analysis.get("candidate_trace", [])
-        if row.get("code")
-    ]
-    expression_reference_code = str(
-        analysis.get("expression_reference_cancer_type") or ""
-    ).strip()
-    scoped_decomposition_codes = [reference_cancer_code]
-    for code in (expression_reference_code, cancer_code):
-        code = str(code or "").strip()
-        if not code or code in scoped_decomposition_codes:
-            continue
-        if _is_defining_fusion_label(code):
-            continue
-        if _has_operational_analysis_reference(code):
-            scoped_decomposition_codes.append(code)
-    for code in (*scoped_decomposition_codes, *candidate_trace_codes[:4]):
-        code = str(code or "").strip()
-        if code and code not in candidate_codes:
-            candidate_codes.append(code)
-    decomposition_site_hint = site_hint or (
-        inferred_site_context.get("site") if inferred_site_context else None
-    )
-    decomposition_tumor_context = (
-        "met"
-        if inferred_site_context and tumor_context == "auto" and not template_overrides
-        else tumor_context
-    )
     candidate_tsv = (
         "%s-cancer-candidates.tsv" % prefix if prefix else "cancer-candidates.tsv"
     )
@@ -2757,28 +2728,355 @@ def _analyze_body(run: AnalyzeRun):
         ),
     )
 
-    decomp_results = decompose_sample(
+    (
+        complete_decomp_results,
+        candidate_codes,
+        _decomposition_context,
+    ) = _fit_report_scope_decompositions(
         df_expr,
-        cancer_types=candidate_codes or [cancer_code],
-        top_k=24,
+        analysis,
+        report_code=cancer_code,
+        reference_code=reference_cancer_code,
         sample_mode=analysis["sample_mode"],
-        tumor_context=decomposition_tumor_context,
-        site_hint=decomposition_site_hint,
-        templates=template_overrides or None,
+        tumor_context=tumor_context,
+        explicit_site_hint=site_hint,
+        inferred_site_context=inferred_site_context,
+        template_overrides=template_overrides,
         sample_context=sample_context,
-        # #85: hand off the already-ranked candidate rows so
-        # decompose_sample reuses analyze_sample's work instead of
-        # re-ranking (which internally re-runs estimate_tumor_purity
-        # per candidate).
-        candidate_rows=analysis.get("candidate_trace"),
     )
+    residual_identity_evidence = evaluate_residual_identity(
+        complete_decomp_results,
+        candidate_codes=candidate_codes,
+        current_code=cancer_code,
+    )
+    residual_identity_evidence = (
+        scope_residual_identity_to_decomposition_mode(
+            residual_identity_evidence,
+            sample_mode=analysis["sample_mode"],
+        )
+    )
+    analysis["residual_identity_evidence"] = residual_identity_evidence
+    if isinstance(cancer_type_evidence, dict):
+        cancer_type_evidence["residual_identity_evidence"] = (
+            residual_identity_evidence
+        )
+    residual_identity_code = str(
+        residual_identity_evidence.get("candidate_code") or ""
+    ).strip()
+    if residual_identity_code:
+        print(
+            "[analysis] Residual tumor identity: "
+            f"{residual_identity_code} "
+            f"({residual_identity_evidence.get('status')}; "
+            f"{residual_identity_evidence.get('realizations_evaluated', 0)} "
+            "decomposition realizations)"
+        )
+    elif residual_identity_evidence.get("status") == "ambiguous":
+        print(
+            "[analysis] Residual tumor identity: ambiguous across "
+            "decomposition backgrounds"
+        )
+    if (
+        allow_auto_scope_refinement
+        and residual_identity_evidence.get("status") == "candidate"
+        and residual_identity_evidence.get("adjudication_eligible", True)
+    ):
+        previous_cancer_code = cancer_code
+        previous_selected_scope = selected_scope
+        previous_report_scope_cancer_type = report_scope_cancer_type
+        previous_rare_scope_inference = rare_scope_inference
+        previous_fine_scope_inference = fine_scope_inference
+        previous_cancer_type_evidence = cancer_type_evidence
+        previous_primary_expression_context = analysis.get(
+            "primary_expression_context"
+        )
+        (
+            post_decomposition_evidence,
+            post_decomposition_scope,
+            post_decomposition_report_code,
+            rare_scope_inference,
+            fine_scope_inference,
+        ) = _apply_cancer_type_evidence(
+            analysis,
+            df_expr,
+            rna_inferred_cancer_type=rna_inferred_cancer_type,
+            fusion_scope_inference=fusion_scope_inference,
+            report_scope_cancer_type=report_scope_cancer_type,
+            rare_scope_inference=rare_scope_inference,
+            fine_scope_inference=fine_scope_inference,
+            residual_identity_evidence=residual_identity_evidence,
+        )
+        if post_decomposition_evidence is not None:
+            cancer_type_evidence = post_decomposition_evidence
+        if (
+            post_decomposition_scope
+            and post_decomposition_report_code
+            and post_decomposition_report_code != previous_cancer_code
+        ):
+            selected_scope = post_decomposition_scope
+            report_scope_cancer_type = post_decomposition_report_code
+            _propagate_report_scope_selection(
+                analysis,
+                df_expr,
+                report_scope_cancer_type=report_scope_cancer_type,
+                selected_scope=selected_scope,
+                rna_inferred_cancer_type=rna_inferred_cancer_type,
+                rna_inferred_cancer_name=rna_inferred_cancer_name,
+                analysis_cancer_type=analysis_cancer_type,
+                fusion_scope_inference=fusion_scope_inference,
+                rare_scope_inference=rare_scope_inference,
+                fine_scope_inference=fine_scope_inference,
+            )
+            # Scope propagation recomputes purity for the new entity. Reapply
+            # the sample-level degradation uncertainty to that replacement
+            # object; the helper is idempotent if recomputation failed and the
+            # original widened object remains in place.
+            apply_sample_context_to_purity(analysis, sample_context)
+            purity = analysis["purity"]
+            cancer_type_context = _synchronize_cancer_type_context(
+                analysis,
+                supplied_cancer_type=None,
+            )
+            cancer_code = cancer_type_context.code_for("report")
+            reference_cancer_code = cancer_type_context.code_for("cohort")
+            inferred_site_context = _infer_likely_met_site_context(
+                analysis,
+                explicit_site_hint=site_hint,
+                explicit_met_site=met_site,
+                tumor_context=tumor_context,
+                decomposition_templates=template_overrides,
+            )
+            if inferred_site_context:
+                analysis["inferred_site_context"] = inferred_site_context
+            else:
+                analysis.pop("inferred_site_context", None)
+            # The first decomposition beam was fitted for the pre-adjudication
+            # entity, purity, and site context. Once residual evidence changes
+            # the report scope, rebuild the entire beam from the synchronized
+            # final state before purity reconciliation or target attribution.
+            (
+                complete_decomp_results,
+                candidate_codes,
+                refit_context,
+            ) = _fit_report_scope_decompositions(
+                df_expr,
+                analysis,
+                report_code=cancer_code,
+                reference_code=reference_cancer_code,
+                sample_mode=analysis["sample_mode"],
+                tumor_context=tumor_context,
+                explicit_site_hint=site_hint,
+                inferred_site_context=inferred_site_context,
+                template_overrides=template_overrides,
+                sample_context=sample_context,
+            )
+            analysis["post_residual_decomposition_refit"] = {
+                "previous_cancer_type": previous_cancer_code,
+                "report_cancer_type": cancer_code,
+                "reference_cancer_type": reference_cancer_code,
+                "candidate_codes": list(candidate_codes),
+                **refit_context,
+            }
+            # Residual evidence is allowed to change the report scope only if
+            # the decomposition rebuilt for that final scope reaches the same
+            # identity conclusion.  This makes adjudication transactional:
+            # purity, site routing, and the candidate beam may all change after
+            # selection, but stale evidence from the discarded model cannot
+            # survive that change.
+            refit_residual_identity = evaluate_residual_identity(
+                complete_decomp_results,
+                candidate_codes=candidate_codes,
+                current_code=cancer_code,
+            )
+            refit_residual_identity = (
+                scope_residual_identity_to_decomposition_mode(
+                    refit_residual_identity,
+                    sample_mode=analysis["sample_mode"],
+                )
+            )
+            refit_confirms_scope = _residual_identity_confirms_report_scope(
+                refit_residual_identity,
+                cancer_code,
+            )
+            if refit_confirms_scope:
+                analysis["post_residual_decomposition_refit"]["accepted"] = True
+                residual_identity_evidence = refit_residual_identity
+                analysis["residual_identity_evidence"] = (
+                    residual_identity_evidence
+                )
+                if isinstance(cancer_type_evidence, dict):
+                    cancer_type_evidence["residual_identity_evidence"] = (
+                        residual_identity_evidence
+                    )
+            else:
+                analysis["post_residual_decomposition_refit"]["accepted"] = False
+                analysis["residual_identity_rejected_after_refit"] = {
+                    "proposed_cancer_type": cancer_code,
+                    "previous_cancer_type": previous_cancer_code,
+                    "initial_evidence": residual_identity_evidence,
+                    "refit_evidence": refit_residual_identity,
+                }
+                residual_identity_evidence = {
+                    **refit_residual_identity,
+                    "adjudication_eligible": False,
+                    "adjudication_blocker": (
+                        "residual identity did not reproduce after the "
+                        "final report-scope decomposition refit"
+                    ),
+                }
+                analysis["residual_identity_evidence"] = (
+                    residual_identity_evidence
+                )
+                cancer_type_evidence = previous_cancer_type_evidence
+                analysis["cancer_type_evidence"] = previous_cancer_type_evidence
+                if isinstance(cancer_type_evidence, dict):
+                    cancer_type_evidence["residual_identity_evidence"] = (
+                        residual_identity_evidence
+                    )
+                selected_scope = previous_selected_scope
+                report_scope_cancer_type = previous_report_scope_cancer_type
+                rare_scope_inference = previous_rare_scope_inference
+                fine_scope_inference = previous_fine_scope_inference
+                if previous_primary_expression_context is None:
+                    analysis.pop("primary_expression_context", None)
+                else:
+                    analysis["primary_expression_context"] = (
+                        previous_primary_expression_context
+                    )
+                _propagate_report_scope_selection(
+                    analysis,
+                    df_expr,
+                    report_scope_cancer_type=previous_cancer_code,
+                    selected_scope=previous_selected_scope,
+                    rna_inferred_cancer_type=rna_inferred_cancer_type,
+                    rna_inferred_cancer_name=rna_inferred_cancer_name,
+                    analysis_cancer_type=analysis_cancer_type,
+                    fusion_scope_inference=fusion_scope_inference,
+                    rare_scope_inference=rare_scope_inference,
+                    fine_scope_inference=fine_scope_inference,
+                )
+                apply_sample_context_to_purity(analysis, sample_context)
+                purity = analysis["purity"]
+                cancer_type_context = _synchronize_cancer_type_context(
+                    analysis,
+                    supplied_cancer_type=None,
+                )
+                cancer_code = cancer_type_context.code_for("report")
+                reference_cancer_code = cancer_type_context.code_for("cohort")
+                inferred_site_context = _infer_likely_met_site_context(
+                    analysis,
+                    explicit_site_hint=site_hint,
+                    explicit_met_site=met_site,
+                    tumor_context=tumor_context,
+                    decomposition_templates=template_overrides,
+                )
+                if inferred_site_context:
+                    analysis["inferred_site_context"] = inferred_site_context
+                else:
+                    analysis.pop("inferred_site_context", None)
+                (
+                    complete_decomp_results,
+                    candidate_codes,
+                    _reverted_refit_context,
+                ) = _fit_report_scope_decompositions(
+                    df_expr,
+                    analysis,
+                    report_code=cancer_code,
+                    reference_code=reference_cancer_code,
+                    sample_mode=analysis["sample_mode"],
+                    tumor_context=tumor_context,
+                    explicit_site_hint=site_hint,
+                    inferred_site_context=inferred_site_context,
+                    template_overrides=template_overrides,
+                    sample_context=sample_context,
+                )
+                print(
+                    "[analysis] Residual identity did not reproduce after "
+                    f"final-scope refit; retained {cancer_code}"
+                )
+            if refit_confirms_scope and sample_tpm_by_symbol is not None:
+                therapy_scores = score_therapy_signatures(
+                    sample_tpm_by_symbol,
+                    reference_cancer_code,
+                )
+                analysis["therapy_response_scores"] = therapy_scores
+                try:
+                    from .tumor_type_ontology import tumor_type_sanity_check
+
+                    analysis["tumor_type_sanity"] = tumor_type_sanity_check(
+                        cancer_code,
+                        sample_tpm_by_symbol,
+                    )
+                except (KeyError, TypeError, ValueError):
+                    _LOGGER.warning(
+                        "post-decomposition tumor-type sanity check failed",
+                        exc_info=True,
+                    )
+                pathway_state_png = _render_therapy_pathway_state(
+                    enabled=plot_ctx.enabled,
+                    prefix=prefix,
+                    therapy_scores=therapy_scores,
+                    cancer_code=reference_cancer_code,
+                    disease_state_caption=compose_disease_state_narrative(
+                        analysis
+                    ),
+                    output_dpi=output_dpi,
+                )
+            if refit_confirms_scope:
+                print(
+                    "[analysis] Residual identity completed an independent "
+                    f"evidence majority: {previous_cancer_code} → {cancer_code}"
+                )
+                run.note_step(
+                    "residual_identity_adjudication",
+                    outputs={
+                        "previous_cancer_type": previous_cancer_code,
+                        "cancer_type": cancer_code,
+                        "selected_by": selected_scope.get("selected_by"),
+                        "residual_identity": residual_identity_evidence.get(
+                            "candidate_code"
+                        ),
+                    },
+                )
+    # ``cancer_call`` is first recorded before decomposition.  Residual
+    # adjudication may legitimately replace it, so refresh the canonical step
+    # before any machine-readable artifacts are emitted while preserving the
+    # original call as explicit audit metadata.
+    cancer_call_step = run.steps.get("cancer_call")
+    initial_call = (
+        str(cancer_call_step.outputs.get("cancer_type") or "")
+        if cancer_call_step is not None
+        else ""
+    )
+    final_call_outputs = {
+        "cancer_type": cancer_code,
+        "reference_cancer_type": reference_cancer_code,
+        "cancer_type_context": analysis.get("cancer_type_context"),
+        "sample_mode": analysis.get("sample_mode"),
+        "purity": {
+            "overall_estimate": (analysis.get("purity") or {}).get(
+                "overall_estimate"
+            ),
+            "overall_lower": (analysis.get("purity") or {}).get(
+                "overall_lower"
+            ),
+            "overall_upper": (analysis.get("purity") or {}).get(
+                "overall_upper"
+            ),
+        },
+        "inferred_site_context": inferred_site_context,
+    }
+    if initial_call and initial_call != cancer_code:
+        final_call_outputs["initial_cancer_type"] = initial_call
+        final_call_outputs["finalized_after_decomposition"] = True
+    run.note_step("cancer_call", outputs=final_call_outputs)
     decomp_results = _prioritize_report_compatible_decomposition(
-        decomp_results,
+        complete_decomp_results,
         reference_code=reference_cancer_code,
         report_code=cancer_code,
         enabled=True,
         analysis=analysis,
-    )
+    )[:24]
     call_summary = _summarize_sample_call(
         analysis,
         decomp_results,
@@ -2798,6 +3096,10 @@ def _analyze_body(run: AnalyzeRun):
     if decomp_results:
         analysis["decomposition_results"] = decomp_results
         best_decomp = decomp_results[0]
+        _attach_lineage_panel_decomposition_attribution(
+            analysis,
+            decomp_results,
+        )
         run.note_step(
             "decomposition",
             outputs={
@@ -3058,6 +3360,31 @@ def _analyze_body(run: AnalyzeRun):
     # BEFORE the ReportView freeze so every headline read (figure, brief, markdown) sees
     # the same finalized number by construction. See ``_finalize_fused_purity``.
     _finalize_fused_purity(analysis)
+    # Finalization may replace the interval after the earlier sample-context
+    # pass. Reapply degradation uncertainty to the definitive interval before
+    # freezing the report view. The helper detects an unchanged already-widened
+    # interval and is therefore safe for samples whose purity was not replaced.
+    if apply_sample_context_to_purity(analysis, sample_context):
+        final_purity = analysis.get("purity") or {}
+        decomp_cap = (
+            (final_purity.get("components") or {}).get(
+                "decomposition_interval_cap"
+            )
+            or {}
+        ).get("constrained_upper")
+        estimate, lower, upper = _clamp_interval_to_cap(
+            final_purity["overall_estimate"],
+            final_purity["overall_lower"],
+            final_purity["overall_upper"],
+            decomp_cap,
+        )
+        final_purity["overall_estimate"] = estimate
+        final_purity["overall_lower"] = lower
+        final_purity["overall_upper"] = upper
+        degradation_caveat = final_purity.get("degradation_caveat")
+        if isinstance(degradation_caveat, dict):
+            degradation_caveat["widened_lower"] = round(float(lower), 4)
+            degradation_caveat["widened_upper"] = round(float(upper), 4)
 
     # Build the frozen ReportView snapshot now that purity is finalized
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -4263,9 +4590,28 @@ def _analyze_body(run: AnalyzeRun):
     readme_path = Path(prefix).parent / "README.md"
     cancer_code = analysis["cancer_type"]
     cancer_name = analysis["cancer_name"]
-    readme = f"""# PIRLy Genes Analysis Output
+    readme = f"""# Trufflepig Analysis Output
 
-Sample analyzed as **{cancer_code}** ({cancer_name}).
+## Result
+
+Sample analyzed as **{cancer_code}** ({cancer_name}). Treat an RNA-inferred
+cancer type as a hypothesis until it is reconciled with pathology and clinical
+context.
+
+## Start here
+
+| File | Description |
+|------|-------------|
+| `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
+| `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
+| `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
+| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
+| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
+
+Read `*-summary.md` first, use `*-analysis.md` for the reasoning, and open
+`*-evidence.md` or the audit packet only when validating a specific claim.
+
+## Data and normalization
 
 Raw QC figures use the original expression table. Downstream biology uses
 technical-RNA-normalized TPM by default: mitochondrial transcripts, NUMT-like
@@ -4274,16 +4620,11 @@ zeroed and the remaining TPM is renormalized. Downstream reference comparisons
 use the same normalized analysis view; raw sample/reference values remain
 available for QC and provenance.
 
-## Reports
+## Supporting artifacts
 
 | File | Description |
 |------|-------------|
-| `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
-| `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
-| `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
 | `*-analysis-parameters.json` | Free model parameters plus selected sample mode and embedding methods |
-| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
-| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
 | `*-cancer-candidates.tsv` | Candidate cancer-type support trace |
 | `*-decomposition-hypotheses.tsv` | Ranked decomposition hypotheses |
 | `*-decomposition-components.tsv` | Component-level fit for best decomposition |
@@ -5020,6 +5361,15 @@ def _prioritize_report_compatible_decomposition(
     uncertainty signal, but it should not silently become the background model
     for target subtraction when a reference-compatible fit exists.
     """
+    # Candidate-independent identity backgrounds are deliberately ineligible
+    # for purity, site, target attribution, and report display.  They share the
+    # complete-beam transport only so residual adjudication can inspect them.
+    decomp_results = [
+        row
+        for row in (decomp_results or ())
+        if str(getattr(row, "model_role", "report_decomposition") or "")
+        != "identity_background"
+    ]
     if not decomp_results:
         return decomp_results
     reference_code = str(reference_code or "").strip()
@@ -5063,6 +5413,145 @@ def _prioritize_report_compatible_decomposition(
     return [selected] + [row for row in decomp_results if row is not selected]
 
 
+def _fit_report_scope_decompositions(
+    df_expr,
+    analysis,
+    *,
+    report_code,
+    reference_code,
+    sample_mode,
+    tumor_context,
+    explicit_site_hint,
+    inferred_site_context,
+    template_overrides,
+    sample_context,
+):
+    """Fit the complete decomposition beam for one synchronized report scope."""
+
+    candidate_codes = []
+    reference_code = str(reference_code or "").strip()
+    report_code = str(report_code or "").strip()
+    if reference_code:
+        candidate_codes.append(reference_code)
+
+    expression_code = str(
+        analysis.get("expression_reference_cancer_type") or ""
+    ).strip()
+    for code in (expression_code, report_code):
+        if not code or code in candidate_codes or _is_defining_fusion_label(code):
+            continue
+        if _has_operational_analysis_reference(code):
+            candidate_codes.append(code)
+
+    for row in analysis.get("candidate_trace") or []:
+        code = str(row.get("code") or "").strip()
+        if code and code not in candidate_codes:
+            candidate_codes.append(code)
+
+    inferred_site_context = inferred_site_context or {}
+    decomposition_site_hint = explicit_site_hint or inferred_site_context.get("site")
+    decomposition_tumor_context = (
+        "met"
+        if inferred_site_context
+        and tumor_context == "auto"
+        and not template_overrides
+        else tumor_context
+    )
+    results = decompose_sample(
+        df_expr,
+        cancer_types=candidate_codes or [report_code],
+        top_k=None,
+        sample_mode=sample_mode,
+        tumor_context=decomposition_tumor_context,
+        site_hint=decomposition_site_hint,
+        templates=template_overrides or None,
+        sample_context=sample_context,
+        # Reuse the ranker trace, including the final entity's recomputed purity.
+        # Missing explicitly requested entities are filled by decompose_sample.
+        candidate_rows=analysis.get("candidate_trace"),
+    )
+    identity_results = decompose_identity_backgrounds(
+        df_expr,
+        sample_mode=sample_mode,
+        sample_context=sample_context,
+    )
+    results.extend(identity_results)
+    return results, candidate_codes, {
+        "site_hint": decomposition_site_hint,
+        "tumor_context": decomposition_tumor_context,
+        "identity_background_models": len(identity_results),
+    }
+
+
+def _residual_identity_confirms_report_scope(evidence, report_code):
+    """Require a final-scope refit to corroborate the proposed report branch."""
+
+    candidate_code = str((evidence or {}).get("candidate_code") or "").strip()
+    return bool(
+        (evidence or {}).get("status") == "corroborated"
+        and (evidence or {}).get("adjudication_eligible", True)
+        and candidate_code
+        and cancer_codes_entity_compatible(candidate_code, report_code)
+    )
+
+
+def _attach_lineage_panel_decomposition_attribution(
+    analysis,
+    decomp_results,
+):
+    """Explain whether lineage-panel markers remain in the tumor residual.
+
+    Candidate decomposition scores are not independent cancer-type votes: they
+    reuse the ranker's support. Gene-level attribution is still valuable for a
+    different question—whether a lineage program came from modeled host/TME
+    background or remained in the tumor residual. Persist that distinction as
+    post-selection corroboration only.
+    """
+    summary = analysis.get("lineage_panel_evidence") or {}
+    top_panel = str(summary.get("top_panel") or "").strip()
+    if not top_panel or not decomp_results:
+        return None
+    panel_evidence = next(
+        (
+            row
+            for row in (summary.get("panels") or [])
+            if str(row.get("panel_name") or "").strip() == top_panel
+        ),
+        None,
+    )
+    if panel_evidence is None:
+        return None
+    panel_code = str(panel_evidence.get("parent_cohort") or "").strip()
+    decomposition = next(
+        (
+            row
+            for row in decomp_results
+            if str(getattr(row, "cancer_type", "") or "").strip() == panel_code
+        ),
+        None,
+    )
+    if decomposition is None:
+        return None
+    from .lineage_panels import attribute_panel_markers_to_decomposition
+
+    attribution = attribute_panel_markers_to_decomposition(
+        panel_evidence,
+        getattr(decomposition, "gene_attribution", None),
+    )
+    attribution["decomposition_cancer_type"] = str(
+        getattr(decomposition, "cancer_type", "") or ""
+    )
+    attribution["decomposition_template"] = str(
+        getattr(decomposition, "template", "") or ""
+    )
+    summary["decomposition_attribution"] = attribution
+    evidence = analysis.get("cancer_type_evidence")
+    if isinstance(evidence, dict):
+        evidence["lineage_panel_evidence"] = summary
+    analysis["lineage_panel_evidence"] = summary
+    return attribution
+
+
 def _reconcile_purity_after_decomposition(
     analysis, best_decomp, *, reference_cancer_code, effective_purity, run
 ):
@@ -5071,7 +5560,8 @@ def _reconcile_purity_after_decomposition(
     lineage-panel override, then cap the interval by the modeled non-tumor mass.
 
     The decomposition's purity is only safe to adopt when its cancer_type matches the
-    classifier AND its template has non-tumor compartments
+    classifier or is a descendant of a deliberately broad classifier/report node, AND
+    its template has non-tumor compartments
     (``should_adopt_decomposition_purity``): a template with no TME compartments trivially
     returns fraction=1.0 (everything maps to tumor by construction), which is not a purity
     measurement — the canonical failure case is a CRC sample the classifier scored at 36%
@@ -5611,6 +6101,111 @@ def _veto_local_reference_lineage_flip(
     return report_scope_cancer_type
 
 
+def _propagate_report_scope_selection(
+    analysis,
+    df_expr,
+    *,
+    report_scope_cancer_type,
+    selected_scope,
+    rna_inferred_cancer_type,
+    rna_inferred_cancer_name=None,
+    analysis_cancer_type=None,
+    fusion_scope_inference=None,
+    rare_scope_inference=None,
+    fine_scope_inference=None,
+):
+    """Apply one evidence-selected report scope to the shared analysis state."""
+
+    selected_scope = selected_scope or {}
+    reference_code = (
+        selected_scope.get("reference_cancer_type")
+        or rna_inferred_cancer_type
+    )
+    analysis["reference_cancer_type"] = reference_code
+    analysis["expression_reference_cancer_type"] = (
+        selected_scope.get("expression_reference_cancer_type")
+        or reference_code
+    )
+    analysis["inferred_cancer_type"] = report_scope_cancer_type
+    analysis["reference_cancer_name"] = cancer_code_display_name(
+        reference_code,
+        reference_code or rna_inferred_cancer_name,
+    )
+    analysis["report_scope_cancer_type"] = report_scope_cancer_type
+    analysis["cancer_type"] = report_scope_cancer_type
+    analysis["cancer_name"] = cancer_code_display_name(
+        report_scope_cancer_type,
+        report_scope_cancer_type,
+    )
+    # ``analyze_sample`` binds purity to the pre-evidence ranker winner.
+    # Recompute it whenever an integrated selector changes the final entity.
+    _finalize_purity_for_final_call(
+        analysis,
+        df_expr,
+        report_scope_cancer_type,
+    )
+    if analysis_cancer_type:
+        analysis["report_scope_parent_cancer_type"] = analysis_cancer_type
+    elif fine_scope_inference and fine_scope_inference.get(
+        "reference_cancer_type"
+    ):
+        analysis["report_scope_parent_cancer_type"] = fine_scope_inference[
+            "reference_cancer_type"
+        ]
+    if fusion_scope_inference:
+        analysis["fusion_report_scope_inference"] = fusion_scope_inference
+    if rare_scope_inference:
+        analysis["rare_report_scope_inference"] = rare_scope_inference
+    else:
+        analysis.pop("rare_report_scope_inference", None)
+    if fine_scope_inference:
+        analysis["fine_report_scope_inference"] = fine_scope_inference
+    else:
+        analysis.pop("fine_report_scope_inference", None)
+
+
+def _synchronize_cancer_type_context(analysis, *, supplied_cancer_type):
+    """Resolve tree roles, sanitize sibling references, and persist the result."""
+
+    # Exclusions are derived state relative to the active report node. A
+    # post-selection sibling change can make yesterday's excluded code today's
+    # diagnosis, so retain only codes that are still siblings before rebuilding
+    # context. New sibling exclusions from active reference/expression roles are
+    # added by ``cancer_type_context_from_analysis`` below.
+    report_code = str(
+        analysis.get("report_scope_cancer_type")
+        or analysis.get("cancer_type")
+        or ""
+    ).strip()
+    excluded_values = analysis.get("excluded_sibling_cancer_type_contexts") or ()
+    if isinstance(excluded_values, str):
+        excluded_values = (excluded_values,)
+    current_siblings = sorted(
+        {
+            str(code).strip()
+            for code in excluded_values
+            if str(code).strip()
+            and cancer_type_tree_relationship(report_code, code) == "sibling"
+        }
+    )
+    if current_siblings:
+        analysis["excluded_sibling_cancer_type_contexts"] = current_siblings
+    else:
+        analysis.pop("excluded_sibling_cancer_type_contexts", None)
+
+    context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type=supplied_cancer_type,
+    )
+    _apply_cancer_type_context_roles(analysis, context)
+    context = cancer_type_context_from_analysis(
+        analysis,
+        supplied_cancer_type=supplied_cancer_type,
+    )
+    analysis["cancer_type_context"] = context.to_dict()
+    return context
+
+
 def _apply_cancer_type_evidence(
     analysis,
     df_expr,
@@ -5620,6 +6215,7 @@ def _apply_cancer_type_evidence(
     report_scope_cancer_type,
     rare_scope_inference,
     fine_scope_inference,
+    residual_identity_evidence=None,
 ):
     """Run the unified cancer-type evidence selector and propagate its output.
 
@@ -5654,6 +6250,7 @@ def _apply_cancer_type_evidence(
             analysis,
             rare_marker_hypotheses=analysis.get("rare_marker_hypotheses"),
             fusion_scope_inference=fusion_scope_inference,
+            residual_identity_evidence=residual_identity_evidence,
         )
     except (KeyError, ValueError, TypeError):
         _LOGGER.warning(
@@ -5679,6 +6276,13 @@ def _apply_cancer_type_evidence(
         analysis["lineage_panel_evidence"] = panel_evidence
     selected_scope = (cancer_type_evidence or {}).get("selected")
     if selected_scope and selected_scope.get("cancer_type"):
+        # These report-basis slots describe the current winning selector, not
+        # historical evidence. A second adjudication pass must not carry a
+        # superseded rare/fine rationale into the new entity's narrative.
+        rare_scope_inference = None
+        fine_scope_inference = None
+        analysis.pop("rare_report_scope_inference", None)
+        analysis.pop("fine_report_scope_inference", None)
         analysis["inferred_cancer_type"] = selected_scope["cancer_type"]
         analysis["expression_reference_cancer_type"] = (
             selected_scope.get("expression_reference_cancer_type")
@@ -5746,6 +6350,8 @@ def _apply_cancer_type_context_roles(analysis, cancer_type_context):
         analysis["excluded_sibling_cancer_type_contexts"] = list(
             cancer_type_context.excluded_sibling_codes
         )
+    else:
+        analysis.pop("excluded_sibling_cancer_type_contexts", None)
     if reference_code:
         analysis["reference_cancer_type"] = reference_code
         analysis["reference_cancer_name"] = cancer_code_display_name(
@@ -6183,15 +6789,19 @@ def _cancer_type_context_line(cancer_type_context):
         else:
             line += " No different active subtype node is carried downstream."
         return line
-    relation = (
-        "ancestor analysis context"
-        if cancer_type_context.reference_relationship == "ancestor"
-        else "independent fallback analysis context"
-    )
-    line = (
-        f"- **Cancer label roles**: diagnosis/report node is {report}; "
-        f"{reference} is the {relation} only and is not an alternative diagnosis"
-    )
+    if cancer_type_context.reference_relationship == "ancestor":
+        line = (
+            f"- **Cancer label roles**: diagnosis/report node is {report}; "
+            f"{reference} is the ancestor analysis context only and is not an "
+            "alternative diagnosis"
+        )
+    else:
+        line = (
+            f"- **Cancer label roles**: diagnosis/report node is {report}; "
+            f"{reference} is an independent fallback analysis context. It "
+            "remains an audited competing RNA hypothesis but does not set the "
+            "diagnosis/report node"
+        )
     if expression and expression != reference:
         expression_relation = cancer_type_context.expression_relationship
         expression_role = {
@@ -6990,12 +7600,27 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
 
     if best_decomp is not None:
         comp_bits = _composition_highlights(best_decomp)
+        decomp_relationship = cancer_type_tree_relationship(
+            cancer_code,
+            best_decomp.cancer_type,
+        )
         sentence = (
             f"- **Decomposition line**: best fit is "
             f"{_hypothesis_display_label(best_decomp, primary_code=cancer_code, analysis=analysis)}"
         )
-        if best_decomp.cancer_type == cancer_code:
+        if decomp_relationship == "same":
             sentence += ", consistent with the active report label"
+        elif decomp_relationship == "descendant":
+            sentence += (
+                f"; {_cancer_label(best_decomp.cancer_type)} is a descendant "
+                f"background model within the {_cancer_label(cancer_code)} branch "
+                "and does not refine the report label"
+            )
+        elif decomp_relationship == "ancestor":
+            sentence += (
+                f"; {_cancer_label(best_decomp.cancer_type)} is the broader "
+                f"ancestor context for the {_cancer_label(cancer_code)} report label"
+            )
         elif (
             cancer_type_context.uses_distinct_reference
             and best_decomp.cancer_type == reference_cancer_code
@@ -7033,6 +7658,38 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 )
         sentence += "."
         bullets.append(sentence)
+
+    panel_attribution = (
+        (analysis.get("lineage_panel_evidence") or {}).get(
+            "decomposition_attribution"
+        )
+        or {}
+    )
+    evaluated_markers = int(panel_attribution.get("evaluated_marker_count") or 0)
+    tumor_markers = int(panel_attribution.get("tumor_dominant_count") or 0)
+    if evaluated_markers:
+        panel_name = str(panel_attribution.get("panel") or "lineage panel")
+        status = str(panel_attribution.get("status") or "")
+        if status == "tumor_residual":
+            interpretation = (
+                "the identity program remains after modeled host/TME subtraction"
+            )
+        elif status == "background_attributed":
+            interpretation = (
+                "the apparent identity program is attributable to modeled "
+                "host/TME rather than tumor"
+            )
+        else:
+            interpretation = (
+                "the identity program is split between tumor and modeled "
+                "host/TME"
+            )
+        bullets.append(
+            f"- **Tumor-versus-host lineage attribution**: {panel_name} has "
+            f"{tumor_markers}/{evaluated_markers} positive markers primarily "
+            f"assigned to tumor; {interpretation}. This is decomposition "
+            "corroboration, not an additional classifier vote."
+        )
 
     active_biology = []
     for finding in (analysis.get("pathway_activity_inferences") or [])[:3]:
@@ -8253,10 +8910,10 @@ def _generate_text_reports(
             "match; the top row is the pan-cancer signature-ranker leader, which may differ from the "
             "active report label when stronger orthogonal evidence selects another row.\n\n"
             "- **Signature** (0–1): raw match quality between the sample's expression and "
-            "this candidate's broad reference signature, computed from z-scored expression "
-            "of cancer-type-enriched genes. Interpretable on its own — higher means the "
-            "candidate pattern is strongly present. Does not account for purity or lineage "
-            "concordance.\n"
+            "this candidate's broad reference signature, computed as the mean fixed-universe "
+            "within-sample percentile of cancer-type-enriched genes. Interpretable on its "
+            "own — higher means the candidate program dominates the sample transcriptome. "
+            "Does not account for purity or lineage concordance.\n"
             "- **Geomean** (0–1): the geometric mean of the five factors that feed the "
             "ranking (signature × purity × lineage support × signature stability × family "
             "factor). Stays bounded on [0, 1] so it's comparable across samples, unlike "
@@ -8356,6 +9013,7 @@ def _generate_text_reports(
                 candidate_trace,
                 sample_tpm_by_symbol,
                 top_k=3,
+                analysis=analysis,
             )
             if evidence_lines:
                 lines.extend(evidence_lines)
@@ -8499,6 +9157,35 @@ def _generate_text_reports(
         f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
         f"{tier_suffix}"
     )
+    stability = (analysis.get("decomposition") or {}).get("purity_stability") or {}
+    decomp_code = str(
+        (analysis.get("decomposition") or {}).get("best_cancer_type") or ""
+    )
+    uncertainty_basis = []
+    if decomp_code and decomp_code != str(reference_cancer_code or ""):
+        try:
+            decomp_is_descendant = cancer_codes_entity_compatible(
+                decomp_code, reference_cancer_code
+            )
+        except (KeyError, TypeError, ValueError):
+            decomp_is_descendant = False
+        if decomp_is_descendant:
+            uncertainty_basis.append(
+                f"the {decomp_code} descendant decomposition supplies the quantitative "
+                f"point without refining the {reference_cancer_code} report label"
+            )
+    if stability.get("tme_overexplained"):
+        uncertainty_basis.append(
+            "the fit is marked fragile because background components can over-absorb "
+            "tumor expression"
+        )
+    caveat = purity.get("degradation_caveat") or {}
+    if caveat.get("severity") and caveat.get("severity") != "none":
+        uncertainty_basis.append(
+            f"{caveat.get('severity')} RNA degradation widens the interval"
+        )
+    if uncertainty_basis:
+        lines.append("- **Uncertainty basis**: " + "; ".join(uncertainty_basis) + ".")
     components = purity.get("components", {})
     for comp_name in ("stromal", "immune"):
         comp = components.get(comp_name, {})
@@ -8545,7 +9232,7 @@ def _generate_text_reports(
             "Purity was refined using cancer-type lineage genes — genes with "
             "known high expression in this tumor type and low TME background. "
             "Each gene independently estimates purity by comparing the sample's "
-            "HK-normalized expression to the TCGA reference (adjusted for "
+            "clean-TPM expression to the TCGA reference (adjusted for "
             "TCGA cohort purity).\n"
         )
 
@@ -8575,6 +9262,26 @@ def _generate_text_reports(
         skipped_detected = {
             entry["gene"]: entry for entry in lineage.get("skipped_detected", [])
         }
+        # Model participation is not a detection assay. A gene can be absent
+        # from ``per_gene`` because a cancer-specific filter or a winning
+        # subtype panel excluded it even though the input contains measurable
+        # expression. Use the sample itself as the final authority on
+        # detection so those genes are described as detected-but-not-used,
+        # never as absent.
+        if df_expr is not None:
+            from .common import build_sample_tpm_by_symbol
+
+            sample_tpm = build_sample_tpm_by_symbol(df_expr)
+            for gene_name in all_lineage:
+                if gene_name in found_names or gene_name in skipped_detected:
+                    continue
+                sample_value = float(sample_tpm.get(gene_name, 0.0) or 0.0)
+                if sample_value > 0:
+                    skipped_detected[gene_name] = {
+                        "gene": gene_name,
+                        "sample_tpm": sample_value,
+                        "reason": "not_used_in_lineage_calibration",
+                    }
         not_found = [
             g for g in all_lineage if g not in found_names and g not in skipped_detected
         ]
@@ -8604,11 +9311,36 @@ def _generate_text_reports(
             s_tpm = entry["sample_tpm"]
             # Keep resolution proportional to magnitude so a 0.3 TPM
             # gene doesn't render as "0 TPM".
-            tpm_str = f"{s_tpm:.1f}" if s_tpm < 10 else f"{s_tpm:.0f}"
+            if s_tpm < 0.01:
+                tpm_str = "<0.01"
+            elif s_tpm < 0.1:
+                tpm_str = f"{s_tpm:.2f}"
+            elif s_tpm < 10:
+                tpm_str = f"{s_tpm:.1f}"
+            else:
+                tpm_str = f"{s_tpm:.0f}"
+            reason = entry.get("reason")
+            if reason == "tme_dominated":
+                explanation = (
+                    "TME background exceeds tumor contribution for this "
+                    "cancer type"
+                )
+            elif reason in {
+                "not_in_cancer_specific_panel",
+                "not_used_in_lineage_calibration",
+            }:
+                explanation = (
+                    "not specific enough to this cancer type for purity "
+                    "calibration"
+                )
+            else:
+                explanation = (
+                    "the matching cohort/gene reference is unavailable for "
+                    "calibration"
+                )
             lines.append(
                 f"| {gene_name} | — | detected {tpm_str} TPM — "
-                "uninformative (TME background exceeds tumor contribution "
-                "for this cancer type) |"
+                f"uninformative ({explanation}) |"
             )
         for g in not_found:
             lines.append(f"| {g} | — | not detected |")
@@ -8929,7 +9661,7 @@ def _build_target_report(
             "even when most of the signal is stromal. Treat the "
             "`tme_explainable=true` column in the TSV as the primary "
             "filter for therapy-target safety; cross-check any "
-            "`median_est` > 30 TPM against `tme_fold_med` before acting.\n"
+            "`median_est` > 30 TPM against `tme_tpm_med` before acting.\n"
         )
 
     # Sample-context caveat (step 1 propagation): when the sample was
@@ -9742,7 +10474,7 @@ def _build_target_report(
         lines.append(f"- **Matched-normal split**: {matched_normal_summary}")
         lines.append(
             "- **Per-gene provenance**: see TSV `estimation_path` "
-            "(`tme_only`, `matched_normal_split`, `clamped`, `tme_fold_fallback`)."
+            "(`tme_only`, `matched_normal_split`, `clamped`, `tme_tpm_fallback`)."
         )
 
     context_cautions = []
@@ -10323,7 +11055,7 @@ def plot_cancer_cohorts(
         fn(save_to_filename=out, save_dpi=output_dpi)
         png_files.append(out)
 
-    # Heatmaps: emit both z-score and HK-normalized versions
+    # Heatmaps: emit both cross-cancer z-score and absolute clean-TPM versions
     heatmap_plots = [
         ("heatmap", plot_cohort_heatmap),
         ("therapy-targets", plot_cohort_therapy_targets),
@@ -10331,7 +11063,7 @@ def plot_cancer_cohorts(
         ("ctas", plot_cohort_ctas),
     ]
     for name, fn in heatmap_plots:
-        for suffix, zs in [("zscore", True), ("hk", False)]:
+        for suffix, zs in [("zscore", True), ("clean-tpm", False)]:
             out = f"{prefix}-{name}-{suffix}.png"
             fn(save_to_filename=out, save_dpi=output_dpi, zscore=zs)
             png_files.append(out)

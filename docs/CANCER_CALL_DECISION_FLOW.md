@@ -4,28 +4,27 @@ This document is the canonical map of how trufflepig goes from a sample
 TPM table to a final cancer-type call, decomposition, therapy
 shortlist, and report.
 
-> 2026-07 update: the high-level flow below remains useful, but the current
-> implementation now includes the staged identity refactor described in
-> `docs/rnaseq-cancer-call-redesign.md`. In particular, candidate rows carry
-> `staged_identity_evidence`; dominant normal tissue can demote a same-origin
-> cancer candidate; same-lineage centroid subtype swaps are marker-gated; and
-> `local_expression_reference` cross-lineage report-scope flips are marker-gated
-> and vetoed when the bulk classifier and confident compartment call agree
-> against them. The pan-cancer signature ranker's own `winning_subtype` is now
-> represented as `pan_cancer_signature_subtype` evidence in the trace, but ranker
-> output remains candidate/context evidence unless the fused model has a
-> non-ranker admission path. A guarded learned-expression layer now preserves
-> flat plus hierarchical compartment/family/entity/subtype votes in the staged
-> evidence graph. Strong learned entity calls can admit a candidate only when
-> probability, margin, entity support, hierarchy support, and flat-lineage
-> support agree. Curated marker/reference thresholds with expected-low conflicts
-> remain visible as contextual evidence but cannot select against a contradictory
-> learned neighborhood. Strong lineage-panel evidence can also rescue a
-> candidate outside the broad top-5 only when the broad expression distribution
-> carries a technical concentration warning or decomposition reports an
-> expression/code lineage conflict, and the panel score/margin are very high.
+## At a glance
+
+1. Load and normalize the expression table, retaining the raw view for QC.
+2. Compute reusable whole-sample evidence: tissue composition, signature
+   ranking, centroid/compartment context, learned votes, and molecular evidence.
+3. Admit plausible candidates and compare them at the appropriate ontology
+   level: compartment, family, entity, then subtype.
+4. Apply hard molecular blockers and require independent evidence before a
+   candidate can replace the current call.
+5. Finalize one cancer call and one reference scope before decomposition,
+   tumor-attributed expression, therapy ranking, and report rendering.
+
+The central rule is that a broad context may guide a finer comparison, but it
+must not masquerade as independent evidence for that fine label. The finalized
+call owns downstream interpretation; alternatives remain explicitly contextual
+or blocked.
+
+## Why this document exists
 
 It exists because:
+
 1. The flow has 12 stages with non-trivial conditional branching;
    debugging requires knowing which stage produced a value.
 2. Several stages have **special rescue paths** (e.g. basal-BRCA
@@ -36,7 +35,28 @@ It exists because:
    `cancer_type_evidence.select_report_scope_from_evidence`; this doc
    records where that selector sits and what feeds it.
 
-Conclusions are summarized at the bottom in tabular form.
+## Current implementation note
+
+The high-level flow below remains canonical. The 2026-07 staged-identity
+refactor, described in
+[the redesign note](./rnaseq-cancer-call-redesign.md), adds these safeguards:
+
+- candidate rows carry staged identity evidence;
+- dominant normal tissue can demote an unsupported same-origin cancer
+  candidate;
+- same-lineage centroid subtype changes and cross-lineage local-reference
+  changes are marker-gated;
+- flat percentile and hierarchical log-clean-TPM predictions are retained as
+  two views of one learned evidence group; entity changes require a true
+  majority of available groups and at least two non-learned groups;
+- learned leaf predictions are normalized to the entity being adjudicated,
+  while the original child remains explicit in audit fields and may be applied
+  later on its subtype/status axis; and
+- pirlygenes pairwise discriminators are retained as contextual hypotheses and
+  pass through its global consensus policy; pairwise-only rows cannot promote
+  report scope or supply an entity-consensus vote; and
+- expected-low marker conflicts and definitive molecular blockers remain
+  disqualifying even when other channels agree.
 
 ---
 
@@ -287,6 +307,7 @@ These fire **across stages** based on gates — easy to miss when reading the ca
 | Rare-marker promotion | Stage 8 selector #2 | Promotes a rare cancer (NUTM, salivary, etc.) when marker gene + context match | Marker TPM ≥ threshold + (top context promotes to full XOR top_context_weight applied) |
 | Fine reference promotion | Stage 8 selector #4 | Promotes a fine label (OS-within-SARC) | All metrics in `FineReferenceSpec.minimum_metrics` met, support ≥ 0.70 |
 | Learned expression classifier | Stage 8 selector | Adds selectable/contextual flat and hierarchical full-profile votes | Flat probability/margin pass, marker sanity is coherent, broad context or hierarchical context supports the label, and compartment/background checks do not contradict it |
+| Complete lineage-program refinement | Stage 8 selector | Lets a complete tumor-identity program resolve an ambiguous in-beam entity call without reducing the program to one scalar margin | Every expected-high marker, every expected-low marker, and the obligate marker pass; no competing cancer entity has a complete program; broad fit is weak/ambiguous; existing composition and consensus vetoes still apply |
 | QC/decomposition-guarded lineage-panel out-of-beam rescue | Stage 8 selector | Lets a strong lineage panel admit a code omitted by the broad top-5 | Expression concentration warning or expression/code lineage conflict + lineage-panel score ≥ 0.85 + margin ≥ 0.25 + no independent composition conflict |
 | User --cancer-type override | Stage 10 | Forces report scope but does NOT silence broad-classifier disagreement | Always when supplied |
 

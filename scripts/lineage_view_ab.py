@@ -24,7 +24,18 @@ from oncoref.normalization import clean_tpm
 from trufflepig.lineage_evidence import EPITHELIAL_MARKERS
 from trufflepig.lineage_marker_recall import NE_PROGRAM
 from trufflepig.signal_views import signal_report, VIEW_NAMES
-from trufflepig.tumor_purity import _sample_hk_median
+
+
+def _sample_hk_median(sample_tpm):
+    """Legacy HK comparator kept local to this migration benchmark."""
+    from pirlygenes.gene_sets_cancer import housekeeping_gene_names
+
+    values = [
+        float(sample_tpm[gene])
+        for gene in housekeeping_gene_names(core_only=True)
+        if float(sample_tpm.get(gene, 0.0) or 0.0) > 0.0
+    ]
+    return float(np.median(values)) if values else 0.0
 
 
 def _auc(scores, labels):
@@ -54,30 +65,50 @@ def _samples():
     return out
 
 
-def evaluate(signal_name, genes, positive_group):
-    samples = _samples()
-    per_view = {v: [] for v in VIEW_NAMES}
+def evaluate(signal_name, genes, positive_group, samples):
+    evaluated_views = ("hk", *VIEW_NAMES)
+    per_view = {v: [] for v in evaluated_views}
     consensus = []
     labels = []
     for grp, sym in samples:
         hkmed = _sample_hk_median(sym)
-        sig = signal_report(signal_name, genes, sym, sample_hk_median=hkmed)
+        sig = signal_report(signal_name, genes, sym)
+        hk_value = (
+            float(np.median([float(sym.get(g, 0.0)) / hkmed for g in genes]))
+            if hkmed > 0
+            else 0.0
+        )
+        per_view["hk"].append(float(np.clip((hk_value - 0.10) / 1.40, 0.0, 1.0)))
         for v in VIEW_NAMES:
             per_view[v].append(sig.presence.get(v, np.nan))
         consensus.append(sig.confidence)
         labels.append(grp == positive_group)
     n_pos = sum(labels)
     print(f"\n=== {signal_name} presence: {positive_group} (n_pos={n_pos}) vs rest (n={len(labels)}) — AUC per view ===")
-    for v in VIEW_NAMES:
+    for v in evaluated_views:
         sc = [x for x in per_view[v]]
         print(f"  {v:11s} AUC {_auc(sc, labels):.3f}")
-    print(f"  {'CONSENSUS':11s} AUC {_auc(consensus, labels):.3f}   (equal-weight 5-view confidence)")
+    print(f"  {'PRODUCTION':11s} AUC {_auc(consensus, labels):.3f}   (log1p + cohort_pct)")
     # leave-one-view-out: does dropping HK help the consensus?
-    arr = {v: np.array(per_view[v], float) for v in VIEW_NAMES}
-    for drop in ("hk", "none"):
-        keep = [v for v in VIEW_NAMES if v != drop]
+    arr = {v: np.array(per_view[v], float) for v in evaluated_views}
+    for drop in evaluated_views:
+        keep = [v for v in evaluated_views if v != drop]
         m = np.nanmean(np.vstack([arr[v] for v in keep]), axis=0)
         print(f"  consensus w/o {drop:5s} AUC {_auc(m, labels):.3f}  (views: {keep})")
+    for keep in (
+        ("within_pct", "log1p", "cohort_pct"),
+        ("log1p", "cohort_pct"),
+        ("within_pct", "log1p", "cohort_pct", "cohort_z"),
+    ):
+        stack = np.vstack([arr[v] for v in keep])
+        m = np.nanmean(stack, axis=0)
+        label = "+".join(keep)
+        print(f"  {label:36s} AUC {_auc(m, labels):.3f}")
+        if len(keep) == 3:
+            median_vote = np.nanmedian(stack, axis=0)
+            geomean_vote = np.prod(np.clip(stack, 0.0, 1.0), axis=0) ** (1 / 3)
+            print(f"  {'median(' + label + ')':36s} AUC {_auc(median_vote, labels):.3f}")
+            print(f"  {'geomean(' + label + ')':36s} AUC {_auc(geomean_vote, labels):.3f}")
     # the combined filter that landed #7: cohort_pct x within_pct
     combined = np.nan_to_num(arr["cohort_pct"]) * np.nan_to_num(arr["within_pct"])
     print(f"  {'COMBINED':11s} AUC {_auc(combined, labels):.3f}   (cohort_pct x within_pct — the #7 filter)")
@@ -85,8 +116,9 @@ def evaluate(signal_name, genes, positive_group):
 
 def main():
     print("Per-view lineage discrimination (higher AUC = better lineage signal)", file=sys.stderr)
-    evaluate("epithelial", EPITHELIAL_MARKERS, "Epithelial")
-    evaluate("neuroendocrine", NE_PROGRAM, "Neuroendocrine")
+    samples = _samples()
+    evaluate("epithelial", EPITHELIAL_MARKERS, "Epithelial", samples)
+    evaluate("neuroendocrine", NE_PROGRAM, "Neuroendocrine", samples)
 
 
 if __name__ == "__main__":

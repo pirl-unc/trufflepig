@@ -1,30 +1,40 @@
 """Rigorous comparison of normalization × weighting strategies for NNLS decomposition.
 
-Tests 12 combinations (4 normalizations × 3 weightings) across 6 samples with
-known or strongly expected composition.  The goal is to find the strategy that
-minimises proportional reconstruction error AND attribution leakage (e.g. Ig
-genes misattributed to tumor because the NNLS residual on high-expression
-genes dominates the objective).
+Tests feature-space × weighting combinations across synthetic and reference
+mixtures. Bulk-cancer mixtures are directional checks only: a TCGA cohort
+profile already contains normal tissue and TME, so mixing it with 70% healthy
+tissue does *not* create a sample with exactly 70% healthy RNA. Exact fraction
+recovery is assessed separately using mixtures of two healthy component
+profiles, where the input fractions really are known.
+
+The goal is to find the strategy that minimises healthy-component recovery
+error and attribution leakage (e.g. Ig genes misattributed to tumor because
+the NNLS residual on high-expression genes dominates the objective).
 
 Normalization options (applied to both A and b):
-  hk         – divide each vector by its housekeeping-gene median (current)
+  hk         – divide each vector by its housekeeping-gene median (legacy A/B)
   zscore     – per-gene z-score across the K reference components
   hk_zscore  – HK-normalise first, then z-score across components
   raw        – no normalisation (TPM as-is, marker selection only)
+  tpm_fraction – clean TPM rescaled to unit sum over the measured fit universe
+  log1p      – log1p(clean TPM)
+  percentile – within-vector percentile rank for sample and each component
+  hk_percentile_product – HK units multiplied by within-vector percentile
 
 Weighting options (per-row weight in the NNLS system):
-  uniform    – only the marker-specificity weight (no expression adjustment)
+  uniform    – only the marker-specificity weight (production)
   inv_sqrt   – marker_weight / sqrt(max(b, 0.1))  (previous default)
-  inv_b      – marker_weight / max(b, 0.1)         (current default)
+  inv_b      – marker_weight / max(b, 0.1)         (legacy A/B)
 """
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from trufflepig.decomposition.engine import (
-    _hk_normalize,
     _select_marker_rows,
     _weighted_constrained_nnls,
+    decompose_sample,
 )
 from trufflepig.decomposition.signature import (
     build_signature_matrix,
@@ -33,7 +43,12 @@ from trufflepig.decomposition.signature import (
 from trufflepig.decomposition.templates import get_template_components
 from pirlygenes.gene_sets_cancer import housekeeping_gene_ids
 from trufflepig.reference import pan_cancer_expression
+from trufflepig.normalization_usage import Basis, NORMALIZATION_USAGE
 from trufflepig.tumor_purity import estimate_tumor_purity
+from trufflepig.expression_decomposition import (
+    _refs as _routed_decomposition_refs,
+    decompose_expression,
+)
 
 
 # ── Test fixtures ────────────────────────────────────────────────────────
@@ -87,9 +102,51 @@ def _mix_samples(parts):
     return out
 
 
+def _component_sample(component):
+    """Return the exact clean-TPM reference used for one healthy component."""
+    genes, symbols, matrix, _ = build_signature_matrix([component])
+    return pd.DataFrame(
+        {
+            "ensembl_gene_id": genes,
+            "gene_symbol": symbols,
+            "TPM": matrix[:, 0],
+        }
+    )
+
+
+def _sample_by_symbol(df_sample):
+    return (
+        df_sample.assign(gene_symbol=df_sample["gene_symbol"].astype(str))
+        .groupby("gene_symbol")["TPM"]
+        .sum()
+        .astype(float)
+        .to_dict()
+    )
+
+
+def _mix_symbol_profiles(parts):
+    symbols = set().union(*(set(profile) for _, profile in parts))
+    return {
+        symbol: sum(
+            float(weight) * float(profile.get(symbol, 0.0))
+            for weight, profile in parts
+        )
+        for symbol in symbols
+    }
+
+
 # ── Core fitting with configurable normalization/weighting ───────────────
 
-NORMALIZATIONS = ["hk", "zscore", "hk_zscore", "raw"]
+NORMALIZATIONS = [
+    "hk",
+    "zscore",
+    "hk_zscore",
+    "hk_percentile_product",
+    "raw",
+    "tpm_fraction",
+    "log1p",
+    "percentile",
+]
 WEIGHTINGS = ["uniform", "inv_sqrt", "inv_b"]
 IG_GENES = {
     "IGKC",
@@ -108,19 +165,94 @@ IG_GENES = {
 }
 
 
+def _hk_normalize_for_benchmark(values, genes, hk_gene_set):
+    """Legacy comparator kept out of the production decomposition module."""
+    hk_values = [
+        values[index]
+        for index, gene in enumerate(genes)
+        if gene in hk_gene_set and values[index] > 0
+    ]
+    hk_median = float(np.median(hk_values)) if hk_values else 1.0
+    if hk_median <= 0.0:
+        hk_median = 1.0
+    return values / hk_median, hk_median
+
+
 def _apply_normalization(sample_vec, sig_raw, genes, normalization):
     """Return (normalized_sample, normalized_sig, hk_median)."""
     hk_ids = housekeeping_gene_ids()
+    sample_vec = np.nan_to_num(
+        sample_vec, nan=0.0, posinf=0.0, neginf=0.0
+    )
+    sig_raw = np.nan_to_num(
+        sig_raw, nan=0.0, posinf=0.0, neginf=0.0
+    )
 
     if normalization == "raw":
         return sample_vec.copy(), sig_raw.copy(), 1.0
 
+    if normalization == "tpm_fraction":
+        clean_sample = np.nan_to_num(sample_vec, nan=0.0, posinf=0.0, neginf=0.0)
+        clean_sig = np.nan_to_num(sig_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        sample_total = float(clean_sample.sum())
+        if sample_total > 0.0:
+            clean_sample = clean_sample / sample_total * 1_000_000.0
+        component_totals = clean_sig.sum(axis=0)
+        for k, total in enumerate(component_totals):
+            if total > 0.0:
+                clean_sig[:, k] = clean_sig[:, k] / total * 1_000_000.0
+        return clean_sample, clean_sig, 1.0
+
+    if normalization == "log1p":
+        return np.log1p(sample_vec), np.log1p(sig_raw), 1.0
+
+    if normalization == "percentile":
+        from scipy.stats import rankdata
+
+        clean_sample = np.nan_to_num(sample_vec, nan=0.0, posinf=0.0, neginf=0.0)
+        clean_sig = np.nan_to_num(sig_raw, nan=0.0, posinf=0.0, neginf=0.0)
+        obs_rank = (
+            rankdata(clean_sample, method="average") / max(len(clean_sample), 1)
+        )
+        sig_rank = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_rank[:, k] = (
+                rankdata(clean_sig[:, k], method="average")
+                / max(sig_raw.shape[0], 1)
+            )
+        return obs_rank, sig_rank, 1.0
+
     if normalization == "hk":
-        obs_hk, hk_med = _hk_normalize(sample_vec, genes, hk_ids)
+        obs_hk, hk_med = _hk_normalize_for_benchmark(sample_vec, genes, hk_ids)
         sig_hk = np.zeros_like(sig_raw, dtype=float)
         for k in range(sig_raw.shape[1]):
-            sig_hk[:, k], _ = _hk_normalize(sig_raw[:, k], genes, hk_ids)
+            sig_hk[:, k], _ = _hk_normalize_for_benchmark(
+                sig_raw[:, k], genes, hk_ids
+            )
         return obs_hk, sig_hk, hk_med
+
+    if normalization == "hk_percentile_product":
+        # This is the natural multiplicative interpretation of "pair HK with
+        # percentile".  It is benchmark-only: multiplying by ranks destroys
+        # the linear-mixture interpretation that makes NNLS fractions useful,
+        # so production should adopt it only if it wins decisively.
+        from scipy.stats import rankdata
+
+        obs_hk, hk_med = _hk_normalize_for_benchmark(sample_vec, genes, hk_ids)
+        sig_hk = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_hk[:, k], _ = _hk_normalize_for_benchmark(
+                sig_raw[:, k], genes, hk_ids
+            )
+        obs_rank = rankdata(sample_vec, method="average") / max(
+            len(sample_vec), 1
+        )
+        sig_rank = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            sig_rank[:, k] = rankdata(
+                sig_raw[:, k], method="average"
+            ) / max(sig_raw.shape[0], 1)
+        return obs_hk * obs_rank, sig_hk * sig_rank, hk_med
 
     if normalization == "zscore":
         # Z-score each gene across the K reference components.
@@ -136,10 +268,12 @@ def _apply_normalization(sample_vec, sig_raw, genes, normalization):
 
     if normalization == "hk_zscore":
         # Step 1: HK-normalise
-        obs_hk, hk_med = _hk_normalize(sample_vec, genes, hk_ids)
+        obs_hk, hk_med = _hk_normalize_for_benchmark(sample_vec, genes, hk_ids)
         sig_hk = np.zeros_like(sig_raw, dtype=float)
         for k in range(sig_raw.shape[1]):
-            sig_hk[:, k], _ = _hk_normalize(sig_raw[:, k], genes, hk_ids)
+            sig_hk[:, k], _ = _hk_normalize_for_benchmark(
+                sig_raw[:, k], genes, hk_ids
+            )
         # Step 2: Z-score across components on HK-normalised values
         mu = sig_hk.mean(axis=1)
         sigma = sig_hk.std(axis=1)
@@ -208,13 +342,22 @@ def _fit_combo(df_sample, template_name, cancer_type, purity, normalization, wei
         filt_sample_vec, sig_raw, filt_genes, normalization
     )
 
-    # Select markers (always on HK space for consistency of marker selection)
-    obs_hk_for_markers, _ = _hk_normalize(filt_sample_vec, filt_genes, hk_ids)
-    sig_hk_for_markers = np.zeros_like(sig_raw, dtype=float)
-    for k in range(sig_raw.shape[1]):
-        sig_hk_for_markers[:, k], _ = _hk_normalize(sig_raw[:, k], filt_genes, hk_ids)
+    # Select markers in the feature space under test. Z-scoring creates
+    # negative values that do not define reference specificity, so its
+    # no-HK marker set comes from clean TPM. HK-zscore deliberately retains
+    # HK marker selection because it is itself an HK strategy.
+    if normalization == "zscore":
+        marker_matrix = sig_raw
+    elif normalization in {"hk_zscore", "hk_percentile_product"}:
+        marker_matrix = np.zeros_like(sig_raw, dtype=float)
+        for k in range(sig_raw.shape[1]):
+            marker_matrix[:, k], _ = _hk_normalize_for_benchmark(
+                sig_raw[:, k], filt_genes, hk_ids
+            )
+    else:
+        marker_matrix = sig_norm
     fit_rows, fit_weights, _ = _select_marker_rows(
-        filt_genes, filt_symbols, sig_hk_for_markers, comp_names
+        filt_genes, filt_symbols, marker_matrix, comp_names
     )
     if not fit_rows:
         fit_rows = list(range(len(filt_genes)))
@@ -307,6 +450,7 @@ def _get_samples():
         "template": "solid_primary",
         "cancer_type": "COAD",
         "expected_purity_range": (0.15, 0.45),
+        "expected_components": {"matched_normal_colon": 0.70},
         "description": "30% CRC + 70% colon normal",
     }
 
@@ -321,6 +465,7 @@ def _get_samples():
         "template": "met_liver",
         "cancer_type": "COAD",
         "expected_purity_range": (0.15, 0.45),
+        "expected_components": {"hepatocyte": 0.70},
         "description": "30% CRC + 70% liver (met_liver template)",
     }
 
@@ -331,6 +476,7 @@ def _get_samples():
         "cancer_type": "THYM",
         "expected_purity_range": (-0.01, 0.01),  # purity_override=0
         "purity_override": 0.0,
+        "expected_components": {"T_cell": 1.0},
         "description": "Pure HPA T-cell profile (purity=0)",
     }
 
@@ -348,6 +494,7 @@ def _get_samples():
         "template": "solid_primary",
         "cancer_type": "COAD",
         "expected_purity_range": (0.05, 0.35),
+        "expected_components": {"plasma": 0.80},
         "description": "20% COAD + 80% plasma cells (Ig leakage test)",
     }
 
@@ -362,7 +509,26 @@ def _get_samples():
         "template": "met_brain",
         "cancer_type": "LUAD",
         "expected_purity_range": (0.10, 0.40),
+        "expected_component_groups": {("astrocyte", "neuron"): 0.75},
         "description": "25% LUAD + 75% brain (met_brain template)",
+    }
+
+    # 7. Immune-rich prostate — matched-normal prostate must not absorb
+    # lymph-node signal that belongs to the immune compartments.
+    SAMPLES["PRAD_lymph_20"] = {
+        "df": _mix_samples(
+            [
+                (0.2, _tcga_sample("PRAD")),
+                (0.8, _normal_tissue_sample("lymph_node")),
+            ]
+        ),
+        "template": "solid_primary",
+        "cancer_type": "PRAD",
+        "expected_purity_range": (0.05, 0.30),
+        "expected_component_groups": {
+            ("B_cell", "T_cell", "plasma", "NK", "myeloid"): 0.80
+        },
+        "description": "20% PRAD + 80% lymph node",
     }
 
     return SAMPLES
@@ -392,12 +558,32 @@ def run_comparison():
             for wt in WEIGHTINGS:
                 try:
                     result = _fit_combo(df, template, cancer_type, purity, norm, wt)
+                    component_error = []
+                    for component, expected in spec.get(
+                        "expected_components", {}
+                    ).items():
+                        component_error.append(
+                            abs(float(result["fractions"].get(component, 0.0)) - expected)
+                        )
+                    for components, expected in spec.get(
+                        "expected_component_groups", {}
+                    ).items():
+                        observed = sum(
+                            float(result["fractions"].get(component, 0.0))
+                            for component in components
+                        )
+                        component_error.append(abs(observed - expected))
                     rows.append(
                         {
                             "sample": sample_name,
                             "normalization": norm,
                             "weighting": wt,
                             "purity": round(purity, 3),
+                            "component_mae": (
+                                float(np.mean(component_error))
+                                if component_error
+                                else np.nan
+                            ),
                             **{
                                 f"f_{k}": round(v, 4)
                                 for k, v in result["fractions"].items()
@@ -423,11 +609,200 @@ def run_comparison():
     return pd.DataFrame(rows)
 
 
+# ── Composition-recovery benchmark ───────────────────────────────────────────
+
+
+def _healthy_pair_fraction_cases():
+    """Two-healthy-component mixtures with exact fraction ground truth."""
+    return {
+        "T_cell_25_fibroblast_75": {
+            "parts": (("T_cell", 0.25), ("fibroblast", 0.75)),
+        },
+        "B_cell_40_endothelial_60": {
+            "parts": (("B_cell", 0.40), ("endothelial", 0.60)),
+        },
+        "plasma_65_NK_35": {
+            "parts": (("plasma", 0.65), ("NK", 0.35)),
+        },
+        "T_cell_20_B_cell_80": {
+            "parts": (("T_cell", 0.20), ("B_cell", 0.80)),
+        },
+    }
+
+
+def run_composition_recovery_benchmark():
+    """Compare all candidate-template feature spaces on exact mixtures."""
+    rows = []
+    for case_name, spec in _healthy_pair_fraction_cases().items():
+        parts = spec["parts"]
+        sample = _mix_samples(
+            [(fraction, _component_sample(component)) for component, fraction in parts]
+        )
+        for normalization in NORMALIZATIONS:
+            for weighting in WEIGHTINGS:
+                result = _fit_combo(
+                    sample,
+                    "solid_primary",
+                    "SARC",
+                    0.0,
+                    normalization,
+                    weighting,
+                )
+                fractions = result["fractions"]
+                errors = [
+                    abs(float(fractions.get(component, 0.0)) - fraction)
+                    for component, fraction in parts
+                ]
+                rows.append(
+                    {
+                        "case": case_name,
+                        "normalization": normalization,
+                        "weighting": weighting,
+                        "recovered_background": sum(
+                            float(value)
+                            for component, value in fractions.items()
+                            if component != "tumor"
+                        ),
+                        "recovered_expected_host": sum(
+                            float(fractions.get(component, 0.0))
+                            for component, _ in parts
+                        ),
+                        "fraction_mae": float(np.mean(errors)),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def run_routed_decomposition_recovery_benchmark():
+    """Benchmark the residual-producing decomposition used by purity.
+
+    Unlike the candidate-template decomposition above, this path estimates
+    background mass directly. It can therefore answer the requested binary
+    cancer-mixture question rather than merely echoing an upstream purity
+    prior.
+    """
+    templates, _ = _routed_decomposition_refs()
+    template_profiles = {
+        component: templates[component].astype(float).to_dict()
+        for component in ("immune", "stromal", "epithelial", "liver")
+    }
+    cancer_profiles = {
+        code: _sample_by_symbol(_tcga_sample(code))
+        for code in ("COAD", "LUAD", "SARC")
+    }
+    cancer_cases = {
+        "COAD_plus_stromal": {
+            "sample": _mix_symbol_profiles(
+                [
+                    (0.30, cancer_profiles["COAD"]),
+                    (0.70, template_profiles["stromal"]),
+                ]
+            ),
+            "cancer": "COAD",
+            "met_sites": None,
+            "explicit": 0.70,
+        },
+        "COAD_plus_immune": {
+            "sample": _mix_symbol_profiles(
+                [
+                    (0.30, cancer_profiles["COAD"]),
+                    (0.70, template_profiles["immune"]),
+                ]
+            ),
+            "cancer": "COAD",
+            "met_sites": None,
+            "explicit": 0.70,
+        },
+        "SARC_plus_immune": {
+            "sample": _mix_symbol_profiles(
+                [
+                    (0.30, cancer_profiles["SARC"]),
+                    (0.70, template_profiles["immune"]),
+                ]
+            ),
+            "cancer": "SARC",
+            "met_sites": None,
+            "explicit": 0.70,
+        },
+        "LUAD_plus_liver": {
+            "sample": _mix_symbol_profiles(
+                [
+                    (0.25, cancer_profiles["LUAD"]),
+                    (0.75, template_profiles["liver"]),
+                ]
+            ),
+            "cancer": "LUAD",
+            "met_sites": ["liver"],
+            "explicit": 0.75,
+        },
+    }
+    rows = []
+    for case_name, spec in cancer_cases.items():
+        result = decompose_expression(
+            spec["sample"],
+            cancer=spec["cancer"],
+            met_sites=spec["met_sites"],
+        )
+        recovered = sum(result["purity"]["subtracted_fractions"].values())
+        rows.append(
+            {
+                "case_kind": "cancer_plus_healthy",
+                "case": case_name,
+                "expected": spec["explicit"],
+                "recovered": recovered,
+                "passed": spec["explicit"] < recovered < 1.0,
+            }
+        )
+
+    healthy_cases = {
+        "immune_20_stromal_80": {
+            "parts": (("immune", 0.20), ("stromal", 0.80)),
+            "cancer": "COAD",
+        },
+        "immune_50_stromal_50": {
+            "parts": (("immune", 0.50), ("stromal", 0.50)),
+            "cancer": "COAD",
+        },
+        "immune_80_stromal_20": {
+            "parts": (("immune", 0.80), ("stromal", 0.20)),
+            "cancer": "COAD",
+        },
+        "immune_40_epithelial_60": {
+            "parts": (("immune", 0.40), ("epithelial", 0.60)),
+            "cancer": "SARC",
+        },
+    }
+    for case_name, spec in healthy_cases.items():
+        sample = _mix_symbol_profiles(
+            [
+                (fraction, template_profiles[component])
+                for component, fraction in spec["parts"]
+            ]
+        )
+        result = decompose_expression(sample, cancer=spec["cancer"])
+        recovered = result["purity"]["subtracted_fractions"]
+        errors = [
+            abs(float(recovered.get(component, 0.0)) - fraction)
+            for component, fraction in spec["parts"]
+        ]
+        rows.append(
+            {
+                "case_kind": "healthy_plus_healthy",
+                "case": case_name,
+                "expected": 1.0,
+                "recovered": sum(recovered.values()),
+                "passed": max(errors) < 0.02,
+                "fraction_mae": float(np.mean(errors)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 # ── Pytest entry points ──────────────────────────────────────────────────
 
 
 def test_comparison_runs_without_errors():
-    """All 72 normalization × weighting × sample combos should run."""
+    """Every normalization × weighting × sample combination should run."""
     df = run_comparison()
     if "error" in df.columns:
         errors = df[df["error"].notna()]
@@ -435,6 +810,93 @@ def test_comparison_runs_without_errors():
             print("\n=== ERRORS ===")
             print(errors.to_string(index=False))
         assert errors.empty, f"{len(errors)} combos failed"
+
+    # These bulk-cancer stress cases remain useful for leakage diagnostics,
+    # but their nominal mix fractions are not ground truth: every TCGA input
+    # already includes unknown normal tissue and TME. They must not decide the
+    # production feature space.
+
+
+def test_composition_recovery_benchmark_compares_exact_fractions():
+    """Compare feature spaces only where exact fraction truth exists."""
+    healthy = run_composition_recovery_benchmark()
+
+    assert healthy["case"].nunique() >= 4
+    assert healthy["fraction_mae"].notna().all()
+    assert healthy["recovered_background"].between(0.999, 1.001).all()
+
+    # Linear clean TPM must at least be capable of recovering mixtures made
+    # from the same healthy reference profiles. This is a model-consistency
+    # check, not a claim of validation on independent biological specimens.
+    clean = healthy[
+        (healthy["normalization"] == "raw")
+        & (healthy["weighting"] == "uniform")
+    ]
+    assert float(clean["fraction_mae"].mean()) < 0.05
+
+
+def test_routed_decomposition_recovers_known_healthy_mixtures():
+    """The residual-producing path should honor linear mixture semantics."""
+    df = run_routed_decomposition_recovery_benchmark()
+    cancer = df[df["case_kind"] == "cancer_plus_healthy"]
+    healthy = df[df["case_kind"] == "healthy_plus_healthy"]
+
+    assert cancer["case"].nunique() == 4
+    assert healthy["case"].nunique() == 4
+    assert cancer["passed"].all(), cancer.to_string(index=False)
+    assert healthy["passed"].all(), healthy.to_string(index=False)
+    assert float(healthy["fraction_mae"].max()) < 0.02
+
+
+def test_production_candidate_decomposition_recovers_healthy_pair_fractions():
+    """Exercise the public candidate/template path, not only the A/B fitter."""
+    candidate = {
+        "code": "SARC",
+        "signature_score": 1.0,
+        "purity_estimate": 0.0,
+        "support_fraction_of_top": 1.0,
+        "purity_result": {
+            "overall_lower": 0.0,
+            "overall_estimate": 0.0,
+            "overall_upper": 0.0,
+        },
+    }
+    for spec in _healthy_pair_fraction_cases().values():
+        parts = spec["parts"]
+        sample = _mix_samples(
+            [
+                (fraction, _component_sample(component))
+                for component, fraction in parts
+            ]
+        )
+        result = decompose_sample(
+            sample,
+            cancer_types=["SARC"],
+            templates=["solid_primary"],
+            top_k=1,
+            purity_override=0.0,
+            candidate_rows=[candidate],
+        )[0]
+        for component, expected in parts:
+            assert result.fractions[component] == pytest.approx(
+                expected, abs=0.01
+            )
+        assert result.tme_background_tpm
+
+
+def test_normalization_policy_has_no_hk_decision_path():
+    """HK is diagnostic/A-B only, never a default decision feature."""
+
+    hk_consumers = {
+        consumer
+        for consumer, record in NORMALIZATION_USAGE.items()
+        if record.get("current") == Basis.HK
+    }
+    assert hk_consumers == set()
+    assert (
+        NORMALIZATION_USAGE["input_scale_qc"]["current"]
+        == "input_linear_tpm_housekeeping_median_qc"
+    )
 
 
 def print_comparison_table_for_manual_review():
@@ -495,6 +957,11 @@ def print_comparison_table_for_manual_review():
             mean_resid = (
                 sub["residual"].mean() if "residual" in sub.columns else float("nan")
             )
+            mean_component_mae = (
+                sub["component_mae"].mean()
+                if "component_mae" in sub.columns
+                else float("nan")
+            )
 
             combo_scores.append(
                 {
@@ -503,10 +970,13 @@ def print_comparison_table_for_manual_review():
                     "mean_prop_error": round(mean_prop, 4),
                     "mean_ig_tumor_tpm": round(mean_ig_leak, 1),
                     "mean_residual": round(mean_resid, 4),
+                    "mean_component_mae": round(mean_component_mae, 4),
                 }
             )
 
-    ranking = pd.DataFrame(combo_scores).sort_values("mean_prop_error")
+    ranking = pd.DataFrame(combo_scores).sort_values(
+        ["mean_component_mae", "mean_prop_error"]
+    )
     print(ranking.to_string(index=False))
 
 

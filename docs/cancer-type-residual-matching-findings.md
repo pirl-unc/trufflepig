@@ -3,6 +3,18 @@
 A negative result, recorded so the line isn't re-explored from scratch. Companion
 to [cancer-type-ontology.md](./cancer-type-ontology.md).
 
+## At a glance
+
+Do not use whole-profile similarity on the deconvolved tumor residual to decide
+cancer type. Across the tested normalizations and similarity methods it was
+unstable, did not fix the motivating stromal-confounding case, and performed
+worse than the production signature screen. Decomposition remains useful after
+the cancer call for purity and source attribution; it is not an independent
+lineage classifier.
+
+The rest of this document records the experiment, result, and narrow condition
+under which revisiting it could be justified.
+
 ## The idea (and why it was appealing)
 
 The signature screen can be fooled by admixture: a colorectal sample with heavy

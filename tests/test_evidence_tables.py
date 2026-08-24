@@ -82,6 +82,24 @@ def test_per_subtype_table_returns_empty_on_no_genes():
     assert _per_subtype_evidence_table("BRCA", None, {}, {}, None, []) == []
 
 
+def test_per_subtype_table_does_not_invent_missing_reference_medians():
+    body = "\n".join(
+        _per_subtype_evidence_table(
+            "SARC_MPLPS",
+            None,
+            {"KRT8": 42.0, "MDM2": 0.0},
+            {},
+            None,
+            ["KRT8", "MDM2"],
+        )
+    )
+
+    assert "No exact expression reference is available" in body
+    assert "| Gene | Sample TPM |" in body
+    assert "median |" not in body
+    assert "| KRT8 | 42.0 |" in body
+
+
 # ---------------------------------------------------------------------------
 # _rescue_evidence_table
 # ---------------------------------------------------------------------------
@@ -256,6 +274,74 @@ def test_winning_subtype_uses_subtype_medians_not_broad_cohort(monkeypatch):
     # cells: ['', 'KRT81', '624.1', '600', '0.50', '+9.46', '']  (approx)
     # The third value cell (index 3) is the candidate median; assert it == 600.
     assert "600" in cells[3]
+
+
+def test_blocked_subtype_does_not_control_parent_reference_medians(monkeypatch):
+    """A subtype rejected by integrated evidence remains differential-only."""
+    import trufflepig.plot_embedding as plot_emb_mod
+    import trufflepig.plot_tumor_expr as plot_tumor_expr_mod
+    import trufflepig.reference as ref_mod
+    import trufflepig.subtype_signature as subsig_mod
+
+    monkeypatch.setattr(
+        ref_mod,
+        "pan_cancer_expression",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "Symbol": ["COL1A1"],
+                "Ensembl_Gene_ID": ["ENSG_COL1A1"],
+                "SARC_TPM": [25.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        plot_tumor_expr_mod,
+        "_exact_expression_tpm_reference",
+        lambda code: ({}, "", ""),
+    )
+    monkeypatch.setattr(
+        et_mod,
+        "_subtype_medians_lookup",
+        lambda: {("SARC", "SARC_PEC"): {"COL1A1": 900.0}},
+    )
+    monkeypatch.setattr(
+        subsig_mod,
+        "subtype_signature_panels",
+        lambda **kwargs: {("SARC", "SARC_PEC"): ("COL1A1",)},
+    )
+    monkeypatch.setattr(
+        plot_emb_mod,
+        "_get_cancer_type_signature_panels",
+        lambda **kwargs: {"SARC": ("COL1A1",)},
+    )
+    analysis = {
+        "cancer_type": "SARC",
+        "candidate_trace": [{"code": "SARC", "winning_subtype": "SARC_PEC"}],
+        "cancer_type_evidence": {
+            "selected": {"cancer_type": "SARC"},
+            "evidence": [
+                {
+                    "cancer_type": "SARC_PEC",
+                    "can_select_report_label": False,
+                    "blocking_reasons": ["contradictory expected-low lineage"],
+                }
+            ],
+        },
+    }
+
+    body = "\n".join(
+        build_candidate_evidence_block(
+            analysis["candidate_trace"],
+            {"COL1A1": 40.0},
+            top_k=1,
+            analysis=analysis,
+        )
+    )
+
+    assert "winning subtype: `SARC_PEC`" not in body
+    assert "SARC_PEC median" not in body
+    assert "900" not in body
+    assert "25" in body
 
 
 def test_build_block_handles_empty_trace():

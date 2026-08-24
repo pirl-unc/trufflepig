@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import trufflepig.plot as plot_mod
+import trufflepig.plot_scatter as plot_scatter_mod
 import trufflepig.plot_strip as plot_strip_mod
 import trufflepig.main as cli_mod
 import trufflepig.tumor_purity as purity_mod
@@ -462,6 +463,8 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert decomp_kwargs["site_hint"] == "liver"
     assert decomp_kwargs["templates"] == ["met_liver"]
     readme = (tmp_path / "test-output" / "README.md").read_text()
+    assert readme.startswith("# Trufflepig Analysis Output")
+    assert readme.index("## Start here") < readme.index("## Data and normalization")
     assert "Prefer the standalone decomposition figures" in readme
     assert "*-decomposition-composition.png" in readme
     assert "*-decomposition.png" not in readme
@@ -634,7 +637,10 @@ def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
     assert "Lineage / Background Context" in detailed
 
 
-def test_generate_text_reports_handles_missing_lineage_summary(tmp_path):
+def test_generate_text_reports_handles_missing_lineage_summary(
+    tmp_path,
+    monkeypatch,
+):
     analysis = {
         "cancer_type": "UCS",
         "cancer_name": "Uterine Carcinosarcoma",
@@ -710,7 +716,17 @@ def test_generate_text_reports_handles_missing_lineage_summary(tmp_path):
     }
     prefix = str(tmp_path / "sarcoma-like")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    monkeypatch.setattr(
+        "trufflepig.common.build_sample_tpm_by_symbol",
+        lambda _df: {"ESR1": 0.003},
+    )
+    cli_mod._generate_text_reports(
+        analysis,
+        embedding_meta,
+        prefix,
+        decomp_results=[],
+        df_expr=pd.DataFrame({"Ensembl_Gene_ID": [], "TPM": []}),
+    )
 
     # "broad family interpretation is more trustworthy" + "site/template
     # assignment is indeterminate" lived in the retired summary.md
@@ -726,6 +742,12 @@ def test_generate_text_reports_handles_missing_lineage_summary(tmp_path):
         in detailed
     )
     assert "UCS / met_bone" not in detailed
+    assert (
+        "| ESR1 | — | detected <0.01 TPM — uninformative "
+        "(not specific enough to this cancer type for purity calibration) |"
+        in detailed
+    )
+    assert "| ESR1 | — | not detected |" not in detailed
 
 
 def test_summarize_sample_call_keeps_primary_site_for_weak_primary_fit():
@@ -1481,7 +1503,7 @@ def test_hierarchy_embedding_metadata_reports_feature_space():
 def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     mock_result = {
         "cancer_type": "DLBC",
-        "tcga_median_purity": 0.94,
+        "tcga_median_purity": None,
         "overall_estimate": 0.81,
         "overall_lower": 0.71,
         "overall_upper": 0.89,
@@ -1510,6 +1532,7 @@ def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     assert result["cancer_type"] == "DLBC"
     assert fig.axes[0].get_xlabel() == "Fraction estimate (%)"
     assert fig.axes[1].get_title() == "Fraction / context components"
+    assert "TCGA median purity not available" in fig.axes[0].get_title()
     assert "Malignant-lineage fraction estimate" in fig._suptitle.get_text()
 
 
@@ -1544,6 +1567,152 @@ def test_plot_sample_summary_is_mode_aware(monkeypatch):
     assert fig.axes[1].get_title() == "Heme Composition Context"
     assert fig.axes[2].get_title().startswith("Lineage / Background Context")
     assert "hematologic / lymphoid bulk" in fig._suptitle.get_text()
+
+
+def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
+    mock_analysis = {
+        "cancer_type": "BRCA",
+        "cancer_name": "Breast Invasive Carcinoma",
+        "top_cancers": [("HL", 1.0), ("BRCA", 0.47)],
+        "fit_quality": {"label": "ambiguous"},
+        "purity": {
+            "overall_estimate": 0.81,
+            "overall_lower": 0.71,
+            "overall_upper": 0.89,
+            "tcga_median_purity": 0.73,
+            "components": {
+                "stromal": {"enrichment": 1.2},
+                "immune": {"enrichment": 0.8},
+            },
+        },
+        "tissue_scores": [("breast", 0.93, 20)],
+        "mhc1": {"HLA-A": 40, "HLA-B": 55, "HLA-C": 30, "B2M": 200},
+        "mhc2": {},
+        "candidate_trace": [{"code": "HL"}, {"code": "BRCA"}],
+    }
+
+    fig, _analysis = purity_mod.plot_sample_summary(
+        pd.DataFrame(
+            {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
+        ),
+        cancer_type="BRCA",
+        sample_mode="solid",
+        analysis=mock_analysis,
+    )
+
+    ranker_panel = fig.axes[0]
+    assert ranker_panel.get_title() == (
+        "Pre-adjudication cancer-type ranker (ambiguous fit)"
+    )
+    panel_text = "\n".join(text.get_text() for text in ranker_panel.texts)
+    assert "Final report call: BRCA" in panel_text
+    assert "Pre-adjudication ranker leader: HL" in panel_text
+    assert "Lead label: HL" not in panel_text
+
+
+def test_plot_sample_summary_allows_missing_reference_purity(monkeypatch):
+    """A loadable report must not depend on optional cohort-purity metadata."""
+    mock_analysis = {
+        "cancer_type": "SARC_LPS_UNSPEC",
+        "cancer_name": "Liposarcoma, unspecified",
+        "top_cancers": [("SARC_LPS_UNSPEC", 0.42)],
+        "purity": {
+            "overall_estimate": 0.61,
+            "overall_lower": 0.48,
+            "overall_upper": 0.72,
+            "tcga_median_purity": None,
+            "components": {
+                "stromal": {"enrichment": 1.2},
+                "immune": {"enrichment": 0.8},
+            },
+        },
+        "tissue_scores": [("adipose", 0.93, 20)],
+        "mhc1": {"HLA-A": 40, "HLA-B": 55, "HLA-C": 30, "B2M": 200},
+        "mhc2": {},
+        "candidate_trace": [{"code": "SARC_LPS_UNSPEC"}],
+    }
+    monkeypatch.setattr(purity_mod, "analyze_sample", lambda *a, **k: mock_analysis)
+
+    fig, _analysis = purity_mod.plot_sample_summary(
+        pd.DataFrame({"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}),
+        cancer_type="SARC_LPS_UNSPEC",
+        sample_mode="solid",
+    )
+
+    purity_text = "\n".join(text.get_text() for text in fig.axes[1].texts)
+    assert "median purity: not available" in purity_text
+    legend_labels = [
+        text.get_text() for text in fig.axes[2].get_legend().get_texts()
+    ]
+    assert all("()" not in label for label in legend_labels)
+    assert not any("origin" in label.lower() for label in legend_labels)
+
+
+def test_background_tissue_plot_labels_model_proxy_without_claiming_origin():
+    fig = purity_mod.plot_background_tissues(
+        {
+            "cancer_type": "CHOL",
+            "tissue_scores": [
+                ("liver", 0.96, 20),
+                ("gallbladder", 0.78, 20),
+            ],
+        }
+    )
+
+    legend_labels = [text.get_text() for text in fig.axes[0].get_legend().get_texts()]
+    assert "Reference tissue proxy (Gallbladder)" in legend_labels
+    assert not any("expected origin" in label.lower() for label in legend_labels)
+
+
+@pytest.mark.parametrize(
+    ("cancer_type", "expected_label"),
+    [
+        (
+            "SARC_LPS_UNSPEC",
+            "parent cohort (SARC; requested SARC_LPS_UNSPEC)",
+        ),
+        (
+            "NUTM",
+            "Mean across available pan-cancer cohorts "
+            "(no NUTM pan-cancer cohort)",
+        ),
+    ],
+)
+def test_scatter_uses_an_honest_available_reference_fallback(
+    monkeypatch,
+    cancer_type,
+    expected_label,
+):
+    """Report plots remain loadable when a leaf has no pan-cancer column."""
+    ref = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG1"],
+            "Symbol": ["GENE1"],
+            "SARC_TPM": [2.0],
+            "LUAD_TPM": [4.0],
+        }
+    )
+    monkeypatch.setattr(
+        plot_scatter_mod,
+        "pan_cancer_expression",
+        lambda **_kwargs: ref.copy(),
+    )
+
+    _plot_df, _cats, _colors, _sample_label, cohort_label = (
+        plot_scatter_mod._prepare_sample_vs_cancer_data(
+            pd.DataFrame(
+                {
+                    "gene_id": ["ENSG1"],
+                    "gene_display_name": ["GENE1"],
+                    "TPM": [10.0],
+                }
+            ),
+            {"markers": ["ENSG1"]},
+            cancer_type,
+        )
+    )
+
+    assert expected_label in cohort_label
 
 
 def test_hierarchy_embedding_plot_adds_family_legend_and_neighbors(monkeypatch):

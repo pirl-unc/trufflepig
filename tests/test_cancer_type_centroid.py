@@ -224,6 +224,25 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
     assert rows[0].get("compartment_in_set") is False
 
 
+def test_member_union_ancestry_keeps_resolved_child_above_parent():
+    """A confident LUAD profile must not broaden to an aggregate NSCLC label."""
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("LUAD"),
+        candidate_codes=["NSCLC", "LUAD", "LUSC"],
+        top_k=3,
+    )
+    by_code = {row["code"]: row for row in rows}
+
+    assert rows[0]["code"] == "LUAD"
+    assert [row["code"] for row in rows].index("LUAD") < [
+        row["code"] for row in rows
+    ].index("NSCLC")
+    assert by_code["LUAD"]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert by_code["NSCLC"]["support_fraction_of_top"] < 1.0
+
+
 def test_ranker_does_not_hallmark_veto_on_unconfident_compartment(monkeypatch):
     """A near-tie compartment call may annotate disagreement but must not delete
     cross-compartment leaves. This is the HCC1395-shaped failure mode: a basal/EMT
@@ -301,6 +320,55 @@ def test_ranker_renormalizes_support_after_compartment_rerank(monkeypatch):
     assert by_code["SARC"]["support_fraction_of_top"] < 1.0
 
 
+def test_member_union_branch_abstains_with_inconsistent_centroid_top(monkeypatch):
+    """Branch promotion must honor the compartment gate's safety abstention."""
+    import trufflepig.cancer_type_centroid as ctc
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    monkeypatch.setattr(
+        ctc,
+        "centroid_correlations",
+        lambda sample, restrict_to=None: pd.Series(
+            {"SARC_PEC": 0.90, "COAD": 0.70}
+        ),
+    )
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda sample, _corr=None: {
+            "compartment": "Epithelial",
+            "score": 0.90,
+            "runner_up": "Sarcoma",
+            "margin": 0.20,
+            "confident": True,
+            "scores": pd.Series({"Epithelial": 0.90, "Sarcoma": 0.70}),
+        },
+    )
+    monkeypatch.setattr(
+        ctc,
+        "resolve_fine_subtype",
+        lambda code, correlations, current_subtype=None: (
+            "SARC_PEC"
+            if code in {"SARC", "SARC_PEC"}
+            else current_subtype
+        ),
+    )
+    monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("COAD"),
+        candidate_codes=["COAD", "SARC", "SARC_PEC"],
+        top_k=3,
+    )
+
+    assert rows[0]["code"] == "COAD"
+    assert rows[0]["centroid_compartment_restricted"] is False
+    assert all(
+        not row.get("centroid_member_union_branch_promoted")
+        for row in rows
+    )
+
+
 def test_final_support_preserves_same_family_display_order_without_compartment():
     from trufflepig.tumor_purity import _finalize_candidate_rank_support
 
@@ -363,6 +431,40 @@ def test_final_support_compartment_tier_preserves_order_within_tier():
     assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
     assert rows[1]["support_fraction_of_top"] < 1.0
     assert rows[2]["support_raw_fraction_of_max"] == pytest.approx(1.0)
+    assert rows[2]["support_fraction_of_top"] < rows[1]["support_fraction_of_top"]
+
+
+def test_final_support_resolved_child_outranks_stronger_aggregate_parent():
+    """Branch normalization must agree with the child-first biological order."""
+    from trufflepig.tumor_purity import _finalize_candidate_rank_support
+
+    rows = [
+        {
+            "code": "LUAD",
+            "centroid_member_union_branch_promoted": True,
+            "centroid_member_union_branch_role": "resolved_child",
+            "support_score": 0.40,
+            "signature_score": 0.40,
+        },
+        {
+            "code": "NSCLC",
+            "centroid_member_union_branch_promoted": True,
+            "centroid_member_union_branch_role": "aggregate_parent",
+            "support_score": 1.00,
+            "signature_score": 1.00,
+        },
+        {
+            "code": "LUSC",
+            "support_score": 0.80,
+            "signature_score": 0.80,
+        },
+    ]
+
+    _finalize_candidate_rank_support(rows, compartment_restricted=False)
+
+    assert [row["code"] for row in rows] == ["LUAD", "NSCLC", "LUSC"]
+    assert rows[0]["support_fraction_of_top"] == pytest.approx(1.0)
+    assert rows[1]["support_fraction_of_top"] < 1.0
     assert rows[2]["support_fraction_of_top"] < rows[1]["support_fraction_of_top"]
 
 

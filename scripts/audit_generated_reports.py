@@ -16,15 +16,28 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from analyze_reports import (
-    Compat,
-    _calls_of,
-    _expected_for,
-    _iter_samples,
-    _load_truth,
-    _registry_parent_map,
-    _broad_lineage_fn,
-)
+try:
+    from .analyze_reports import (
+        Compat,
+        _calls_of,
+        _expected_for,
+        _iter_samples,
+        _load_truth,
+        _registry_parent_map,
+        _broad_lineage_fn,
+        expected_codes,
+    )
+except ImportError:
+    from analyze_reports import (
+        Compat,
+        _calls_of,
+        _expected_for,
+        _iter_samples,
+        _load_truth,
+        _registry_parent_map,
+        _broad_lineage_fn,
+        expected_codes,
+    )
 
 _SUMMARY_CALL = re.compile(r"\*\*Cancer call:\*\*\s*([A-Za-z][A-Za-z0-9_]*)\b")
 _WORKING_CALL = re.compile(r"\*\*Working cancer call\*\*:\s*([^.\n]+)")
@@ -42,6 +55,12 @@ _FALLBACK_PHRASES = (
 )
 _STALE_ROLE_PHRASES = (
     "leading broad expression context used for cohort-normalized downstream analyses",
+)
+_NOT_DETECTED_LINE = re.compile(r"\*\*Not detected\*\*:\s*([^.\n]+)")
+_TABLE_GENE_TPM = re.compile(
+    r"^\|\s*([A-Za-z0-9_.\-/]+)\s*\|\s*"
+    r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*\|",
+    re.MULTILINE,
 )
 
 
@@ -71,6 +90,9 @@ def _sample_paths(analysis_md: Path, sample_id: str) -> dict[str, Path | None]:
             [root / f"{sample_id}-decomposition-hypotheses.tsv"]
         ),
         "ranges": _first_existing([root / f"{sample_id}-tumor-expression-ranges.tsv"]),
+        "signal_matrix": _first_existing(
+            [root / f"{sample_id}-cancer-type-signal-matrix.tsv"]
+        ),
     }
 
 
@@ -86,6 +108,62 @@ def _working_codes(analysis_text: str) -> list[str]:
     return _CODE_BEFORE_PAREN.findall(match.group(1))
 
 
+def _detected_gene_absence_contradictions(text: str) -> list[tuple[str, float]]:
+    """Genes narrated as absent despite a positive TPM table elsewhere."""
+
+    positive_tpm = {}
+    for gene, raw_value in _TABLE_GENE_TPM.findall(text):
+        try:
+            value = float(raw_value.replace(",", ""))
+        except ValueError:
+            continue
+        if value > 0:
+            positive_tpm[gene] = max(positive_tpm.get(gene, 0.0), value)
+    absent = []
+    for match in _NOT_DETECTED_LINE.finditer(text):
+        genes = re.findall(r"[A-Za-z][A-Za-z0-9_.\-/]*", match.group(1))
+        for gene in genes:
+            if gene in positive_tpm:
+                absent.append((gene, positive_tpm[gene]))
+    return list(dict.fromkeys(absent))
+
+
+def _signature_reference_table_issues(text: str) -> list[tuple[str, str]]:
+    """Find signature tables whose candidate reference column is unusable."""
+
+    issues = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("#### Signature evidence for "):
+            continue
+        title = line.removeprefix("#### ").strip()
+        header_index = next(
+            (
+                row_index
+                for row_index in range(index + 1, min(index + 8, len(lines)))
+                if lines[row_index].startswith("| Gene | Sample TPM |")
+            ),
+            None,
+        )
+        if header_index is None:
+            continue
+        medians = []
+        for row in lines[header_index + 2 :]:
+            if not row.startswith("|"):
+                break
+            cells = [cell.strip() for cell in row.strip().strip("|").split("|")]
+            if len(cells) < 3:
+                continue
+            medians.append(cells[2])
+        if not medians:
+            continue
+        if all(value in {"0", "0.0", "0.00", "0.000"} for value in medians):
+            issues.append((title, "all candidate reference medians are zero"))
+        elif all(value in {"", "—", "-"} for value in medians):
+            issues.append((title, "candidate reference medians are unavailable"))
+    return issues
+
+
 def _decomposition_rows(path: Path | None) -> list[dict[str, str]]:
     if path is None or not path.exists():
         return []
@@ -96,6 +174,46 @@ def _decomposition_rows(path: Path | None) -> list[dict[str, str]]:
         return []
 
 
+def _duplicated_global_learned_votes(
+    path: Path | None,
+) -> list[tuple[str, str, int]]:
+    """Return sample-level learned votes repeated across candidate rows.
+
+    Compartment, family, entity, and subtype-axis classifiers each emit one
+    sample-level vote. Repeating the same vote once per candidate makes the
+    public evidence graph look as though every diagnosis received the vote.
+    Context-specific MMR rows are deliberately excluded.
+    """
+
+    if path is None or not path.exists():
+        return []
+    global_roles = {
+        "hierarchical_compartment_vote",
+        "hierarchical_family_vote",
+        "hierarchical_entity_vote",
+        "hierarchical_subtype_axis_vote",
+    }
+    try:
+        with path.open(encoding="utf-8", newline="") as handle:
+            rows = csv.DictReader(handle, delimiter="\t")
+            counts = Counter(
+                (
+                    str(row.get("role") or ""),
+                    str(row.get("predicted_code") or ""),
+                )
+                for row in rows
+                if row.get("signal_source") == "learned_expression_classifier"
+                and row.get("role") in global_roles
+            )
+    except OSError:
+        return []
+    return [
+        (role, code, count)
+        for (role, code), count in sorted(counts.items())
+        if count > 1
+    ]
+
+
 def _sample_issues(
     *,
     sample_id: str,
@@ -104,7 +222,12 @@ def _sample_issues(
     compat: Compat,
 ) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
-    missing = [key for key, path in paths.items() if path is None]
+    required_artifacts = {"analysis", "summary", "evidence", "decomposition", "ranges"}
+    missing = [
+        key
+        for key, path in paths.items()
+        if key in required_artifacts and path is None
+    ]
     for key in missing:
         issues.append(
             {
@@ -153,13 +276,46 @@ def _sample_issues(
                 "detail": f"summary={summary_call}; analysis={','.join(working_codes)}",
             }
         )
-    if expected and working_codes and not any(compat(code, expected) for code in working_codes):
+    if expected and working_codes and not any(
+        compat(code, accepted)
+        for code in working_codes
+        for accepted in expected_codes(expected)
+    ):
         issues.append(
             {
                 "sample": sample_id,
                 "severity": "error",
                 "category": "headline_incompatible_with_expected",
                 "detail": f"expected={expected}; analysis={','.join(working_codes)}",
+            }
+        )
+    for gene, tpm in _detected_gene_absence_contradictions(analysis_text):
+        issues.append(
+            {
+                "sample": sample_id,
+                "severity": "error",
+                "category": "detected_gene_narrated_absent",
+                "detail": f"{gene} is narrated as not detected but another report table shows {tpm:g} TPM",
+            }
+        )
+    for title, detail in _signature_reference_table_issues(analysis_text):
+        issues.append(
+            {
+                "sample": sample_id,
+                "severity": "error",
+                "category": "unusable_signature_reference_medians",
+                "detail": f"{title}: {detail}",
+            }
+        )
+    for role, code, count in _duplicated_global_learned_votes(
+        paths.get("signal_matrix")
+    ):
+        issues.append(
+            {
+                "sample": sample_id,
+                "severity": "error",
+                "category": "duplicated_global_learned_vote",
+                "detail": f"{role}/{code} is repeated across {count} candidate rows",
             }
         )
 

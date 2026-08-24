@@ -15,6 +15,50 @@ this repo as `trufflepig run`. Multi-sample longitudinal comparison
 extraction of the analyze pipeline (so a web UI can stream incremental
 results) is the next track.
 
+## Documentation
+
+Start with the [documentation map](docs/README.md). It points first to the
+end-to-end production workflow, then to classifier design records, report
+consistency work, calibration, and performance notes.
+
+## How the analysis works
+
+The pipeline makes and finalizes one cancer call before it interprets purity,
+tumor-attributed expression, or therapy relevance:
+
+1. **Expression QC** loads the input expression file, maps gene identifiers,
+   checks TPM scale, and removes technical RNA from clean TPM used downstream.
+   Outputs: clean expression table and QC warnings.
+2. **RNA Prep and Preservation** infers library prep, preservation,
+   degradation, and assay caveats that affect confidence and expression
+   interpretation. Outputs: prep/preservation calls, degradation flags, and
+   widened uncertainty when needed.
+3. **Tissue Composition Screen** compares the sample with normal tissues and
+   cancer-expression references before the cancer-type call; it also adds
+   tumor-evidence signals such as proliferation, CTA/oncofetal markers, and
+   tumor-up markers. Outputs: healthy/tumor hint, top normal matches, and top
+   cancer-reference matches.
+4. **Cancer-Type Evidence** combines expression-reference matching,
+   rare-marker/fusion evidence, exact local references, and registry
+   relationships into one cancer-type call. Outputs: inferred cancer type,
+   expression reference used for cohort math, and alternate hypotheses.
+5. **Tumor Purity and Coarse Composition** estimates tumor fraction and broad
+   non-tumor compartments such as immune, stromal, epithelial matched normal,
+   and other background components. Outputs: purity interval and fitted
+   compartment fractions.
+6. **Subtype and Background Refinements** refines the coarse composition with
+   activated background states such as CAF/TAM/Treg/MDSC and matched-normal
+   compartments. Outputs: immune/stromal infiltration, subtype/background
+   adjustments, and matched-normal splits used before target ranking.
+7. **Tumor-Attributed Expression** subtracts fitted non-tumor signal and
+   estimates how much observed expression is likely tumor-cell derived.
+   Outputs: tumor-source TPM ranges, attribution flags, and confidence tiers.
+8. **Therapy Prioritization** ranks actionable targets and pathway states
+   using tumor-attributed expression, indication curation, antigen-presentation
+   status, immune/background attribution, and pathway/treatment-state signals.
+   Outputs: therapy shortlist, target tables, pathway/treatment-state evidence,
+   and caveats.
+
 ## Install
 
 ```
@@ -50,43 +94,6 @@ Today, every analyze artifact (markdown, figures, TSVs, the bundled
 PDF) lives under `analyze/`. The empty sibling directories are the
 seam for per-stage extraction (trufflepig#2–#14); once stages start
 writing their own records, `analyze/` shrinks.
-
-### Analysis stages
-
-The reports follow these named stages:
-
-1. **Expression QC** loads the input expression file, maps gene identifiers,
-   checks TPM scale, and removes technical RNA from clean TPM used downstream.
-   Outputs: clean expression table and QC warnings.
-2. **RNA Prep and Preservation** infers library prep, preservation,
-   degradation, and assay caveats that affect confidence and expression
-   interpretation. Outputs: prep/preservation calls, degradation flags, and
-   widened uncertainty when needed.
-3. **Tissue Composition Screen** compares the sample with normal tissues and
-   cancer-expression references before the cancer-type call; it also adds
-   tumor-evidence signals such as proliferation, CTA/oncofetal markers, and
-   tumor-up markers. Outputs: healthy/tumor hint, top normal matches, and top
-   cancer-reference matches.
-4. **Cancer-Type Evidence** combines expression-reference matching,
-   rare-marker/fusion evidence, exact local references, and registry
-   relationships into one cancer-type call. Outputs: inferred cancer type,
-   expression reference used for cohort math, and alternate hypotheses.
-5. **Tumor Purity and Coarse Composition** estimates tumor fraction and broad
-   non-tumor compartments such as immune, stromal, epithelial matched normal,
-   and other background components. Outputs: purity interval and fitted
-   compartment fractions.
-6. **Subtype and Background Refinements** refines the coarse composition with
-   activated background states such as CAF/TAM/Treg/MDSC and matched-normal
-   compartments. Outputs: immune/stromal infiltration, subtype/background
-   adjustments, and matched-normal splits used before target ranking.
-7. **Tumor-Attributed Expression** subtracts fitted non-tumor signal and
-   estimates how much observed expression is likely tumor-cell derived.
-   Outputs: tumor-source TPM ranges, attribution flags, and confidence tiers.
-8. **Therapy Prioritization** ranks actionable targets and pathway states
-   using tumor-attributed expression, indication curation, antigen-presentation
-   status, immune/background attribution, and pathway/treatment-state signals.
-   Outputs: therapy shortlist, target tables, pathway/treatment-state evidence,
-   and caveats.
 
 Common pass-through flags: `--hla-types`, `--fusions`, `--alterations`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,

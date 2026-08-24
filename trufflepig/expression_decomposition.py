@@ -444,8 +444,32 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     recon = sum(f[i] * templates[keys[i]] for i in range(len(keys)))
     residual = (sample - recon.reindex(sample.index).fillna(0.0)).clip(lower=0)
     total = float(sample.sum()) or 1.0
-    metrics = {"residual_fraction": round(float(residual.sum() / total), 3),
-               "subtracted": {keys[i]: round(float(f[i] * templates[keys[i]].sum() / 1e6), 3) for i in range(len(keys))},
+    residual_fraction = float(np.clip(residual.sum() / total, 0.0, 1.0))
+
+    # NNLS coefficients are not compositional fractions when correlated
+    # templates overlap: their implied RNA masses can sum above the sample
+    # mass even though the clipped residual is well behaved. Preserve the
+    # fitted relative allocation, but report it over the mass actually removed
+    # from the sample. This makes background + residual mass-conserving while
+    # leaving the reconstructed expression and residual identity unchanged.
+    raw_component_mass = np.array(
+        [
+            max(0.0, float(f[i]))
+            * float(templates[keys[i]].sum())
+            / total
+            for i in range(len(keys))
+        ],
+        dtype=float,
+    )
+    removed_fraction = max(0.0, 1.0 - residual_fraction)
+    raw_total = float(raw_component_mass.sum())
+    if raw_total > 0.0:
+        component_fractions = raw_component_mass / raw_total * removed_fraction
+    else:
+        component_fractions = np.zeros(len(keys), dtype=float)
+
+    metrics = {"residual_fraction": round(residual_fraction, 3),
+               "subtracted": {keys[i]: round(float(component_fractions[i]), 3) for i in range(len(keys))},
                "tumor_lineage_in_residual": _round_or_none(signature_score(residual, signatures[_MODES[mode]["tumor_sig"]], space), 2),
                "lineage_fit": lineage_fit_score(mode, residual, signatures=signatures, space=space),
                "template_collinearity": round(_collinearity([templates[k] for k in keys], fit), 3), **met}

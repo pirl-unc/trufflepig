@@ -8,7 +8,7 @@ marker read as "not expressed". Scoring by ID eliminates that class.
 
 import pandas as pd
 import pytest
-from pirlygenes.gene_sets_cancer import cancer_family_panels_df, housekeeping_gene_ids
+from pirlygenes.gene_sets_cancer import cancer_family_panels_df
 
 from trufflepig.tumor_purity import (
     _CANCER_FAMILY_PANELS,
@@ -26,23 +26,32 @@ def test_id_panels_cover_same_families_with_unversioned_ensgs():
             assert gid.startswith("ENSG") and "." not in gid, f"{family}: bad ENSG {gid!r}"
 
 
+def test_id_panels_do_not_turn_negative_markers_into_positive_evidence():
+    panels = cancer_family_panels_df()
+    for family, rows in panels.groupby("Family"):
+        negative_ids = set(
+            rows.loc[rows["role"].eq("negative"), "Ensembl_Gene_ID"]
+        )
+        assert negative_ids.isdisjoint(
+            _CANCER_FAMILY_PANELS_BY_ID[family]
+        )
+
+
 def test_scoring_matches_by_ensg_even_with_wrong_symbol():
     """Markers present under their ENSG but a deliberately wrong symbol must
     still score the family — proving ID-matching, immune to alias drift.
     (Under the old symbol-keyed scoring these would silently read as 0.)"""
     panels = cancer_family_panels_df()
-    ne = panels[panels["Family"] == "NEUROENDOCRINE"]
+    ne = panels[
+        panels["Family"].eq("NEUROENDOCRINE")
+        & panels["role"].ne("negative")
+    ]
     assert not ne.empty
 
     rows = [
         # real NE markers at high TPM, but labelled with a bogus alias symbol
         {"gene_id": row["Ensembl_Gene_ID"], "symbol": "WRONG_ALIAS", "TPM": 500.0}
         for _, row in ne.iterrows()
-    ]
-    # housekeeping anchors (so the hk median denominator is > 0)
-    rows += [
-        {"gene_id": gid, "symbol": "HK", "TPM": 50.0}
-        for gid in list(housekeeping_gene_ids())[:8]
     ]
     sample = pd.DataFrame(rows)
 

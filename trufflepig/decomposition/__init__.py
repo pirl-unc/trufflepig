@@ -10,6 +10,7 @@ fraction is distributed across reference-supported compartments.
 
 from .engine import (
     decompose_sample,
+    decompose_identity_backgrounds,
     DecompositionResult,
     get_decomposition_parameters,
     infer_sample_mode,
@@ -20,6 +21,10 @@ from .panels import (
     build_tumor_biased_panel,
     estimate_lineage_tumor_fraction,
     summarize_panels,
+)
+from .residual_identity import (
+    evaluate_residual_identity,
+    scope_residual_identity_to_decomposition_mode,
 )
 from .plot import (
     plot_decomposition_candidates,
@@ -34,12 +39,15 @@ from .templates import (
 
 __all__ = [
     "decompose_sample",
+    "decompose_identity_backgrounds",
     "DecompositionResult",
     "EPITHELIAL_MATCHED_NORMAL_TISSUE",
     "epithelial_matched_normal_component",
     "build_tumor_biased_panel",
     "build_matched_normal_biased_panel",
     "build_shared_lineage_panel",
+    "evaluate_residual_identity",
+    "scope_residual_identity_to_decomposition_mode",
     "estimate_lineage_tumor_fraction",
     "summarize_panels",
     "get_decomposition_parameters",

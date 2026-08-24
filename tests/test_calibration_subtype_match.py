@@ -12,6 +12,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pandas as pd
+
 # Load the script as a module (it isn't an installed package).
 _spec = importlib.util.spec_from_file_location(
     "calibrate_decomposition",
@@ -87,3 +89,169 @@ def test_top3_no_kin():
     matched, kind = calib._any_in_kin(["LUSC", "ESCA", "HNSC"], "BRCA")
     assert matched is False
     assert kind == "none"
+
+
+def test_local_expectation_uses_canonical_registry_aliases():
+    """Legacy OS truth labels are equivalent to the canonical SARC_OS code."""
+
+    assert calib._accept_expected("SARC_OS", "OS") is True
+
+
+def test_residual_calibration_matches_production_beam_and_mode_scope(
+    monkeypatch,
+):
+    """Calibration must not count a residual call production would withhold."""
+
+    import trufflepig.cancer_type_evidence as cancer_type_evidence
+    import trufflepig.decomposition as decomposition
+    import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.rare_inference as rare_inference
+    import trufflepig.tumor_purity as tumor_purity
+
+    trace = [
+        {
+            "code": code,
+            "support_fraction_of_top": 1.0 - rank * 0.05,
+        }
+        for rank, code in enumerate(
+            ["DLBC", "BRCA", "PRAD", "ACC", "SARC"]
+        )
+    ]
+    monkeypatch.setattr(
+        healthy_vs_tumor,
+        "assess_healthy_vs_tumor",
+        lambda _frame: {},
+    )
+    monkeypatch.setattr(
+        tumor_purity,
+        "analyze_sample",
+        lambda _frame, tissue_signal=None: {"candidate_trace": trace},
+    )
+    monkeypatch.setattr(
+        rare_inference,
+        "infer_rare_cancer_marker_hypotheses_from_rna",
+        lambda _frame, _analysis: [],
+    )
+
+    observed = {}
+
+    def fake_decompose(_frame, **kwargs):
+        observed["top_k"] = kwargs["top_k"]
+        observed["candidate_codes"] = list(kwargs["cancer_types"])
+        return list(range(40))
+
+    def fake_residual(results, **_kwargs):
+        observed["realizations_seen"] = len(results)
+        return {
+            "status": "candidate",
+            "candidate_code": "DLBC",
+            "panel_candidate_code": "DLBC",
+            "current_code": "SARC",
+        }
+
+    monkeypatch.setattr(decomposition, "decompose_sample", fake_decompose)
+    monkeypatch.setattr(
+        decomposition,
+        "decompose_identity_backgrounds",
+        lambda *_args, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        decomposition,
+        "evaluate_residual_identity",
+        fake_residual,
+    )
+
+    residual_calls = []
+
+    def fake_select(_frame, _analysis, **kwargs):
+        if kwargs.get("residual_identity_evidence"):
+            residual_calls.append(kwargs["residual_identity_evidence"])
+        return {
+            "selected": {
+                "cancer_type": "SARC",
+                "selected_by": "fused_evidence",
+            }
+        }
+
+    monkeypatch.setattr(
+        cancer_type_evidence,
+        "select_report_scope_from_evidence",
+        fake_select,
+    )
+
+    _trace, summary = calib._classify_one(
+        pd.DataFrame(),
+        include_residual_identity=True,
+    )
+
+    assert observed["top_k"] is None
+    assert observed["candidate_codes"] == [
+        "SARC",
+        "DLBC",
+        "BRCA",
+        "PRAD",
+        "ACC",
+    ]
+    assert observed["realizations_seen"] == 40
+    assert residual_calls[0]["adjudication_eligible"] is False
+    assert residual_calls[0]["decomposition_sample_mode"] == "solid"
+    assert residual_calls[0]["candidate_sample_mode"] == "heme"
+    assert summary["consolidated_cancer_type"] == "SARC"
+
+
+def test_nonresidual_calibration_keeps_production_composition_evidence(
+    monkeypatch,
+):
+    """Disabling residual analysis must not change upstream cancer evidence."""
+    import trufflepig.cancer_type_evidence as cancer_type_evidence
+    import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.rare_inference as rare_inference
+    import trufflepig.tumor_purity as tumor_purity
+
+    tissue_signal = object()
+    observed = {}
+    trace = [
+        {"code": "BLCA", "support_fraction_of_top": 1.0},
+        {"code": "KIRP", "support_fraction_of_top": 0.8},
+    ]
+    monkeypatch.setattr(
+        healthy_vs_tumor,
+        "assess_healthy_vs_tumor",
+        lambda _frame: tissue_signal,
+    )
+
+    def fake_analyze(_frame, *, tissue_signal=None):
+        observed["analyze_tissue_signal"] = tissue_signal
+        return {"candidate_trace": trace}
+
+    monkeypatch.setattr(tumor_purity, "analyze_sample", fake_analyze)
+    monkeypatch.setattr(
+        rare_inference,
+        "infer_rare_cancer_marker_hypotheses_from_rna",
+        lambda _frame, _analysis: [],
+    )
+
+    def fake_select(_frame, analysis, **_kwargs):
+        observed["selected_analysis"] = analysis
+        return {
+            "selected": {
+                "cancer_type": "BLCA",
+                "selected_by": "coarse_composition_reference",
+            }
+        }
+
+    monkeypatch.setattr(
+        cancer_type_evidence,
+        "select_report_scope_from_evidence",
+        fake_select,
+    )
+
+    returned_trace, summary = calib._classify_one(
+        pd.DataFrame(),
+        include_residual_identity=False,
+    )
+
+    assert returned_trace == trace
+    assert observed["analyze_tissue_signal"] is tissue_signal
+    assert observed["selected_analysis"]["healthy_vs_tumor"] is tissue_signal
+    assert summary["consolidated_cancer_type"] == "BLCA"

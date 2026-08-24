@@ -1300,14 +1300,13 @@ def cancer_expression(cancer_type, genes=None) -> pd.DataFrame:
     """Expression for a single cancer type as a simple gene-level DataFrame.
 
     Columns: ``Ensembl_Gene_ID``, ``Symbol``, ``expression``
-    (housekeeping-normalized, technical-RNA-normalized).
+    (clean TPM, technical-RNA-normalized).
     """
     from trufflepig.cancer_ontology import resolve_cancer_type
 
     code = resolve_cancer_type(cancer_type)
     df = pan_cancer_expression(
         genes=genes,
-        normalize="housekeeping",
         technical_rna_normalize=True,
     )
     col = f"{code}_TPM"
@@ -1323,7 +1322,7 @@ def cancer_enriched_genes(
     from trufflepig.cancer_ontology import resolve_cancer_type
 
     code = resolve_cancer_type(cancer_type)
-    df = pan_cancer_expression(normalize="housekeeping", technical_rna_normalize=True)
+    df = pan_cancer_expression(technical_rna_normalize=True)
     target_col = f"{code}_TPM"
     if target_col not in df.columns:
         raise ValueError(

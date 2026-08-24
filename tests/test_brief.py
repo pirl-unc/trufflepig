@@ -8,6 +8,7 @@ from trufflepig.brief import (
     build_summary,
     biomarker_expression_is_not_eligibility,
     _format_therapy_bullet,
+    _empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _shortlist_omission_note,
@@ -30,6 +31,25 @@ def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
             },
         }
     }
+
+
+def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
+    targets = pd.DataFrame([{"symbol": "CDK4", "agent": "palbociclib"}])
+    ranges = pd.DataFrame(
+        [
+            {
+                "symbol": "CDK4",
+                "observed_tpm": 63.0,
+                "attr_tumor_tpm": 53.0,
+                "attr_tumor_fraction": 0.84,
+            }
+        ]
+    )
+
+    message = _empty_therapy_shortlist_message(targets, ranges)
+
+    assert "did not meet the shortlist's" in message
+    assert "non-tumor-supported" not in message
 
 
 def test_subtype_line_suppressed_when_panel_blocked_against_call():
@@ -64,6 +84,55 @@ def test_lineage_panel_evidence_marks_promoted_unadopted_label_as_competing():
     line = _lineage_panel_evidence_line(analysis, "ADCC") or ""
     assert "competing BRCA lineage signal" in line
     assert "did not override the ADCC call" in line
+
+
+def test_lineage_panel_evidence_distinguishes_tumor_residual_from_host():
+    analysis = _lineage_panel_evidence("BLCA_LUMINAL", promoted=True, code="BLCA")
+    analysis["lineage_panel_evidence"]["decomposition_attribution"] = {
+        "status": "tumor_residual",
+        "evaluated_marker_count": 7,
+        "tumor_dominant_count": 7,
+    }
+
+    line = _lineage_panel_evidence_line(analysis, "BLCA") or ""
+
+    assert "supports the BLCA call" in line
+    assert "7/7 positive markers" in line
+    assert "tumor residual rather than modeled host/TME background" in line
+
+
+def test_lineage_panel_explains_background_resolved_low_marker_violation():
+    analysis = _lineage_panel_evidence(
+        "CRC",
+        blockers=["top panel is not a complete positive/negative-marker program"],
+    )
+    analysis["lineage_panel_evidence"].update(
+        {
+            "top_rationale": (
+                "6/6 required markers in cohort range; "
+                "low-marker violations: DES=6039>10"
+            ),
+            "decomposition_attribution": {
+                "status": "tumor_residual",
+                "evaluated_marker_count": 6,
+                "tumor_dominant_count": 6,
+            },
+        }
+    )
+    analysis["residual_identity_evidence"] = {
+        "status": "corroborated",
+        "candidate_code": "CRC",
+        "source_resolved_identity": True,
+        "background_attributed_expected_low_genes": ["DES"],
+    }
+
+    line = _lineage_panel_evidence_line(analysis, "CRC") or ""
+
+    assert "bulk panel remains incomplete because of DES" in line
+    assert "normal structural tissue can explain the expected-low violation" in line
+    assert "complete panel and ontology programs agree" in line
+    assert "not a claim that every measured DES transcript is non-tumor" in line
+    assert "noted, did not change the call" not in line
 
 
 def _make_analysis(
@@ -1691,7 +1760,7 @@ def test_brief_no_internal_jargon():
         "Spearman",
         "x1.10",
         "×1.10",
-        "tme_fold_med",
+        "tme_tpm_med",
         "_combine_purity_estimates",
         "overexplained_tpm",
         "sig_stability",

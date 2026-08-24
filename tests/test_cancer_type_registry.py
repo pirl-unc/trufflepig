@@ -217,11 +217,11 @@ def test_source_cohort_values_are_canonical():
     """source_cohort should only take values from the canonical cohort
     vocabulary — rejects typos like 'TCGA_BRCA' vs 'TREEHOUSE_POLYA_25_01'.
 
-    The canonical vocabulary is pirlygenes' cohort registry, which covers both
-    expression-reference shards and computed/curated cohorts without loading
-    the multi-gigabyte expression summary. A handful of
-    non-expression values (curated literature, the pan-cancer Xena matrix,
-    blank) are allowed explicitly.
+    The canonical vocabulary is the union of pirlygenes' cohort registry and
+    oncoref's compact selected-source registry. Together they cover expression
+    shards and computed/curated cohorts without loading the multi-gigabyte
+    expression summary. A handful of non-expression values (curated
+    literature, the pan-cancer Xena matrix, blank) are allowed explicitly.
 
     A registry cohort may also be a *stratification* of a canonical base —
     ``<base>_<stratification>`` (e.g. ``TREEHOUSE_POLYA_25_01`` →
@@ -236,6 +236,11 @@ def test_source_cohort_values_are_canonical():
     df = cancer_type_registry()
     canonical = set(
         cohort_registry_df()["cohort_id"].fillna("").astype(str)
+    )
+    from oncoref.source_matrices import registry as source_matrix_registry
+
+    canonical.update(
+        source_matrix_registry()["source_cohort"].fillna("").astype(str)
     )
     valid = canonical | {"", "LITERATURE_CURATED", "TCGA_XENA_TOIL"}
     canonical_bases = {c for c in canonical if c}

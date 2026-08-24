@@ -2,7 +2,7 @@
 
 """Unit tests for decomposition engine internals.
 
-Covers: _weighted_constrained_nnls, _hk_normalize, template scoring,
+Covers: _weighted_constrained_nnls, template scoring, and
 _fit_one_hypothesis lineage-panel stability threshold.
 """
 
@@ -13,7 +13,6 @@ import pytest
 from trufflepig.decomposition import panels as panel_mod
 from trufflepig.decomposition.engine import (
     DECOMPOSITION_PARAMETERS,
-    _hk_normalize,
     _weighted_constrained_nnls,
     _is_excluded_auto_marker,
 )
@@ -94,6 +93,36 @@ def test_nnls_recovers_known_mix():
     )
 
 
+def test_nnls_fit_is_invariant_to_tpm_scale():
+    """The same mixture in different linear units has the same fit quality."""
+    A = np.array(
+        [
+            [8.0, 1.0],
+            [1.0, 9.0],
+            [6.0, 2.0],
+            [2.0, 7.0],
+        ]
+    )
+    b = A @ np.array([0.65, 0.35]) + np.array([0.1, -0.1, 0.2, -0.2])
+
+    solution, residual = _weighted_constrained_nnls(
+        A,
+        b,
+        sum_to_one_weight=0.0,
+        l2_penalty=0.0,
+    )
+    scaled_solution, scaled_residual = _weighted_constrained_nnls(
+        A * 10_000.0,
+        b * 10_000.0,
+        sum_to_one_weight=0.0,
+        l2_penalty=0.0,
+    )
+
+    assert scaled_solution == pytest.approx(solution)
+    assert scaled_residual == pytest.approx(residual)
+    assert 0.0 < residual < 1.0
+
+
 def test_nnls_empty_matrix():
     """Empty matrix should return empty solution with inf residual."""
     A = np.zeros((0, 3))
@@ -159,35 +188,6 @@ def test_nnls_nonnegative():
 
 
 # ── _hk_normalize ────────────────────────────────────────────────────────
-
-
-def test_hk_normalize_basic():
-    """Normalizing by HK median scales values appropriately."""
-    values = np.array([10.0, 20.0, 30.0, 40.0])
-    genes = ["GENE_A", "HK1", "HK2", "GENE_B"]
-    hk_set = {"HK1", "HK2"}
-    normalized, hk_med = _hk_normalize(values, genes, hk_set)
-    assert hk_med == pytest.approx(25.0)  # median of 20, 30
-    assert normalized[0] == pytest.approx(10.0 / 25.0)
-
-
-def test_hk_normalize_no_hk_genes_fallback():
-    """When no HK genes present, hk_med defaults to 1.0."""
-    values = np.array([5.0, 10.0])
-    genes = ["GENE_A", "GENE_B"]
-    hk_set = {"HK1", "HK2"}  # none match
-    normalized, hk_med = _hk_normalize(values, genes, hk_set)
-    assert hk_med == 1.0
-    assert np.array_equal(normalized, values)
-
-
-def test_hk_normalize_all_zero_hk():
-    """When all HK genes are zero, hk_med defaults to 1.0."""
-    values = np.array([5.0, 0.0, 0.0])
-    genes = ["GENE_A", "HK1", "HK2"]
-    hk_set = {"HK1", "HK2"}
-    normalized, hk_med = _hk_normalize(values, genes, hk_set)
-    assert hk_med == 1.0
 
 
 # ── _is_excluded_auto_marker ─────────────────────────────────────────────

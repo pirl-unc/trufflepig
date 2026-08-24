@@ -4,6 +4,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+from trufflepig.main import _render_therapy_pathway_state
 from trufflepig.plot_therapy import plot_therapy_pathway_state
 from trufflepig.therapy_response import TherapyAxisScore
 
@@ -35,6 +36,58 @@ def _crpc_scores():
             down_genes_measured=3,
         ),
     }
+
+
+def test_report_renderer_refreshes_path_and_removes_stale_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    """A post-decomposition reclassification cannot retain the old figure."""
+
+    import trufflepig.plot_therapy as plot_therapy
+
+    prefix = str(tmp_path / "case")
+    output = tmp_path / "case-therapy-pathway-state.png"
+    output.write_text("old cancer")
+    monkeypatch.setattr(
+        plot_therapy,
+        "plot_therapy_pathway_state",
+        lambda **_kwargs: None,
+    )
+
+    missing = _render_therapy_pathway_state(
+        enabled=True,
+        prefix=prefix,
+        therapy_scores={},
+        cancer_code="CRC",
+        disease_state_caption="",
+        output_dpi=100,
+    )
+
+    assert missing is None
+    assert not output.exists()
+
+    def render_new(**kwargs):
+        assert kwargs["save_to_filename"] == str(output)
+        output.write_text("new cancer")
+        return object()
+
+    monkeypatch.setattr(
+        plot_therapy,
+        "plot_therapy_pathway_state",
+        render_new,
+    )
+    refreshed = _render_therapy_pathway_state(
+        enabled=True,
+        prefix=prefix,
+        therapy_scores=_crpc_scores(),
+        cancer_code="PRAD",
+        disease_state_caption="current",
+        output_dpi=100,
+    )
+
+    assert refreshed == str(output)
+    assert output.read_text() == "new cancer"
 
 
 def test_renders_dumbbell_and_caption(tmp_path):

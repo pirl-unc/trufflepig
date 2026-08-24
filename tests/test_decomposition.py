@@ -2,7 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from trufflepig.decomposition import decompose_sample, infer_sample_mode
+from trufflepig.decomposition import (
+    decompose_identity_backgrounds,
+    decompose_sample,
+    evaluate_residual_identity,
+    infer_sample_mode,
+)
 from trufflepig.decomposition.signature import _load_hpa_cell_types
 from trufflepig.decomposition.templates import get_template_components
 from trufflepig.reference import pan_cancer_expression
@@ -142,6 +147,8 @@ def test_tcga_prad_uses_external_purity_anchor():
 
     assert 0.5 < result.purity < 0.85
     assert result.fractions["tumor"] == result.purity
+    assert np.isfinite(result.reconstruction_error)
+    assert result.score > 0.05
 
 
 def test_tcga_coad_primary_beats_lymph_node_template():
@@ -241,6 +248,11 @@ def test_infer_sample_mode_prefers_best_heme_candidate():
     assert mode == "heme"
 
 
+@pytest.mark.parametrize("code", ["CML", "FL", "B_ALL"])
+def test_infer_sample_mode_uses_ontology_for_non_tcga_heme_entities(code):
+    assert infer_sample_mode(cancer_types=[code], sample_mode="auto") == "heme"
+
+
 def test_explicit_pure_mode_uses_pure_population_template():
     """Explicit pure mode should bypass bulk-mixture templates."""
     hpa = _load_hpa_cell_types()
@@ -292,6 +304,22 @@ def test_met_site_override_limits_to_requested_template():
 
     assert results
     assert all(row.template == "met_liver" for row in results)
+
+
+def test_unbounded_decomposition_returns_every_usable_realization():
+    """Identity adjudication can inspect the complete structural beam."""
+
+    templates = ["solid_primary", "met_bone", "met_liver"]
+    results = decompose_sample(
+        _tcga_sample("PRAD"),
+        cancer_types=["PRAD"],
+        templates=templates,
+        sample_mode="solid",
+        top_k=None,
+    )
+
+    assert {row.template for row in results} == set(templates)
+    assert len(results) == len(templates)
 
 
 def test_synthetic_coad_colon_mix_tracks_known_purity():
@@ -360,6 +388,54 @@ def test_synthetic_coad_liver_mix_uses_liver_background():
     assert results[0].cancer_type in {"COAD", "READ"}
     assert results[0].fractions["hepatocyte"] > 0.5
     assert results[0].template_extra_fraction > 0.5
+
+
+def test_synthetic_coad_liver_residual_retains_colorectal_identity():
+    """Residual programs distinguish metastatic tumor from liver host."""
+    from trufflepig.decomposition import evaluate_residual_identity
+
+    df = _mix_samples(
+        [
+            (0.3, _tcga_sample("COAD")),
+            (0.7, _normal_tissue_sample("liver")),
+        ]
+    )
+    candidate_codes = ["COAD", "READ", "LIHC", "CHOL"]
+    results = decompose_sample(
+        df,
+        cancer_types=candidate_codes,
+        templates=["met_liver"],
+        purity_override=0.3,
+        top_k=len(candidate_codes),
+    )
+
+    evidence = evaluate_residual_identity(
+        results,
+        candidate_codes=candidate_codes,
+        current_code="COAD",
+    )
+
+    assert evidence["status"] == "corroborated", [
+        {
+            "candidate": model["candidate_code"],
+            "panel": model["panel_candidate"],
+            "ontology": model["ontology_candidate"],
+            "rows": [
+                {
+                    "code": row["decomposition_cancer_type"],
+                    "panel": row["panel_candidate"],
+                    "ontology": row["ontology_candidate"],
+                    "complete": row["ontology_complete_codes"],
+                    "programs": row["ontology_programs"],
+                }
+                for row in model["rows"]
+            ],
+        }
+        for model in evidence["background_models"]
+    ]
+    assert evidence["candidate_code"] == "CRC"
+    assert evidence["models_evaluated"] == 1
+    assert evidence["realizations_evaluated"] == len(candidate_codes)
 
 
 def test_met_bone_requires_hard_bone_evidence_not_generic_ecm():
@@ -501,6 +577,10 @@ def test_synthetic_prad_smooth_muscle_mix_keeps_prad_and_primary_template():
     assert sarc is None or sarc.get("compartment_in_set") is False
     assert results[0].template == "solid_primary"
     assert results[0].score > results[1].score
+    unsupported_soft_tissue = next(
+        row for row in results if row.template == "met_soft_tissue"
+    )
+    assert "smooth_muscle" not in unsupported_soft_tissue.fractions
 
 
 def test_synthetic_sarc_smooth_muscle_mix_surfaces_mesenchymal_family():
@@ -534,6 +614,133 @@ def test_synthetic_stromal_heavy_crc_ranker_keeps_crc_near_top():
     candidates = rank_cancer_type_candidates(df, top_k=6)
     top_codes = {row["code"] for row in candidates[:2]}
     assert top_codes & {"COAD", "READ"}
+
+
+def test_soft_tissue_decomposition_separates_crc_from_smooth_muscle_host():
+    """Tumor identity should be scored after the declared host is subtracted."""
+
+    df = _mix_samples(
+        [
+            (0.3, _tcga_sample("COAD")),
+            (0.7, _normal_tissue_sample("smooth_muscle")),
+        ]
+    )
+    result = decompose_sample(
+        df,
+        cancer_types=["COAD"],
+        templates=["met_soft_tissue"],
+        site_hint="soft_tissue",
+        top_k=1,
+    )[0]
+
+    attribution = result.gene_attribution.set_index("symbol")
+    assert "smooth_muscle" in result.fractions
+    assert result.component_reference_tissues["smooth_muscle"] == "smooth_muscle"
+    assert result.fractions["smooth_muscle"] > result.fractions["tumor"]
+    assert attribution.loc["DES", "smooth_muscle"] > attribution.loc["DES", "tumor"]
+    for marker in ("CDX2", "SATB2", "CDH17", "VIL1"):
+        assert attribution.loc[marker, "tumor"] > attribution.loc[
+            marker, "smooth_muscle"
+        ]
+
+    identity = evaluate_residual_identity(
+        [result],
+        candidate_codes=["COAD", "SARC_PLEOLPS"],
+        current_code="SARC_PLEOLPS",
+    )
+    assert identity["status"] == "candidate"
+    assert identity["candidate_code"] == "CRC"
+
+
+def test_candidate_independent_model_resolves_crc_from_muscularis():
+    """A normal-tissue screen, not a tentative tumor label, supplies the host.
+
+    DES remains a contradiction in bulk but becomes attributable to purified
+    smooth muscle, while the complete CRC positive/negative program remains in
+    the residual.
+    """
+
+    df = _mix_samples(
+        [
+            (0.4, _tcga_sample("COAD")),
+            (0.6, _normal_tissue_sample("smooth_muscle")),
+        ]
+    )
+    identity_models = decompose_identity_backgrounds(df, sample_mode="solid")
+
+    assert identity_models
+    assert all(row.model_role == "identity_background" for row in identity_models)
+    structural = next(
+        row
+        for row in identity_models
+        if row.template == "identity_structural_background"
+    )
+    assert "smooth_muscle_identity" in structural.fractions
+
+    evidence = evaluate_residual_identity(
+        identity_models,
+        candidate_codes=["COAD", "READ", "SARC_DDLPS"],
+        current_code="SARC_DDLPS",
+    )
+
+    assert evidence["status"] == "candidate"
+    assert evidence["candidate_code"] == "CRC"
+    assert evidence["panel_candidate_code"] == "CRC"
+    assert evidence["ontology_candidate_code"] == "CRC"
+    assert evidence["source_resolved_identity"] is True
+    assert "DES" in evidence["background_attributed_expected_low_genes"]
+
+
+def test_hollow_organ_identity_model_includes_mucosa_and_muscularis():
+    """Composition supplies both layers without consulting a cancer code."""
+
+    df = _mix_samples(
+        [
+            (0.3, _tcga_sample("COAD")),
+            (0.4, _normal_tissue_sample("colon")),
+            (0.3, _normal_tissue_sample("smooth_muscle")),
+        ]
+    )
+    identity_models = decompose_identity_backgrounds(df, sample_mode="solid")
+    structural = next(
+        row
+        for row in identity_models
+        if row.template == "identity_structural_background"
+    )
+
+    assert "smooth_muscle_identity" in structural.fractions
+    assert any(
+        component.startswith("matched_normal_")
+        for component in structural.fractions
+    )
+
+
+def test_identity_background_cannot_manufacture_crc_without_crc_program():
+    """Smooth muscle subtraction alone is not affirmative CRC evidence."""
+
+    identity_models = decompose_identity_backgrounds(
+        _normal_tissue_sample("smooth_muscle"),
+        sample_mode="solid",
+    )
+    evidence = evaluate_residual_identity(
+        identity_models,
+        candidate_codes=["COAD", "READ", "SARC_LMS"],
+        current_code="SARC_LMS",
+    )
+
+    assert evidence.get("candidate_code") != "CRC"
+    assert evidence.get("source_resolved_identity") is not True
+
+
+def test_identity_background_abstains_without_gene_identity_columns(caplog):
+    incomplete = pd.DataFrame({"value": [1.0]})
+
+    with caplog.at_level("WARNING"):
+        result = decompose_identity_backgrounds(incomplete, sample_mode="solid")
+
+    assert result == []
+    assert "Residual-identity decomposition skipped" in caplog.text
+    assert "gene identity columns are unavailable" in caplog.text
 
 
 def test_synthetic_low_purity_crc_purity_matches_expected_scale():
@@ -996,7 +1203,7 @@ def test_auto_marker_selection_excludes_mhc_ii_and_ribosomal(monkeypatch):
     fit_rows, _weights, marker_df = _select_marker_rows(
         genes=genes,
         symbols=symbols,
-        sig_matrix_hk=mat,
+        signature_tpm=mat,
         comp_names=["T_cell", "B_cell", "myeloid"],
     )
 

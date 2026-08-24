@@ -3,6 +3,7 @@ import pytest
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.tumor_purity import (
     _resolve_purity_reference,
+    _select_tumor_specific_genes,
     _use_estimate_component,
 )
 
@@ -48,3 +49,19 @@ def test_parent_pan_cancer_fallback_keeps_estimate_component():
     assert not _use_estimate_component("subtype_deconvolved", stromal_genes)
     assert not _use_estimate_component("observed_bulk_reference", stromal_genes)
     assert not _use_estimate_component("parent_pan_cancer", [])
+
+
+def test_crc_parent_pools_coad_and_read_without_choosing_a_leaf():
+    ref_by_sym = _reference_by_symbol()
+
+    context = _resolve_purity_reference("CRC", ref_by_sym)
+
+    assert context["reference_cancer_code"] == "CRC"
+    assert context["reference_expression_source"] == "member_union_pan_cancer"
+    assert context["reference_member_codes"] == ("COAD", "READ")
+    assert context["reference_purity"] == pytest.approx(0.595)
+    symbol = "KRT20"
+    expected = ref_by_sym.loc[symbol, ["COAD_TPM", "READ_TPM"]].median()
+    assert context["ref_expr"][symbol] == pytest.approx(expected)
+    assert _select_tumor_specific_genes("CRC", n=30)
+    assert _use_estimate_component(context["reference_expression_source"], ["COL1A1"])

@@ -1,5 +1,18 @@
 # RNA-seq cancer-call information flow and redesign plan
 
+## At a glance
+
+Trufflepig should make one staged, ancestry-aware cancer call from independent
+evidence groups, finalize it once, and use that same scope for decomposition and
+reporting. Whole-profile, marker, exact-reference, and composition evidence are
+integrated at the entity level; molecular and expression subtypes remain
+separate axes until their parent entity is established.
+
+This document combines current implementation notes, historical validation
+snapshots, failure analyses, and a target architecture. Read the implementation
+status for shipped behavior and treat every dated accuracy table as an
+experiment record rather than a release guarantee.
+
 This note summarizes how trufflepig currently determines cancer type,
 subtype, molecular-expression context, purity, and decomposition from
 RNA-seq, then proposes a simpler confluent redesign.
@@ -26,9 +39,11 @@ for a full replacement classifier:
   better explained by a dominant normal tissue. This closes the COAD+liver
   issue by treating LIHC/liver as background unless LIHC-distinctive tumor
   markers corroborate it.
-- Decomposition met-site scoring now lets strong host-site evidence plus a
-  large fitted site-specific component overcome generic solid-primary residual
-  fit. The applied boost is recorded in `site_evidence`.
+- Decomposition keeps tumor identity and host modeling separate. For the
+  leading tumor hypothesis, a supported metastatic template is preferred when
+  its fitted site-specific component exceeds tumor and its tissue evidence
+  exceeds the proposed origin. Host fit cannot promote a weaker cancer
+  hypothesis; the structural evidence is recorded in `site_evidence`.
 - Centroid report-scope corroboration is marker-gated for same-lineage subtype
   swaps. It remains useful for broad/selectable rare entities, but it cannot
   slide SARC_RMS_ERMS to a sibling sarcoma subtype on a small whole-profile
@@ -55,9 +70,14 @@ for a full replacement classifier:
   itself.
 - The fused evidence layer now carries flat learned predictions plus staged
   learned compartment/family/entity votes as first-class decision features.
-  A strong learned entity call must agree with its entity label, hierarchy
-  support, flat-lineage support, and margin before it can overrule weak or
-  blocked local-reference markers.
+  The calibrated hierarchy and quantifier-robust flat classifier form one
+  learned full-profile axis. A candidate can change the report entity only when
+  it wins a true majority of available evidence groups with at least two
+  non-learned groups; hard molecular blockers remain disqualifying.
+- Entity consensus evaluates the full learned candidate beam, not only the
+  hierarchy top-1. Valid expression-subtype reference support rolls up to its
+  parent entity for that comparison while retaining the child code in audit
+  fields; subtype selection remains a later decision.
 - Curated local-expression references and pan-cancer marker programs retain
   positive marker evidence in the trace, but expected-low conflicts make them
   contextual unless independent learned, centroid, fusion, lineage-panel, or
@@ -81,10 +101,14 @@ for a full replacement classifier:
 - Nonselecting ranker fallbacks are rendered as "Fallback RNA context" in the
   evidence appendix, not as an independently selected report label.
 
-## Validation status
+## Historical validation snapshot — 2026-07-05
 
-Validation through 2026-07-05 shows a large improvement, including removal of
-the severe cross-lineage failures that motivated this refactor:
+This snapshot records the evidence used for the refactor at that date. It is not
+a current-release guarantee; rerun the blind local corpus and packaged
+evaluation harness after decision-logic or dependency changes.
+
+At the time, validation showed a large improvement, including removal of the
+severe cross-lineage failures that motivated this refactor:
 
 - Focused selector/report regression subset:
   `109 passed` (`./test.sh tests/test_cancer_type_evidence.py -q`).
@@ -191,25 +215,60 @@ against curated cancer-type signature panels. For each signature gene, it
 computes:
 
 ```text
-score_gene = cohort_percentile_HK_reference * within_sample_percentile
+score_gene = within_sample_percentile(clean TPM)
 ```
 
-The cohort-percentile leg ranks the sample's HK-normalized expression against
-the full approximately 170-column reference set: broad cancer cohorts plus
-HPA normal tissues. The within-sample percentile leg makes the signal more
-robust to dilution. The cancer-type score is the mean over the panel.
+Cross-cohort clean-TPM contrasts determine which genes belong to each panel;
+sample scoring then uses no cohort-abundance comparison and asks whether those
+cancer-specific genes dominate this transcriptome. Ranks are computed over a
+fixed reference gene universe so annotation-only zero rows cannot move the
+score. The cancer-type score is the panel mean.
+This separation prevents a zero-heavy cohort distribution or a housekeeping
+denominator from manufacturing sample evidence and is robust to proportional
+dilution.
 
 This is now explicitly the `pan_cancer_signature_ranker`, not an authoritative
-`primary_expression_match`. Its HK cohort-percentile basis is legacy and useful
-as candidate-generation/corroborating evidence, but it cannot select a report
-label by itself. The A/B harness
-`scripts/eval_pan_cancer_signature_ranker_ab.py` compares the HK basis against
-raw clean-TPM/nTPM cohort percentiles, within-sample percentiles, the learned
-classifier, centroid Spearman, and the fused report selector.
+`primary_expression_match`, and it cannot select a report label by itself.
+Explicit raw and HK cohort bases remain available only in evaluation harnesses.
+On 592 representative samples, the isolated within-sample score essentially
+matched the former HK-combined score undiluted (0.302 versus 0.304), improved
+lineage accuracy (0.767 versus 0.764), and was more robust at 70% background
+dilution (0.257 versus 0.242). HK was therefore not unequivocally superior and
+does not justify a default-path dependency.
 
 Molecular subtype cohorts are mostly kept out of the broad candidate space so
 they do not leak into primary cancer-type routing. Separate subtype scoring
-exists for selected broad types such as BRCA, HNSC, and LUAD.
+exists for selected broad types such as BRCA, HNSC, and LUAD and uses the same
+within-sample feature space.
+
+### Normalization policy
+
+Every analysis-facing sample is first conformed to clean TPM. Decision features
+then use the representation matching the biological question:
+
+- Within-sample percentile for broad and subtype signatures.
+- Log1p(clean TPM) plus cross-cancer cohort percentile for lineage programs,
+  no-reference recall, curated lineage panels, and family panels.
+- Linear clean-TPM mass for purity and tumor/background mixture equations.
+- Whole-profile Spearman for centroid and compartment evidence.
+- Linear clean TPM for both NNLS decomposition paths. Component-specificity
+  marker weights focus the fit without changing the additive abundance basis.
+
+The decisive decomposition benchmark uses exact mixtures of two healthy
+component profiles. Clean TPM with marker-specificity weights recovers their
+fractions essentially exactly (mean absolute error 5.9e-11), versus 0.013 for
+HK and 0.081 for percentile. Earlier bulk-cancer dilution mixtures are retained
+as directional stress tests, not fraction truth, because each TCGA cancer
+profile already includes unknown normal tissue and TME. Percentile/log-cohort
+residual programs independently test tumor identity after the linear fit.
+
+The pre-normalization QC housekeeping median is separate and is not a
+housekeeping-normalized feature. It is the median housekeeping-gene abundance
+measured on input-derived linear TPM after log-scale detection and gene
+aggregation, before technical-RNA rescue and clean-TPM reference conformance.
+Together with total TPM and concentration checks, it can flag an accidental
+log scale, collapsed complexity, or implausibly low absolute RNA scale that
+later normalization could hide. It does not contribute to the cancer call.
 
 ### 4. Whole-profile centroid and compartment call
 
@@ -397,8 +456,10 @@ rewards the dominant normal liver compartment. Whole-profile centroid and
 tissue composition also prefer liver/LIHC because most RNA really is liver.
 
 The correct signal is component-aware: subtract the structured liver
-background, then score the residual tumor identity. The current pipeline does
-that too late, only after the label has already been chosen.
+background, then score the residual tumor identity. The original pipeline did
+that too late, only after the label had already been chosen. The incremental
+implementation below now permits a blocker-preserving post-decomposition
+entity refinement; the full single-DAG redesign remains future work.
 
 The existing normal-tissue tiebreaker only boosts a candidate whose primary
 normal tissue matches the sample. It does not demote a candidate whose apparent
@@ -448,6 +509,69 @@ it is validated.
   curated identity panels rather than cosine-like whole-profile similarity.
 - Fusion and direct molecular evidence: authoritative for entities where the
   alteration is defining.
+
+### Implemented incremental residual-identity path
+
+`decomposition.evaluate_residual_identity` now evaluates the plausible
+candidate/background beam without using decomposition rank, purity, or the
+upstream cancer-support score as identity evidence.
+
+For every usable tumor residual it evaluates curated expected-high and
+expected-low lineage panels plus ontology sanity programs. Candidate-specific
+fits are first grouped by structural background model. Identity evaluation
+uses the complete candidate-by-template beam; the 24-row report limit is
+applied only afterward for presentation. A residual identity is eligible only
+when every realization within each model agrees and every model agrees with
+the others. Discordant models remain explicitly `ambiguous`; same-branch
+sibling ambiguity resolves only to the deepest shared registry parent.
+
+Residual evidence is selectable only inside the biological regime that
+generated it: a solid residual cannot establish a heme diagnosis, and a heme
+residual cannot establish a solid diagnosis. Production and calibration call
+the same ontology-backed mode guard, so evaluation cannot credit a transition
+that the report pipeline would reject.
+
+The initial decomposition regime follows the adjudicated report entity rather
+than the raw ranker leader. This matters for concentrated or otherwise
+quantifier-sensitive profiles: if a complete basal-breast marker program
+resolves an artifactual heme leader to `BRCA`, decomposition starts in solid
+mode. A subtype-specific positive/negative program is evaluated at that
+subtype's resolution; it is not vetoed by a broader parent marker set that may
+represent a different sibling biology (for example, luminal markers are not
+required for a coherent basal-breast program).
+
+After adjudication, an unrelated fallback ceases to be an active analysis
+context whenever the resolved entity has its own broad reference. The old
+ranker label remains in the differential, while decomposition, purity, target
+attribution, and therapy curation stay on the resolved branch. Ancestor or
+descendant decomposition rows are named explicitly as such and do not silently
+refine the report label.
+
+The result is one independent entity-consensus axis, not a direct selector.
+An invariant residual may add one parent-level entity to the small consensus
+beam. Cross-branch eligibility requires either a matching lineage panel or an
+ontology result whose identity is invariant across every usable background
+model and candidate realization. It must then win a true majority of the
+available independent axes; a residual-led candidate needs three non-learned
+groups. Blocked contrast/reference evidence and persistent molecular/registry
+vetoes remain unavailable. Because residual ontology programs reuse curated
+marker genes, the bulk marker-program axis abstains whenever the residual axis
+is active rather than counting the same program twice. Subtype/status
+resolution still happens after entity coherence.
+
+Sibling leaves with identical positive/negative programs are rolled up to
+their deepest shared registry parent. Thus the ASY residual supports `CRC`,
+not an arbitrary `COAD` or `READ` leaf. The soft-tissue template fits the
+smooth-muscle host it declares only when soft-tissue specimen context is
+independently available. This lets ACTG2/DES-rich host signal be modeled
+without allowing an unconstrained metastatic template to absorb a
+smooth-muscle-rich primary.
+
+On the 160 public exemplars this changed exactly one headline:
+`TCGA-OR-A5L5-01` moved from `SARC_DDLPS` to its expected `ACC`. Compatible
+accuracy increased from 134/160 to 135/160 with no regressions. Across the
+beam, 64 residual results corroborated the current entity, 15 nominated an
+alternative for consensus, and 81 abstained as ambiguous.
 
 ## Required design clarifications
 

@@ -20,6 +20,22 @@ import pytest
 import trufflepig.reference as gsc
 
 
+def _reject_legacy_full_summary_load(monkeypatch, oncoref_expression, reject):
+    """Guard the legacy multi-GB union loader when that dependency version has it.
+
+    Newer oncoref releases read bounded per-source shards and no longer expose
+    ``_reference_summary_frame``.  In that case there is no full-frame helper
+    to guard, and the public result assertions below remain the compatibility
+    contract.
+    """
+    if hasattr(oncoref_expression, "_reference_summary_frame"):
+        monkeypatch.setattr(
+            oncoref_expression,
+            "_reference_summary_frame",
+            reject,
+        )
+
+
 def test_pan_cancer_expression_renormalizes_to_million_by_default():
     """Trufflepig default: every value column should sum to ~1e6 so the
     analysis pipeline can compare user-sample TPM to cohort columns on
@@ -488,9 +504,9 @@ def test_cancer_reference_manifest_uses_loader_identity_and_metadata_counts(
         "cancer_reference_expression_availability",
         compact_availability,
     )
-    monkeypatch.setattr(
+    _reject_legacy_full_summary_load(
+        monkeypatch,
         oncoref_expression,
-        "_reference_summary_frame",
         reject_heavy_path,
     )
     monkeypatch.setattr(accessors, "_full_canonical_views", reject_heavy_path)
@@ -883,9 +899,9 @@ def test_cancer_reference_manifest_failure_uses_registry_without_summary(
         "cancer_reference_expression_availability",
         reject_heavy_path,
     )
-    monkeypatch.setattr(
+    _reject_legacy_full_summary_load(
+        monkeypatch,
         oncoref_expression,
-        "_reference_summary_frame",
         reject_heavy_path,
     )
     monkeypatch.setattr(
@@ -1041,9 +1057,9 @@ def test_real_cancer_reference_expression_exposes_raw_and_clean_modes(monkeypatc
     def reject_summary(*args, **kwargs):
         raise AssertionError("summary expression frame was loaded")
 
-    monkeypatch.setattr(
+    _reject_legacy_full_summary_load(
+        monkeypatch,
         oncoref_expression,
-        "_reference_summary_frame",
         reject_summary,
     )
     # Exercise the compatibility aliases as well as every distinct value space.
@@ -1174,9 +1190,9 @@ def test_real_raw_qc_preserves_source_cohorts_and_wide_selects_richest(monkeypat
     """Long QC stays source-specific; source-less wide output is deterministic."""
     import oncoref.expression as oncoref_expression
 
-    monkeypatch.setattr(
+    _reject_legacy_full_summary_load(
+        monkeypatch,
         oncoref_expression,
-        "_reference_summary_frame",
         lambda *args, **kwargs: (_ for _ in ()).throw(
             AssertionError("summary expression frame was loaded")
         ),
@@ -1233,9 +1249,9 @@ def test_real_cancer_reference_manifest_matches_loader_availability(monkeypatch)
     )
 
     gsc._cancer_reference_manifest_cached.cache_clear()
-    monkeypatch.setattr(
+    _reject_legacy_full_summary_load(
+        monkeypatch,
         oncoref_expression,
-        "_reference_summary_frame",
         reject_summary,
     )
     try:
@@ -1295,7 +1311,6 @@ def test_cancer_expression_uses_trufflepig_reference_surface(monkeypatch):
     assert calls == [
         {
             "genes": ["KLK3"],
-            "normalize": "housekeeping",
             "technical_rna_normalize": True,
         }
     ]
@@ -1310,7 +1325,6 @@ def test_cancer_enriched_genes_preserves_legacy_columns(monkeypatch):
 
     def fake_pan_cancer_expression(**kwargs):
         assert kwargs == {
-            "normalize": "housekeeping",
             "technical_rna_normalize": True,
         }
         return pd.DataFrame(

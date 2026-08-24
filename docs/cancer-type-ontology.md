@@ -1,5 +1,16 @@
 # Cancer-type reasoning ontology — design + inference ledger
 
+## At a glance
+
+The ontology tells the selector which labels are ancestors, siblings, entities,
+and orthogonal molecular or expression states. It lets the report stop at a
+defensible parent when sibling evidence conflicts and prevents a status child
+from masquerading as an independently established cancer entity.
+
+This is a design and experiment ledger. Counts and accuracy statements are
+dated snapshots; the canonical current flow is
+[Cancer-call decision workflow](./CANCER_CALL_DECISION_FLOW.md).
+
 `trufflepig/cancer_type_ontology.py` is an **interpretable reasoning layer** over
 the production signature engine
 (`trufflepig.tumor_purity.rank_cancer_type_candidates`). It refines a sample's
@@ -7,13 +18,14 @@ cancer-type call only as far as the evidence supports, and otherwise reports the
 near-tied neighbours as a candidate set (e.g. *COAD or READ*).
 
 This document is the **inference ledger**: the reasoning each decision is built
-from, and the running ground-truth check, so we can see whether changes drift
-relative to the (small) set of samples we actually know the answer for.
+from, plus dated ground-truth checkpoints that show how earlier versions
+behaved. Those checkpoints are historical evidence, not current release
+guarantees.
 
 The engine this layer sits on now runs a **hierarchical compartment→leaf** call:
-stage 1 pins the histogenesis compartment (15/15 on the local truth set) and
-restricts the leaves stage 2 considers. That architecture and its stage-2 bake-off
-are documented in
+stage 1 estimates the histogenesis compartment and restricts the leaves stage 2
+considers. A historical 15-sample checkpoint is documented with the
+architecture and stage-2 bake-off in
 [cancer-type-hierarchical-classifier.md](./cancer-type-hierarchical-classifier.md).
 
 ## Why a layer, not a new scorer
@@ -31,10 +43,11 @@ transcriptome is contaminated by
 
 The production engine avoids this with cross-cohort signature panels (rank the
 sample's value within the 33-cohort reference distribution), purity anchoring and
-family-factor correction. It calls **all 11 local clinical samples correctly**.
-So we *consume* its per-cohort scores rather than re-deriving lineage. The
-ontology adds the structure the flat engine lacks: exclusion gating, triggered
-organ follow-up, abstention, and a readable trace.
+family-factor correction. In the historical 11-sample checkpoint used for this
+design, it called all 11 samples correctly. That result is not a current
+release guarantee. We consume its per-cohort scores rather than re-deriving
+lineage; the ontology adds exclusion gating, triggered organ follow-up,
+abstention, and a readable trace.
 
 ## The ontology
 
@@ -65,8 +78,8 @@ histopathology.
 
 ## Coverage
 
-`ontology_path()` places **all 145** pirlygenes registry codes on the tree
-(broad lineage at minimum):
+At the time of this checkpoint, `ontology_path()` placed **all 145** pirlygenes
+registry codes on the tree (broad lineage at minimum):
 
 | broad node | # codes | notes |
 |------------|--------:|-------|
@@ -95,7 +108,7 @@ lowered), and the NE branch then competes in the walk. Validated against pirlyge
 now include the neuroendocrine family): the recall fires on **10/11** NE reps
 (SCLC, NET_PANCREAS/MIDGUT/RECTAL, NEC_LUNG_LARGECELL, NBL ±MYCN, PCPG, MTC) and
 stays silent on **22/22** new heme / sarcoma / embryonal reps (perfect
-specificity) and all 11 local clinical samples. A single dominant core granin
+specificity) and all 11 samples in that historical local checkpoint. A single dominant core granin
 (≥2.0×HK) fires on its own (catches well-differentiated NETs like NET_MIDGUT that
 present one granin); NET_LUNG is the one honest miss (that rep's NE markers are
 all <0.15×HK — atypical / low-purity).
@@ -169,7 +182,7 @@ With all three channels, the local clinical set reaches **11/11 broad and 11/11
 leaf-in-candidates** (vs 11/11 broad, 10/11 leaf for the signature-only walk) —
 the pfo002-washu stromal-SARC confound now resolves cleanly to READ.
 
-## Ground-truth ledger — 11 local clinical samples
+## Historical ground-truth ledger — 11 local clinical samples
 
 Truth labels are the curated local set (cegat = PRAD/Kat-DL, pfo004 = osteosarcoma,
 asy = CRC, pfo019 = NUT carcinoma, pfo017 = bladder ± liver met, hcc1395 = BRCA

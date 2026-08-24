@@ -1,5 +1,19 @@
 # Decomposition calibration notes
 
+## At a glance
+
+Use this document to reproduce decomposition and cancer-call calibration
+experiments, not to infer current release accuracy from old tables. The safe
+workflow is:
+
+1. run a small deterministic smoke check;
+2. run the canonical five-samples-per-cohort evaluation;
+3. compare against a named baseline; and
+4. inspect every regression before accepting aggregate improvement.
+
+The numeric results below are dated PR #41 records. Recompute them after changes
+to trufflepig, pirlygenes, oncoref, or their bundled references.
+
 ## Why this document exists
 
 PR #41 removed decomposition's `renormalize_to_million=False` opt-out
@@ -47,11 +61,11 @@ PYTHONPATH=$HOME/code/pirlygenes:$PYTHONPATH \
         --baseline-json docs/calibration-baseline.json \
         --out-json calibration-report.json
 
-# Optional: full TCGA matrix (~10k samples, multiprocessing).
+# Optional: full TCGA matrix (~10k samples). Size workers from available RAM.
 PYTHONPATH=$HOME/code/pirlygenes:$PYTHONPATH \
     python scripts/calibrate_decomposition.py \
         --use-full-tcga-matrix \
-        --workers 6 \
+        --workers 1 \
         --include-normals \
         --skip-hpa \
         --out-json calibration-full-tcga.json
@@ -78,9 +92,9 @@ The script runs five tracks (any combination):
    parquet cache under `~/.cache/trufflepig/` (~2 min, ~1.5 GB);
    subsequent invocations load in seconds. Each worker process loads
    the parquet once via `multiprocessing` initializer, so memory
-   scales as `workers × ~3 GB` rather than per-task. Use
-   `--workers N` to parallelise (recommended: `--workers 4–8` on a
-   16 GB+ machine), and `--max-tcga-samples N` to cap. Ground-truth
+   scales with the number of workers. Start with `--workers 1`; increase only
+   after measuring peak RSS and preserving an operating-system reserve.
+   Use `--max-tcga-samples N` to cap. Ground-truth
    labels come from `barcode_to_project.pkl`; sample-type suffix `01`
    is primary tumor, and `--include-normals` also evaluates `11`
    (matched normals) under a `NORMAL:` prefix so the classifier's
@@ -112,7 +126,7 @@ now don't. This is the recommended path when changing decomposition
 scoring constants — bisect bug → run with `--baseline-json` → look
 at the regression list.
 
-## Headline numbers (recorded on the PR #41 calibration pass)
+## Historical results: PR #41 calibration pass
 
 These were captured by running the script above on
 `pirlygenes==5.2.7`, `trufflepig` at the head of

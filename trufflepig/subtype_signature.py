@@ -21,9 +21,9 @@ Why this is the principled fix:
 - Subtype panels are *data-driven* (the top-N most-distinctive genes
   per subtype vs. the cross-cohort median), not curated marker lists
   that drift over time.
-- The same scoring math (HK-normalized percentile rank in the cross-
-  cohort distribution) is used for both broad and subtype panels, so
-  the scores are directly comparable.
+- The same within-sample percentile score is used for broad and subtype
+  panels, so the scores are directly comparable and invariant to the
+  sample's absolute RNA scale.
 - It composes: adding a new subtype to the registry / data file
   automatically gives that subtype a signature panel and a place in
   the ranking — no engine change needed.
@@ -169,41 +169,25 @@ def compute_subtype_signature_stats(
 
         {"subtype": ..., "score": ..., "n_genes": ..., "gene_details": [...]}
 
-    sorted by score descending. Same scoring math as
-    :func:`trufflepig.plot_embedding._compute_cancer_type_signature_stats`:
-    HK-normalized percentile rank of each panel gene's expression against
-    the cross-cohort distribution, averaged across genes.
+    sorted by score descending. The score is the mean within-sample
+    percentile rank of the panel genes, matching the default broad-signature
+    scorer. Panel *selection* already establishes cross-cohort specificity;
+    scoring therefore asks only whether those genes dominate this sample.
 
     Filter to a single ``cancer_code`` if the caller knows which cohort
     to evaluate (e.g., per-candidate scoring inside the candidate loop).
     """
-    from .plot_embedding import _sample_expression_by_symbol
-    from .tumor_purity import _cached_reference_matrices
+    from .plot_embedding import _fixed_reference_within_sample_percentiles
+    from .tumor_purity import _build_sample_tpm_by_symbol
 
     panels = subtype_signature_panels(top_n=top_n)
     if not panels:
         return {}
 
-    sample_raw_by_symbol, sample_hk_by_symbol = _sample_expression_by_symbol(
-        df_gene_expr
-    )
-    ref_matrices = _cached_reference_matrices(normalize="housekeeping")
-    ref_by_sym = ref_matrices["ref_by_sym"]
-    expr_matrix = ref_matrices["expr_matrix"]
-    # Same full ~170-cohort HK reference the broad signature uses, so broad + subtype cohort-percentiles
-    # are on one comparable footing.
-    from .plot_embedding import _full_cohort_hk_reference
-
-    full_ref = _full_cohort_hk_reference()
-    # Same COMBINED filter the broad signature uses (HK-migration #7): cross-cohort percentile x
-    # within-sample percentile — specificity + score spread from the cohort leg, purity-robustness
-    # from the within-sample leg. Within-sample percentile computed once.
-    import pandas as _pd
-
-    within_pct_by_symbol = (
-        _pd.Series(sample_raw_by_symbol, dtype=float).rank(pct=True, method="average").to_dict()
-        if sample_raw_by_symbol
-        else {}
+    sample_raw_by_symbol = _build_sample_tpm_by_symbol(df_gene_expr)
+    within_pct_by_symbol = _fixed_reference_within_sample_percentiles(
+        sample_raw_by_symbol,
+        panels.values(),
     )
 
     results: dict[str, list[dict]] = {}
@@ -213,34 +197,17 @@ def compute_subtype_signature_stats(
         percentiles: list[float] = []
         details: list[dict] = []
         for gene in panel:
-            sample_hk_val = float(sample_hk_by_symbol.get(gene, 0.0) or 0.0)
             sample_raw = float(sample_raw_by_symbol.get(gene, 0.0) or 0.0)
-            if full_ref is not None and gene in full_ref.index:
-                ref_vals = full_ref.loc[gene].to_numpy(float)  # ~170-cohort HK reference
-                ref_vals = ref_vals[~np.isnan(ref_vals)]
-            elif gene in ref_by_sym.index:
-                ref_vals = expr_matrix.loc[gene].values
-            else:
-                continue
-            n = len(ref_vals)
-            if n == 0:
-                continue
-            below = int(np.sum(ref_vals < sample_hk_val))
-            equal = int(np.sum(np.isclose(ref_vals, sample_hk_val, atol=1e-6)))
-            cohort_pct = float((below + 0.5 * equal) / n)
-            # cohort-pct dominant, within-pct as a [1-w, 1] factor — same weight as the broad
-            # signature so broad + subtype scores stay on one comparable scale.
-            from .plot_embedding import _WITHIN_PCT_WEIGHT as _w
-
-            within_pct = float(within_pct_by_symbol.get(gene, 0.5))
-            percentile = cohort_pct * ((1.0 - _w) + _w * within_pct)
-            percentiles.append(percentile)
+            within_pct = float(within_pct_by_symbol.get(gene, 0.0))
+            percentiles.append(within_pct)
             details.append(
                 {
                     "gene": gene,
                     "sample_raw": sample_raw,
-                    "sample_hk": sample_hk_val,
-                    "percentile": percentile,
+                    "within_sample_percentile": within_pct,
+                    # Retained as the generic score field consumed by report
+                    # serializers; its basis is explicit above.
+                    "percentile": within_pct,
                 }
             )
         if not percentiles:

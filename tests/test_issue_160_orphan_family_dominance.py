@@ -24,6 +24,7 @@ from trufflepig.tumor_purity import (
     CANCER_TO_TISSUE,
     _CANCER_FAMILY_BY_CODE,
     _apply_coarse_tcga_orphan_rescue,
+    _apply_unconstrained_identity_rescues,
     _candidate_codes_from_family_panels,
     rank_cancer_type_candidates,
 )
@@ -278,6 +279,79 @@ def test_all_tcga_codes_are_either_family_mapped_or_context_rescuable_orphans():
         )
     ]
     assert not missing_tissue
+
+
+def test_intrinsic_basal_mammary_identity_precedes_aggregate_orphan_rescue():
+    """A member-union composition hit must not hide a coherent BRCA program.
+
+    This is the HCC1395 regression shape: a squamous-family first pass exposes
+    the basal-mammary discriminator, while SGC is the top coarse aggregate.
+    Applying the aggregate first makes SGC top and prevents the intrinsic
+    discriminator from running at all.
+    """
+
+    rows = [
+        _rank_row(
+            "ESCA",
+            support_score=0.50,
+            signature_score=0.70,
+            purity_estimate=0.40,
+            lineage_support_factor=0.80,
+            family_label="ESCA_SQ",
+            family_factor=0.90,
+        ),
+        _rank_row(
+            "SGC",
+            support_score=0.48,
+            signature_score=0.70,
+            purity_estimate=0.60,
+            lineage_support_factor=0.35,
+            family_factor=0.15,
+        ),
+        _rank_row(
+            "BRCA",
+            support_score=0.20,
+            signature_score=0.45,
+            purity_estimate=0.95,
+            lineage_support_factor=0.40,
+            family_factor=0.15,
+        ),
+    ]
+    basal_mammary_tpm = {
+        "KRT5": 502.0,
+        "KRT6A": 79.0,
+        "KRT6B": 326.0,
+        "KRT14": 1111.0,
+        "ESR1": 0.14,
+        "PGR": 0.01,
+        "FOXC1": 29.0,
+        "TP63": 2.4,
+        "SOX2": 0.06,
+        "MIA": 181.0,
+        "GABRP": 6.92,
+        "UPK1A": 0.0,
+        "UPK1B": 0.0,
+        "UPK2": 0.0,
+        "UPK3A": 0.0,
+        "UPK3B": 0.0,
+    }
+    signal = _TissueSignal(
+        [("SGC_TPM", 0.86), ("ESCA_TPM", 0.84)],
+        [("salivary_gland_nTPM", 0.82)],
+    )
+
+    rescued = _apply_unconstrained_identity_rescues(
+        rows,
+        basal_mammary_tpm,
+        TUMOR_PURITY_PARAMETERS["family_scoring"],
+        tissue_signal=signal,
+    )
+
+    assert rescued[0]["code"] == "BRCA"
+    assert rescued[0]["winning_subtype"] == "BRCA_Basal"
+    assert rescued[0]["support_override"]["kind"] == (
+        "tnbc_basal_brca_misclassification"
+    )
 
 
 def test_coarse_tcga_context_rescue_allows_met_site_background_by_raw_dominance():

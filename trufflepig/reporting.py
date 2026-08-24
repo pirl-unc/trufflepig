@@ -2333,6 +2333,26 @@ def candidate_winning_subtype_for_analysis(analysis):
     winning_subtype = _clean_text(row.get("winning_subtype"))
     if not winning_subtype:
         return None
+    subtype_evidence = next(
+        (
+            evidence_row
+            for evidence_row in (
+                (analysis.get("cancer_type_evidence") or {}).get("evidence") or []
+            )
+            if _clean_text(evidence_row.get("cancer_type")) == winning_subtype
+        ),
+        None,
+    )
+    if (
+        subtype_evidence is not None
+        and subtype_evidence.get("can_select_report_label") is False
+        and subtype_evidence.get("blocking_reasons")
+    ):
+        # The integrated evidence layer explicitly rejected this child. It may
+        # remain in the differential, but reusing the pre-adjudication ranker's
+        # subtype would incorrectly restore it in the summary, reference
+        # medians, therapy scope, and decomposition routing.
+        return None
     if active_code:
         try:
             from .analyze import cancer_type_tree_relationship

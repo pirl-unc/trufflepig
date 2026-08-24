@@ -397,6 +397,31 @@ def test_context_roles_never_propagate_a_sibling_subtype():
     assert final_context.code_for("expression") == "BRCA_Basal"
 
 
+def test_context_resynchronization_drops_the_new_report_from_old_exclusions():
+    from trufflepig.main import _synchronize_cancer_type_context
+
+    analysis = {
+        "cancer_type": "READ",
+        "report_scope_cancer_type": "READ",
+        "reference_cancer_type": "READ",
+        "expression_reference_cancer_type": "READ",
+        # READ was excluded while COAD was active; after a sibling change it is
+        # the diagnosis and can no longer remain an exclusion.
+        "excluded_sibling_cancer_type_contexts": ["READ"],
+    }
+
+    context = _synchronize_cancer_type_context(
+        analysis,
+        supplied_cancer_type=None,
+    )
+
+    assert context.code_for("report") == "READ"
+    assert context.excluded_sibling_codes == ()
+    assert "excluded_sibling_cancer_type_contexts" not in analysis
+    assert analysis["cancer_type_tree_roles"]["excluded_siblings"] == []
+    assert analysis["cancer_type_context"]["excluded_sibling_codes"] == ()
+
+
 def test_rare_rna_surrogate_rules_are_data_backed_and_context_gated():
     from pirlygenes.gene_sets_cancer import rare_cancer_rna_surrogate_rules_df
 
@@ -701,6 +726,22 @@ def test_apply_sample_context_to_purity_widens_ci():
     assert analysis["purity"]["overall_upper"] == pytest.approx(0.66)
     assert analysis["purity"]["degradation_caveat"]["severity"] == "severe"
 
+    widened = dict(analysis["purity"])
+    assert apply_sample_context_to_purity(analysis, context) is False
+    assert analysis["purity"] == widened
+
+    # A downstream purity replacement or fusion can change the interval while
+    # retaining metadata. The same context must widen that new final interval
+    # exactly once.
+    analysis["purity"]["overall_lower"] = 0.45
+    analysis["purity"]["overall_upper"] = 0.55
+    assert apply_sample_context_to_purity(analysis, context) is True
+    assert analysis["purity"]["overall_lower"] == pytest.approx(0.42)
+    assert analysis["purity"]["overall_upper"] == pytest.approx(0.58)
+    re_widened = dict(analysis["purity"])
+    assert apply_sample_context_to_purity(analysis, context) is False
+    assert analysis["purity"] == re_widened
+
 
 def test_should_adopt_decomposition_purity_contract():
     ok = SimpleNamespace(
@@ -719,8 +760,20 @@ def test_should_adopt_decomposition_purity_contract():
         purity_result={"overall_estimate": 1.0},
     )
     missing = SimpleNamespace(cancer_type="COAD", warnings=[], purity_result=None)
+    crc_child = SimpleNamespace(
+        cancer_type="READ",
+        warnings=[],
+        purity_result={"overall_estimate": 0.4},
+    )
+    child_to_parent = SimpleNamespace(
+        cancer_type="CRC",
+        warnings=[],
+        purity_result={"overall_estimate": 0.4},
+    )
 
     assert should_adopt_decomposition_purity("COAD", ok)
+    assert should_adopt_decomposition_purity("CRC", crc_child)
+    assert not should_adopt_decomposition_purity("COAD", child_to_parent)
     assert not should_adopt_decomposition_purity("COAD", mismatch)
     assert not should_adopt_decomposition_purity("COAD", no_tme)
     assert not should_adopt_decomposition_purity("COAD", missing)

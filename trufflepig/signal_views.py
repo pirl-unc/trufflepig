@@ -1,33 +1,28 @@
-"""Multi-view normalization of a biological signal, with reasoning over the views.
+"""Non-HK views of a biological signal, with reasoning over the views.
 
-Any signal (a lineage marker panel, a pathway, a background/cluster score) can be
-expressed under five complementary normalizations — each answering a *different*
-question. No single one is best (see docs/cancer-type-ontology.md and the
-normalization sweeps): HK-ratio is scale-invariant but has high within-class
-spread; log1p separates classes tightest but is mildly scale-sensitive;
-within-sample percentile measures dominance but is TME-contaminated; the
-cohort-relative views measure specificity vs the cross-cohort background.
+Any signal (a lineage marker panel, a pathway, a background/cluster score) is
+represented in four complementary clean-TPM views. The decision uses two
+independent biological questions: absolute program burden (``log1p``) and
+specificity versus other cancers (``cohort_pct``). The remaining views diagnose
+why those signals disagree without manufacturing extra votes.
 
-The five views
+The four views
 --------------
-1. ``hk``         — median(marker / ribosomal-free housekeeping median).
-                    "How high vs this sample's own baseline." Scale-invariant.
-2. ``within_pct`` — median(within-sample percentile rank of the marker).
+1. ``within_pct`` — median(within-sample percentile rank of the marker).
                     "How dominant within this transcriptome." Purity/dominance;
                     TME-contaminated for non-tumour-intrinsic panels.
-3. ``log1p``      — median(log1p(clean TPM)). "Absolute expression, compressed."
+2. ``log1p``      — median(log1p(clean TPM)). "Absolute expression, compressed."
                     Tightest within-class spread → best for a threshold gate.
-4. ``cohort_pct`` — median(fraction of reference cohorts below this sample).
+3. ``cohort_pct`` — median(fraction of reference cohorts below this sample).
                     "How high vs other cancer types." Specificity; bounded [0,1].
-5. ``cohort_z``   — median((value − cohort mean) / cohort sd). "How many SDs above
+4. ``cohort_z``   — median((value − cohort mean) / cohort sd). "How many SDs above
                     the cross-cohort background." Outlier-ness vs background.
 
 Reasoning
 ---------
-Each view is mapped to a 0–1 "presence" via a view-specific calibration, then the
-views vote. Concordance across views = confidence; *which* views disagree is
-itself diagnostic (e.g. high cohort_z but low within_pct ⇒ present-but-not-
-dominant ⇒ admixture / low purity).
+Each decision view is mapped to a 0–1 presence score. Their mean is the program
+confidence and their agreement is its concordance. Diagnostic views are exposed
+and can explain admixture, but do not independently change the lineage call.
 """
 
 from __future__ import annotations
@@ -37,9 +32,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .lineage_marker_recall import marker_hk_median
-
-VIEW_NAMES = ("hk", "within_pct", "log1p", "cohort_pct", "cohort_z")
+VIEW_NAMES = ("within_pct", "log1p", "cohort_pct", "cohort_z")
+DECISION_VIEW_NAMES = ("log1p", "cohort_pct")
+PRESENT_CONFIDENCE = 0.6
+ABSENT_CONFIDENCE = 0.35
 
 
 @functools.lru_cache(maxsize=1)
@@ -61,7 +57,7 @@ def _median(values):
 
 @dataclass
 class SignalViews:
-    """The five normalized views of one signal, plus the reasoning verdict."""
+    """The four normalized views of one signal, plus the reasoning verdict."""
 
     name: str
     views: dict[str, float]
@@ -80,14 +76,10 @@ def compute_views(
     genes,
     sample_tpm_by_symbol,
     *,
-    sample_hk_median: float | None = None,
     within_sample_pct: dict | None = None,
     cohort_reference: dict | None = None,
 ) -> dict:
-    """Compute the five normalized views for one gene panel."""
-    hk = sample_hk_median
-    if hk is None:
-        hk = marker_hk_median(sample_tpm_by_symbol)
+    """Compute the four non-HK views for one gene panel."""
     ref = cohort_reference if cohort_reference is not None else _cohort_reference()
     if within_sample_pct is None:
         syms = list(sample_tpm_by_symbol)
@@ -99,7 +91,6 @@ def compute_views(
     def g_tpm(g):
         return float(sample_tpm_by_symbol.get(g, 0.0))
 
-    hk_v = _median([g_tpm(g) / hk for g in genes]) if hk and hk > 0 else float("nan")
     wp_v = _median([within_sample_pct.get(g, 0.0) for g in genes])
     lg_v = _median([np.log1p(g_tpm(g)) for g in genes])
     cp_v, cz_v = [], []
@@ -111,7 +102,6 @@ def compute_views(
         sd = dist.std()
         cz_v.append(float((g_tpm(g) - dist.mean()) / sd) if sd > 0 else 0.0)
     return {
-        "hk": hk_v,
         "within_pct": wp_v,
         "log1p": lg_v,
         "cohort_pct": _median(cp_v),
@@ -123,7 +113,6 @@ def compute_views(
 # observed across the 109-rep + 18-local sweeps (carcinoma/sarcoma, NE/non-NE):
 # each maps its "clearly present" level to ~0.8 and "clearly absent" to ~0.2.
 _PRESENCE_ANCHORS = {
-    "hk": (0.10, 1.50),          # marker/HK: 0.1 absent .. 1.5 present
     "within_pct": (0.55, 0.92),  # within-sample rank
     "log1p": (1.50, 5.50),       # log1p(TPM)
     "cohort_pct": (0.30, 0.85),  # cross-cohort percentile
@@ -139,9 +128,9 @@ def _to_presence(view, value):
 
 
 def reason_over_views(name, views) -> SignalViews:
-    """Integrate the five views into a presence call + concordance + flags."""
+    """Integrate the two decision views; retain the others as diagnostics."""
     presence = {v: _to_presence(v, views.get(v)) for v in VIEW_NAMES}
-    votes = [p for p in presence.values() if p is not None]
+    votes = [presence[v] for v in DECISION_VIEW_NAMES if presence[v] is not None]
     confidence = float(np.mean(votes)) if votes else 0.0
     # concordance = 1 - mean pairwise absolute disagreement
     if len(votes) >= 2:
@@ -149,7 +138,11 @@ def reason_over_views(name, views) -> SignalViews:
         concordance = float(1.0 - np.mean(diffs))
     else:
         concordance = 1.0
-    call = "present" if confidence >= 0.6 else ("absent" if confidence <= 0.35 else "ambiguous")
+    call = (
+        "present"
+        if confidence >= PRESENT_CONFIDENCE
+        else ("absent" if confidence <= ABSENT_CONFIDENCE else "ambiguous")
+    )
 
     flags = []
     cz, wp = presence.get("cohort_z"), presence.get("within_pct")
@@ -167,6 +160,6 @@ def reason_over_views(name, views) -> SignalViews:
 
 
 def signal_report(name, genes, sample_tpm_by_symbol, **kw) -> SignalViews:
-    """Convenience: compute the five views for a panel and reason over them."""
+    """Convenience: compute the four views for a panel and reason over them."""
     views = compute_views(name, genes, sample_tpm_by_symbol, **kw)
     return reason_over_views(name, views)

@@ -1580,7 +1580,15 @@ def plot_expression_concentration_top_features_qc(
     ax_bar.invert_yaxis()
     ax_bar.set_xlabel("Share of total TPM")
     ax_bar.set_title("Dominant expression features", loc="left", fontsize=12)
-    ax_bar.xaxis.set_major_formatter(lambda x, _pos: f"{x:.0%}")
+    # Whole-percent labels collapse every tick to ``0%`` when the dominant
+    # feature is below 1%. Keep one decimal in that range so low-concentration
+    # samples remain interpretable, while preserving compact integer labels for
+    # high-concentration technical-RNA failures.
+    max_share = float(max(shares, default=0.0))
+    decimals = 1 if max_share < 0.02 else 0
+    ax_bar.xaxis.set_major_formatter(
+        lambda x, _pos: f"{x:.{decimals}%}"
+    )
     for yi, share, (gene, value) in zip(y, shares, top):
         qc = classify_gene_qc(gene)
         annotation = _format_feature_share(float(share))

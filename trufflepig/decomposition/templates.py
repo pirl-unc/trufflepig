@@ -15,12 +15,10 @@ from ..tumor_purity import CANCER_TO_TISSUE
 # tissues rather than a single HPA cell type.  For the NNLS, the best-
 # matching member tissue is selected as the reference column.
 #
-# Why: HPA single-cell profiles for astrocytes and neurons have
-# housekeeping-gene medians of ~20 nTPM (vs ~350 for immune/stroma),
-# likely from harsh brain-tissue dissociation.  HK-normalisation inflates
-# these references ~17×, making the NNLS think a 75%-brain sample has
-# <1% brain signal.  Bulk tissue references (cerebral_cortex etc.) have
-# normal HK medians (~380) and avoid this distortion entirely.
+# Why: HPA single-cell profiles for astrocytes and neurons carry strong
+# dissociation/acquisition scale effects and are not representative of bulk
+# brain RNA mass. Bulk tissue references (cerebral_cortex etc.) preserve the
+# relevant host-tissue composition for a bulk-sample NNLS fit.
 #
 # The best-match selection within each category captures within-category
 # variation (e.g. a cerebellar met matches cerebellum while a cortical
@@ -67,6 +65,7 @@ COMPONENT_TO_CATEGORY = {
     "neuron": "CNS",
     "adrenal_cortical": "adrenal",
     "keratinocyte": "skin",
+    "smooth_muscle": "muscle",
     # Optional compartments (#59 items 2-4) are registered only in
     # ``signature.COMPONENT_TO_HPA`` — they resolve directly to HPA
     # single-cell rows (Adipocytes / Schwann cells / Erythroid cells)
@@ -275,7 +274,11 @@ TEMPLATES = {
         "description": "Metastasis in skin",
     },
     "met_soft_tissue": {
-        "components": _SOLID_IMMUNE + _SOLID_STROMA,
+        # The engine fits smooth muscle only after a soft-tissue site context
+        # has been established. Keeping it in the template definition makes
+        # it part of the supported host model without letting an unconstrained
+        # metastatic fit absorb smooth-muscle-rich primary tumors.
+        "components": _SOLID_IMMUNE + _SOLID_STROMA + ["smooth_muscle"],
         "host_tissue": "smooth_muscle",
         "description": "Metastasis in soft tissue / retroperitoneum",
     },

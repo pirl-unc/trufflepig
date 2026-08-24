@@ -101,6 +101,44 @@ def test_context_excludes_sibling_reference_from_active_report_roles():
     )
 
 
+def test_direct_broad_report_reference_replaces_independent_fallback():
+    from trufflepig.main import _cancer_type_context_line
+
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "CRC",
+            "report_scope_cancer_type": "CRC",
+            "reference_cancer_type": "SARC_PLEOLPS",
+            "expression_reference_cancer_type": "CRC",
+        }
+    )
+
+    report_line = _cancer_type_context_line(context)
+
+    assert context.code_for("reference") == "CRC"
+    assert context.reference_relationship == "same"
+    assert context.requested_reference_code == "SARC_PLEOLPS"
+    assert "SARC_PLEOLPS" not in report_line
+
+
+def test_synchronized_active_context_does_not_resurrect_requested_sibling():
+    context = cancer_type_context_from_analysis(
+        {
+            "cancer_type": "BRCA_Basal",
+            "report_scope_cancer_type": "BRCA_Basal",
+            "reference_cancer_type": "BRCA",
+            "expression_reference_cancer_type": "BRCA_Basal",
+            "requested_reference_cancer_type": "BRCA_HER2",
+            "requested_expression_reference_cancer_type": "BRCA_HER2",
+        }
+    )
+
+    assert context.code_for("reference") == "BRCA"
+    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.requested_reference_code == "BRCA_HER2"
+    assert context.requested_expression_code == "BRCA_HER2"
+
+
 def test_context_labels_descendant_expression_as_reference_only(monkeypatch):
     basal_record = ExpressionReferenceRecord(
         requested_code="BRCA_Basal",
@@ -108,22 +146,31 @@ def test_context_labels_descendant_expression_as_reference_only(monkeypatch):
         source_kind="deconvolved_tumor_reference",
         source="TCGA_BRCA_PAM50",
     )
+    her2_record = ExpressionReferenceRecord(
+        requested_code="BRCA_HER2",
+        reference_code="BRCA_HER2",
+        source_kind="deconvolved_tumor_reference",
+        source="TCGA_BRCA_PAM50",
+    )
     monkeypatch.setattr(
         context_module,
         "_direct_expression_reference_records",
-        lambda: {"BRCA_Basal": (basal_record,)},
+        lambda: {
+            "BRCA_Basal": (basal_record,),
+            "BRCA_HER2": (her2_record,),
+        },
     )
 
     context = cancer_type_context_from_analysis(
         {
             "cancer_type": "BRCA",
-            "reference_cancer_type": "BRCA_Basal",
+            "reference_cancer_type": "BRCA_HER2",
         }
     )
 
     assert context.code_for("report") == "BRCA"
     assert context.code_for("reference") == "BRCA"
-    assert context.code_for("expression") == "BRCA_Basal"
+    assert context.code_for("expression") == "BRCA_HER2"
     assert context.reference_relationship == "same"
     assert context.expression_relationship == "descendant"
     lines = "\n".join(context.markdown_lines())
@@ -185,21 +232,21 @@ def test_context_separates_nutm_report_label_from_fallback_reference():
     assert "expression data are available for the report label" in lines
 
 
-def test_context_uses_documented_fallback_when_fine_expression_is_missing():
-    # ACINIC (acinic cell carcinoma) has no direct cohort of its own. Via its
-    # registry parent SGC (salivary gland carcinoma) it resolves to the typed
-    # member-union salivary reference rather than borrowing one child cohort.
+def test_context_uses_documented_fallback_for_noncohort_scope():
+    # NET_NONPANCREATIC is an evidence/source scope, not an expression cohort.
+    # It therefore resolves through its typed member-union parent rather than
+    # borrowing one site-specific neuroendocrine cohort.
     context = cancer_type_context_from_analysis(
         {
-            "cancer_type": "ACINIC",
-            "report_scope_cancer_type": "ACINIC",
+            "cancer_type": "NET_NONPANCREATIC",
+            "report_scope_cancer_type": "NET_NONPANCREATIC",
         }
     )
 
-    assert context.code_for("report") == "ACINIC"
+    assert context.code_for("report") == "NET_NONPANCREATIC"
     assert not context.report_has_expression_ref
-    assert context.code_for("expression") == "SGC"
-    assert context.best_expression_source_kind == "observed_pan_cancer_reference"
+    assert context.code_for("expression") == "NET"
+    assert context.best_expression_source_kind == "computed_member_union_reference"
     assert context.best_expression_fallback_reason == "registry parent"
     assert not context.best_expression_direct
 
@@ -207,17 +254,31 @@ def test_context_uses_documented_fallback_when_fine_expression_is_missing():
 def test_grouping_uses_its_typed_member_union_reference():
     # Groupings with member-union references are direct classifier targets; they
     # no longer borrow one child cohort as a temporary stand-in.
-    for code in ("BTC", "SGC", "NET"):
+    for code in ("CRC", "NET"):
         record = effective_expression_reference(code)
         assert record is not None
         assert record.reference_code == code
-        assert record.source_kind == "observed_pan_cancer_reference"
+        assert record.source_kind == "computed_member_union_reference"
         assert record.fallback_reason == ""
         assert record.direct
 
 
+def test_unavailable_member_union_does_not_claim_a_direct_reference():
+    # The registry can describe an intended member union before the installed
+    # artifact can load it. In that case retain the safe, in-branch member
+    # fallback instead of advertising an unavailable direct reference.
+    for code in ("BTC", "SGC"):
+        record = effective_expression_reference(code)
+        assert record is not None
+        assert record.reference_code != code
+        assert record.fallback_reason == "member cohort"
+        assert not record.direct
+
+
 def test_context_markdown_reports_expression_fallback_without_parent_context():
-    context = cancer_type_context_from_analysis({"cancer_type": "ACINIC"})
+    context = cancer_type_context_from_analysis(
+        {"cancer_type": "NET_NONPANCREATIC"}
+    )
 
     lines = "\n".join(context.markdown_lines())
 
@@ -355,12 +416,13 @@ def test_expression_reference_options_canonicalize_source_codes():
         # below; the old neuroendocrine-fallback example was retired because the
         # rebuild gave every NE code its own cohort — see NEC_MERKEL.)
         (
-            # ACINIC has no direct cohort; its registry parent SGC supplies a
-            # typed member-union salivary reference.
-            "ACINIC",
-            "SGC",
-            "observed_pan_cancer_reference",
-            "LITERATURE_CURATED",
+            # Evidence/source scopes are not expression cohorts. The typed
+            # member-union parent supplies a deterministic broad reference.
+            "NET_NONPANCREATIC",
+            "NET",
+            "computed_member_union_reference",
+            "DRMETRICS_ALCALA_2019_LNEN + GSE118014_ALVAREZ_2018 + "
+            "GSE98894_ALVAREZ_2018_NET",
             "ensembl_symbol",
             False,
             "registry parent",

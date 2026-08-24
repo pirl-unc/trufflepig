@@ -32,6 +32,15 @@ def test_lineage_panels_lose_no_genes_to_alias_drift():
     assert "CD20" not in panels.get("DLBC", [])
 
 
+def test_canonical_lineage_panels_keep_directional_contrasts_out_of_presence_scoring():
+    """Positive lineage consumers must not invert expected-low MMNST evidence."""
+    from trufflepig.common import lineage_genes_by_cancer_type_canonical
+
+    markers = set(lineage_genes_by_cancer_type_canonical()["SARC_MMNST"])
+    assert {"TYR", "PMEL", "MLANA", "DCT", "MITF", "SOX10", "S100B"} <= markers
+    assert markers.isdisjoint({"PMP22", "PMP2", "MPZ", "PRKAR1A"})
+
+
 def test_biomarker_symbols_canonicalized_to_reference_vocabulary():
     """cancer-key-genes biomarker aliases must be recovered into the reference
     vocabulary for the marker-expectation channel (it has no Ensembl column, so
@@ -135,14 +144,14 @@ def test_ontology_records_direct_reference_and_literature_markers_for_adcc():
     assert {"MYB", "MYBL1", "NFIB"} <= set(entry.expected_high_genes)
 
 
-def test_ontology_records_member_cohort_fallback_for_acinic():
-    # ACINIC has no direct cohort of its own; its registry parent SGC now supplies
-    # the typed member-union salivary reference.
-    entry = tumor_type_ontology_entry("ACINIC")
+def test_ontology_records_member_cohort_fallback_for_noncohort_scope():
+    # NET_NONPANCREATIC is a source/evidence scope rather than an expression
+    # cohort, so its typed member-union parent supplies the reference.
+    entry = tumor_type_ontology_entry("NET_NONPANCREATIC")
 
     assert entry is not None
-    assert entry.family == "salivary"
-    assert entry.expression_reference_code == "SGC"
+    assert entry.family == "neuroendocrine"
+    assert entry.expression_reference_code == "NET"
     assert not entry.expression_reference_direct
     assert entry.expression_reference_reason == "registry parent"
 

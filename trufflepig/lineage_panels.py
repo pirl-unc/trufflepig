@@ -4,16 +4,15 @@
 
 Each panel evaluates a single hypothesis: "is this sample a member of
 lineage X?" using a small, curated set of markers. The score is a
-synthesis of two evidence streams kept separately because the
-TPM-vs-HK experiment (see `docs/CANCER_CALL_DECISION_FLOW.md` known
-gaps section) showed they have opposite optimal scales:
+synthesis of two evidence streams kept separately because they answer
+different biological questions:
 
   - **High-direction markers** ("this gene should be ON") score better
-    when normalized to housekeeping median, because HK normalization
-    cancels library-depth differences across samples.
+    by combining compressed absolute clean-TPM burden with the marker's
+    percentile among cancer cohorts.
   - **Low-direction markers** ("this gene should be OFF") score better
     as absolute TPM thresholds, because the question is "is it
-    essentially zero?" — HK ratios at near-zero are noise.
+    essentially zero?"
 
 Evidence is preserved per marker, not collapsed prematurely. The
 returned ``PanelEvidence`` is JSON-serializable so it flows into
@@ -36,8 +35,11 @@ section at the bottom for the integration sketch.
 
 from __future__ import annotations
 
+import math
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, asdict
 from functools import lru_cache
+from statistics import median
 from typing import Any, Mapping
 
 
@@ -58,16 +60,43 @@ class LineagePanel:
     for ``high_markers``. Looked up in cancer_reference_expression."""
 
     high_markers: tuple[str, ...]
-    """Genes that should be ON in this lineage. Scored HK-normalized
-    against the parent cohort's HK-normalized cohort median."""
+    """Genes that should be ON in this lineage. Scored by log1p(clean TPM)
+    burden and cross-cancer cohort percentile."""
+
+    reference_cohorts: tuple[str, ...] = ()
+    """Optional loadable child cohorts used to construct a parent-level
+    reference. This keeps the reported identity at the defensible parent while
+    allowing aggregate registry nodes such as CRC to use their observed
+    children (COAD and READ) as the expression reference."""
 
     low_markers: tuple[tuple[str, float], ...] = ()
     """(symbol, max_tpm) — gene should be below the absolute TPM cap.
     Absolute TPM is more interpretable than HK ratios near zero."""
 
     obligate: tuple[str, ...] = ()
-    """At least one high_marker per entry must clear 0.5× cohort HK ratio
-    or the panel returns score=0 and the obligate-failed rationale."""
+    """Every listed marker must reach 0.5 integrated positive support or
+    the panel returns score=0 and an obligate-failed rationale."""
+
+    identity_marker_groups: tuple[tuple[str, ...], ...] = ()
+    """Alternative marker groups that establish tissue identity.
+
+    Every group must contribute at least one actively expressed marker. This
+    represents biological alternatives without making one transcript a
+    brittle veto: for example, urothelial plaques contain a UPK1-family
+    subunit and a UPK2/3-family partner, but an individual tumor need not
+    retain every uroplakin. These gates establish lineage identity; the
+    ordinary ``high_markers`` still describe the phenotype within it.
+    """
+
+    background_attribution_markers: tuple[tuple[str, str], ...] = ()
+    """Expected-low markers that can originate in a named normal component.
+
+    These remain ordinary low-marker violations in bulk RNA.  Residual-identity
+    analysis may clear one only when a candidate-independent decomposition
+    identifies the named component as the dominant fitted background.  This
+    keeps a host-tissue transcript from masquerading as tumor-cell evidence
+    without weakening the bulk panel or adding a sample-specific threshold.
+    """
 
     description: str = ""
     references: tuple[str, ...] = ()
@@ -93,12 +122,12 @@ class PanelEvidence:
     parent_cohort: str
     obligate_passed: bool
     obligate_failures: tuple[tuple[str, float, float], ...]
-    """(symbol, observed_hk_ratio, required_hk_ratio) for each failed
-    obligate marker. Empty when obligate_passed."""
+    """(symbol, observed_support, required_support) for each failed obligate
+    marker. Empty when obligate_passed."""
 
     high_hits: tuple[tuple[str, float, float], ...]
     """(symbol, observed_tpm, cohort_median_tpm) for high_markers that
-    cleared the 0.5× cohort HK ratio threshold."""
+    reached 0.5 integrated positive support."""
     high_misses: tuple[tuple[str, float, float], ...]
     """Same shape as high_hits, for markers that did not clear."""
 
@@ -108,7 +137,7 @@ class PanelEvidence:
     """Same shape as low_passes, for markers above the cap."""
 
     score: float
-    """Synthesis: (high_fraction ** 0.6) × (low_fraction ** 0.4).
+    """Synthesis: (mean_high_support ** 0.6) × (low_fraction ** 0.4).
     Range [0, 1]. The exponents weight positive evidence more than
     negative compliance — a panel with all positives firing but one
     negative violation is still strong evidence, while a panel with
@@ -117,6 +146,15 @@ class PanelEvidence:
     rationale: str
     """One human-readable sentence describing the panel verdict for
     reports. Mirrors the style of the existing basal-BRCA rescue text."""
+
+    identity_marker_groups_passed: bool = True
+    """Whether every configured identity-marker group had an expressed hit."""
+
+    identity_marker_hits: tuple[tuple[str, float], ...] = ()
+    """Flattened ``(symbol, TPM)`` hits across the identity-marker groups."""
+
+    identity_marker_group_failures: tuple[tuple[str, ...], ...] = ()
+    """Configured alternative groups for which no marker was expressed."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -134,51 +172,160 @@ class PanelEvidence:
 # one Ensembl-lookup path in the whole codebase.
 
 
-@lru_cache(maxsize=1)
-def _cohort_medians_by_gene_id() -> dict[tuple[str, str], float]:
+def _marker_symbols_for_panels(
+    panels: tuple[LineagePanel, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                symbol
+                for panel in panels
+                for symbol in (
+                    *panel.high_markers,
+                    *panel.obligate,
+                    *(s for group in panel.identity_marker_groups for s in group),
+                    *(s for s, _ in panel.low_markers),
+                )
+            }
+        )
+    )
+
+
+def _reference_symbols_for_panel(panel: LineagePanel) -> tuple[str, ...]:
+    """Use one shared key for built-ins and an exact key for custom panels."""
+
+    built_in_panels = tuple(globals().get("LINEAGE_PANELS", ()))
+    panels = built_in_panels if panel in built_in_panels else (panel,)
+    return _marker_symbols_for_panels(panels)
+
+
+@lru_cache(maxsize=64)
+def _cohort_medians_by_gene_id(
+    symbols: tuple[str, ...] = (),
+) -> dict[tuple[str, str], float]:
     """Map ``(cohort_code, versionless_gene_id) → median TPM_clean``.
 
-    Cached because cancer_reference_expression is ~2M rows. The lookup
-    table itself is ~70 cohorts × 20k genes ≈ 1.4M entries — a single
-    GroupBy at first use, hot lookup after.
+    The cache key is the marker universe being evaluated. Calls without an
+    explicit universe retain the shared built-in-panel path; public custom
+    panels use their own bounded symbol tuple.
     """
+
     from .common import _versionless_gene_id
     from .reference import cancer_reference_expression
 
-    df = cancer_reference_expression()
+    if not symbols:
+        panels = tuple(globals().get("LINEAGE_PANELS", ()))
+        symbols = _marker_symbols_for_panels(panels)
+    if not symbols:
+        return {}
+    df = cancer_reference_expression(genes=list(symbols), normalize="tpm_clean")
     df = df[df["normalization"] == "TPM_clean"]
-    out: dict[tuple[str, str], float] = {}
-    for row in df.itertuples():
-        gid = _versionless_gene_id(getattr(row, "Ensembl_Gene_ID", None))
-        if not gid:
-            continue
-        out[(str(row.cancer_code), gid)] = float(row.expression)
-    return out
+    df = df.assign(
+        _gene_id=df["Ensembl_Gene_ID"].map(_versionless_gene_id),
+        _expression=df["expression"].astype(float).clip(lower=0.0),
+    )
+    df = df[df["_gene_id"].astype(bool)]
+    grouped = df.groupby(["cancer_code", "_gene_id"], sort=False)[
+        "_expression"
+    ].median()
+    return {
+        (str(cancer_code), str(gene_id)): float(expression)
+        for (cancer_code, gene_id), expression in grouped.items()
+    }
 
 
-@lru_cache(maxsize=1)
-def _cohort_hk_medians() -> dict[str, float]:
-    """Per-cohort housekeeping median, used as the HK denominator when
-    normalizing a marker against its cohort distribution."""
-    from pirlygenes import housekeeping_gene_ids
+@lru_cache(maxsize=64)
+def _cohort_values_by_gene_id(
+    symbols: tuple[str, ...] = (),
+) -> dict[str, tuple[float, ...]]:
+    """Sorted clean-TPM medians across all reference cohorts, per gene."""
+    values: dict[str, list[float]] = {}
+    for (_, gene_id), value in _cohort_medians_by_gene_id(symbols).items():
+        if math.isfinite(value):
+            values.setdefault(gene_id, []).append(max(0.0, float(value)))
+    return {
+        gene_id: tuple(sorted(gene_values))
+        for gene_id, gene_values in values.items()
+    }
 
-    from .reference import cancer_reference_expression
 
-    df = cancer_reference_expression()
-    df = df[df["normalization"] == "TPM_clean"]
-    hk_ids = set(housekeeping_gene_ids())
-    hk = df[df["Ensembl_Gene_ID"].isin(hk_ids)]
-    return {str(k): float(v) for k, v in hk.groupby("cancer_code")["expression"].median().items()}
-
-
-def _cohort_median_by_id(cohort: str, gene_id: str) -> float | None:
+def _cohort_median_by_id(
+    cohort: str,
+    gene_id: str,
+    reference_symbols: tuple[str, ...] = (),
+) -> float | None:
     if not gene_id:
         return None
-    return _cohort_medians_by_gene_id().get((cohort, gene_id))
+    return _cohort_medians_by_gene_id(reference_symbols).get((cohort, gene_id))
 
 
-def _cohort_hk(cohort: str) -> float:
-    return _cohort_hk_medians().get(cohort, 1.0) or 1.0
+def _panel_reference_cohorts(panel: LineagePanel) -> tuple[str, ...]:
+    return panel.reference_cohorts or (panel.parent_cohort,)
+
+
+def _panel_cohort_median(
+    panel: LineagePanel,
+    gene_id: str,
+    reference_symbols: tuple[str, ...] = (),
+) -> float | None:
+    reference_symbols = reference_symbols or _reference_symbols_for_panel(panel)
+    values = [
+        value
+        for cohort in _panel_reference_cohorts(panel)
+        if (
+            value := _cohort_median_by_id(cohort, gene_id, reference_symbols)
+        ) is not None
+    ]
+    return float(median(values)) if values else None
+
+
+def _cohort_percentile(
+    gene_id: str,
+    value: float,
+    reference_symbols: tuple[str, ...] = (),
+) -> float:
+    """Midrank percentile of ``value`` among clean-TPM cohort medians."""
+    values = _cohort_values_by_gene_id(reference_symbols).get(gene_id, ())
+    if not values:
+        return 0.0
+    left = bisect_left(values, value)
+    right = bisect_right(values, value)
+    return float((left + right) / (2.0 * len(values)))
+
+
+def _positive_marker_support(
+    panel: LineagePanel,
+    gene_id: str,
+    observed_tpm: float,
+) -> tuple[float, float | None]:
+    """Integrate absolute burden and cross-cancer specificity for one marker."""
+    reference_symbols = _reference_symbols_for_panel(panel)
+    reference_tpm = _panel_cohort_median(panel, gene_id, reference_symbols)
+    if reference_tpm is None:
+        return 0.0, None
+    reference_tpm = max(0.0, float(reference_tpm))
+    observed_tpm = max(0.0, float(observed_tpm))
+    reference_log = math.log1p(reference_tpm)
+    log_support = (
+        min(1.0, math.log1p(observed_tpm) / reference_log)
+        if reference_log > 0.0
+        else float(observed_tpm > 0.0)
+    )
+    reference_percentile = _cohort_percentile(
+        gene_id,
+        reference_tpm,
+        reference_symbols,
+    )
+    sample_percentile = _cohort_percentile(
+        gene_id,
+        observed_tpm,
+        reference_symbols,
+    )
+    cohort_support = min(
+        1.0,
+        sample_percentile / reference_percentile,
+    ) if reference_percentile > 0.0 else float(sample_percentile > 0.0)
+    return float((log_support + cohort_support) / 2.0), reference_tpm
 
 
 @lru_cache(maxsize=64)
@@ -196,6 +343,8 @@ def _panel_marker_ids(panel: LineagePanel) -> dict[str, str]:
 
     syms: list[str] = []
     syms.extend(panel.obligate)
+    for group in panel.identity_marker_groups:
+        syms.extend(group)
     syms.extend(panel.high_markers)
     syms.extend(sym for sym, _ in panel.low_markers)
     return panel_symbols_to_gene_ids(syms)
@@ -232,7 +381,6 @@ _HIGH_MARKER_MIN_TPM = 5.0
 def score_panel(
     panel: LineagePanel,
     sample_tpm_by_gene_id: Mapping[str, float],
-    sample_hk_median: float,
 ) -> PanelEvidence:
     """Evaluate one panel against one sample.
 
@@ -258,19 +406,60 @@ def score_panel(
     Each unresolvable marker is logged exactly once per process via
     ``_warn_unresolved_marker``.
 
-    ``sample_hk_median`` is the sample's own housekeeping median
-    (computed once per sample upstream and passed in — keeps this
-    function pure).
+    Both sample and reference values are clean TPM. No housekeeping
+    normalization is used.
     """
-
-    cohort_hk = _cohort_hk(panel.parent_cohort)
     marker_ids = _panel_marker_ids(panel)
 
     def _sample(gid: str) -> float:
         return float(sample_tpm_by_gene_id.get(gid, 0.0))
 
-    # Obligate check — required marker must clear cohort-normalized
-    # half-of-cohort-HK-ratio bar, otherwise the panel returns 0.
+    # Tissue-identity gates use active expression, not distance from the cohort
+    # median. The latter is unstable in highly concentrated profiles (a basal
+    # squamous tumor can devote most reads to keratins and thereby depress
+    # every other gene's proportional abundance). Requiring one member from every
+    # biologically interchangeable group preserves specificity without making
+    # any single transcript an all-or-nothing veto.
+    identity_hits: list[tuple[str, float]] = []
+    identity_failures: list[tuple[str, ...]] = []
+    for group in panel.identity_marker_groups:
+        group_hits: list[tuple[str, float]] = []
+        for sym in group:
+            gid = marker_ids.get(sym)
+            if not gid:
+                _warn_unresolved_marker(panel.name, "identity", sym)
+                continue
+            observed = _sample(gid)
+            if observed >= _HIGH_MARKER_MIN_TPM:
+                group_hits.append((sym, observed))
+        if group_hits:
+            identity_hits.extend(group_hits)
+        else:
+            identity_failures.append(tuple(group))
+
+    if identity_failures:
+        missing = " or ".join(identity_failures[0])
+        return PanelEvidence(
+            panel_name=panel.name,
+            parent_cohort=panel.parent_cohort,
+            obligate_passed=True,
+            obligate_failures=(),
+            high_hits=(),
+            high_misses=(),
+            low_passes=(),
+            low_violations=(),
+            score=0.0,
+            rationale=(
+                f"{panel.name}: tissue-identity marker group absent "
+                f"({missing}) — panel not scored"
+            ),
+            identity_marker_groups_passed=False,
+            identity_marker_hits=tuple(identity_hits),
+            identity_marker_group_failures=tuple(identity_failures),
+        )
+
+    # Obligate check — required markers must be both expressed and supported
+    # by the parent-vs-cross-cancer comparison.
     obligate_failures: list[tuple[str, float, float]] = []
     for sym in panel.obligate:
         gid = marker_ids.get(sym)
@@ -288,15 +477,15 @@ def score_panel(
                     f"{panel.name}: obligate marker {sym} could not be "
                     "resolved to a gene_id — panel not scored"
                 ),
+                identity_marker_hits=tuple(identity_hits),
             )
-        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
+        observed = _sample(gid)
+        support, cohort_val = _positive_marker_support(panel, gid, observed)
         if cohort_val is None:
             continue
-        cohort_hk_ratio = cohort_val / cohort_hk
-        sample_hk_ratio = _sample(gid) / sample_hk_median
-        required = 0.5 * cohort_hk_ratio
-        if sample_hk_ratio < required:
-            obligate_failures.append((sym, sample_hk_ratio, required))
+        required = 0.5
+        if observed < _HIGH_MARKER_MIN_TPM or support < required:
+            obligate_failures.append((sym, support, required))
 
     if obligate_failures:
         sym, obs, req = obligate_failures[0]
@@ -310,13 +499,15 @@ def score_panel(
             score=0.0,
             rationale=(
                 f"{panel.name}: required marker {sym} absent "
-                f"(HK ratio {obs:.3f} vs threshold {req:.3f})"
+                f"(integrated clean-TPM support {obs:.3f} vs {req:.3f})"
             ),
+            identity_marker_hits=tuple(identity_hits),
         )
 
-    # Positive markers — HK-normalized vs cohort
+    # Positive markers — log1p(clean TPM) burden + cross-cancer specificity.
     high_hits: list[tuple[str, float, float]] = []
     high_misses: list[tuple[str, float, float]] = []
+    high_supports: list[float] = []
     for sym in panel.high_markers:
         gid = marker_ids.get(sym)
         if not gid:
@@ -324,20 +515,18 @@ def score_panel(
             # Pessimistic: count as a miss so an unresolved positive
             # marker can't inflate the panel's score.
             high_misses.append((sym, 0.0, 0.0))
+            high_supports.append(0.0)
             continue
-        cohort_val = _cohort_median_by_id(panel.parent_cohort, gid)
         obs_tpm = _sample(gid)
+        support, cohort_val = _positive_marker_support(panel, gid, obs_tpm)
         if cohort_val is None:
             high_misses.append((sym, obs_tpm, 0.0))
+            high_supports.append(0.0)
             continue
-        sample_hk_ratio = obs_tpm / sample_hk_median
-        cohort_hk_ratio = cohort_val / cohort_hk
-        # A positive lineage marker can only count as a hit if it is actually
-        # expressed in the sample. Without this floor, a marker that is ~0 in
-        # both the sample and the cohort median trivially passes
-        # ``0 >= 0.5 * 0`` and is mis-counted as "in cohort range" (e.g.
-        # MUC5AC=0 inflating a CHOL panel).
-        if obs_tpm >= _HIGH_MARKER_MIN_TPM and sample_hk_ratio >= 0.5 * cohort_hk_ratio:
+        if obs_tpm < _HIGH_MARKER_MIN_TPM:
+            support = 0.0
+        high_supports.append(support)
+        if support >= 0.5:
             high_hits.append((sym, obs_tpm, cohort_val))
         else:
             high_misses.append((sym, obs_tpm, cohort_val))
@@ -363,7 +552,7 @@ def score_panel(
     # Synthesis — positives weighted harder than negatives
     high_total = max(1, len(panel.high_markers))
     low_total = max(1, len(panel.low_markers))
-    high_frac = len(high_hits) / high_total
+    high_frac = sum(high_supports) / high_total
     low_frac = len(low_passes) / low_total
     score = (high_frac ** 0.6) * (low_frac ** 0.4)
 
@@ -397,13 +586,13 @@ def score_panel(
         low_violations=tuple(low_violations),
         score=score,
         rationale=rationale,
+        identity_marker_hits=tuple(identity_hits),
     )
 
 
 def evaluate_panels(
     panels: tuple[LineagePanel, ...],
     sample_tpm_by_gene_id: Mapping[str, float],
-    sample_hk_median: float,
 ) -> tuple[PanelEvidence, ...]:
     """Score every panel; return evidence sorted by score (highest first).
 
@@ -411,9 +600,7 @@ def evaluate_panels(
     reasoning (confidence, report rationale, conflicting-call detection)
     needs to see misses as well as hits.
     """
-    evidence = tuple(
-        score_panel(p, sample_tpm_by_gene_id, sample_hk_median) for p in panels
-    )
+    evidence = tuple(score_panel(p, sample_tpm_by_gene_id) for p in panels)
     return tuple(sorted(evidence, key=lambda e: -e.score))
 
 
@@ -486,7 +673,10 @@ _BLCA_LUMINAL = LineagePanel(
         ("SCGB2A2", 1.0),
         ("CDX2", 5.0),     # not GI
     ),
-    obligate=("UPK1B",),
+    identity_marker_groups=(
+        ("UPK1A", "UPK1B"),
+        ("UPK2", "UPK3A"),
+    ),
     description="Urothelial luminal (MIBC luminal subtype)",
     references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
     program_note=(
@@ -711,19 +901,53 @@ _BLCA_BASAL_PANEL = LineagePanel(
     parent_cohort="BLCA",
     # Basal MIBC retains partial uroplakin expression but loses the
     # luminal urothelial differentiation; squamous-like keratins rise.
-    high_markers=("KRT5", "KRT14", "KRT6A", "UPK1B", "UPK2", "S100P"),
+    # The keratins define the basal/squamous phenotype. Urothelial identity is
+    # established separately by the two complementary uroplakin groups below,
+    # so loss of any one uroplakin cannot zero the whole program.
+    high_markers=("KRT5", "KRT14", "KRT6A"),
     low_markers=(
         ("MUCL1", 1.0),    # not mammary (otherwise → BRCA_BASAL)
         ("SCGB2A2", 1.0),
         ("FOXA1", 200.0),  # luminal urothelial has FOXA1/GATA3 very high
         ("GATA3", 200.0),
     ),
-    obligate=("UPK1B",),   # urothelial marker — distinguishes from BRCA_BASAL
+    identity_marker_groups=(
+        ("UPK1A", "UPK1B"),
+        ("UPK2", "UPK3A"),
+    ),
     description="Basal-like muscle-invasive bladder cancer",
     references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
     program_note=(
         "basal-like muscle-invasive bladder program (KRT5/KRT14/KRT6A, S100P, low FOXA1/GATA3). "
         "More chemo-sensitive than luminal MIBC; squamous-like differentiation"
+    ),
+)
+
+_CRC_PANEL = LineagePanel(
+    name="CRC",
+    parent_cohort="CRC",
+    reference_cohorts=("COAD", "READ"),
+    high_markers=("VIL1", "CDH17", "SATB2", "CDX2", "KRT20", "MUC2"),
+    low_markers=(
+        ("ALB", 5.0),
+        ("AFP", 5.0),
+        ("UPK1B", 1.0),
+        ("MYOD1", 5.0),
+        ("MYOG", 5.0),
+        ("DES", 10.0),
+    ),
+    obligate=("CDX2",),
+    identity_marker_groups=(
+        ("SATB2", "CDX2"),
+        ("CDH17", "VIL1"),
+    ),
+    background_attribution_markers=(("DES", "smooth_muscle"),),
+    description="Colorectal adenocarcinoma — shared colon/rectal identity",
+    references=("WHO Classification of Tumours, Digestive System Tumours",),
+    program_note=(
+        "colorectal epithelial program (CDX2, SATB2, CDH17, VIL1, KRT20, MUC2). "
+        "This parent-level program establishes CRC identity but does not by "
+        "itself distinguish colon from rectal origin"
     ),
 )
 
@@ -746,6 +970,7 @@ LINEAGE_PANELS: tuple[LineagePanel, ...] = (
     _THYM_PANEL,
     _PCPG_PANEL,
     _LUAD_PANEL,
+    _CRC_PANEL,
 )
 
 
@@ -777,6 +1002,199 @@ def summarize_evidence(evidence: tuple[PanelEvidence, ...]) -> dict[str, Any]:
     }
 
 
+def complete_program_entity_decision(
+    evidence: tuple[PanelEvidence, ...],
+) -> dict[str, Any]:
+    """Describe whether the top panel is an unopposed complete program.
+
+    Panel scores are useful summaries, but they are not the whole evidentiary
+    structure. A panel with every expected-high marker present, every
+    expected-low marker compliant, and its obligate marker present is
+    qualitatively stronger than an incomplete runner-up. This helper preserves
+    that distinction without introducing another numeric cutoff.
+
+    Competition is evaluated between parent cancer entities, not between two
+    subtype panels that both map to the same parent. If a second entity also
+    has a complete program, the result remains ambiguous.
+    """
+    if not evidence:
+        return {
+            "decisive": False,
+            "reason": "no panel evidence",
+            "top_parent_cohort": None,
+            "competing_parent_cohort": None,
+        }
+
+    top = evidence[0]
+
+    def _complete(row: PanelEvidence) -> bool:
+        return bool(
+            getattr(row, "obligate_passed", False)
+            and getattr(row, "identity_marker_groups_passed", True)
+            and getattr(row, "high_hits", ())
+            and getattr(row, "low_passes", ())
+            and not getattr(row, "high_misses", ())
+            and not getattr(row, "low_violations", ())
+        )
+
+    top_parent = str(getattr(top, "parent_cohort", "") or "")
+    competing_rows = tuple(
+        row
+        for row in evidence[1:]
+        if str(getattr(row, "parent_cohort", "") or "") != top_parent
+    )
+    competing = competing_rows[0] if competing_rows else None
+    top_complete = _complete(top)
+    competing_complete = any(_complete(row) for row in competing_rows)
+    decisive = bool(top_complete and not competing_complete)
+    if not top_complete:
+        reason = "top panel is not a complete positive/negative-marker program"
+    elif competing_complete:
+        reason = (
+            "another cancer entity also has a complete positive/negative-marker "
+            "program"
+        )
+    else:
+        reason = (
+            "top panel is complete and no competing cancer entity has a "
+            "complete program"
+        )
+    return {
+        "decisive": decisive,
+        "reason": reason,
+        "top_parent_cohort": top_parent or None,
+        "top_panel": top.panel_name,
+        "top_complete": top_complete,
+        "top_identity_specific": bool(
+            getattr(top, "identity_marker_hits", ())
+        ),
+        "competing_parent_cohort": (
+            getattr(competing, "parent_cohort", None)
+            if competing is not None
+            else None
+        ),
+        "competing_panel": competing.panel_name if competing is not None else None,
+        "competing_complete": competing_complete,
+        "margin_over_competing_entity": (
+            float(top.score - competing.score)
+            if competing is not None
+            else float(top.score)
+        ),
+    }
+
+
+def attribute_panel_markers_to_decomposition(
+    panel_evidence: Mapping[str, Any],
+    gene_attribution: Any,
+) -> dict[str, Any]:
+    """Attribute a panel's positive markers to tumor or background.
+
+    The decomposition table contains one expression contribution per modeled
+    component. We call a marker tumor-residual only when ``tumor`` is its
+    largest modeled contributor. This is a structural comparison—there is no
+    new tumor-fraction threshold to tune.
+
+    The result is post-selection corroboration. It must not be counted as an
+    independent cancer-classifier vote because the decomposition candidates
+    already reuse ranker support.
+    """
+    high_hits = list(panel_evidence.get("high_hits") or [])
+    symbols = [str(row[0]).strip() for row in high_hits if row]
+    empty_result = {
+        "status": "not_evaluable",
+        "role": "post_selection_corroboration",
+        "panel": panel_evidence.get("panel_name"),
+        "parent_cohort": panel_evidence.get("parent_cohort"),
+        "evaluated_marker_count": 0,
+        "tumor_dominant_count": 0,
+        "ambiguous_marker_count": 0,
+        "markers": [],
+    }
+    if (
+        not symbols
+        or gene_attribution is None
+        or getattr(gene_attribution, "empty", True)
+    ):
+        return empty_result
+
+    metadata_columns = {
+        "gene_id",
+        "symbol",
+        "observed_tpm",
+        "overexplained_tpm",
+        "tumor_fraction_of_total",
+    }
+    component_columns = [
+        str(column)
+        for column in gene_attribution.columns
+        if str(column) not in metadata_columns
+    ]
+    if "tumor" not in component_columns:
+        return empty_result
+
+    rows_by_symbol = {}
+    symbol_set = set(symbols)
+    for _, row in gene_attribution.iterrows():
+        symbol = row.get("symbol")
+        if isinstance(symbol, str) and symbol.strip() in symbol_set:
+            rows_by_symbol[symbol.strip()] = row
+    markers: list[dict[str, Any]] = []
+    ambiguous_count = 0
+    for symbol in symbols:
+        row = rows_by_symbol.get(symbol)
+        if row is None:
+            continue
+        contributions = {}
+        for component in component_columns:
+            try:
+                value = float(row.get(component) or 0.0)
+            except (TypeError, ValueError):
+                value = 0.0
+            contributions[component] = value if math.isfinite(value) else 0.0
+        largest = max(contributions.values())
+        dominant_components = sorted(
+            component
+            for component, value in contributions.items()
+            if value == largest
+        )
+        unambiguous = len(dominant_components) == 1
+        dominant_component = (
+            dominant_components[0] if unambiguous else "ambiguous"
+        )
+        if not unambiguous:
+            ambiguous_count += 1
+        markers.append(
+            {
+                "symbol": symbol,
+                "observed_tpm": round(float(row.get("observed_tpm") or 0.0), 4),
+                "dominant_component": dominant_component,
+                "dominant_components": dominant_components,
+                "tumor_dominant": unambiguous and dominant_component == "tumor",
+                "tumor_contribution": round(contributions["tumor"], 4),
+            }
+        )
+
+    tumor_dominant_count = sum(row["tumor_dominant"] for row in markers)
+    if not markers:
+        status = "not_evaluable"
+    elif tumor_dominant_count == len(markers):
+        status = "tumor_residual"
+    elif tumor_dominant_count or ambiguous_count:
+        status = "mixed_tumor_and_background"
+    else:
+        status = "background_attributed"
+    return {
+        "status": status,
+        "role": "post_selection_corroboration",
+        "panel": panel_evidence.get("panel_name"),
+        "parent_cohort": panel_evidence.get("parent_cohort"),
+        "evaluated_marker_count": len(markers),
+        "tumor_dominant_count": tumor_dominant_count,
+        "ambiguous_marker_count": ambiguous_count,
+        "markers": markers,
+    }
+
+
 def conflicting_calls(
     evidence: tuple[PanelEvidence, ...],
     tie_threshold: float = 0.10,
@@ -803,7 +1221,7 @@ def conflicting_calls(
 #
 #   1. NEW SELECTOR in cancer_type_evidence (~30 lines):
 #      Add a ``lineage_panel`` selector that calls
-#      ``evaluate_panels(LINEAGE_PANELS, sample_tpm, hk_median)``.
+#      ``evaluate_panels(LINEAGE_PANELS, sample_tpm)``.
 #      Promotes a hypothesis when ``summarize_evidence`` shows a clear
 #      winner above some threshold (e.g. top score >= 0.6 AND margin
 #      over second >= 0.2). Lives between ``rare_marker`` (priority 2)

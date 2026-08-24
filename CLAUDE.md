@@ -81,9 +81,9 @@ visible to type-calling, decomposition, and purity.
 
 **Three evidence signals (each computed once):**
 - **signature_score** (`plot_embedding._compute_cancer_type_signature_stats`) — mean over a curated
-  ~20-gene panel of `cohort_pct × within_sample_pct`, per cancer type. Cohort reference = the
-  **170-cohort HK-bridged** matrix (118 cancer + 50 normal; `_full_cohort_hk_reference`). Panels exist
-  for ~93 types incl. the missing base types. Cached as `stats`.
+  ~20-gene panel of within-sample clean-TPM percentile, per cancer type. Cross-cohort clean-TPM
+  contrasts derive the panels, while the sample ranks over a fixed reference gene universe. Panels
+  exist for ~93 types including the missing base types. Cached as `stats`.
 - **centroid correlation** (`cancer_type_centroid.centroid_correlations`) — Spearman of the WHOLE
   transcriptome to ~116 cohort centroids; `compartment_call` aggregates it to a coarse histogenesis
   group + confidence. Computed once as `_ranker_cen_corr`, reused everywhere.
@@ -98,8 +98,10 @@ drives the call two ways it's stronger at: the `compartment_call` leaf-restricti
 confidence-gated, #83) and centroid-authoritative fine-subtype resolution + veto (`resolve_fine_subtype`
 / `_apply_centroid_fine_subtype_veto`, #98).
 
-**Decomposition** (`decompose_expression`) runs ONCE for the winner. FEATURE SPACE = within-sample
-**percentile** (`space="percentile"`). Lineage-ROUTED by `compartment_call` (same centroid signal) →
+**Decomposition** uses additive **clean TPM** for both the lineage-routed residual fit
+(`decompose_expression`) and the candidate/template fit (`decompose_sample`). Exact healthy-profile
+mixtures reject HK, percentile, and log transforms for fraction recovery; those nonlinear spaces
+remain evaluation-only alternatives. It is lineage-ROUTED by `compartment_call` →
 one of 4 modes: **solid / mesenchymal / heme / embryonal** (not confident → run top+runner-up, resolve
 by residual `lineage_fit`). Each mode runs an **NNLS background subtraction** over that mode's
 stroma/immune/normal-tissue templates → tumor-specific **residual** = `sample − reconstructed_background`

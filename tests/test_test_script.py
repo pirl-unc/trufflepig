@@ -34,7 +34,7 @@ def _environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path]:
     return env, lock_dir, args_path
 
 
-def test_test_script_caps_workers_and_releases_lock(tmp_path):
+def test_test_script_caps_workers_forwards_args_and_releases_lock(tmp_path):
     env, lock_dir, args_path = _environment(tmp_path)
 
     result = subprocess.run(
@@ -47,7 +47,7 @@ def test_test_script_caps_workers_and_releases_lock(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-    assert args_path.read_text().strip() == "-n 1 tests -q -k focused"
+    assert args_path.read_text().strip() == "-n 1 -q -k focused"
     assert not lock_dir.exists()
 
 
