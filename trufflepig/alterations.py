@@ -25,7 +25,8 @@ _NON_POSITIVE_EVENT_PATTERN = (
     r"(?:not\s+detected|negative|absent|wild[- ]?type|not\s+present|"
     r"inconclusive|fail(?:ed|ure)?|qns|pending|indeterminate|equivocal|"
     r"insufficient|cancel(?:l?ed)?|not\s+(?:assessed|evaluable)|"
-    r"no\s+call|invalid|vus|(?:variant\s+of\s+)?uncertain\s+significance|"
+    r"not\s+reportable|non[- ]?reportable|no\s+call|invalid|vus|"
+    r"(?:variant\s+of\s+)?uncertain\s+significance|"
     r"(?:likely\s+)?benign|low[- ]?qual(?:ity)?)"
 )
 _NON_POSITIVE_RESULT_PATTERN = rf"(?:{_NON_POSITIVE_EVENT_PATTERN}|unknown)"
@@ -406,11 +407,30 @@ def _molecular_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     gene = _clean_gene(record.get("gene"))
     if alteration_type == "fusion" and gene:
         return ("fusion", gene)
+    # These alteration classes are the molecular eligibility event.  Repeated
+    # exports may phrase the result differently (for example ``amplification``
+    # versus ``amplification not detected``), but a negative result should
+    # reconcile only with the same class—not erase a distinct event involving
+    # the same gene such as an EGFR kinase-domain duplication.
+    if alteration_type in {
+        "amplification",
+        "internal_tandem_duplication",
+        "kdd",
+        "loss",
+        "msi_high",
+    }:
+        return (alteration_type, gene)
     alteration = re.sub(
         r"\s+",
         " ",
         _text(record.get("alteration") or record.get("raw_name")).lower(),
     )
+    # Outcome wording is not part of the biological event identity.  Removing
+    # it lets ``BRAF V600E`` and ``BRAF V600E not detected`` reconcile as one
+    # conflicting assay event while distinct variants remain separate.
+    alteration = _NON_POSITIVE_EVENT_RE.sub(" ", alteration)
+    alteration = _EXPLICIT_UNKNOWN_OUTCOME_RE.sub(" ", alteration)
+    alteration = re.sub(r"[^a-z0-9]+", " ", alteration).strip()
     return (alteration_type, gene, alteration)
 
 
@@ -482,40 +502,23 @@ def molecular_evidence_records(analysis: object) -> list[dict[str, Any]]:
     return normalized
 
 
-def _record_mentions_gene(record: dict[str, Any], gene: str) -> bool:
-    escaped = re.escape(gene)
-    return any(
-        re.search(rf"\b{escaped}\b", _text(record.get(key)), re.IGNORECASE)
-        for key in ("gene", "gene_a", "gene_b", "pair", "alteration", "raw_name")
-    )
-
-
 def molecular_evidence_for_gene(analysis: object, gene: str) -> list[dict[str, Any]]:
     """Return positive, non-conflicting supplied evidence for one gene.
 
-    A positive call is withheld when another supplied record explicitly
-    negates the same gene. This prevents the two input interfaces—or repeated
-    assay exports—from turning contradictory molecular results into automatic
-    therapy eligibility.
+    :func:`molecular_evidence_records` reconciles positive and non-positive
+    reports for the same molecular-event identity. Distinct events involving
+    one gene remain independent: a negative EGFR KDD assay must not suppress a
+    separately reported EGFR amplification, for example.
     """
     wanted = _clean_gene(gene)
     if not wanted:
         return []
     records = molecular_evidence_records(analysis)
-    positive = [
+    return [
         record
         for record in records
         if wanted in alteration_record_genes(record)
     ]
-    if not positive:
-        return []
-    if any(
-        _record_mentions_gene(record, wanted)
-        and alteration_record_gene_is_negated(record, wanted)
-        for record in records
-    ):
-        return []
-    return positive
 
 
 def _valid_fusion_pair_genes(genes: tuple[str, str]) -> bool:

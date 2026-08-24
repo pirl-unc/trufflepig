@@ -441,3 +441,22 @@ def test_unmapped_sarcoma_child_does_not_inherit_sibling_subtype_drugs():
     assert panel_code == "SARC_SFT"
     assert panel_subtype is None
     assert panel.empty
+
+
+def test_exact_mpnst_uses_its_curated_parent_subtype_panel():
+    panel_code, panel_subtype, panel = cancer_therapy_panel_for_analysis(
+        "SARC_MPNST",
+        _analysis("SARC_MPNST"),
+    )
+
+    assert panel_code == "SARC"
+    assert panel_subtype == "MPNST"
+    assert len(panel) == 5
+    assert set(panel["subtype"]) == {"MPNST"}
+    assert set(panel["agent"]) == {
+        "BET inhibitors (trials)",
+        "SHP2 inhibitors (trials)",
+        "selumetinib",
+        "tazemetostat",
+        "trametinib",
+    }

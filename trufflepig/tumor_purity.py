@@ -4599,6 +4599,7 @@ def rank_cancer_type_candidates(
     # invokes (a disconnect no test caught); a live characterization test now
     # guards this wiring.
     compartment_restricted = False
+    centroid_context = None
     if sample_tpm:
         from .cancer_type_ontology import lineage_compatibility
         from .lineage_evidence import lineage_exclusion_evidence
@@ -4827,15 +4828,14 @@ def rank_cancer_type_candidates(
                     rows = survivors
 
             if rows and cen_coarse is not None:
-                rows[0]["centroid_top_code"] = cen_top_code
-                rows[0]["centroid_coarse_lineage"] = cen_coarse
-                rows[0]["centroid_lineage_margin"] = comp["margin"]
-                rows[0]["centroid_lineage_confident"] = comp["confident"]
-                rows[0]["centroid_compartment_restricted"] = compartment_restricted
-                rows[0]["hallmark_vetoed"] = hallmark_vetoed
-                rows[0]["centroid_lineage_agreement"] = bool(
-                    cancer_lineage_group(rows[0]["code"]) == cen_coarse
-                )
+                centroid_context = {
+                    "centroid_top_code": cen_top_code,
+                    "centroid_coarse_lineage": cen_coarse,
+                    "centroid_lineage_margin": comp["margin"],
+                    "centroid_lineage_confident": comp["confident"],
+                    "centroid_compartment_restricted": compartment_restricted,
+                    "hallmark_vetoed": hallmark_vetoed,
+                }
         except Exception:  # noqa: BLE001
             logger.debug("centroid cross-check failed", exc_info=True)
 
@@ -4849,6 +4849,12 @@ def rank_cancer_type_candidates(
         rows,
         compartment_restricted=compartment_restricted,
     )
+    if rows and centroid_context is not None:
+        rows[0].update(centroid_context)
+        rows[0]["centroid_lineage_agreement"] = bool(
+            cancer_lineage_group(rows[0]["code"])
+            == centroid_context["centroid_coarse_lineage"]
+        )
 
     return rows[:top_k]
 

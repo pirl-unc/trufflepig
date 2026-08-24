@@ -203,6 +203,74 @@ def test_low_confidence_dedicated_fusion_does_not_enable_therapy():
     assert molecular_evidence_for_gene(analysis, "ALK") == []
 
 
+@pytest.mark.parametrize("status", ("Not Reportable", "Non-reportable"))
+def test_explicitly_nonreportable_fusions_do_not_enable_therapy(status):
+    fusion = FusionRecord(
+        gene_a="TPM3",
+        gene_b="ALK",
+        reportable=status,
+    ).public_dict()
+    analysis = {"fusion_records": [fusion]}
+
+    assert molecular_evidence_for_gene(analysis, "ALK") == []
+    assert not supplied_alteration_supports_target_row(
+        {
+            "symbol": "ALK",
+            "eligibility_basis": "alk_positive",
+            "indication": "ALK-positive inflammatory myofibroblastic tumor",
+        },
+        analysis,
+    )
+
+
+def test_negative_same_gene_event_does_not_erase_distinct_positive_event():
+    analysis = {
+        "alteration_records": [
+            _record("EGFR amplification"),
+            _record("EGFR KDD not detected"),
+        ]
+    }
+
+    assert supplied_alteration_supports_target_row(
+        {
+            "symbol": "EGFR",
+            "indication": "EGFR amplification",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
+    assert not supplied_alteration_supports_target_row(
+        {
+            "symbol": "EGFR",
+            "indication": "EGFR kinase domain duplication",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
+
+
+def test_conflicting_same_class_calls_fail_closed():
+    analysis = {
+        "alteration_records": [
+            _record("EGFR amplification"),
+            _record("EGFR amplification not detected"),
+        ]
+    }
+
+    assert molecular_evidence_for_gene(analysis, "EGFR") == []
+
+
+def test_conflicting_same_variant_calls_fail_closed():
+    analysis = {
+        "alteration_records": [
+            _record("BRAF V600E"),
+            _record("BRAF V600E not detected"),
+        ]
+    }
+
+    assert molecular_evidence_for_gene(analysis, "BRAF") == []
+
+
 def test_structured_nonreportable_fusion_fails_closed(tmp_path):
     path = tmp_path / "fusions.csv"
     pd.DataFrame(

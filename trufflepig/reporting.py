@@ -2472,19 +2472,33 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
         )
 
         curated_codes = {_clean_text(code) for code in cancer_key_genes_cancer_types()}
-        if resolved_code and resolved_code in curated_codes:
-            return resolved_code, None
+        reg = cancer_type_registry()
+        default_match = reg[reg["code"] == default_code]
+        default_is_grouping = bool(
+            not default_match.empty
+            and _clean_text(default_match.iloc[0].get("ontology_level"))
+            == "grouping"
+        )
+        # A concrete report entity is authoritative.  Subtype resolution may
+        # legitimately narrow a grouping, but it must not replace an exact
+        # entity with stale sibling context carried for expression comparison.
+        lookup_code = (
+            resolved_code
+            if default_is_grouping and resolved_code
+            else default_code or resolved_code
+        )
+        if lookup_code and lookup_code in curated_codes:
+            return lookup_code, None
 
-        if resolved_code:
-            reg = cancer_type_registry()
-            match = reg[reg["code"] == resolved_code]
+        if lookup_code:
+            match = reg[reg["code"] == lookup_code]
             if not match.empty:
                 row = match.iloc[0]
                 parent_code = _clean_text(row.get("parent_code"))
                 subtype_key = _clean_text(row.get("subtype_key"))
                 suffix = ""
-                if parent_code and resolved_code.startswith(parent_code + "_"):
-                    suffix = resolved_code[len(parent_code) + 1 :]
+                if parent_code and lookup_code.startswith(parent_code + "_"):
+                    suffix = lookup_code[len(parent_code) + 1 :]
                 matched_subtype = _match_curated_subtype(
                     parent_code,
                     subtype_key,
@@ -2566,6 +2580,24 @@ def cancer_therapy_panel_for_analysis(
         if panel_subtype
         else therapy_targets_loader(panel_code)
     )
+    if not is_grouping and (targets_df is None or targets_df.empty):
+        mapped_code, mapped_subtype = cancer_key_genes_lookup_for_analysis(
+            active_cancer_code,
+            analysis,
+            ranges_df=ranges_df,
+        )
+        if mapped_subtype or mapped_code != active_cancer_code:
+            mapped_targets = (
+                therapy_targets_loader(mapped_code, subtype=mapped_subtype)
+                if mapped_subtype
+                else therapy_targets_loader(mapped_code)
+            )
+            if mapped_targets is not None and not mapped_targets.empty:
+                panel_code, panel_subtype, targets_df = (
+                    mapped_code,
+                    mapped_subtype,
+                    mapped_targets,
+                )
     if (
         is_grouping
         and panel_code == active_cancer_code
