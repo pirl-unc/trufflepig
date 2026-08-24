@@ -31,10 +31,12 @@ share module-level cache state (e.g. `_PAN_CANCER_CACHE`). If a test passes
 alone but fails in the suite, that's almost always xdist worker-affinity flake,
 not a real regression — re-run the failing file alone to confirm.
 
-## Pipeline: evidence → cancer-type call → decomposition → aneuploidy
+## Pipeline: evidence → exploratory decomposition → final call → aneuploidy
 
-`analyze_sample` → `rank_cancer_type_candidates` → (winner) `decompose_expression`. Whole-profile
-signals are computed ONCE per sample and shared across stages.
+`analyze_sample` → `rank_cancer_type_candidates` → initial evidence call →
+`decompose_sample` over the plausible candidate/background beam → residual
+identity consensus. Whole-profile signals are computed ONCE per sample and
+shared across stages.
 
 - **signature_score** (`plot_embedding._compute_cancer_type_signature_stats`): mean over a ~20-gene
   panel of `cohort_pct × within_sample_pct`, per type; cohort reference = the 170-cohort HK-bridged
@@ -50,10 +52,21 @@ lineage_support × signature_stability × family_factor` (`_candidate_support_sc
 centroid is NOT a support-score factor (folding it in was a documented negative result); it drives the
 call via the `compartment_call` leaf-restriction (#83) and fine-subtype resolution/veto (#98) instead.
 
-**Decomposition** (`decompose_expression`, winner only): FEATURE SPACE = within-sample **percentile**
-(`space="percentile"`). Lineage-routed by `compartment_call` → one of 4 modes (solid / mesenchymal /
-heme / embryonal). Each mode: NNLS background subtraction over stroma/immune/normal templates →
-**residual** = `sample − reconstructed_background` (clipped ≥0). `residual_fraction` = PRIMARY purity.
+**Decomposition** (`decompose_sample`, plausible candidate/background beam):
+FEATURE SPACE = within-sample **percentile** (`space="percentile"`).
+Lineage-routed by `compartment_call` → one of 4 modes (solid / mesenchymal /
+heme / embryonal). Each mode: NNLS background subtraction over
+stroma/immune/normal templates → **residual** =
+`sample − reconstructed_background` (clipped ≥0). `residual_fraction` =
+PRIMARY purity.
+
+**Residual identity** (`decomposition.evaluate_residual_identity`): curated
+expected-high and expected-low tumor programs are evaluated on every usable
+residual. A result must be invariant across candidate-specific realizations
+and structural background models. It contributes one independent entity-
+consensus axis; it never uses decomposition rank/purity as identity support,
+never originates an unrelated hypothesis, and never clears molecular or
+registry blockers.
 
 **Aneuploidy**: **bulk** (`bulk_aneuploidy_amplitude`, on BULK, ∝ purity) is a purity CORROBORATOR —
 `aneuploidy_purity = clip(A_obs / A_ref(type), 0, 1)`, `A_ref` from `purity_calibration` (subtype →

@@ -31,6 +31,7 @@ from pirlygenes import get_data
 from pirlygenes.gene_sets_cancer import cancer_type_registry
 
 from trufflepig.analyze import effective_expression_reference
+from trufflepig.infantile_spindle import INFANTILE_SPINDLE_CODES
 from trufflepig.reference import (
     heme_tumor_up_vs_matched_normal,
     tumor_up_vs_matched_normal,
@@ -81,6 +82,10 @@ _MISSING_MATCHED_NORMAL = frozenset(
         # no matched-normal panel. Expression resolves via the cns-glial fallback
         # to MBL (pirlygenes#461); literature signature added trufflepig-side.
         "ASTB",
+        # CMN is a non-classifying validation/context cohort. Its local
+        # alteration-gated therapy panel does not imply a calibrated kidney
+        # matched-normal decomposition reference.
+        "CMN",
     }
 )
 
@@ -143,6 +148,9 @@ _MISSING_THERAPY_AXIS = frozenset(
         "THYMCA",
         # ASTB — no therapy-response axis panel yet (rare CNS leaf).
         "ASTB",
+        # No validated expression-response axis exists for CMN; actionable
+        # interpretation is alteration-gated in infantile_spindle.py.
+        "CMN",
     }
 )
 
@@ -202,7 +210,7 @@ _TOLERATED_GAPS_EXPLICIT = {
     "NPC": {"expression", "lineage"},
     "SARC_CHOR": {"expression", "lineage"},
     "SARC_CHON": {"lineage"},
-    "SARC_IFS": {"expression", "lineage", "biomarker", "therapy"},
+    "SARC_IFS": {"expression", "lineage", "biomarker"},
     "SARC_GCTB": {"expression", "lineage", "biomarker", "therapy"},
     "SARC_ESS_LG": {"expression", "lineage", "biomarker", "therapy"},
     "SARC_ESS_HG": {"expression", "lineage", "biomarker", "therapy"},
@@ -236,6 +244,11 @@ _TOLERATED_GAPS_EXPLICIT = {
     # literature signature (BEND2/MN1/GFAP), biomarker supplied by pirlygenes;
     # lineage panel + therapy targets not yet deposited for this rare leaf.
     "ASTB": {"lineage", "therapy"},
+    # oncoref exposes CMN for marker/rank validation but explicitly marks it
+    # non-classifying. Trufflepig supplies diagnostic driver guidance and an
+    # alteration-gated therapy panel locally; a classifier lineage panel and
+    # pirlygenes biomarker table remain intentionally absent.
+    "CMN": {"lineage", "biomarker"},
 }
 
 
@@ -274,6 +287,7 @@ def _leaf_codes_with_coverage():
     key = get_data("cancer-key-genes")
     biomarker_codes = set(key[key["role"] == "biomarker"]["cancer_code"].dropna())
     therapy_codes = set(key[key["role"] == "target"]["cancer_code"].dropna())
+    therapy_codes.update(INFANTILE_SPINDLE_CODES)
 
     mn_solid = tumor_up_vs_matched_normal()
     mn_heme = heme_tumor_up_vs_matched_normal()
@@ -329,6 +343,20 @@ def test_tolerated_gaps_only_list_real_codes():
     assert not unknown, (
         f"``_TOLERATED_GAPS`` references codes not in the registry: {sorted(unknown)}"
     )
+
+
+def test_cmn_local_therapy_is_counted_without_inventing_classifier_coverage():
+    coverage = _leaf_codes_with_coverage()["CMN"]
+
+    assert coverage["expression"]
+    assert coverage["therapy"]
+    assert not coverage["lineage"]
+    assert _TOLERATED_GAPS["CMN"] == {
+        "lineage",
+        "biomarker",
+        "matched_normal",
+        "therapy_axis",
+    }
 
 
 def test_tolerated_fields_are_valid_names():

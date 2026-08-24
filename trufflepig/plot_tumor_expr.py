@@ -2312,8 +2312,8 @@ def plot_subtype_attribution(
         "surface": "Surface proteins",
     }.get(category, category.replace("_", " "))
     ax.set_title(
-        f"Subtype-reference correction audit — {cat_label}\n"
-        "Audit-only view: shows genes whose background estimate changed "
+        f"Subtype-reference comparison — {cat_label}\n"
+        "Shows genes whose background estimate changed "
         "after subtype-specific refinement.",
         fontsize=9,
         fontweight="bold",

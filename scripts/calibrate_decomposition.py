@@ -854,13 +854,20 @@ def _classify_one(
     consolidated_cancer_type = pre_residual_cancer_type
     consolidated_selected_by = str(selected.get("selected_by") or "")
     residual_identity: dict[str, Any] = {}
+    residual_refit_performed = False
+    residual_refit_accepted: bool | None = None
     if include_residual_identity:
         from trufflepig.decomposition import (
-            decompose_identity_backgrounds,
-            decompose_sample,
             evaluate_residual_identity,
             infer_sample_mode,
             scope_residual_identity_to_decomposition_mode,
+        )
+        from trufflepig.main import (
+            _fit_report_scope_decompositions,
+            _propagate_report_scope_selection,
+            _residual_identity_confirms_report_scope,
+            _restore_report_scope_metadata,
+            _synchronize_cancer_type_context,
         )
 
         # Match production before fitting residuals: an evidence-refined call
@@ -869,11 +876,6 @@ def _classify_one(
         # makes calibration exercise a decomposition state that users never
         # see in reports.
         if selected and pre_residual_cancer_type != broad_top_code:
-            from trufflepig.main import (
-                _propagate_report_scope_selection,
-                _synchronize_cancer_type_context,
-            )
-
             _propagate_report_scope_selection(
                 analysis,
                 df_expr,
@@ -886,15 +888,6 @@ def _classify_one(
                 supplied_cancer_type=None,
             )
 
-        candidate_codes: list[str] = []
-        for code in (
-            pre_residual_cancer_type,
-            broad_top_code,
-            *(str(row.get("code") or "") for row in trace),
-        ):
-            code = str(code or "").strip()
-            if code and code not in candidate_codes:
-                candidate_codes.append(code)
         sample_mode = infer_sample_mode(
             # Match production: the adjudicated report entity chooses the
             # biological decomposition regime. The raw ranker trace remains
@@ -902,18 +895,29 @@ def _classify_one(
             cancer_types=[pre_residual_cancer_type],
             sample_mode="auto",
         )
-        decompositions = decompose_sample(
-            df_expr,
-            cancer_types=candidate_codes,
-            top_k=None,
-            sample_mode=sample_mode,
-            candidate_rows=trace,
-        )
-        decompositions.extend(
-            decompose_identity_backgrounds(
-                df_expr,
-                sample_mode=sample_mode,
+        analysis["sample_mode"] = sample_mode
+
+        def fit_active_scope(report_code):
+            context = _synchronize_cancer_type_context(
+                analysis,
+                supplied_cancer_type=None,
             )
+            reference_code = context.code_for("cohort") or report_code
+            return _fit_report_scope_decompositions(
+                df_expr,
+                analysis,
+                report_code=report_code,
+                reference_code=reference_code,
+                sample_mode=sample_mode,
+                tumor_context="auto",
+                explicit_site_hint=None,
+                inferred_site_context=None,
+                template_overrides=None,
+                sample_context=None,
+            )
+
+        decompositions, candidate_codes, _initial_fit_context = fit_active_scope(
+            pre_residual_cancer_type
         )
         residual_identity = evaluate_residual_identity(
             decompositions,
@@ -932,14 +936,78 @@ def _classify_one(
             residual_identity_evidence=residual_identity,
         )
         post_selected = (post_evidence or {}).get("selected") or {}
-        consolidated_cancer_type = (
+        proposed_cancer_type = (
             str(post_selected.get("cancer_type") or "")
             or pre_residual_cancer_type
         )
-        consolidated_selected_by = (
+        proposed_selected_by = (
             str(post_selected.get("selected_by") or "")
             or consolidated_selected_by
         )
+        if post_selected and proposed_cancer_type != pre_residual_cancer_type:
+            residual_refit_performed = True
+            previous_report_scope = analysis.get("report_scope_cancer_type")
+            previous_report_parent = analysis.get(
+                "report_scope_parent_cancer_type"
+            )
+            _propagate_report_scope_selection(
+                analysis,
+                df_expr,
+                report_scope_cancer_type=proposed_cancer_type,
+                selected_scope=post_selected,
+                rna_inferred_cancer_type=broad_top_code,
+            )
+            refit_decompositions, refit_codes, _refit_context = fit_active_scope(
+                proposed_cancer_type
+            )
+            refit_identity = evaluate_residual_identity(
+                refit_decompositions,
+                candidate_codes=refit_codes,
+                current_code=proposed_cancer_type,
+            )
+            refit_identity = scope_residual_identity_to_decomposition_mode(
+                refit_identity,
+                sample_mode=sample_mode,
+            )
+            residual_refit_accepted = _residual_identity_confirms_report_scope(
+                refit_identity,
+                proposed_cancer_type,
+            )
+            residual_identity = refit_identity
+            if residual_refit_accepted:
+                consolidated_cancer_type = proposed_cancer_type
+                consolidated_selected_by = proposed_selected_by
+            else:
+                residual_identity = {
+                    **refit_identity,
+                    "adjudication_eligible": False,
+                    "adjudication_blocker": (
+                        "residual identity did not reproduce after the final "
+                        "report-scope decomposition refit"
+                    ),
+                }
+                consolidated_cancer_type = pre_residual_cancer_type
+                consolidated_selected_by = str(
+                    selected.get("selected_by") or ""
+                )
+                _propagate_report_scope_selection(
+                    analysis,
+                    df_expr,
+                    report_scope_cancer_type=pre_residual_cancer_type,
+                    selected_scope=selected,
+                    rna_inferred_cancer_type=broad_top_code,
+                )
+                _restore_report_scope_metadata(
+                    analysis,
+                    report_scope_cancer_type=previous_report_scope,
+                    report_scope_parent_cancer_type=previous_report_parent,
+                )
+                # Production rebuilds the retained scope after rollback so its
+                # purity and decomposition state are internally consistent.
+                fit_active_scope(pre_residual_cancer_type)
+        else:
+            consolidated_cancer_type = proposed_cancer_type
+            consolidated_selected_by = proposed_selected_by
     return trace, {
         "broad_top_code": broad_top_code,
         "broad_top_support": float(top.get("support_fraction_of_top") or 0.0),
@@ -954,6 +1022,8 @@ def _classify_one(
         "residual_identity_realizations": int(
             residual_identity.get("realizations_evaluated") or 0
         ),
+        "residual_identity_refit_performed": residual_refit_performed,
+        "residual_identity_refit_accepted": residual_refit_accepted,
         "consolidated_cancer_type": consolidated_cancer_type,
         "consolidated_selected_by": consolidated_selected_by,
     }

@@ -360,7 +360,7 @@ def plot_decomposition_candidates(
             101,
             i - 0.24,
             (
-                ("ADOPTED · " if i == 0 else "audit only · ")
+                ("● selected · " if i == 0 else "○ comparison · ")
                 + f"score {score:.2f}  (cancer {cancer:.2f} · site {site:.2f})"
             ),
             va="center",
@@ -370,6 +370,8 @@ def plot_decomposition_candidates(
         )
         site_evidence = getattr(row, "site_evidence", {}) or {}
         site_status = str(site_evidence.get("status") or "").replace("_", " ")
+        if site_status.startswith("site "):
+            site_status = site_status.removeprefix("site ")
         ax.text(
             101,
             i + 0.20,
@@ -377,7 +379,7 @@ def plot_decomposition_candidates(
                 f"tumor fraction {float(row.purity or 0.0):.0%} · "
                 f"host site/shared {tmpl_vals[i]:.0%}/{shared_vals[i]:.0%} · "
                 f"fit err {err:.2f} · markers {median_marker:.2f}"
-                + (f" · site {site_status}" if site_status else "")
+                + (f" · host-site evidence {site_status}" if site_status else "")
             ),
             va="center",
             ha="left",
@@ -428,9 +430,7 @@ def plot_decomposition_candidates(
     ax.set_yticklabels(display_labels, fontsize=9.5)
     ax.invert_yaxis()
     ax.set_xlim(0, 100)
-    ax.set_xlabel(
-        "Percent of sample (bar composition only; adopted row drives downstream attribution)"
-    )
+    ax.set_xlabel("Estimated sample composition (selected row is used downstream)")
     # Legend above the plot area so it never overlaps the last row's
     # segment labels — the title still sits above the legend. Legend
     # entries include the hatched "gated" pattern only when at least
@@ -447,7 +447,7 @@ def plot_decomposition_candidates(
     # Title kept single-line — the per-bar segments + legend already
     # explain that each row is one candidate's composition.
     if title == "Sample decomposition candidates":
-        title = "Decomposition candidates - adopted first; retained rows are audit-only"
+        title = "Decomposition models — selected first, alternatives below"
     ax.set_title(title, fontweight="bold", pad=28)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)

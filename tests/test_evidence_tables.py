@@ -374,6 +374,7 @@ def test_build_block_surfaces_rescue_payload_when_present(monkeypatch):
             "code": "BRCA",
             "support_override": {
                 "kind": "tnbc_basal_brca_misclassification",
+                "recommended_code": "BRCA",
                 "keratin_tpm": {"KRT14": 1122.0},
                 "luminal_marker_tpm": {"ESR1": 0.14},
                 "basal_positive_tpm": {"MIA": 181.0},
@@ -386,3 +387,15 @@ def test_build_block_surfaces_rescue_payload_when_present(monkeypatch):
     body = "\n".join(build_candidate_evidence_block(trace, {"FOXC1": 30.0}))
     assert "TNBC / basal-BRCA misclassification rescue" in body
     assert "1,122" in body
+
+    retained = "\n".join(
+        build_candidate_evidence_block(
+            trace,
+            {"FOXC1": 30.0},
+            analysis={"cancer_type": "NUTM"},
+        )
+    )
+    assert "Basal-BRCA differential marker evidence" in retained
+    assert "retained **NUTM**" in retained
+    assert "did not set the report label or therapy scope" in retained
+    assert "misclassification rescue" not in retained

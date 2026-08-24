@@ -358,6 +358,26 @@ def test_summary_surfaces_rna_qc_and_prad_stromal_pitfall():
     assert "RNA-inferred PRAD context rescue" in md
 
 
+def test_summary_explains_a_ceiling_purity_estimate():
+    analysis = _make_analysis()
+    analysis["purity"] = {
+        "overall_estimate": 1.0,
+        "overall_lower": 0.83,
+        "overall_upper": 1.0,
+    }
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+
+    assert "**Purity:** 100%" in md
+    assert "not proof of literal 100% tumor cellularity" in md
+
+
 def test_summary_uses_generic_text_for_orphan_context_rescue():
     analysis = _make_analysis()
     analysis["cancer_type"] = "BLCA"
@@ -1392,12 +1412,12 @@ def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillo
             "cancer_name": "Sarcoma",
             "cancer_type_source": "user-specified",
             "analysis_constraints": {"cancer_type": "SARC"},
-            "alteration_inputs_supplied": True,
-            "alteration_records": [
+            "variant_inputs_supplied": True,
+            "variant_records": [
                 {
                     "gene": "EGFR",
-                    "alteration": "EGFR kinase domain duplication / KDD",
-                    "alteration_type": "kdd",
+                    "variant": "EGFR kinase domain duplication / KDD",
+                    "variant_type": "kdd",
                 }
             ],
         }
@@ -1439,15 +1459,36 @@ def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillo
 
     md = build_summary(analysis, ranges_df, cancer_code="SARC", disease_state="")
 
-    assert "**Alteration evidence:** supplied EGFR kinase domain duplication" in md
+    assert "**Variant evidence:** supplied EGFR kinase domain duplication" in md
     top_lines = [line for line in md.splitlines() if line.startswith("- **")]
     assert top_lines[0].startswith("- **EGFR**")
-    assert "supplied alteration evidence matches this therapy requirement" in md
+    assert "supplied variant evidence matches this therapy requirement" in md
     assert "- **PDGFRA**" not in md
     assert "- **NTRK1**" not in md
     assert "- **CDK4**" not in md
     assert "- **PRAME**" not in md
     assert "HLA typing needed" not in md
+
+
+def test_summary_does_not_present_a_negative_variant_as_eligibility_evidence():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "variant_inputs_supplied": True,
+            "variant_records": [
+                {
+                    "gene": "EGFR",
+                    "variant": "EGFR KDD not detected",
+                    "variant_type": "kdd",
+                }
+            ],
+        }
+    )
+
+    md = build_summary(analysis, pd.DataFrame(), cancer_code="SARC", disease_state="")
+
+    assert "**Variant evidence:** supplied EGFR" not in md
+    assert "no usable positive call was available" in md
 
 
 def test_summary_prompts_for_hla_when_hla_gated_target_is_plausible():
@@ -1935,16 +1976,16 @@ def test_actionable_background_dominant_therapy_row_is_audit_only():
         sample_id="pfo017-liver",
     )
     assert "## Therapy Prioritization" in md
-    assert "### Audit-only rows: not tumor-supported in this sample" in md
+    assert "### Other curated rows — not supported by this sample" in md
     therapy_section = md.split("## Therapy Prioritization", 1)[1]
     active_block, audit_block = therapy_section.split(
-        "### Audit-only rows: not tumor-supported in this sample", 1
+        "### Other curated rows — not supported by this sample", 1
     )
     # The host-attributed FGFR3 row is not presented as an active opportunity.
     assert "erdafitinib" not in active_block
     assert "FGFR3" in audit_block
     assert "erdafitinib" in audit_block
-    assert "audit-only negative/background evidence" in audit_block
+    assert "not sample-supported; negative/background evidence" in audit_block
 
 
 def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):

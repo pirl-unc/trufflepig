@@ -168,11 +168,11 @@ def test_infer_mapk_activity_sources_keeps_driver_uncertainty():
     )
     analysis = {
         "therapy_response_scores": {MAPK_ACTIVITY_AXIS: score},
-        "alteration_records": [
+        "variant_records": [
             {
                 "gene": "EGFR",
-                "alteration": "kinase domain duplication",
-                "alteration_type": "kdd",
+                "variant": "kinase domain duplication",
+                "variant_type": "kdd",
                 "source_path": "alvin.tsv",
                 "confidence": "supplied",
             }
@@ -198,6 +198,36 @@ def test_infer_mapk_activity_sources_keeps_driver_uncertainty():
     assert any("supplied EGFR kinase domain duplication" in label for label in labels)
     assert any("RNA-high EGFR" in label for label in labels)
     assert "not source-specific" in findings[0]["caveat"]
+
+
+def test_mapk_source_reasoning_uses_dedicated_fusion_evidence():
+    from trufflepig.fusions import FusionRecord
+
+    score = TherapyAxisScore(
+        therapy_class=MAPK_ACTIVITY_AXIS,
+        state="up",
+        up_geomean_fold=8.2,
+        up_genes_measured=5,
+    )
+    analysis = {
+        "therapy_response_scores": {MAPK_ACTIVITY_AXIS: score},
+        "fusion_records": [
+            FusionRecord(
+                gene_a="KIF5B",
+                gene_b="RET",
+                source_path="caller.tsv",
+                confidence="high",
+            ).public_dict()
+        ],
+    }
+
+    findings = infer_mapk_activity_sources(analysis)
+
+    sources = findings[0]["candidate_sources"]
+    assert len(sources) == 1
+    assert sources[0]["kind"] == "supplied_fusion"
+    assert "RET" in sources[0]["label"]
+    assert "KIF5B--RET" in sources[0]["label"]
 
 
 def test_fold_uses_pseudocount_to_avoid_division_by_zero():

@@ -125,21 +125,24 @@ def test_target_row_sources_are_present_for_most_curation_rows():
     sources = targets["source"].astype(str).str.strip()
     # Coverage: nearly every target row carries provenance.
     assert sources.ne("").mean() >= 0.95
-    # Well-formedness: every provenance string is either a PMID citation or a
-    # recognized curated-provenance label. pirlygenes uses ``curated_<kind>``
+    # Well-formedness: every provenance string is a PMID citation, a structured
+    # FDA label citation, or a recognized curated-provenance label. Pirlygenes
+    # uses ``curated_<kind>``
     # (e.g. ``curated_literature``) when a literature-curated association has no
     # single anchor PMID, so asserting "every source is a PMID" is an incidental
     # bundle fact, not the real invariant — it broke the deploy gate the moment the
     # (dev-ahead) pirlygenes bundle added curated_literature rows while CACHE-green
     # CI (published bundle) still passed. Assert the traceability invariant instead:
-    # a PMID citation or a curated_<kind> label — robust to the PMID/curated mix
-    # drifting, still rejecting blank-but-nonempty junk.
+    # a PMID citation, ``FDA_LABEL:<label_year>``, or a curated_<kind> label —
+    # robust to the source mix drifting, still rejecting blank-but-nonempty junk.
     non_empty = sources[sources.ne("")]
-    well_formed = non_empty.str.contains("PMID:", regex=False) | non_empty.str.fullmatch(
-        r"curated_[a-z_]+"
+    well_formed = (
+        non_empty.str.contains("PMID:", regex=False)
+        | non_empty.str.fullmatch(r"FDA_LABEL:[A-Z0-9_]+")
+        | non_empty.str.fullmatch(r"curated_[a-z_]+")
     )
     assert well_formed.all(), (
-        "malformed target-row source provenance (not a PMID citation or curated_<kind> label): "
+        "malformed target-row source provenance (not PMID, FDA_LABEL, or curated_<kind>): "
         + ", ".join(sorted(non_empty[~well_formed].unique())[:10])
     )
 
@@ -337,11 +340,11 @@ def test_her2_rows_remain_prioritizable_when_orthogonal_eligibility_is_supplied(
     }
     analysis = {
         "therapy_response_scores": {"HER2_signaling": {"state": "down"}},
-        "alteration_records": [
+        "variant_records": [
             {
                 "gene": "ERBB2",
-                "alteration": "ERBB2 amplification",
-                "alteration_type": "amplification",
+                "variant": "ERBB2 amplification",
+                "variant_type": "amplification",
             }
         ],
     }

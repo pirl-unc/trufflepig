@@ -40,7 +40,7 @@ from .reporting import (
     offcontext_known_targets,
     analysis_site_template_for_subtype,
     cancer_code_display_name,
-    cancer_key_genes_lookup_for_analysis,
+    cancer_therapy_panel_for_analysis,
     canonical_target_symbol,
     candidate_winning_subtype_for_analysis,
     clinical_maturity_summary,
@@ -50,7 +50,6 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_interpretation,
     expression_independent_rna_context,
-    filter_current_therapy_targets,
     format_missing_observation_cell,
     format_missing_observation_interp,
     hla_restrictions_for_target_row,
@@ -61,11 +60,12 @@ from .reporting import (
     target_observation_state,
     same_lineage_material_target_candidate,
     select_mismatch_repair_channel_for_report,
-    supplied_alteration_context_for_target_row,
-    supplied_alteration_supports_target_row,
+    supplied_variant_context_for_target_row,
+    supplied_variant_supports_target_row,
     subtype_curation_scope_note,
     therapy_path_context,
     therapy_path_rank,
+    therapy_row_requires_confirmed_eligibility,
     therapy_rna_context_conflict,
     therapy_row_rna_context_inactive,
     therapy_state_caution,
@@ -84,6 +84,8 @@ from .sample_context import (
     library_prep_clause,
     library_prep_display_label,
 )
+from .infantile_spindle import infantile_spindle_guidance_markdown
+from .sarcoma_therapy import sarcoma_subtype_guidance_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -489,7 +491,7 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
     The full target tables can list subtype-specific rows as context. The brief
     top-3 and summary HLA prompts should not imply Ewing/GIST/synovial-specific
     eligibility for a broad SARC call unless that subtype was actually selected
-    or direct alteration evidence supports the row.
+    or a directly supplied variant supports the row.
     """
     if not analysis:
         return False
@@ -504,7 +506,7 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
         return False
     if _subtype_tagged_row_is_parent_scope(target_row, active_code):
         return False
-    return not bool(supplied_alteration_supports_target_row(target_row, analysis))
+    return not bool(supplied_variant_supports_target_row(target_row, analysis))
 
 
 def _has_direct_eligibility_input(analysis, biomarker: str) -> bool:
@@ -517,8 +519,9 @@ def _has_direct_eligibility_input(analysis, biomarker: str) -> bool:
             bool(analysis.get(key))
             for key in (
                 "fusion_inputs_supplied",
-                "alteration_inputs_supplied",
                 "variant_inputs_supplied",
+                # Compatibility for analyses serialized before 1.24.
+                "alteration_inputs_supplied",
                 "mutation_inputs_supplied",
                 "cnv_inputs_supplied",
             )
@@ -578,7 +581,7 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
     """Surface when non-expression eligibility evidence was not provided."""
     if not expression_independent_indication(target_row):
         return ""
-    supplied_context = supplied_alteration_context_for_target_row(
+    supplied_context = supplied_variant_context_for_target_row(
         target_row,
         analysis,
     )
@@ -800,9 +803,11 @@ def _top_therapies(
             disease_state=disease_state,
         ):
             continue
-        supplied_alteration_rank = (
-            0 if supplied_alteration_supports_target_row(t, analysis) else 1
+        supplied_variant_rank = (
+            0 if supplied_variant_supports_target_row(t, analysis) else 1
         )
+        if therapy_row_requires_confirmed_eligibility(t) and supplied_variant_rank != 0:
+            continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):
                 continue
@@ -812,7 +817,7 @@ def _top_therapies(
                 scored.append(
                     (
                         (
-                            supplied_alteration_rank,
+                            supplied_variant_rank,
                             therapy_path_rank(
                                 t,
                                 analysis=analysis,
@@ -876,7 +881,7 @@ def _top_therapies(
         }.get(reliability_status, 2)
         expression_rank = 1 if expr_independent else 0
         sort_key = (
-            supplied_alteration_rank,
+            supplied_variant_rank,
             therapy_path_rank(
                 t,
                 analysis=analysis,
@@ -1240,35 +1245,9 @@ def _parent_code_for(code):
 
 
 def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
-    from pirlygenes.gene_sets_cancer import cancer_therapy_targets
-
-    panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
-        cancer_code,
-        analysis,
-        ranges_df=ranges_df,
+    panel_code, panel_subtype, targets_df = cancer_therapy_panel_for_analysis(
+        cancer_code, analysis, ranges_df=ranges_df
     )
-    if panel_subtype:
-        targets_df = cancer_therapy_targets(panel_code, subtype=panel_subtype)
-    else:
-        targets_df = cancer_therapy_targets(panel_code)
-    # Subtype -> parent fallback: a refined call can land on a subtype code
-    # (e.g. HNSC_HPVneg, LAML_ELNfav) that has no curated therapy rows of its
-    # own, which would silently empty the shortlist even though the parent
-    # cohort (HNSC: pembrolizumab/cetuximab; LAML: CD33/FLT3/IDH/venetoclax)
-    # is fully curated. Fall back to the parent panel and report against it;
-    # the existing ``subtype_curation_scope_note`` (fires when panel_code !=
-    # cancer_code) explains the parent-panel use to the reader.
-    if targets_df is None or targets_df.empty:
-        parent = _parent_code_for(panel_code)
-        if parent and parent != panel_code:
-            parent_targets = cancer_therapy_targets(parent)
-            if parent_targets is not None and not parent_targets.empty:
-                panel_code, panel_subtype, targets_df = (
-                    parent,
-                    None,
-                    parent_targets,
-                )
-    targets_df = filter_current_therapy_targets(targets_df)
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 
 
@@ -1324,6 +1303,17 @@ def _caveats_from_purity_tier(
                 "reflects the agreement of the remaining methods rather "
                 "than that single high reading."
             )
+    purity = (analysis or {}).get("purity") or {}
+    try:
+        purity_point = float(purity.get("overall_estimate"))
+    except (TypeError, ValueError):
+        purity_point = None
+    if purity_point is not None and purity_point >= 0.995:
+        out.append(
+            "The RNA model reached its purity ceiling because it did not resolve "
+            "a separable non-tumor fraction; this is not proof of literal 100% "
+            "tumor cellularity."
+        )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", None)
@@ -1667,35 +1657,48 @@ def _fusion_evidence_line(analysis, cancer_code: str) -> str:
     return ""
 
 
-def _alteration_evidence_line(analysis) -> str:
-    records = analysis.get("alteration_records") or []
+def _variant_evidence_line(analysis) -> str:
+    supplied_records = (
+        analysis.get("variant_records")
+        if "variant_records" in analysis
+        else analysis.get("alteration_records")
+    ) or []
+    from .variants import variant_record_genes
+
+    records = [record for record in supplied_records if variant_record_genes(record)]
     if records:
         labels = []
         for record in records[:4]:
             if not hasattr(record, "get"):
                 continue
             gene = str(record.get("gene") or "").strip()
-            alteration = str(
-                record.get("alteration") or record.get("alteration_type") or ""
+            variant = str(
+                record.get("variant")
+                or record.get("alteration")
+                or record.get("variant_type")
+                or record.get("alteration_type")
+                or ""
             ).strip()
             if gene:
-                if alteration.upper().startswith(gene.upper()):
-                    labels.append(alteration)
+                if variant.upper().startswith(gene.upper()):
+                    labels.append(variant)
                 else:
-                    labels.append(f"{gene} {alteration}".strip())
+                    labels.append(f"{gene} {variant}".strip())
         if labels:
             suffix = "" if len(records) <= 4 else f" (+{len(records) - 4} more)"
             return (
-                "**Alteration evidence:** supplied "
+                "**Variant evidence:** supplied "
                 + ", ".join(labels)
                 + suffix
                 + "; used as driver/eligibility context, not inferred from RNA."
             )
-    if analysis.get("alteration_inputs_supplied"):
+    if supplied_records or analysis.get("variant_inputs_supplied") or analysis.get(
+        "alteration_inputs_supplied"
+    ):
         return (
-            "**Alteration evidence:** alteration input was supplied, but no usable "
-            "calls were parsed; verify the file format before using therapies "
-            "that require alteration evidence."
+            "**Variant evidence:** variant input was supplied, but no usable positive "
+            "call was available; verify the source result before using therapies "
+            "that require variant evidence."
         )
     return ""
 
@@ -2214,7 +2217,7 @@ _OUTLIER_MIN_AMPLIFICATION_FOLD = 10.0
 _OUTLIER_MIN_OBSERVED_TPM = 50.0
 _OUTLIER_HIGH_PERCENTILE = 0.95
 
-# Rationale phrasing that marks a biomarker as gated by a DNA alteration
+# Rationale phrasing that marks a biomarker as gated by a DNA variant
 # (mutation / specific allele / wild-type status) rather than by mRNA level.
 # An amplification / overexpression / IHC / FISH cue WINS (HER2/ERBB2 and MDM2
 # amplicons are legitimately expression-readable), so those are never flagged.
@@ -2248,7 +2251,7 @@ _BIOMARKER_EXPRESSION_BASIS_MARKERS = (
 
 def biomarker_expression_is_not_eligibility(rationale: str) -> bool:
     """True when a biomarker-panel gene's clinical eligibility is gated by a DNA
-    alteration (mutation / specific allele / wild-type status), NOT by mRNA level.
+    variant (mutation / specific allele / wild-type status), NOT by mRNA level.
 
     Keyed off the pirlygenes-authored biomarker ``rationale`` so trufflepig
     surfaces the *consequence* without re-encoding which genes are mutation-driven
@@ -2721,12 +2724,18 @@ def build_summary(
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
     if fusion_line:
         lines.append(fusion_line)
-    alteration_line = _alteration_evidence_line(analysis)
-    if alteration_line:
-        lines.append(alteration_line)
+    variant_line = _variant_evidence_line(analysis)
+    if variant_line:
+        lines.append(variant_line)
+    spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
+    if spindle_guidance:
+        lines.append(spindle_guidance)
+    sarcoma_guidance = sarcoma_subtype_guidance_markdown(cancer_code)
+    if sarcoma_guidance:
+        lines.append(sarcoma_guidance)
     lateral_rare_prompts_are_summary_level = not (
         fusion_line
-        or alteration_line
+        or variant_line
         or analysis.get("rare_report_scope_inference")
         or analysis.get("cancer_type_source") == "user-specified"
     )
@@ -2850,8 +2859,9 @@ def build_summary(
         analysis,
         ranges_df=ranges_df,
     )
+    top = []
     hla_prompts = _missing_hla_prompts(targets_df, ranges_df, analysis)
-    if panel_code in cancer_key_genes_cancer_types():
+    if targets_df is not None and len(targets_df):
         therapy_analysis = dict(analysis)
         if panel_subtype:
             therapy_analysis["_target_panel_subtype"] = panel_subtype
@@ -2899,7 +2909,7 @@ def build_summary(
                     ranges_df=ranges_df,
                 )
                 phase = str(target_row.get("phase") or "").strip().lower()
-                if supplied_alteration_supports_target_row(target_row, therapy_analysis):
+                if supplied_variant_supports_target_row(target_row, therapy_analysis):
                     supplied_evidence_bullets.append(bullet)
                 elif phase == "approved":
                     approved_bullets.append(bullet)
@@ -3024,8 +3034,6 @@ def build_actionable(
     biomarker panel and therapy landscape inline; no pipeline-
     internal jargon.
     """
-    from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
-
     from .report_view import finalized_purity_headline
 
     purity = analysis.get("purity") or {}
@@ -3136,6 +3144,15 @@ def build_actionable(
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
     if fusion_line:
         lines.append(f"\n{fusion_line}")
+    variant_line = _variant_evidence_line(analysis)
+    if variant_line:
+        lines.append(f"\n{variant_line}")
+    spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
+    if spindle_guidance:
+        lines.append(f"\n{spindle_guidance}")
+    sarcoma_guidance = sarcoma_subtype_guidance_markdown(cancer_code)
+    if sarcoma_guidance:
+        lines.append(f"\n{sarcoma_guidance}")
     # Tissue-composition banner (if non-tumor-consistent) so
     # an actionable reader sees the caveat attached to the
     # working call, not buried in the summary. Same evidence-gated
@@ -3163,7 +3180,7 @@ def build_actionable(
     )
     hla_prompts = _missing_hla_prompts(targets_df, ranges_df, analysis)
     panel_label = _panel_display_label(panel_code, panel_subtype)
-    if panel_code in cancer_key_genes_cancer_types():
+    if targets_df is not None and len(targets_df):
         from .common import ranges_by_symbol
         sym_to_row = ranges_by_symbol(ranges_df)
 
@@ -3349,7 +3366,7 @@ def build_actionable(
                         reliability = target_reliability_status(expr, target_row=t)
                 # Route host/background-attributed disease-curation rows (e.g. a
                 # BLCA FGFR3/erdafitinib row whose RNA is hepatocyte-attributed)
-                # out of the active-opportunity table and into an audit-only
+                # out of the active-opportunity table and into a non-supported
                 # section — the same partition ``_build_target_report`` applies to
                 # ``*-targets.md`` (issue #105), so the summary, the analysis
                 # markdown, and the PDF agree.
@@ -3359,7 +3376,8 @@ def build_actionable(
                 )
                 if audit_only:
                     interp_cell = (
-                        "audit-only negative/background evidence; " + interp_cell
+                        "not sample-supported; negative/background evidence; "
+                        + interp_cell
                     )
                 phase = _phase_label(str(t.get("phase") or ""))
                 return {
@@ -3415,7 +3433,7 @@ def build_actionable(
                         "reviewable RNA evidence in this sample.*\n"
                     )
                 lines.append(
-                    "### Audit-only rows: not tumor-supported in this sample\n"
+                    "### Other curated rows — not supported by this sample\n"
                 )
                 lines.append(
                     "These rows remain visible as disease-curation provenance or "

@@ -39,7 +39,7 @@ def _clean_text(value) -> str:
     if value is None:
         return ""
     text = str(value).strip()
-    if text.lower() == "nan":
+    if text.lower() in {"nan", "<na>", "none", "null"}:
         return ""
     return text
 
@@ -646,35 +646,31 @@ def format_missing_observation_interp(state: str) -> str:
     return "not measured"
 
 
-def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
-    """Return supplied alteration records matching a target gene symbol."""
+def supplied_variants_for_gene(analysis, gene: str) -> list[dict]:
+    """Return supplied variant records matching a target gene symbol."""
+    from .variants import variant_evidence_for_gene
+
     if not isinstance(analysis, dict):
         return []
     wanted = _clean_text(gene).upper()
     if not wanted:
         return []
-    records = analysis.get("alteration_records") or []
-    matches: list[dict] = []
-    for record in records:
-        if not hasattr(record, "get"):
-            continue
-        observed = _clean_text(record.get("gene")).upper()
-        if observed == wanted:
-            matches.append(dict(record))
-    return matches
+    return variant_evidence_for_gene(analysis, wanted)
 
 
-def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
-    """Return supplied alteration records compatible with a therapy row.
+def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
+    """Return supplied variants compatible with a therapy row.
 
     This is intentionally conservative: a row that requires EGFR KDD is not
     supported by generic EGFR expression or a vague EGFR variant. For broader
-    mutation/fusion/amplification rows, a same-gene supplied alteration of a
+    mutation/fusion/amplification rows, a same-gene supplied variant of a
     compatible coarse class is enough to mark the eligibility evidence as
     present, still with clinical verification language in the reports.
     """
+    from .variants import classify_variant_type
+
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
-    records = supplied_alterations_for_gene(analysis, sym)
+    records = supplied_variants_for_gene(analysis, sym)
     if not records:
         return []
     text = " ".join(
@@ -682,12 +678,18 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         for key in ("indication", "rationale", "eligibility_note")
         if hasattr(target_row, "get")
     ).lower()
+    eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
     required_types: set[str] = set()
-    if re.search(r"\b(kdd|kinase\s+domain\s+duplication)\b", text):
+    if "alk_positive" in eligibility_basis:
+        # Trufflepig currently accepts variant files, not an IHC
+        # result channel. An activating ALK rearrangement is therefore the only
+        # supplied evidence that can satisfy an ALK-positive row here.
+        required_types.add("fusion")
+    elif re.search(r"\b(kdd|kinase\s+domain\s+duplication)\b", text):
         required_types.update({"kdd", "internal_tandem_duplication"})
     elif re.search(r"\b(itd|internal\s+tandem\s+duplication)\b", text):
         required_types.add("internal_tandem_duplication")
-    elif re.search(r"\b(fusion|rearrang|translocation)\b", text):
+    elif classify_variant_type(text) == "fusion":
         required_types.add("fusion")
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
@@ -706,10 +708,10 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         return []
     supported: list[dict] = []
     for record in records:
-        observed_type = _clean_text(record.get("alteration_type")).lower()
+        observed_type = _clean_text(record.get("variant_type")).lower()
         observed_text = " ".join(
             _clean_text(record.get(key))
-            for key in ("alteration", "raw_name", "alteration_type")
+            for key in ("variant", "raw_name", "variant_type")
         ).lower()
         if observed_type in required_types:
             supported.append(record)
@@ -722,28 +724,54 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
     return supported
 
 
-def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
-    """Reader-facing summary of supplied alteration evidence for a target row."""
-    supported = supplied_alteration_supports_target_row(target_row, analysis)
+def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
+    """Whether a therapy row needs non-expression eligibility evidence.
+
+    Pirlygenes 5.23.51 distinguishes histology-only rows from molecular or
+    otherwise biomarker-qualified rows. Unknown future structured bases fail
+    closed; plain histology remains eligible from the established report entity.
+    """
+    if not hasattr(target_row, "get"):
+        return False
+    if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
+        # Pirlygenes therapy tables retain this legacy column.
+        target_row.get("requires_supplied_alteration")
+    ) or _truthy(
+        target_row.get("requires_verified_alteration")
+    ):
+        return True
+    eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
+    return bool(eligibility_basis and eligibility_basis != "histology")
+
+
+def supplied_variant_context_for_target_row(target_row, analysis) -> str:
+    """Reader-facing summary of supplied variant evidence for a target row."""
+    supported = supplied_variant_supports_target_row(target_row, analysis)
     if not supported:
         return ""
     labels: list[str] = []
     for record in supported[:3]:
         gene = _clean_text(record.get("gene"))
-        alteration = _clean_text(record.get("alteration")) or _clean_text(
-            record.get("alteration_type")
+        variant = _clean_text(record.get("variant")) or _clean_text(
+            record.get("variant_type")
         )
-        if gene and alteration.upper().startswith(gene.upper()):
-            labels.append(alteration)
+        if gene and variant.upper().startswith(gene.upper()):
+            labels.append(variant)
         else:
-            labels.append(f"{gene} {alteration}".strip())
+            labels.append(f"{gene} {variant}".strip())
     suffix = "" if len(supported) <= 3 else f" (+{len(supported) - 3} more)"
     return (
-        "supplied alteration evidence matches this therapy requirement: "
+        "supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
         + "; verify against the clinical assay report"
     )
+
+
+# Compatibility names for downstream callers of the pre-1.24 reporting API.
+supplied_alterations_for_gene = supplied_variants_for_gene
+supplied_alteration_supports_target_row = supplied_variant_supports_target_row
+supplied_alteration_context_for_target_row = supplied_variant_context_for_target_row
 
 
 def pathway_state_figure_axes(therapy_response_scores) -> list:
@@ -1864,7 +1892,7 @@ def _therapy_rna_context_inactive_rule(target_row, *, analysis=None) -> dict | N
     """
     if not isinstance(analysis, dict) or not hasattr(target_row, "get"):
         return None
-    if supplied_alteration_supports_target_row(target_row, analysis):
+    if supplied_variant_supports_target_row(target_row, analysis):
         return None
     for rule in _THERAPY_EXPOSURE_RULES:
         axis = str(rule.get("axis") or "")
@@ -1882,7 +1910,7 @@ def therapy_rna_context_conflict(target_row, *, analysis=None, disease_state=Non
 
     This is stronger than the medication-reconciliation caution: the row can
     remain visible in full context tables, but should be deprioritized unless
-    clinical HER2/ER status or a compatible supplied alteration confirms
+    clinical HER2/ER status or a compatible supplied variant confirms
     eligibility.
     """
     rule = _therapy_rna_context_inactive_rule(target_row, analysis=analysis)
@@ -2159,20 +2187,30 @@ def summarize_reliability_reasons(rows, top_n=3):
     return ", ".join(reason for reason, _ in counter.most_common(top_n))
 
 
-def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
-    """Return the final subtype/cancer code implied by the analysis."""
+def subtype_resolution_for_analysis(analysis, ranges_df=None):
+    """Return the subtype decision and its provenance for report consumers.
+
+    A raw expression winner and a subtype established by an independent
+    site/marker tiebreaker are not interchangeable.  Callers that can change
+    clinical scope (notably therapy lookup) must inspect ``status`` rather than
+    treating every ``final_subtype`` as established.
+    """
     try:
         from .analyze import cancer_type_context_from_analysis
 
         cancer_type_context = cancer_type_context_from_analysis(analysis)
         if cancer_type_context.uses_distinct_reference and cancer_type_context.report_code:
-            return cancer_type_context.report_code
+            return {
+                "final_subtype": cancer_type_context.report_code,
+                "status": "report_scope",
+                "reason": "active report scope",
+            }
     except Exception:
         pass
 
     winning_subtype = candidate_winning_subtype_for_analysis(analysis)
     if not winning_subtype:
-        return None
+        return {}
 
     tumor_tpm_by_symbol = analysis.get("tumor_tpm_by_symbol")
     if not tumor_tpm_by_symbol and ranges_df is not None:
@@ -2194,12 +2232,19 @@ def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
             site_template=analysis_site_template_for_subtype(analysis),
             tumor_tpm_by_symbol=tumor_tpm_by_symbol,
         )
-        winning_subtype = (
-            _clean_text(resolution.get("final_subtype")) or winning_subtype
-        )
     except Exception:
-        pass
-    return winning_subtype or None
+        return {
+            "final_subtype": winning_subtype,
+            "status": "unresolved",
+            "reason": "subtype resolver unavailable",
+        }
+    return dict(resolution)
+
+
+def resolved_subtype_code_for_analysis(analysis, ranges_df=None):
+    """Return the final subtype/cancer code implied by the analysis."""
+    resolution = subtype_resolution_for_analysis(analysis, ranges_df=ranges_df)
+    return _clean_text(resolution.get("final_subtype")) or None
 
 
 def analysis_site_template_for_subtype(analysis):
@@ -2436,19 +2481,33 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
         )
 
         curated_codes = {_clean_text(code) for code in cancer_key_genes_cancer_types()}
-        if resolved_code and resolved_code in curated_codes:
-            return resolved_code, None
+        reg = cancer_type_registry()
+        default_match = reg[reg["code"] == default_code]
+        default_is_grouping = bool(
+            not default_match.empty
+            and _clean_text(default_match.iloc[0].get("ontology_level"))
+            == "grouping"
+        )
+        # A concrete report entity is authoritative.  Subtype resolution may
+        # legitimately narrow a grouping, but it must not replace an exact
+        # entity with stale sibling context carried for expression comparison.
+        lookup_code = (
+            resolved_code
+            if default_is_grouping and resolved_code
+            else default_code or resolved_code
+        )
+        if lookup_code and lookup_code in curated_codes:
+            return lookup_code, None
 
-        if resolved_code:
-            reg = cancer_type_registry()
-            match = reg[reg["code"] == resolved_code]
+        if lookup_code:
+            match = reg[reg["code"] == lookup_code]
             if not match.empty:
                 row = match.iloc[0]
                 parent_code = _clean_text(row.get("parent_code"))
                 subtype_key = _clean_text(row.get("subtype_key"))
                 suffix = ""
-                if parent_code and resolved_code.startswith(parent_code + "_"):
-                    suffix = resolved_code[len(parent_code) + 1 :]
+                if parent_code and lookup_code.startswith(parent_code + "_"):
+                    suffix = lookup_code[len(parent_code) + 1 :]
                 matched_subtype = _match_curated_subtype(
                     parent_code,
                     subtype_key,
@@ -2463,6 +2522,147 @@ def cancer_key_genes_lookup_for_analysis(cancer_code, analysis, ranges_df=None):
         pass
 
     return default_code or resolved_code, None
+
+
+def cancer_therapy_panel_for_analysis(
+    cancer_code,
+    analysis,
+    ranges_df=None,
+    *,
+    therapy_targets_loader=None,
+):
+    """Return the complete curated therapy panel for the active report scope.
+
+    Pirlygenes is the primary disease-curation source. Trufflepig adds a small
+    variant-gated layer for infantile spindle tumors whose upstream panel is
+    empty. Exact molecular panels take precedence over a generic parent
+    fallback; other uncurated descendants retain the historical parent-panel
+    behavior.
+    """
+    import pandas as pd
+    if therapy_targets_loader is None:
+        from pirlygenes.gene_sets_cancer import cancer_therapy_targets
+
+        therapy_targets_loader = cancer_therapy_targets
+
+    from .infantile_spindle import infantile_spindle_therapy_targets
+
+    active_cancer_code = _clean_text(cancer_code)
+    if isinstance(analysis, dict):
+        active_cancer_code = (
+            _clean_text(analysis.get("report_scope_cancer_type"))
+            or _clean_text(analysis.get("cancer_type"))
+            or active_cancer_code
+        )
+
+    # Histology-specific treatment evidence follows the report entity, not an
+    # expression-only child carried for reference/marker interpretation.  A
+    # broad SARC report with a PEComa-like expression pattern must not inherit
+    # the PEComa indication. An independently confirmed/corrected child (for
+    # example an MDM2-amplified sarcoma resolved to osteosarcoma by bone-site
+    # context) can supply the narrower panel.
+    panel_code, panel_subtype = active_cancer_code, None
+    try:
+        from trufflepig.cancer_ontology import cancer_type_registry
+
+        registry = cancer_type_registry()
+        match = registry[registry["code"] == active_cancer_code]
+        is_grouping = bool(
+            not match.empty
+            and str(match.iloc[0].get("ontology_level") or "").strip()
+            == "grouping"
+        )
+    except Exception:
+        is_grouping = False
+
+    if is_grouping:
+        resolution = subtype_resolution_for_analysis(analysis, ranges_df=ranges_df)
+        if resolution.get("status") in {"confirmed", "corrected"}:
+            panel_code, panel_subtype = cancer_key_genes_lookup_for_analysis(
+                active_cancer_code,
+                analysis,
+                ranges_df=ranges_df,
+            )
+
+    targets_df = (
+        therapy_targets_loader(panel_code, subtype=panel_subtype)
+        if panel_subtype
+        else therapy_targets_loader(panel_code)
+    )
+    if not is_grouping and (targets_df is None or targets_df.empty):
+        mapped_code, mapped_subtype = cancer_key_genes_lookup_for_analysis(
+            active_cancer_code,
+            analysis,
+            ranges_df=ranges_df,
+        )
+        if mapped_subtype or mapped_code != active_cancer_code:
+            mapped_targets = (
+                therapy_targets_loader(mapped_code, subtype=mapped_subtype)
+                if mapped_subtype
+                else therapy_targets_loader(mapped_code)
+            )
+            if mapped_targets is not None and not mapped_targets.empty:
+                panel_code, panel_subtype, targets_df = (
+                    mapped_code,
+                    mapped_subtype,
+                    mapped_targets,
+                )
+    if (
+        is_grouping
+        and panel_code == active_cancer_code
+        and targets_df is not None
+        and "subtype" in targets_df.columns
+    ):
+        subtype = targets_df["subtype"].fillna("").astype(str).str.strip()
+        molecular_match = targets_df.apply(
+            lambda row: bool(supplied_variant_supports_target_row(row, analysis)),
+            axis=1,
+        )
+        # Parent-wide rows are valid for the broad report. A child-specific
+        # row may cross that boundary only when the sample itself supplies the
+        # molecular eligibility event; expression resemblance is insufficient.
+        targets_df = targets_df.loc[~subtype.astype(bool) | molecular_match]
+
+    molecular_df = infantile_spindle_therapy_targets(active_cancer_code, analysis)
+    has_molecular_panel = molecular_df is not None and not molecular_df.empty
+
+    if (targets_df is None or targets_df.empty) and not has_molecular_panel:
+        parent_code = _cancer_registry_parent_codes().get(_clean_text(panel_code), "")
+        if parent_code and parent_code != panel_code:
+            parent_targets = therapy_targets_loader(parent_code)
+            if parent_targets is not None and not parent_targets.empty:
+                # A parent can contain mutually exclusive subtype panels.  An
+                # unmapped child may inherit only genuinely parent-wide rows,
+                # never every sibling's therapies (for example IMT inheriting
+                # GIST, liposarcoma, and MPNST drugs from the SARC table).
+                if "subtype" in parent_targets.columns:
+                    subtype = parent_targets["subtype"].fillna("").astype(str).str.strip()
+                    parent_targets = parent_targets.loc[~subtype.astype(bool)]
+                if not parent_targets.empty:
+                    panel_code, panel_subtype, targets_df = (
+                        parent_code,
+                        None,
+                        parent_targets,
+                    )
+
+    parts = [
+        frame
+        for frame in (targets_df, molecular_df)
+        if frame is not None and not frame.empty
+    ]
+    if not parts:
+        if targets_df is not None:
+            return panel_code, panel_subtype, targets_df.reset_index(drop=True)
+        return panel_code, panel_subtype, pd.DataFrame()
+    targets_df = pd.concat(parts, ignore_index=True, sort=False)
+    dedupe_columns = [
+        col
+        for col in ("cancer_code", "subtype", "symbol", "agent", "indication")
+        if col in targets_df.columns
+    ]
+    if dedupe_columns:
+        targets_df = targets_df.drop_duplicates(subset=dedupe_columns, keep="last")
+    return panel_code, panel_subtype, filter_current_therapy_targets(targets_df)
 
 
 def subtype_key_for_analysis(analysis, ranges_df=None):

@@ -192,7 +192,17 @@ def compute_purity_confidence(
     if isinstance(best_integration, dict) and best_integration.get("point_source") == "desaturated_fusion":
         if tier == "high":
             tier = "moderate"
-        reasons.append("high single-method purity reading uncorroborated — using method consensus")
+        excluded = best_integration.get("ceiling_excluded_methods") or []
+        if excluded:
+            reasons.append(
+                "ceiling-pinned "
+                + "/".join(str(name) for name in excluded)
+                + " values are non-informative — using unsaturated evidence"
+            )
+        else:
+            reasons.append(
+                "high purity reading uncorroborated — using method consensus"
+            )
 
     sev = (degradation_severity or "none").lower()
     if sev in ("moderate", "severe"):

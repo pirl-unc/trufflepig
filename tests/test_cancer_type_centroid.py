@@ -224,6 +224,60 @@ def test_ranker_crosscheck_flags_cross_lineage_disagreement():
     assert rows[0].get("compartment_in_set") is False
 
 
+def test_centroid_context_follows_hierarchy_finalized_leader(monkeypatch):
+    """Leader-level centroid audit data belongs to the final ontology call.
+
+    Hierarchy abstention is applied after the centroid pass.  This integration
+    test makes that final ordering deterministic and verifies that a promoted
+    parent—not the superseded child—carries the context consumed downstream.
+    """
+    import trufflepig.cancer_type_centroid as ctc
+    from trufflepig.tumor_purity import rank_cancer_type_candidates
+
+    monkeypatch.setattr(
+        ctc,
+        "centroid_correlations",
+        lambda sample, restrict_to=None: pd.Series(
+            {
+                "SARC_MPNST": 0.90,
+                "SARC_DDLPS": 0.80,
+                "SARC_LMS": 0.70,
+                "SARC": 0.60,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        ctc,
+        "compartment_call",
+        lambda sample, _corr=None: {
+            "compartment": "Sarcoma",
+            "score": 0.90,
+            "runner_up": "Epithelial",
+            "margin": 0.20,
+            "confident": True,
+            "scores": pd.Series({"Sarcoma": 0.90, "Epithelial": 0.70}),
+        },
+    )
+    monkeypatch.setattr(
+        ctc,
+        "resolve_fine_subtype",
+        lambda code, correlations, current_subtype=None: "SARC_SYN",
+    )
+    monkeypatch.setattr(ctc, "hallmark_veto", lambda code, sample: False)
+
+    rows = rank_cancer_type_candidates(
+        _cohort_sample_df("SARC"),
+        candidate_codes=["SARC_DDLPS", "SARC_LMS", "SARC"],
+        top_k=3,
+    )
+
+    assert rows[0]["code"] == "SARC"
+    assert rows[0]["hierarchy_conflict_parent_abstention"] is True
+    assert rows[0]["centroid_top_code"]
+    assert rows[0]["centroid_coarse_lineage"] == "Sarcoma"
+    assert rows[0]["centroid_lineage_agreement"] is True
+
+
 def test_member_union_ancestry_keeps_resolved_child_above_parent():
     """A confident LUAD profile must not broaden to an aggregate NSCLC label."""
     from trufflepig.tumor_purity import rank_cancer_type_candidates

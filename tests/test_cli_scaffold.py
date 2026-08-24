@@ -109,7 +109,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
         "--workspace", str(workspace),
         "--hla-types", "A*02:01,B*07:02",
         "--fusions", "/tmp/fusions.tsv",
-        "--alterations", "/tmp/alts.tsv",
+        "--variants", "/tmp/variants.tsv",
         "--alignment-qc", "/tmp/aqc.tsv",
         "--sample-mode", "tumor_bulk",
         "--tumor-context", "primary",
@@ -120,7 +120,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
     assert rc == 0
     assert captured["hla_types"] == "A*02:01,B*07:02"
     assert captured["fusions"] == "/tmp/fusions.tsv"
-    assert captured["alterations"] == "/tmp/alts.tsv"
+    assert captured["variants"] == "/tmp/variants.tsv"
     assert captured["alignment_qc"] == "/tmp/aqc.tsv"
     assert captured["sample_mode"] == "tumor_bulk"
     assert captured["tumor_context"] == "primary"

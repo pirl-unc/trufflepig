@@ -91,8 +91,9 @@ def test_all_gene_ids_resolve_in_ensembl():
     unresolvable IDs is tolerated (retirements, alt-haplotype-only genes).
 
     Checks all installed human Ensembl releases, not just the default GRCh38.
-    Recommend having at least Ensembl 110 installed for reasonable coverage
-    of alt-haplotype genes that have been added/revised since earlier releases.
+    Recommend having Ensembl 114 or newer installed for coverage of genes in
+    current reference bundles, plus the historical releases used by the source
+    cohorts.
     """
     aliases = _load_ensembl_id_aliases()
 
@@ -127,4 +128,8 @@ def test_all_gene_ids_resolve_in_ensembl():
                 f"First few: {missing[:5]}"
             )
 
-    assert not failures, "\n".join(failures)
+    installed_releases = [genome.release for genome in _human_genomes]
+    assert not failures, (
+        "\n".join(failures)
+        + f"\nInstalled human Ensembl releases: {installed_releases}"
+    )

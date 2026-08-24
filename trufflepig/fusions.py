@@ -230,8 +230,10 @@ def _numeric(value: object) -> float | None:
 
 
 def _text(value: object) -> str:
-    text = str(value or "").strip()
-    if text.lower() == "nan":
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "<na>", "none"}:
         return ""
     return text
 

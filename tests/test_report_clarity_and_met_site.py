@@ -1141,13 +1141,14 @@ def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
     )
     targets = (tmp_path / "pfo017-liver-targets.md").read_text()
 
-    assert "### Audit-only rows: not tumor-supported in this sample" in targets
-    active_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[0]
-    audit_block = targets.split("### Audit-only rows: not tumor-supported in this sample", 1)[1]
+    unsupported_heading = "### Other curated rows — not supported by this sample"
+    assert unsupported_heading in targets
+    active_block = targets.split(unsupported_heading, 1)[0]
+    audit_block = targets.split(unsupported_heading, 1)[1]
     assert "erdafitinib" not in active_block
     assert "FGFR3" in audit_block
     assert "erdafitinib" in audit_block
-    assert "audit-only negative/background evidence" in audit_block
+    assert "not sample-supported; negative/background evidence" in audit_block
 
 
 def test_ci_confidence_tier_buckets():

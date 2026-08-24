@@ -664,6 +664,47 @@ def test_summarize_call_explicit_site_hint_survives_divergent_warning():
     assert result["reported_site"] == "bone-associated host context"
 
 
+def test_summarize_call_explicit_met_site_survives_fit_warning():
+    analysis = _base_analysis(
+        cancer_type="BLCA",
+        fit_quality={"label": "ambiguous"},
+        analysis_constraints={"met_site": "liver"},
+    )
+    best = _mock_decomp_result(
+        cancer_type="BLCA",
+        template="met_liver",
+        template_site_factor=0.9,
+        template_tissue_score=0.8,
+        site_evidence={"site_supported": True, "status": "site_supported"},
+        warnings=["Many genes are overexplained by the TME background"],
+    )
+
+    result = _summarize_sample_call(analysis, [best], sample_mode="solid")
+
+    assert result["site_indeterminate"] is False
+    assert result["reported_context"] == "met"
+    assert result["reported_site"] == "liver-associated host context"
+
+
+def test_explicit_met_site_does_not_bless_a_different_template():
+    analysis = _base_analysis(
+        cancer_type="BLCA",
+        fit_quality={"label": "strong"},
+        analysis_constraints={"met_site": "liver"},
+    )
+    best = _mock_decomp_result(
+        cancer_type="BLCA",
+        template="met_bone",
+        site_evidence={"site_supported": True, "status": "site_supported"},
+        warnings=[],
+    )
+
+    result = _summarize_sample_call(analysis, [best], sample_mode="solid")
+
+    assert result["site_indeterminate"] is True
+    assert result["reported_site"] is None
+
+
 def test_report_compatible_decomposition_skips_unsupported_met_template():
     analysis = _base_analysis(cancer_type="BRCA_Basal")
     raw_best = SimpleNamespace(
@@ -704,3 +745,65 @@ def test_report_compatible_decomposition_skips_unsupported_met_template():
         "Selected fallback-reference decomposition" in warning
         for warning in report_primary.warnings
     )
+
+
+def test_report_decomposition_requires_independent_context_for_met_site():
+    """A host component fit cannot by itself assign an anatomic sample site."""
+    analysis = _base_analysis(cancer_type="NUTM")
+    met_fit = SimpleNamespace(
+        cancer_type="NUTM",
+        template="met_peritoneal",
+        score=0.28,
+        warnings=[],
+        site_evidence={"site_supported": True, "status": "site_supported"},
+    )
+    primary_fit = SimpleNamespace(
+        cancer_type="NUTM",
+        template="solid_primary",
+        score=0.25,
+        warnings=[],
+        site_evidence={},
+    )
+
+    ordered = _prioritize_report_compatible_decomposition(
+        [met_fit, primary_fit],
+        reference_code="NUTM",
+        report_code="NUTM",
+        enabled=True,
+        analysis=analysis,
+    )
+
+    assert ordered[0] is primary_fit
+    assert ordered[1] is met_fit
+
+
+def test_report_decomposition_uses_independently_inferred_met_site():
+    analysis = _base_analysis(cancer_type="BLCA")
+    analysis["inferred_site_context"] = {
+        "site": "liver",
+        "basis": "strong_off_primary_host_tissue",
+    }
+    met_fit = SimpleNamespace(
+        cancer_type="BLCA",
+        template="met_liver",
+        score=0.28,
+        warnings=[],
+        site_evidence={"site_supported": True, "status": "site_supported"},
+    )
+    primary_fit = SimpleNamespace(
+        cancer_type="BLCA",
+        template="solid_primary",
+        score=0.25,
+        warnings=[],
+        site_evidence={},
+    )
+
+    ordered = _prioritize_report_compatible_decomposition(
+        [met_fit, primary_fit],
+        reference_code="BLCA",
+        report_code="BLCA",
+        enabled=True,
+        analysis=analysis,
+    )
+
+    assert ordered[0] is met_fit

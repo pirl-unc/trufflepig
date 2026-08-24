@@ -230,17 +230,6 @@ _METHOD_RELIABILITY = {
     "estimate": 0.5,
     "lineage": 0.3,
 }
-# A purity read at/above this with no corroborating reliable signal is treated as ESTIMATE-driven
-# saturation (the benchmark: ESTIMATE never drops below ~0.66 and climbs to ~0.97).
-_SATURATION_FLOOR = 0.85
-# A purity read pinned this close to the 1.0 ceiling carries NO information — a tissue biopsy is
-# ~never 100% tumor, and a value at the ceiling is the estimator maxing out, not measuring. Such a
-# read is ALWAYS replaced by the physical fused consensus regardless of corroboration (a lineage-
-# identity + ESTIMATE co-saturation to 100%, as in NUT carcinoma, is the canonical case — the
-# decomposition residual fraction stays ~0.55 and exposes it).
-_CEILING_PINNED = 0.98
-# A method corroborates a high purity only if it independently reads at least this high.
-_CORROBORATION_FLOOR = 0.6
 # Lineage at/above this is saturated (identity signal maxed out) — not usable as a purity point.
 _LINEAGE_SATURATED = 0.95
 
@@ -250,25 +239,20 @@ def best_purity_estimate(
     *,
     decomposition: Optional[dict] = None,
 ) -> Optional[dict]:
-    """Produce the best-available purity: keep the empirically-best point, add an honest interval.
+    """Produce the best-available purity without double-counting its components.
 
-    Evidence (HCC1395×HPA in-silico mixtures): no single method is trustworthy across the purity
-    range — the signature can be flat/broken on atypical inputs, ESTIMATE is monotone but biased high
-    and saturating, lineage is a tissue-identity signal — while the existing combiner's *point* is
-    the most accurate estimator available (mixture MAE ≈ 0.10). So this does two evidence-backed
-    things and nothing speculative:
+    ``purity.overall_*`` is already the integrated estimate produced by the
+    tumor-purity model. Signature, lineage, and ESTIMATE are its internal
+    inputs, while full-template decomposition usually inherits the same point
+    as its tumor-mass prior. Pooling all of them a second time treats dependent,
+    differently calibrated signals as exchangeable measurements and can turn a
+    useful interval into a nearly vacuous 2–98% range.
 
-    1. **Honest interval + agreement.** Fuse the method estimates with the random-effects model and
-       report its interval (which widens automatically when methods disagree) unioned with the
-       incoming interval, plus ``method_agreement`` = 1 − I² (1.0 = methods concur).
-    2. **Anti-saturation guard.** A read pinned at the 1.0 ceiling is never a real measurement (a
-       biopsy is ~never 100% tumor) — it is ALWAYS replaced by the physical fused consensus (chiefly
-       the decomposition residual fraction). Below the ceiling but still high (≥ the saturation
-       floor), the point is replaced only when NO reliable method (signature / non-saturated lineage
-       / non-fragile decomposition) independently corroborates it — the ESTIMATE-driven-saturation
-       case the benchmark exposes. Both paths keep the wide, disagreement-aware interval. This is
-       what pulls a rare type like NUT carcinoma — whose lineage-identity genes and ESTIMATE both
-       saturate to 100% while the residual fraction says ~55% — off a spurious 100%.
+    Preserve the integrated point and interval. Component random-effects
+    statistics remain audit-only agreement metadata. The sole replacement is
+    structural: a point numerically pinned to 100% may yield to a non-saturated
+    physical background residual, whose own interval is then reported without
+    unrelated identity/context channels widening it.
 
     Returns a dict of ``overall_estimate`` / ``overall_lower`` / ``overall_upper`` / ``i2`` /
     ``method_agreement`` / ``n_methods`` / ``point_source`` (``"combiner"`` or ``"desaturated_fusion"``),
@@ -288,6 +272,15 @@ def best_purity_estimate(
     sig_weight = _METHOD_RELIABILITY["signature"]
     if isinstance(sig_stability, (int, float)):
         sig_weight *= max(float(sig_stability), 0.15)
+    ceiling_excluded = []
+    for name, value in (
+        ("signature", sig.get("purity")),
+        ("lineage", lin_p),
+        ("estimate", comp.get("estimate_purity")),
+    ):
+        if isinstance(value, (int, float)) and float(value) >= 1.0 - _EPS:
+            ceiling_excluded.append(name)
+
     ms = [
         measurement_from_interval("signature", sig.get("purity"), sig.get("lower"), sig.get("upper"),
                                   weight=sig_weight),
@@ -300,11 +293,10 @@ def best_purity_estimate(
     decomp_point = None
     if decomposition:
         decomp_point = decomposition.get("overall_estimate")
-        fragile = bool(decomposition.get("fragile"))
         ms.append(measurement_from_interval(
             "decomposition", decomp_point,
             decomposition.get("hypothesis_purity_lo"), decomposition.get("hypothesis_purity_hi"),
-            weight=_METHOD_RELIABILITY["decomposition"] * (0.35 if fragile else 1.0),
+            weight=_METHOD_RELIABILITY["decomposition"],
         ))
     ms = [m for m in ms if m is not None]
     fused = integrate_purity_estimates(ms)
@@ -313,42 +305,70 @@ def best_purity_estimate(
 
     incoming = purity.get("overall_estimate")
 
-    # Does any RELIABLE method independently corroborate a high purity?
-    sig_p = sig.get("purity")
-    corroborated_high = any([
-        isinstance(sig_p, (int, float)) and float(sig_p) >= _CORROBORATION_FLOOR,
-        lineage_usable and float(lin_p) >= _CORROBORATION_FLOOR,
-        isinstance(decomp_point, (int, float)) and float(decomp_point) >= _CORROBORATION_FLOOR
-        and decomposition and not decomposition.get("fragile"),
-    ])
+    # The random-effects result is an agreement diagnostic only. It must not
+    # replace the interval from the already-integrated primary estimate.
     point_source = "combiner"
-    point = float(incoming) if isinstance(incoming, (int, float)) else fused["overall_estimate"]
-    if isinstance(incoming, (int, float)):
-        inc = float(incoming)
-        # A ceiling-pinned read (≈1.0) is never a real measurement → always take the physical fused
-        # consensus. Below the ceiling but still high, desaturate only when no reliable method
-        # corroborates the high read.
-        if inc >= _CEILING_PINNED or (inc >= _SATURATION_FLOOR and not corroborated_high):
-            point = fused["overall_estimate"]  # desaturate: fused point blends in the physical signals
-            point_source = "desaturated_fusion"
+    interval_source = "integrated_estimate"
+    point = (
+        float(incoming)
+        if isinstance(incoming, (int, float))
+        else float(fused["overall_estimate"])
+    )
+    lower_value = purity.get("overall_lower")
+    upper_value = purity.get("overall_upper")
+    lower = (
+        float(lower_value)
+        if isinstance(lower_value, (int, float))
+        else point
+    )
+    upper = (
+        float(upper_value)
+        if isinstance(upper_value, (int, float))
+        else point
+    )
+    lower = min(lower, point)
+    upper = max(upper, point)
 
-    # Interval: the random-effects fused interval — the honest uncertainty of the fusion itself. It
-    # is NOT unioned with the legacy pre-fusion interval, so a poorly-formed legacy bound (e.g. a 0%
-    # lower carried by the old combiner) cannot poison it; the fused interval already incorporates
-    # every method's own interval and their between-method disagreement (τ²). Only widened to contain
-    # the reported point.
-    fl, fh = fused["overall_lower"], fused["overall_upper"]
-    fl = min(fl, point)
-    fh = max(fh, point)
+    # Endpoint saturation is a structural condition, not a tunable
+    # high-purity threshold. Only a non-saturated physical residual can
+    # replace it. Treat that residual as one measurement so its uncertainty
+    # is not inflated by the channels that caused the saturation.
+    incoming_is_pinned = (
+        isinstance(incoming, (int, float))
+        and float(incoming) >= 1.0 - _EPS
+    )
+    residual_measurement = next(
+        (measurement for measurement in ms if measurement.name == "decomposition"),
+        None,
+    )
+    primary_interval_is_degenerate = upper <= lower + _EPS
+    primary_is_background_residual = (
+        purity.get("purity_source") == "background_residual"
+    )
+    if residual_measurement is not None and (
+        incoming_is_pinned
+        or (primary_is_background_residual and primary_interval_is_degenerate)
+    ):
+        residual_result = integrate_purity_estimates([residual_measurement])
+        if residual_result is not None:
+            if incoming_is_pinned:
+                point = float(residual_result["overall_estimate"])
+                point_source = "desaturated_fusion"
+            lower = float(residual_result["overall_lower"])
+            upper = float(residual_result["overall_upper"])
+            interval_source = "background_residual"
+
     return {
         "overall_estimate": round(point, 4),
-        "overall_lower": round(max(0.0, fl), 4),
-        "overall_upper": round(min(1.0, fh), 4),
+        "overall_lower": round(max(0.0, lower), 4),
+        "overall_upper": round(min(1.0, upper), 4),
         "i2": fused["i2"],
         "method_agreement": round(1.0 - fused["i2"], 4),
         "n_methods": fused["n_methods"],
         "point_source": point_source,
+        "interval_source": interval_source,
         "method_weights": fused["weights"],
+        "ceiling_excluded_methods": ceiling_excluded,
     }
 
 

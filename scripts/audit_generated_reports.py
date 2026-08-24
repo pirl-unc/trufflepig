@@ -62,6 +62,10 @@ _TABLE_GENE_TPM = re.compile(
     r"([0-9][0-9,]*(?:\.[0-9]+)?)\s*\|",
     re.MULTILINE,
 )
+_PURITY_INTERVAL = re.compile(
+    r"\*\*Purity:\*\*\s*[0-9]+%\s*\(model interval\s*"
+    r"([0-9]+)%[–-]([0-9]+)%",
+)
 
 
 def _read(path: Path | None) -> str:
@@ -242,6 +246,38 @@ def _sample_issues(
     summary_text = _read(paths.get("summary"))
     evidence_text = _read(paths.get("evidence"))
     all_text = "\n".join([analysis_text, summary_text, evidence_text])
+
+    purity_match = _PURITY_INTERVAL.search(summary_text)
+    if purity_match:
+        purity_lower, purity_upper = map(int, purity_match.groups())
+        if purity_upper == purity_lower:
+            issues.append(
+                {
+                    "sample": sample_id,
+                    "severity": "error",
+                    "category": "degenerate_purity_interval",
+                    "detail": (
+                        f"purity interval {purity_lower}%–{purity_upper}% "
+                        "reports a point estimate as if it had zero uncertainty"
+                    ),
+                }
+            )
+        # A nominal interval covering at least four fifths of the entire
+        # possible 0–100% domain conveys almost no quantitative information.
+        # Treat it as a report bug so 2–98% cannot pass a report audit as
+        # merely another low-confidence result.
+        if purity_upper - purity_lower >= 80:
+            issues.append(
+                {
+                    "sample": sample_id,
+                    "severity": "error",
+                    "category": "uninformative_purity_interval",
+                    "detail": (
+                        f"purity interval {purity_lower}%–{purity_upper}% spans "
+                        "at least 80 percentage points"
+                    ),
+                }
+            )
 
     for category, pattern in _MECHANICAL_PATTERNS.items():
         if pattern.search(all_text):

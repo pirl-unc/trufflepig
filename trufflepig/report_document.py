@@ -85,8 +85,8 @@ FIGURE_REGISTRY = [
     (
         "decomposition-candidates.png",
         "Decomposition hypotheses",
-        "Competing tumor/background decomposition fits ranked by residual; the "
-        "top-ranked hypothesis is the one adopted for purity and attribution.",
+        "Competing tumor/background decomposition fits; the selected model is "
+        "listed first and the remaining rows are comparisons.",
     ),
     (
         "purity-methods.png",
@@ -280,7 +280,7 @@ def find_table(
 
     When *subsection_excludes* is set, tables whose ``###`` subsection contains it
     are skipped — used to keep the PDF's therapy shortlist on the active rows and
-    off the "Audit-only rows" subsection (issue #105)."""
+    off the "not supported by this sample" subsection (issue #105)."""
     for table in tables:
         heading = f"{table['section']} {table['subsection']}".lower()
         if section_contains and section_contains.lower() not in heading:
@@ -355,7 +355,7 @@ def _therapy_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
         tables,
         section_contains="therapy prioritization",
         header_all=("target", "agent", "phase"),
-        subsection_excludes="audit-only",
+        subsection_excludes="not supported by this sample",
     )
     if table is None:
         return None

@@ -182,13 +182,34 @@ def test_rare_marker_promotion_routes_into_rare_scope_inference():
     assert fine_scope_inference is None
 
 
-def test_fine_reference_promotion_routes_into_fine_scope_inference():
+def test_fine_reference_promotion_routes_into_fine_scope_inference(monkeypatch):
     """An OS osteogenic-program match should populate fine_scope_inference."""
+    import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import _FINE_REFERENCE_SPECS
 
     # Sanity: there is a configured fine-reference spec for OS so the path
     # is exercised end-to-end (not just stubbed).
     assert any(s.cancer_type == "SARC_OS" for s in _FINE_REFERENCE_SPECS)
+
+    # Keep this integration test on the public main -> selector -> fine-scope
+    # route, but do not initialize independent evidence systems. Their own
+    # integration tests load the real learned, lineage, centroid, composition,
+    # contrast, and exact-reference data.
+    for helper in (
+        "_add_learned_expression_classifier_features",
+        "_add_learned_hierarchy_candidate_features",
+        "_add_pan_cancer_signature_marker_features",
+        "_add_coarse_composition_reference_features",
+        "_add_local_expression_reference_features",
+        "_add_lineage_panel_features",
+    ):
+        monkeypatch.setattr(evidence, helper, lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        evidence,
+        "_centroid_and_confidence",
+        lambda *args, **kwargs: (None, False),
+    )
+    monkeypatch.setattr(evidence, "_contrast_discriminator_rows", lambda: ())
 
     analysis = _analysis(("SARC", 1.0), ("UCS", 0.3))
 
@@ -424,6 +445,11 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
         {
             "rare_report_scope_inference": stale_rare,
             "fine_report_scope_inference": stale_fine,
+            "cancer_call_rescue": {
+                "kind": "tnbc_basal_brca_misclassification",
+                "recommended_code": "BRCA",
+                "message": "Treat as TNBC / basal-BRCA.",
+            },
             "cancer_type_source": "auto-detected",
         }
     )
@@ -461,6 +487,8 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
 
     assert "rare_report_scope_inference" not in analysis
     assert "fine_report_scope_inference" not in analysis
+    assert "cancer_call_rescue" not in analysis
+    assert analysis["retained_cancer_call_rescue"]["recommended_code"] == "BRCA"
     basis = _cancer_type_basis_line(analysis, "BLCA")
     assert "RNA-inferred hypothesis" in basis
     assert "rare-cancer hypothesis" not in basis

@@ -533,7 +533,10 @@ def main():
 
     failed = [r for r in manifest["runs"] + manifest["comparisons"]
               if r.get("status") == "failed"]
-    print(f"[done] root={root}  ok={len(manifest['runs']) - len(failed)}  "
+    completed = manifest["runs"] + manifest["comparisons"]
+    ok_count = sum(row.get("status") == "ok" for row in completed)
+    skipped_count = sum(row.get("status") == "skipped" for row in completed)
+    print(f"[done] root={root}  ok={ok_count}  skipped={skipped_count}  "
           f"failed={len(failed)}")
     return 1 if failed else 0
 

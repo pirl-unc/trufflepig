@@ -95,7 +95,7 @@ PDF) lives under `analyze/`. The empty sibling directories are the
 seam for per-stage extraction (trufflepig#2–#14); once stages start
 writing their own records, `analyze/` shrinks.
 
-Common pass-through flags: `--hla-types`, `--fusions`, `--alterations`,
+Common pass-through flags: `--hla-types`, `--fusions`, `--variants`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,
 `--met-site`, `--decomposition-templates`, `--output-image-prefix`,
 `--sample-id-col`, `--sample-id-value`, `--gene-id-col`, `--gene-name-col`,
@@ -103,6 +103,12 @@ Common pass-through flags: `--hla-types`, `--fusions`, `--alterations`,
 `--aggregate-gene-expression`, `--expression-qc-rescue`,
 `--therapy-target-top-k`, `--therapy-target-tpm-threshold`, `--force`.
 All have the same meaning as in the old `pirlygenes analyze`.
+
+`--variants` accepts a variant table or an explicit symbolic call such as
+`"EGFR KDD"`. Fusions supplied through `--fusions` enter the same normalized
+variant evidence stream. MSI-H/TMB-like sample states are not variants and are
+kept separate. The old `--alterations` spelling remains a hidden compatibility
+alias; explicit VCF/MAF/caller adapters are tracked in issues #140 and #141.
 
 ### Multi-sample (longitudinal)
 

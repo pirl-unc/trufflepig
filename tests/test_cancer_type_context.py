@@ -252,9 +252,10 @@ def test_context_uses_documented_fallback_for_noncohort_scope():
 
 
 def test_grouping_uses_its_typed_member_union_reference():
-    # Groupings with member-union references are direct classifier targets; they
-    # no longer borrow one child cohort as a temporary stand-in.
-    for code in ("CRC", "NET"):
+    # Complete member unions are direct expression references; they no longer
+    # borrow one child cohort as a temporary stand-in.  Whether a grouping is
+    # itself classifiable is a separate registry policy.
+    for code in ("CRC", "NET", "NSCLC", "SGC"):
         record = effective_expression_reference(code)
         assert record is not None
         assert record.reference_code == code
@@ -263,16 +264,15 @@ def test_grouping_uses_its_typed_member_union_reference():
         assert record.direct
 
 
-def test_unavailable_member_union_does_not_claim_a_direct_reference():
-    # The registry can describe an intended member union before the installed
-    # artifact can load it. In that case retain the safe, in-branch member
-    # fallback instead of advertising an unavailable direct reference.
-    for code in ("BTC", "SGC"):
-        record = effective_expression_reference(code)
-        assert record is not None
-        assert record.reference_code != code
-        assert record.fallback_reason == "member cohort"
-        assert not record.direct
+def test_unavailable_grouping_does_not_claim_a_direct_reference():
+    # BTC remains an evidence/source scope until both CHOL and GBC are backed.
+    # Retain the safe in-branch CHOL fallback rather than advertising a
+    # CHOL-only aggregate as a pan-biliary direct reference.
+    record = effective_expression_reference("BTC")
+    assert record is not None
+    assert record.reference_code == "CHOL"
+    assert record.fallback_reason == "member cohort"
+    assert not record.direct
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():

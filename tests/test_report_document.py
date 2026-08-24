@@ -192,13 +192,13 @@ _ANALYSIS_AUDIT_SPLIT = """# Analysis
 |--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
 | **FOLH1** | lu-psma | radioligand | approved | mCRPC | 142.0 | tumor 128 | 12 | tumor-supported; approved standard |
 
-### Audit-only rows: not tumor-supported in this sample
+### Other curated rows — not supported by this sample
 
 These rows remain visible as disease-curation provenance or negative evidence.
 
 | Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
 |--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | audit-only negative/background evidence; background-dominant |
+| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | not sample-supported; negative/background evidence; background-dominant |
 """
 
 
@@ -224,11 +224,11 @@ _ANALYSIS_ALL_AUDIT = """# Analysis
 
 *No curated therapy row had tumor-supported or clinically reviewable RNA evidence in this sample.*
 
-### Audit-only rows: not tumor-supported in this sample
+### Other curated rows — not supported by this sample
 
 | Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
 |--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | audit-only negative/background evidence; background-dominant |
+| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | not sample-supported; negative/background evidence; background-dominant |
 """
 
 

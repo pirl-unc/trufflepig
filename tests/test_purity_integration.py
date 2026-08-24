@@ -122,10 +122,8 @@ def test_integrate_from_components_applies_method_reliability_weights():
 # --- best_purity_estimate: keep the empirically-best point, add an honest interval + saturation guard ---
 
 
-def test_best_purity_desaturates_an_uncorroborated_high_reading():
-    """The nutm1/NUT failure mode: signature low, no lineage, ESTIMATE saturates high → the combiner
-    reports ~100%. With nothing corroborating that high read, the guard replaces the point with the
-    method consensus and widens the interval."""
+def test_best_purity_does_not_replace_a_high_but_nonendpoint_reading():
+    """A merely high point is not saturation and cannot be replaced by context channels."""
     purity = {
         "overall_estimate": 0.98,
         "overall_lower": 0.90,
@@ -137,9 +135,10 @@ def test_best_purity_desaturates_an_uncorroborated_high_reading():
         },
     }
     out = best_purity_estimate(purity, decomposition=None)
-    assert out["point_source"] == "desaturated_fusion"
-    assert out["overall_estimate"] < 0.85  # pulled off the spurious 100%
-    assert out["overall_upper"] - out["overall_lower"] > 0.3  # wide (methods disagree)
+    assert out["point_source"] == "combiner"
+    assert out["overall_estimate"] == 0.98
+    assert out["overall_lower"] == 0.90
+    assert out["overall_upper"] == 1.0
 
 
 def test_best_purity_preserves_a_corroborated_high_reading():
@@ -206,6 +205,40 @@ def test_best_purity_preserves_the_point_and_gives_a_tight_interval_when_methods
     assert (out["overall_upper"] - out["overall_lower"]) < 0.35  # agreeing → not blown wide open
 
 
+def test_best_purity_preserves_primary_interval_when_component_methods_disagree():
+    """PFO004-shaped regression: internal context disagreement is audit metadata,
+    not license to turn a useful 6–37% primary interval into 2–98%."""
+    purity = {
+        "overall_estimate": 0.12,
+        "overall_lower": 0.06,
+        "overall_upper": 0.37,
+        "components": {
+            "signature": {
+                "purity": 0.08,
+                "lower": 0.03,
+                "upper": 0.18,
+                "stability": 0.25,
+            },
+            "lineage": {"purity": 0.24, "lower": 0.10, "upper": 0.75},
+            "estimate_purity": 0.92,
+        },
+    }
+    decomposition = {
+        "overall_estimate": 0.12,
+        "hypothesis_purity_lo": 0.12,
+        "hypothesis_purity_hi": 0.12,
+        "fragile": True,
+    }
+
+    out = best_purity_estimate(purity, decomposition=decomposition)
+
+    assert out["overall_estimate"] == 0.12
+    assert out["overall_lower"] == 0.06
+    assert out["overall_upper"] == 0.37
+    assert out["interval_source"] == "integrated_estimate"
+    assert out["method_agreement"] < 0.5
+
+
 def test_best_purity_ceiling_pinned_drops_to_the_decomposition_residual():
     """The real NUT-carcinoma pattern (nutm1-0028): signature absent, lineage-identity genes and
     ESTIMATE both saturate to 100%, but the decomposition residual fraction — the physical tumor-vs-
@@ -225,8 +258,10 @@ def test_best_purity_ceiling_pinned_drops_to_the_decomposition_residual():
     decomp = {"overall_estimate": 0.57, "fragile": False}  # residual_fraction
     out = best_purity_estimate(purity, decomposition=decomp)
     assert out["point_source"] == "desaturated_fusion"
+    assert out["interval_source"] == "background_residual"
     assert out["overall_estimate"] == pytest.approx(0.57, abs=0.02)  # tracks the physical signal
     assert out["overall_upper"] < 0.98  # no longer pinned at the ceiling
+    assert out["ceiling_excluded_methods"] == ["lineage", "estimate"]
 
 
 def test_best_purity_ceiling_pinned_desaturates_even_when_decomposition_reads_high():
@@ -248,6 +283,58 @@ def test_best_purity_ceiling_pinned_desaturates_even_when_decomposition_reads_hi
     assert out["overall_estimate"] == pytest.approx(0.9, abs=0.02)  # high, but not a pinned 100%
 
 
+def test_fragility_flag_does_not_turn_a_single_residual_into_a_vacuous_range():
+    """A TME warning remains a caveat; it is not a calibrated variance and
+    must not multiply a residual-only interval into the 9–91% failure mode."""
+    purity = {
+        "overall_estimate": 1.0,
+        "overall_lower": 1.0,
+        "overall_upper": 1.0,
+        "components": {
+            "signature": {"purity": None},
+            "lineage": {"purity": 1.0},
+            "estimate_purity": 1.0,
+        },
+    }
+
+    out = best_purity_estimate(
+        purity,
+        decomposition={"overall_estimate": 0.51, "fragile": True},
+    )
+
+    assert out["overall_estimate"] == pytest.approx(0.51, abs=0.01)
+    assert out["overall_upper"] - out["overall_lower"] < 0.80
+
+
+def test_background_residual_point_gets_a_non_degenerate_measurement_interval():
+    """NNLS produces a point fraction, not zero uncertainty.
+
+    When that residual is the adopted primary purity, a zero-width transport
+    interval should use the existing single-measurement uncertainty model.
+    """
+    purity = {
+        "overall_estimate": 0.70,
+        "overall_lower": 0.70,
+        "overall_upper": 0.70,
+        "purity_source": "background_residual",
+        "components": {
+            "signature": {"purity": None},
+            "lineage": {"purity": 1.0},
+            "estimate_purity": 1.0,
+        },
+    }
+
+    out = best_purity_estimate(
+        purity,
+        decomposition={"overall_estimate": 0.70, "fragile": False},
+    )
+
+    assert out["overall_estimate"] == pytest.approx(0.70)
+    assert out["overall_lower"] < out["overall_estimate"] < out["overall_upper"]
+    assert out["overall_upper"] - out["overall_lower"] < 0.80
+    assert out["interval_source"] == "background_residual"
+
+
 def test_best_purity_corroborated_decomposition_below_ceiling_stays():
     """An 80%-purity sample (nutm1-0026): signature broken-low (0.15) but decomposition residual and
     ESTIMATE both independently say ~0.80. Below the ceiling and corroborated → point preserved."""
@@ -266,9 +353,9 @@ def test_best_purity_corroborated_decomposition_below_ceiling_stays():
     assert out["overall_estimate"] == pytest.approx(0.80, abs=1e-6)
 
 
-def test_best_purity_saturated_lineage_is_not_treated_as_corroboration():
-    """A saturated lineage (≥0.95) is a tissue-identity signal maxed out, not a purity read — it must
-    not be allowed to corroborate a high ESTIMATE."""
+def test_best_purity_saturated_lineage_is_audit_only_below_endpoint():
+    """A saturated lineage is not a purity read, but cannot manufacture a new
+    point or interval when the integrated estimate itself is below the endpoint."""
     purity = {
         "overall_estimate": 0.97,
         "overall_lower": 0.90,
@@ -280,4 +367,7 @@ def test_best_purity_saturated_lineage_is_not_treated_as_corroboration():
         },
     }
     out = best_purity_estimate(purity, decomposition=None)
-    assert out["point_source"] == "desaturated_fusion"
+    assert out["point_source"] == "combiner"
+    assert out["overall_estimate"] == 0.97
+    assert out["overall_lower"] == 0.90
+    assert out["overall_upper"] == 1.0

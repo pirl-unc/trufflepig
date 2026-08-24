@@ -115,12 +115,38 @@ def apply_sample_context_to_purity(analysis: dict[str, Any], sample_context) -> 
     if est is None or lo is None or hi is None:
         return False
     existing_caveat = purity_block.get("degradation_caveat") or {}
-    already_widened = bool(
-        purity_block.get("ci_widening_factor") == round(ci_factor, 3)
-        and existing_caveat.get("widened_lower") == round(float(lo), 4)
-        and existing_caveat.get("widened_upper") == round(float(hi), 4)
+    rounded_lo = round(float(lo), 4)
+    rounded_hi = round(float(hi), 4)
+    prior_widened_lo = existing_caveat.get("widened_lower")
+    prior_widened_hi = existing_caveat.get("widened_upper")
+    same_factor = purity_block.get("ci_widening_factor") == round(ci_factor, 3)
+    # A physical constraint may tighten one side after degradation widening.
+    # An unchanged opposite endpoint proves this is the same widened interval,
+    # not a replacement interval that still needs the context adjustment.
+    constrained_after_widening = bool(
+        same_factor
+        and (
+            (
+                rounded_lo == prior_widened_lo
+                and prior_widened_hi is not None
+                and rounded_hi <= prior_widened_hi
+            )
+            or (
+                rounded_hi == prior_widened_hi
+                and prior_widened_lo is not None
+                and rounded_lo >= prior_widened_lo
+            )
+        )
     )
-    if already_widened:
+    already_widened = bool(
+        same_factor
+        and prior_widened_lo == rounded_lo
+        and prior_widened_hi == rounded_hi
+    )
+    if already_widened or constrained_after_widening:
+        if constrained_after_widening:
+            existing_caveat["widened_lower"] = rounded_lo
+            existing_caveat["widened_upper"] = rounded_hi
         return False
 
     half_lo = max(0.0, est - lo) * ci_factor
@@ -163,6 +189,14 @@ def should_adopt_decomposition_purity(classifier_code: str, decomp_result) -> bo
     if decomposition_code != classifier_code and not _is_descendant_code(
         decomposition_code, classifier_code
     ):
+        return False
+    fractions = getattr(decomp_result, "fractions", None)
+    if isinstance(fractions, dict) and fractions and not any(
+        str(component) != "tumor" for component in fractions
+    ):
+        return False
+    n_measured = getattr(decomp_result, "n_measured_in_fit", None)
+    if n_measured is not None and int(n_measured or 0) <= 0:
         return False
     warnings = getattr(decomp_result, "warnings", None) or []
     if any("No non-tumor components in template" in warning for warning in warnings):
@@ -390,7 +424,7 @@ def build_analysis_parameters(
             "decomposition_templates": template_overrides,
             "hla_types": config.hla_type_list(),
             "fusions": config.fusion_path_list(),
-            "alterations": config.alteration_input_list(),
+            "variants": config.variant_input_list(),
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,

@@ -58,15 +58,24 @@ ALL_BROAD_LINEAGES = (
 # mesenchymal/heme subset). Each entry: (markers, asserted broad lineage,
 # confidence threshold).
 #
-# - neuroendocrine: CHGA/CHGB/SYP/INSM1 — ~0 in carcinomas/gliomas/sarcomas, high
-#   in SCLC/NET/NEC/PCPG. NE tumours are keratin+ so epithelial-*absence* can't
-#   separate them; the specific program does, demoting epithelial AND neural AND
-#   the rest so the NE candidate (own lineage untouched) wins. (#71)
+# - neuroendocrine: CHGA/CHGB/SYP/INSM1 — high in SCLC/NET/NEC/PCPG, but also a
+#   legitimate neuronal-differentiation program in some CNS tumors. NE tumours
+#   are keratin+ so epithelial-*absence* cannot separate them; this program can
+#   exclude epithelial/mesenchymal/heme lineages, but cannot by itself separate
+#   neuroendocrine from neural origin.
 # - melanocytic: MLANA/PMEL/TYR/DCT — lineage-defining, same exclusive logic.
 SPECIFIC_LINEAGE_PROGRAMS = (
     ("neuroendocrine", ("CHGA", "CHGB", "SYP", "INSM1"), "neuroendocrine", 0.45),
     ("melanocytic", ("MLANA", "PMEL", "TYR", "DCT"), "melanocytic", 0.45),
 )
+
+# A differentiation program can be shared by more than one lineage of origin.
+# These are categorical biological compatibilities, not score exceptions: the
+# neuroendocrine marker quartet is affirmative against epithelial, mesenchymal,
+# and heme alternatives, but is not an exclusion of neural/CNS tumors.
+SPECIFIC_LINEAGE_COMPATIBILITY = {
+    "neuroendocrine": frozenset({"neural"}),
+}
 
 # The gate fires on the epithelial signal's non-HK program confidence
 # (:mod:`trufflepig.signal_views`), integrating absolute log1p(clean TPM) burden
@@ -89,10 +98,11 @@ _EPITHELIAL_ABSENT_CONFIDENCE = 0.15
 
 # Specific-program demotion is *stronger* than the epithelial gate's: epithelial
 # markers (keratins) are shared/co-expressed so its demotion is deliberately
-# gentle, but a lineage-*defining* program (NE / melanocytic — markers ≈0 outside
-# that lineage) is near-diagnostic, so a confident call decisively demotes the
-# other lineages rather than just nudging them. Same proportional-to-confidence
-# shape, steeper slope + lower floor.
+# gentle, but a lineage-*defining* program is strong evidence against
+# biologically incompatible origins. A confident call therefore demotes those
+# lineages decisively while preserving declared compatible origins (notably
+# neural/CNS for the shared neuroendocrine differentiation program). Same
+# proportional-to-confidence shape, steeper slope + lower floor.
 _SPECIFIC_DEMOTE_SLOPE = 1.3
 _SPECIFIC_DEMOTE_FLOOR = 0.15
 
@@ -169,8 +179,8 @@ def lineage_exclusion_evidence(
     # broad lineage by the *evidence margin* against it — how far the best-supported
     # specific lineage outscores that lineage's own program. This integrates every
     # program's confidence rather than discarding any (NOT winner-take-all):
-    #   * one program firing  -> the others have margin == its confidence, so they
-    #     are demoted exactly as a single decisive call (unchanged behaviour);
+    #   * one program firing  -> incompatible origins have margin == its
+    #     confidence, while declared biologically compatible origins stay intact;
     #   * two co-firing       -> the stronger lineage has margin 0 (intact) and the
     #     weaker is demoted only by their *gap*, so a genuinely biphasic / ambiguous
     #     tumour surfaces as provisional — never the degenerate "every lineage
@@ -192,7 +202,13 @@ def lineage_exclusion_evidence(
     if support:
         top_lineage = max(support, key=lambda lineage: support[lineage])
         top_conf = support[top_lineage]
+        compatible_lineages = SPECIFIC_LINEAGE_COMPATIBILITY.get(
+            top_lineage,
+            frozenset(),
+        )
         for broad in ALL_BROAD_LINEAGES:
+            if broad in compatible_lineages:
+                continue
             margin = top_conf - support.get(broad, 0.0)
             if margin > 0.0:
                 factors[broad] = min(
@@ -203,9 +219,16 @@ def lineage_exclusion_evidence(
             f"{lineage}={conf:.2f}"
             for lineage, conf in sorted(support.items(), key=lambda kv: -kv[1])
         )
+        compatibility_note = (
+            "; shared compatible origins preserved: "
+            + ", ".join(sorted(compatible_lineages))
+            if compatible_lineages
+            else ""
+        )
         notes.append(
             f"Lineage-specific program(s) present [{ranked}] -> tumour lineage = "
-            f"{top_lineage}; competing lineages demoted by evidence margin (a "
+            f"{top_lineage}; incompatible lineages demoted by evidence margin"
+            f"{compatibility_note} (a "
             f"co-firing weaker program is demoted only by its gap, leaving a "
             f"biphasic tumour provisional rather than forcing a call)."
         )
