@@ -306,6 +306,58 @@ def test_actionable_purity_degrades_to_bare_point_when_interval_missing():
     assert "model interval" not in md  # no interval clause when a bound is missing
 
 
+def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
+    analysis = _make_analysis(
+        purity_point=0.05,
+        ci_low=0.01,
+        ci_high=0.12,
+        purity_tier_label="low",
+    )
+    analysis["purity"].update(
+        {
+            "quantitative_status": "discordant_estimators",
+            "operational_estimate_only": True,
+            "estimator_scenarios": [
+                {
+                    "source": "lineage_panel",
+                    "estimate": 0.05,
+                    "lower": 0.01,
+                    "upper": 0.12,
+                },
+                {
+                    "source": "signature",
+                    "estimate": 0.43,
+                    "lower": 0.32,
+                    "upper": 0.55,
+                },
+            ],
+        }
+    )
+
+    summary = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+    actionable = build_actionable(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="PRAD",
+        disease_state="",
+        sample_id="sample_X",
+    )
+
+    assert "**Purity:** quantitatively unresolved" in summary
+    assert "selected operational model uses 5% [1%–12%]" in summary
+    assert "matched-normal lineage model: 5% [1%–12%]" in summary
+    assert "upstream expression model: 43% [32%–55%]" in summary
+    assert "Purity is **quantitatively unresolved**" in actionable
+    assert "not a consensus tumor-purity estimate" in actionable
+    assert "model interval 1%–43%" not in summary + actionable
+
+
 def test_brief_is_compact():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()

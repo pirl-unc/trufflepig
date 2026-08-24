@@ -3436,10 +3436,17 @@ def _analyze_body(run: AnalyzeRun):
         final_purity.get("purity_source")
     )
     source_suffix = f"; basis: {final_purity_source}" if final_purity_source else ""
-    print(
-        f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])} estimate: "
-        f"{final_purity_text}{source_suffix}"
-    )
+    if final_purity.get("quantitative_status") == "discordant_estimators":
+        print(
+            f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])}: "
+            "quantitatively unresolved; operational model "
+            f"{final_purity_text}{source_suffix}"
+        )
+    else:
+        print(
+            f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])} estimate: "
+            f"{final_purity_text}{source_suffix}"
+        )
 
     # The cancer-call manifest step is created before decomposition so progress
     # reporting has an early call.  Purity is finalized later; refresh only that
@@ -3454,6 +3461,10 @@ def _analyze_body(run: AnalyzeRun):
             "overall_lower": final_purity.get("overall_lower"),
             "overall_upper": final_purity.get("overall_upper"),
             "source": final_purity.get("purity_source"),
+            "quantitative_status": final_purity.get(
+                "quantitative_status", "resolved"
+            ),
+            "estimator_scenarios": final_purity.get("estimator_scenarios", []),
         }
         run.note_step("cancer_call", outputs=final_call_outputs)
 
@@ -5686,6 +5697,13 @@ def _reconcile_purity_after_decomposition(
     ``_set_analysis_purity``) in place, and returns the possibly-updated
     ``effective_purity`` the caller threads onward.
     """
+    # Snapshot the independent pre-decomposition estimate before any adoption.
+    # The previous implementation captured it after ``_set_analysis_purity`` and
+    # therefore logged the adopted 5% estimate as its own 5% comparator.
+    classifier_purity = analysis.get("purity")
+    classifier_purity_snapshot = (
+        dict(classifier_purity) if isinstance(classifier_purity, dict) else {}
+    )
     if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
         decomp_purity = best_decomp.purity_result
         if isinstance(decomp_purity, dict):
@@ -5696,10 +5714,9 @@ def _reconcile_purity_after_decomposition(
             # range. A non-fragile fit is adopted unchanged (prior behavior). On "reject",
             # effective_purity stays the classifier purity (set by the caller), so the
             # lineage-panel override below never promotes the rejected fit.
-            classifier_purity = analysis.get("purity")
             stability = (analysis.get("decomposition") or {}).get("purity_stability")
             action, reconciled = reconcile_decomposition_purity(
-                classifier_purity, decomp_purity, stability
+                classifier_purity_snapshot, decomp_purity, stability
             )
             if isinstance(analysis.get("decomposition"), dict):
                 analysis["decomposition"]["purity_reconciliation"] = action
@@ -5712,9 +5729,8 @@ def _reconcile_purity_after_decomposition(
     # Propagate a lineage-panel purity override back into ``analysis["purity"]`` so every
     # downstream report is consistent (bug 2026-04-14: user saw 23% in the headline and 64%
     # in the decomposition-hypotheses table). When the decomposition's best hypothesis used a
-    # non-signature purity source we promote it, preserve the original estimate as
-    # ``signature_based_estimate``, and reset the CI widening and downstream pct_cancer_median
-    # math to use the new anchor.
+    # lineage estimator we promote it and preserve the original estimate under an accurately
+    # named pre-decomposition audit record.
     purity_source_best = (
         effective_purity.get("purity_source")
         if isinstance(effective_purity, dict)
@@ -5725,12 +5741,19 @@ def _reconcile_purity_after_decomposition(
         and isinstance(effective_purity, dict)
         and "overall_estimate" in effective_purity
     ):
-        orig_purity = dict(analysis["purity"])
-        analysis["purity"]["signature_based_estimate"] = orig_purity.get(
+        orig_purity = classifier_purity_snapshot
+        analysis["purity"]["pre_decomposition_estimate"] = orig_purity.get(
             "overall_estimate"
         )
-        analysis["purity"]["signature_based_lower"] = orig_purity.get("overall_lower")
-        analysis["purity"]["signature_based_upper"] = orig_purity.get("overall_upper")
+        analysis["purity"]["pre_decomposition_lower"] = orig_purity.get(
+            "overall_lower"
+        )
+        analysis["purity"]["pre_decomposition_upper"] = orig_purity.get(
+            "overall_upper"
+        )
+        analysis["purity"]["pre_decomposition_source"] = orig_purity.get(
+            "purity_source"
+        )
         analysis["purity"]["overall_estimate"] = effective_purity["overall_estimate"]
         analysis["purity"]["overall_lower"] = effective_purity.get(
             "overall_lower", effective_purity["overall_estimate"]
@@ -5745,7 +5768,7 @@ def _reconcile_purity_after_decomposition(
         print(
             f"[analysis] Adopted lineage-panel purity "
             f"{analysis['purity']['overall_estimate']:.0%} "
-            f"(signature-based estimate was "
+            f"(pre-decomposition estimate was "
             f"{orig_purity.get('overall_estimate', 0):.0%})"
         )
 
@@ -8635,9 +8658,15 @@ def _generate_text_reports(
                 "an exact expression reference is not available; "
                 f"{_cancer_label(cancer_code)} remains the report label."
             )
-    lines.append(
-        f"- **{_purity_metric_label(sample_mode).title()}**: {_purity_ci_phrase(purity)}."
-    )
+    purity_heading = _purity_metric_label(sample_mode).title()
+    if purity.get("quantitative_status") == "discordant_estimators":
+        lines.append(
+            f"- **{purity_heading}**: **quantitatively unresolved**; operational "
+            f"model {_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))} "
+            "for downstream calculations only."
+        )
+    else:
+        lines.append(f"- **{purity_heading}**: {_purity_ci_phrase(purity)}.")
     if call_summary.get("site_indeterminate"):
         lines.append("- **Background/site context**: indeterminate.")
     elif call_summary.get("reported_site"):
@@ -9307,11 +9336,46 @@ def _generate_text_reports(
         tier_suffix = f" — **{purity_tier.tier} confidence** ({tier_note})"
     else:
         tier_suffix = ""
-    lines.append(
-        "- **Overall estimate**: "
-        f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
-        f"{tier_suffix}"
+    quantitative_status = str(purity.get("quantitative_status") or "resolved")
+    purity_interval_text = _format_purity_interval(
+        purity.get("overall_estimate"),
+        purity.get("overall_lower"),
+        purity.get("overall_upper"),
     )
+    if quantitative_status == "discordant_estimators":
+        lines.append(
+            "- **Quantitative conclusion**: **unresolved** — independent purity "
+            "estimators support incompatible scenarios."
+        )
+        lines.append(
+            "- **Operational model**: "
+            f"{purity_interval_text}; retained for downstream calculations, not "
+            "reported as a consensus purity estimate."
+        )
+        source_labels = {
+            "background_residual": "background-residual decomposition",
+            "lineage_panel": "matched-normal lineage model",
+            "signature": "upstream expression model",
+        }
+        scenario_text = []
+        for scenario in purity.get("estimator_scenarios") or []:
+            estimate = scenario.get("estimate")
+            if not isinstance(estimate, (int, float)):
+                continue
+            source = str(scenario.get("source") or "unspecified")
+            value = _format_purity_interval(
+                estimate, scenario.get("lower"), scenario.get("upper")
+            )
+            scenario_text.append(
+                f"{source_labels.get(source, source.replace('_', ' '))}: {value}"
+            )
+        if scenario_text:
+            lines.append("- **Estimator scenarios**: " + "; ".join(scenario_text) + ".")
+    else:
+        lines.append(
+            "- **Overall estimate**: "
+            f"{purity_interval_text}{tier_suffix}"
+        )
     purity_source = str(purity.get("purity_source") or "").strip()
     if purity_source == "background_residual":
         residual_fraction = (
@@ -9356,6 +9420,10 @@ def _generate_text_reports(
         uncertainty_basis.append(
             "the fit is marked fragile because background components can over-absorb "
             "tumor expression"
+        )
+    if stability.get("estimator_disagreement"):
+        uncertainty_basis.append(
+            "different quantitative estimators support non-overlapping scenarios"
         )
     caveat = purity.get("degradation_caveat") or {}
     if caveat.get("severity") and caveat.get("severity") != "none":

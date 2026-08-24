@@ -35,6 +35,16 @@ def test_wide_ci_low_tier():
     assert tier.badge == "low"
 
 
+def test_discordant_estimators_force_low_confidence_without_fake_wide_interval():
+    purity = _purity(0.05, 0.01, 0.12)
+    purity["quantitative_status"] = "discordant_estimators"
+
+    tier = compute_purity_confidence(purity)
+
+    assert tier.tier == "low"
+    assert any("quantitatively unresolved" in reason for reason in tier.reasons)
+
+
 def test_concise_call_confidence_reasons_keep_summary_skimmable():
     tier = ConfidenceTier(
         tier="moderate",

@@ -223,24 +223,36 @@ def _is_descendant_code(code: str, parent_code: str) -> bool:
     return False
 
 
-# Fragility thresholds for the observed decomposition purity (instrumentation, not yet a gate).
+# Fragility threshold for repeated estimates made by the same estimator under
+# different decomposition templates. Values from different estimators are
+# alternative biological scenarios, not replicates, and are never pooled into
+# this spread.
 _DECOMP_PURITY_FRAGILE_SPREAD = 0.35
 _TME_OVEREXPLAINED_MARKER = "overexplained by the tme background"
 
 
 def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
-    """Observe how fragile the adopted decomposition purity is — INSTRUMENTATION, no behavior change.
+    """Describe template stability without mixing incompatible purity estimators.
 
     A decomposition tumor fraction is only trustworthy when it is stable across the plausible
     template hypotheses AND the background did not over-absorb tumor signal. Across the local cohort,
     most samples fail one of those: the top hypotheses disagree on tumor fraction by tens of points,
     and the low-purity calls carry a "many genes overexplained by the TME background" warning
     (over-subtraction → deflated purity — the READ 10%-vs-78% failure mode). This records the signals
-    so reports can encode that uncertainty and a later gate can consume them; it changes nothing.
+    so reconciliation can distinguish template sensitivity from estimator disagreement.
+
+    ``DecompositionResult.purity`` is not always the same measurement: a
+    matched-normal primary fit may use a lineage-panel tumor fraction while a
+    metastatic fit retains the upstream signature estimate. Those values are
+    alternative estimator scenarios, not confidence limits for one estimator.
 
     Returns, for the adopted hypothesis:
-      - ``hypothesis_purity_spread``: max−min tumor fraction among the same-cancer-type hypotheses
-        (template-choice sensitivity of the purity).
+      - ``hypothesis_purity_spread``: max−min tumor fraction among hypotheses
+        with the same cancer type *and purity source* (template sensitivity).
+      - ``estimator_scenarios``: source-preserving estimates for audit/reporting.
+      - ``estimator_disagreement``: credible source intervals are disjoint.
+      - ``quantitatively_resolved``: false only when estimator disagreement is
+        paired with a fragile/over-subtracted adopted fit.
       - ``tme_overexplained``: the adopted fit flagged TME over-subtraction.
       - ``top_hypotheses``: (template, cancer_type, purity, reconstruction_error) for the top few.
       - ``fragile``: wide spread OR over-subtraction — read the point purity as a range, not a number.
@@ -251,12 +263,27 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
     if adopted is None:
         adopted = results[0]
     adopted_type = getattr(adopted, "cancer_type", None)
-    # Template-choice sensitivity: compare purities only across the SAME-cancer-type hypotheses —
-    # a different-cancer template's tumor fraction is not a comparable measurement of this call.
+    adopted_source = str(
+        getattr(adopted, "purity_source", None)
+        or (getattr(adopted, "purity_result", None) or {}).get("purity_source")
+        or "unspecified"
+    )
+    # Template sensitivity is defined only within one cancer type and one
+    # estimator. A different source is retained below as a named scenario.
     same_type = [r for r in results if getattr(r, "cancer_type", None) == adopted_type]
+    same_estimator = [
+        r
+        for r in same_type
+        if str(
+            getattr(r, "purity_source", None)
+            or (getattr(r, "purity_result", None) or {}).get("purity_source")
+            or "unspecified"
+        )
+        == adopted_source
+    ]
     purities = [
         float(getattr(r, "purity", 0.0))
-        for r in (same_type or results)[:6]
+        for r in (same_estimator or [adopted])
         if getattr(r, "purity", None) is not None
     ]
     spread = round(max(purities) - min(purities), 4) if len(purities) >= 2 else 0.0
@@ -264,11 +291,87 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
     hyp_hi = round(max(purities), 4) if purities else None
     warns = " ".join(getattr(adopted, "warnings", None) or []).lower()
     tme_overexplained = _TME_OVEREXPLAINED_MARKER in warns
+
+    # Preserve every estimator as its own scenario. Bounds come from the
+    # estimator's own result where available; they are never expanded using a
+    # different source. Neutral decomposition priors are useful operationally
+    # but are not evidence and therefore cannot create estimator disagreement.
+    scenarios_by_source = {}
+    for row in same_type:
+        result = getattr(row, "purity_result", None) or {}
+        source = str(
+            getattr(row, "purity_source", None)
+            or result.get("purity_source")
+            or "unspecified"
+        )
+        try:
+            point = float(getattr(row, "purity"))
+        except (TypeError, ValueError):
+            continue
+        lower = result.get("overall_lower")
+        upper = result.get("overall_upper")
+        try:
+            lower = float(lower) if lower is not None else point
+        except (TypeError, ValueError):
+            lower = point
+        try:
+            upper = float(upper) if upper is not None else point
+        except (TypeError, ValueError):
+            upper = point
+        lower, upper = min(lower, point), max(upper, point)
+        scenario = scenarios_by_source.setdefault(
+            source,
+            {
+                "source": source,
+                "estimate": point,
+                "lower": lower,
+                "upper": upper,
+                "templates": [],
+            },
+        )
+        # Keep the adopted/highest-ranked point as the representative estimate,
+        # while spanning repeated measurements made by this same estimator.
+        scenario["lower"] = min(float(scenario["lower"]), lower)
+        scenario["upper"] = max(float(scenario["upper"]), upper)
+        template = str(getattr(row, "template", None) or "")
+        if template and template not in scenario["templates"]:
+            scenario["templates"].append(template)
+
+    scenarios = sorted(
+        scenarios_by_source.values(),
+        key=lambda item: (item["source"] != adopted_source, item["source"]),
+    )
+    try:
+        adopted_point = float(getattr(adopted, "purity"))
+    except (TypeError, ValueError):
+        adopted_point = None
+    for scenario in scenarios:
+        if scenario["source"] == adopted_source and adopted_point is not None:
+            scenario["estimate"] = adopted_point
+        scenario["estimate"] = round(float(scenario["estimate"]), 4)
+        scenario["lower"] = round(float(scenario["lower"]), 4)
+        scenario["upper"] = round(float(scenario["upper"]), 4)
+    credible_scenarios = [
+        scenario
+        for scenario in scenarios
+        if scenario["source"] not in {"neutral_decomposition_prior", "override"}
+    ]
+    estimator_disagreement = any(
+        left["upper"] < right["lower"] or right["upper"] < left["lower"]
+        for i, left in enumerate(credible_scenarios)
+        for right in credible_scenarios[i + 1 :]
+    )
+    fragile = bool(spread >= _DECOMP_PURITY_FRAGILE_SPREAD or tme_overexplained)
     top = [
         {
             "template": getattr(r, "template", None),
             "cancer_type": getattr(r, "cancer_type", None),
             "purity": round(float(getattr(r, "purity", 0.0) or 0.0), 4),
+            "purity_source": str(
+                getattr(r, "purity_source", None)
+                or (getattr(r, "purity_result", None) or {}).get("purity_source")
+                or "unspecified"
+            ),
             "reconstruction_error": round(float(getattr(r, "reconstruction_error", 0.0) or 0.0), 4),
         }
         for r in results[:4]
@@ -278,7 +381,11 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
         "hypothesis_purity_lo": hyp_lo,
         "hypothesis_purity_hi": hyp_hi,
         "tme_overexplained": tme_overexplained,
-        "fragile": bool(spread >= _DECOMP_PURITY_FRAGILE_SPREAD or tme_overexplained),
+        "fragile": fragile,
+        "adopted_purity_source": adopted_source,
+        "estimator_scenarios": scenarios,
+        "estimator_disagreement": estimator_disagreement,
+        "quantitatively_resolved": not (fragile and estimator_disagreement),
         "top_hypotheses": top,
     }
 
@@ -333,19 +440,50 @@ def reconcile_decomposition_purity(classifier_purity, decomp_purity, stability):
     Policy (chosen 2026-07-07): when the adopted decomposition purity is *fragile* (its plausible
     template hypotheses disagree widely and/or the TME background over-subtracted):
 
-      * always WIDEN the reported interval to span the plausible hypothesis range and mark the
-        purity as template-sensitive (the point estimate is kept); and
+      * when the disagreement is between different estimator sources, retain
+        each as a named scenario and mark purity quantitatively unresolved;
+        never merge those scenarios into one interval;
+      * otherwise WIDEN the reported interval to span same-estimator template
+        sensitivity and mark the purity as template-sensitive; and
       * FALL BACK to the classifier's independent purity when the decomposition point disagrees with
         EVERY independent signal (signature, lineage, ESTIMATE) by more than the margin — a fragile
         estimate that no other method corroborates is not trustworthy as the headline.
 
     A non-fragile decomposition purity is returned unchanged. Returns ``(action, purity_dict)`` where
-    ``action`` is ``"adopt"`` (unchanged), ``"widen"`` (adopt point, widened interval + caveat), or
-    ``"reject"`` (do not adopt; use ``classifier_purity``). The returned dict is always safe to adopt.
+    ``action`` is ``"adopt"`` (unchanged), ``"discordant"`` (operational point plus separate
+    scenarios), ``"widen"`` (adopt point, widened interval + caveat), or ``"reject"`` (do not adopt;
+    use ``classifier_purity``). The returned dict is always safe to adopt.
     """
     stability = stability or {}
     if not isinstance(decomp_purity, dict) or not stability.get("fragile"):
         return "adopt", decomp_purity
+
+    if not stability.get("quantitatively_resolved", True):
+        unresolved = dict(decomp_purity)
+        unresolved["quantitative_status"] = "discordant_estimators"
+        unresolved["estimator_scenarios"] = list(
+            stability.get("estimator_scenarios") or []
+        )
+        unresolved["operational_estimate_only"] = True
+        classifier_purity = classifier_purity or {}
+        unresolved["pre_decomposition_estimate"] = classifier_purity.get(
+            "overall_estimate"
+        )
+        unresolved["pre_decomposition_lower"] = classifier_purity.get(
+            "overall_lower"
+        )
+        unresolved["pre_decomposition_upper"] = classifier_purity.get(
+            "overall_upper"
+        )
+        unresolved["pre_decomposition_source"] = classifier_purity.get(
+            "purity_source"
+        )
+        unresolved["quantitative_caveat"] = (
+            "Purity estimators support incompatible scenarios; the selected "
+            "estimate is retained for downstream modeling but is not a consensus "
+            "purity measurement."
+        )
+        return "discordant", unresolved
 
     point = decomp_purity.get("overall_estimate")
     independents = _independent_purity_signals(classifier_purity)

@@ -141,6 +141,9 @@ def compute_purity_confidence(
     ``overall_upper``).
     """
     reasons: List[str] = []
+    quantitative_status = str(
+        (purity or {}).get("quantitative_status") or "resolved"
+    )
     try:
         overall = float(purity.get("overall_estimate") or 0.0)
         lower = float(purity.get("overall_lower") or 0.0)
@@ -150,7 +153,7 @@ def compute_purity_confidence(
 
     tier = "high"
     span = upper - lower
-    if span <= 1e-9:
+    if span <= 1e-9 and quantitative_status != "discordant_estimators":
         # Zero-width CI means the estimator saw no per-gene variation
         # (synthetic / cohort-median / deterministic input). Surfacing
         # that as "high confidence" is misleading — the estimator
@@ -179,6 +182,13 @@ def compute_purity_confidence(
         reasons.append(f"low-purity regime ({overall:.0%})")
         if overall < 0.08:
             tier = "low"
+
+    if quantitative_status == "discordant_estimators":
+        tier = "low"
+        reasons.append(
+            "purity is quantitatively unresolved because independent estimators "
+            "support incompatible scenarios"
+        )
 
     # Anti-saturation guard provenance: if the honest-fusion pass replaced a near-100% single-method
     # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method

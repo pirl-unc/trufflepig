@@ -2560,6 +2560,34 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     )
 
 
+def purity_estimator_scenario_text(purity) -> str:
+    """Render source-preserving purity scenarios without implying one CI.
+
+    Different decomposition templates can invoke different quantitative
+    estimators. This formatter deliberately names each estimator and keeps its
+    own interval, rather than presenting their union as uncertainty around one
+    point estimate.
+    """
+    labels = {
+        "background_residual": "background-residual decomposition",
+        "lineage_panel": "matched-normal lineage model",
+        "signature": "upstream expression model",
+    }
+    rendered = []
+    for scenario in (purity or {}).get("estimator_scenarios") or []:
+        source = str(scenario.get("source") or "unspecified")
+        estimate = scenario.get("estimate")
+        lower = scenario.get("lower")
+        upper = scenario.get("upper")
+        if not isinstance(estimate, (int, float)):
+            continue
+        value = f"{float(estimate):.0%}"
+        if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+            value += f" [{float(lower):.0%}–{float(upper):.0%}]"
+        rendered.append(f"{labels.get(source, source.replace('_', ' '))}: {value}")
+    return "; ".join(rendered)
+
+
 def build_summary(
     analysis,
     ranges_df,
@@ -2782,7 +2810,21 @@ def build_summary(
     # Purity — headline read through the shared ReportView surface so the summary text and the
     # sample-summary figure cannot disagree (both call finalized_purity_headline; imported above).
     overall, lower, upper = finalized_purity_headline(analysis)
-    if overall is not None and lower is not None and upper is not None:
+    quantitative_status = str(purity.get("quantitative_status") or "resolved")
+    if quantitative_status == "discordant_estimators" and overall is not None:
+        operational_range = (
+            f" [{lower:.0%}–{upper:.0%}]"
+            if lower is not None and upper is not None
+            else ""
+        )
+        scenarios = purity_estimator_scenario_text(purity)
+        scenario_clause = f" Scenarios: {scenarios}." if scenarios else ""
+        lines.append(
+            "**Purity:** quantitatively unresolved; the selected operational "
+            f"model uses {overall:.0%}{operational_range}, not a consensus estimate."
+            f"{scenario_clause}"
+        )
+    elif overall is not None and lower is not None and upper is not None:
         tier_label = (
             getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"
         )
@@ -3095,7 +3137,22 @@ def build_actionable(
     upper = purity.get("overall_upper")
     tier_label = getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"
     tier_reasons = getattr(purity_tier, "reasons", []) if purity_tier else []
-    if overall is not None:
+    quantitative_status = str(purity.get("quantitative_status") or "resolved")
+    if quantitative_status == "discordant_estimators" and overall is not None:
+        operational_range = (
+            f" (within-estimator interval {lower:.0%}–{upper:.0%})"
+            if lower is not None and upper is not None
+            else ""
+        )
+        scenarios = purity_estimator_scenario_text(purity)
+        scenario_clause = f" The incompatible scenarios are {scenarios}." if scenarios else ""
+        lines.append(
+            "\nPurity is **quantitatively unresolved**. The selected model uses "
+            f"{overall:.0%}{operational_range} for downstream calculations only; "
+            "it is not a consensus tumor-purity estimate."
+            f"{scenario_clause}"
+        )
+    elif overall is not None:
         confidence_clause = f"**{tier_label}** confidence"
         if tier_reasons and tier_label in {"low", "moderate"}:
             confidence_clause += " (" + "; ".join(tier_reasons) + ")"
