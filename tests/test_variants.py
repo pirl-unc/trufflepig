@@ -53,6 +53,9 @@ def test_symbolic_variant_is_explicitly_assembly_neutral():
         "coordinate_records_without_build": 0,
     }
 
+    programmatic = VariantRecord(gene="EGFR", genome_build="GRCh38")
+    assert programmatic.genome_build == ""
+
 
 def test_coordinate_variant_has_typed_public_provenance():
     record = VariantRecord(
@@ -329,6 +332,8 @@ def test_dedicated_fusion_records_share_the_variant_evidence_contract():
 
     assert len(records) == 1
     assert records[0]["variant_type"] == "fusion"
+    assert records[0]["genes"] == ["KIF5B", "RET"]
+    assert records[0]["source_format"] == "fusion"
     assert records[0]["evidence_source_types"] == ["fusion"]
     assert variant_record_genes(records[0]) == ("KIF5B", "RET")
     assert supplied_variant_supports_target_row(
@@ -339,6 +344,23 @@ def test_dedicated_fusion_records_share_the_variant_evidence_contract():
         },
         {"fusion_records": [fusion]},
     )
+
+
+def test_distinct_coordinate_variants_are_not_merged_by_gene_label():
+    records = [
+        VariantRecord(
+            gene="BRAF",
+            variant="mutation",
+            variant_type="mutation",
+            genome_build="GRCh38",
+            coordinates=(VariantCoordinate("7", position, ref="A", alt="T"),),
+        ).public_dict()
+        for position in (140753336, 140753337)
+    ]
+
+    normalized = variant_evidence_records({"variant_records": records})
+
+    assert len(normalized) == 2
 
 
 def test_same_fusion_from_two_interfaces_is_one_variant():

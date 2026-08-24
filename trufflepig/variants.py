@@ -218,6 +218,9 @@ class VariantRecord:
         release = self.ensembl_release
         if release is not None and int(release) < 1:
             raise ValueError("Ensembl release must be a positive integer")
+        genome_build = (
+            normalize_genome_build(self.genome_build) if coordinates else ""
+        )
         object.__setattr__(self, "gene", primary)
         object.__setattr__(self, "genes", genes)
         object.__setattr__(self, "coordinates", coordinates)
@@ -228,7 +231,7 @@ class VariantRecord:
             str(self.source_format or "unknown").strip().lower(),
         )
         object.__setattr__(self, "caller_version", str(self.caller_version or ""))
-        object.__setattr__(self, "genome_build", normalize_genome_build(self.genome_build))
+        object.__setattr__(self, "genome_build", genome_build)
         object.__setattr__(
             self,
             "ensembl_release",
@@ -243,6 +246,7 @@ class VariantRecord:
             self.variant.lower(),
             self.source_path,
             self.row_index,
+            self.genome_build,
             tuple(coordinate.key for coordinate in self.coordinates),
         )
 
@@ -638,6 +642,7 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
     normalized.update(
         {
             "gene": gene_a,
+            "genes": [gene_a, gene_b],
             "pair": pair,
             "variant": f"{pair} fusion",
             "variant_type": "fusion",
@@ -647,6 +652,11 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
             "filter_status": _text(source.get("filter_status"))
             or _text(source.get("confidence")),
             "filter_semantics": _text(source.get("filter_semantics")) or "generic",
+            "source_format": (
+                _text(source.get("source_format"))
+                if _text(source.get("source_format")) not in {"", "unknown"}
+                else "fusion"
+            ),
             "evidence_source_type": "fusion",
             "evidence_source_types": ["fusion"],
         }
@@ -656,6 +666,25 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
 
 def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     variant_type = _text(record.get("variant_type")).lower() or "unknown"
+    coordinates = tuple(
+        (
+            _text(coordinate.get("contig")),
+            coordinate.get("start"),
+            coordinate.get("end"),
+            _text(coordinate.get("ref")).upper(),
+            _text(coordinate.get("alt")).upper(),
+            _text(coordinate.get("role")),
+        )
+        for coordinate in (record.get("coordinates") or ())
+        if hasattr(coordinate, "get")
+    )
+    if coordinates:
+        return (
+            "coordinate",
+            normalize_genome_build(record.get("genome_build")),
+            variant_type,
+            *coordinates,
+        )
     if variant_type == "fusion":
         for key in ("pair", "gene", "variant", "raw_name"):
             match = _FUSION_PAIR_RE.search(_text(record.get(key)).upper())
