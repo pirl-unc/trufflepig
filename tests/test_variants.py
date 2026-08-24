@@ -4,12 +4,18 @@ import pandas as pd
 import pytest
 
 from trufflepig.variants import (
+    VariantCoordinate,
+    VariantRecord,
     classify_variant_type,
+    normalize_genome_build,
+    normalize_variant_record,
+    parse_variant_file,
+    parse_variant_inputs,
+    validate_variant_genome_builds,
     variant_record_genes,
     variant_record_passes_assay_filters,
     variant_evidence_for_gene,
     variant_evidence_records,
-    parse_variant_inputs,
 )
 from trufflepig.fusions import FusionRecord, parse_fusion_file
 from trufflepig.reporting import supplied_variant_supports_target_row
@@ -17,6 +23,190 @@ from trufflepig.reporting import supplied_variant_supports_target_row
 
 def _record(value):
     return parse_variant_inputs(value)[0].public_dict()
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (("GRCh37", "GRCh37"), ("hg19", "GRCh37"), ("hg38", "GRCh38")),
+)
+def test_genome_build_aliases_have_one_public_representation(value, expected):
+    assert normalize_genome_build(value) == expected
+
+
+def test_unknown_genome_build_is_rejected():
+    with pytest.raises(ValueError, match="Unsupported genome build"):
+        normalize_genome_build("T2T-CHM13")
+
+
+def test_symbolic_variant_is_explicitly_assembly_neutral():
+    record = parse_variant_inputs("EGFR KDD", genome_build="hg38")[0]
+
+    assert record.representation == "symbolic"
+    assert record.genome_build == ""
+    assert record.coordinates == ()
+    assert record.source_format == "inline"
+    assert validate_variant_genome_builds([record]) == {
+        "genome_build": "",
+        "expected_genome_build": "",
+        "coordinate_records": 0,
+        "assembly_neutral_records": 1,
+        "coordinate_records_without_build": 0,
+    }
+
+
+def test_coordinate_variant_has_typed_public_provenance():
+    record = VariantRecord(
+        gene="BRAF",
+        genes=("BRAF",),
+        variant="V600E",
+        variant_type="mutation",
+        source_format="csv",
+        genome_build="hg38",
+        ensembl_release=114,
+        coordinates=(
+            VariantCoordinate(contig="chr7", start=140753336, ref="a", alt="t"),
+        ),
+    )
+
+    assert record.representation == "coordinate"
+    assert record.genes == ("BRAF",)
+    assert record.genome_build == "GRCh38"
+    assert record.public_dict()["coordinates"] == [
+        {
+            "contig": "chr7",
+            "start": 140753336,
+            "end": 140753336,
+            "ref": "A",
+            "alt": "T",
+            "role": "",
+        }
+    ]
+    assert normalize_variant_record(record) == record.public_dict()
+
+
+def test_coordinate_variant_requires_a_build():
+    record = VariantRecord(
+        gene="BRAF",
+        coordinates=(VariantCoordinate("7", 140753336),),
+    )
+
+    with pytest.raises(ValueError, match="require an explicit genome build"):
+        validate_variant_genome_builds([record])
+
+
+def test_mixed_coordinate_builds_are_rejected():
+    records = [
+        VariantRecord(
+            gene="BRAF",
+            genome_build=build,
+            coordinates=(VariantCoordinate("7", 1),),
+        )
+        for build in ("GRCh37", "GRCh38")
+    ]
+
+    with pytest.raises(ValueError, match="contradictory genome builds"):
+        validate_variant_genome_builds(records)
+
+
+def test_expected_genome_build_must_match_coordinates():
+    record = VariantRecord(
+        gene="BRAF",
+        genome_build="GRCh38",
+        coordinates=(VariantCoordinate("7", 1),),
+    )
+
+    with pytest.raises(ValueError, match="does not match expected build"):
+        validate_variant_genome_builds([record], expected_build="GRCh37")
+
+
+def test_generic_coordinate_table_preserves_source_and_build(tmp_path):
+    path = tmp_path / "variants.tsv"
+    pd.DataFrame(
+        [
+            {
+                "Gene": "BRAF",
+                "Variant": "V600E",
+                "Chromosome": "7",
+                "Position": 140753336,
+                "Ref": "A",
+                "Alt": "T",
+                "NCBI_Build": "GRCh38",
+                "Ensembl_Release": 114,
+                "Caller_Version": "example 1.0",
+            }
+        ]
+    ).to_csv(path, sep="\t", index=False)
+
+    record = parse_variant_file(path)[0]
+
+    assert record.source_format == "tsv"
+    assert record.caller_version == "example 1.0"
+    assert record.genome_build == "GRCh38"
+    assert record.ensembl_release == 114
+    assert record.representation == "coordinate"
+    assert record.coordinates[0].start == 140753336
+
+
+def test_requested_build_fills_missing_coordinate_table_build(tmp_path):
+    path = tmp_path / "variants.csv"
+    pd.DataFrame(
+        [{"Gene": "BRAF", "Variant": "V600E", "Chr": "7", "Pos": 140753336}]
+    ).to_csv(path, index=False)
+
+    record = parse_variant_file(path, genome_build="hg19")[0]
+
+    assert record.genome_build == "GRCh37"
+    assert record.source_format == "csv"
+
+
+def test_requested_build_cannot_override_table_build(tmp_path):
+    path = tmp_path / "variants.csv"
+    pd.DataFrame(
+        [
+            {
+                "Gene": "BRAF",
+                "Variant": "V600E",
+                "Chr": "7",
+                "Pos": 140753336,
+                "Assembly": "GRCh38",
+            }
+        ]
+    ).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="conflicts with the requested build"):
+        parse_variant_file(path, genome_build="GRCh37")
+
+
+def test_structured_fusion_retains_both_participating_genes(tmp_path):
+    path = tmp_path / "variants.csv"
+    pd.DataFrame(
+        [{"Gene": "ETV6::NTRK3", "Variant": "fusion", "Result": "Positive"}]
+    ).to_csv(path, index=False)
+
+    record = parse_variant_file(path)[0]
+
+    assert record.representation == "symbolic"
+    assert record.genes == ("ETV6", "NTRK3")
+
+
+def test_empty_structured_variant_file_fails_closed(tmp_path):
+    path = tmp_path / "variants.csv"
+    pd.DataFrame([{"Comment": "no variant records"}]).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="No recognizable variant records"):
+        parse_variant_file(path)
+
+
+@pytest.mark.parametrize("suffix", ("vcf", "vcf.gz", "maf", "maf.gz"))
+def test_standard_variant_files_fail_closed_until_their_adapter_exists(
+    tmp_path,
+    suffix,
+):
+    path = tmp_path / f"variants.{suffix}"
+    path.write_text("Gene\tVariant\nBRAF\tV600E\n")
+
+    with pytest.raises(ValueError, match="source-specific adapter"):
+        parse_variant_file(path)
 
 
 @pytest.mark.parametrize(

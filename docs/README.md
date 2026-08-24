@@ -14,10 +14,12 @@ notes only when you need their implementation detail.
 3. [Exact spindle-sarcoma therapy panels](./spindle-sarcoma-therapy-panels.md)
    — diagnosis-specific IMT, DFSP, PEComa, and GIST therapy scope without
    sibling-panel leakage.
-4. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
+4. [Variant inputs and coordinate provenance](./variant-inputs.md) — the typed
+   exact/symbolic variant contract, source identity, and build checks.
+5. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
    current decision logic is being consolidated and the target staged
    architecture.
-5. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
+6. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
    — how finalized conclusions and uncertainty should flow into every report
    artifact without contradiction.
 
