@@ -15,7 +15,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # >=5.23.51: corrected CMN/SCLC/classification policies plus exact,
-    # alteration-gated IMT/DFSP/PEComa therapy panels; pins the compact
+    # variant-gated IMT/DFSP/PEComa therapy panels; pins the compact
     # oncoref 1.8.174 reference API.
     "pirlygenes>=5.23.51,<6",
     # oncoref is the canonical cancer-type ontology + normalization source (imported

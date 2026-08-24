@@ -424,7 +424,7 @@ def build_analysis_parameters(
             "decomposition_templates": template_overrides,
             "hla_types": config.hla_type_list(),
             "fusions": config.fusion_path_list(),
-            "alterations": config.alteration_input_list(),
+            "variants": config.variant_input_list(),
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,

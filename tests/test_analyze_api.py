@@ -169,13 +169,13 @@ def test_build_analysis_parameters_records_fusion_paths():
     assert params["input"]["fusions"] == ["calls.tsv", "extra.jsonl"]
 
 
-def test_build_analysis_parameters_records_alteration_inputs():
+def test_build_analysis_parameters_records_variant_inputs():
     quality = {
         "degradation": {"level": "unknown", "long_short_ratio": None},
         "culture": {"level": "unknown", "stress_score": None},
         "has_issues": False,
     }
-    config = AnalyzeConfig(input_path="gene.tsv", alterations="EGFR KDD;variants.tsv")
+    config = AnalyzeConfig(input_path="gene.tsv", variants="EGFR KDD;variants.tsv")
     resolution = resolve_analyze_inputs(config, sniff_input_level=lambda _path: "gene")
 
     params = build_analysis_parameters(
@@ -188,8 +188,27 @@ def test_build_analysis_parameters_records_alteration_inputs():
         decomposition_parameters={},
     )
 
-    assert config.alteration_input_list() == ["EGFR KDD", "variants.tsv"]
-    assert params["input"]["alterations"] == ["EGFR KDD", "variants.tsv"]
+    assert config.variant_input_list() == ["EGFR KDD", "variants.tsv"]
+    assert params["input"]["variants"] == ["EGFR KDD", "variants.tsv"]
+
+
+def test_legacy_alterations_config_serializes_as_variants():
+    config = AnalyzeConfig(input_path="gene.tsv", alterations="EGFR KDD")
+
+    assert config.variant_input_list() == ["EGFR KDD"]
+    assert config.public_dict()["variants"] == "EGFR KDD"
+    assert "alterations" not in config.public_dict()
+
+
+def test_variant_and_legacy_inputs_cannot_conflict():
+    config = AnalyzeConfig(
+        input_path="gene.tsv",
+        variants="EGFR KDD",
+        alterations="ALK fusion",
+    )
+
+    with pytest.raises(ValueError, match="not both"):
+        config.variant_input_list()
 
 
 def test_registry_only_cancer_label_becomes_report_scope():
@@ -482,21 +501,21 @@ def test_fusion_parser_rejects_missing_supplied_file(tmp_path: Path):
         parse_fusion_file(missing)
 
 
-def test_alteration_parser_accepts_inline_kdd():
-    from trufflepig.alterations import parse_alteration_inputs
+def test_variant_parser_accepts_inline_kdd():
+    from trufflepig.variants import parse_variant_inputs
 
-    records = parse_alteration_inputs("EGFR kinase domain duplication / KDD")
+    records = parse_variant_inputs("EGFR kinase domain duplication / KDD")
 
     assert len(records) == 1
     assert records[0].gene == "EGFR"
-    assert records[0].alteration_type == "kdd"
+    assert records[0].variant_type == "kdd"
 
 
-def test_alteration_parser_reads_loose_table(tmp_path: Path):
-    from trufflepig.alterations import parse_alteration_file
+def test_variant_parser_reads_loose_table(tmp_path: Path):
+    from trufflepig.variants import parse_variant_file
 
-    alterations = tmp_path / "variants.tsv"
-    alterations.write_text(
+    variants = tmp_path / "variants.tsv"
+    variants.write_text(
         "\n".join(
             [
                 "Gene\tAlteration\tVAF",
@@ -505,21 +524,21 @@ def test_alteration_parser_reads_loose_table(tmp_path: Path):
         )
     )
 
-    records = parse_alteration_file(alterations)
+    records = parse_variant_file(variants)
 
     assert len(records) == 1
     assert records[0].gene == "EGFR"
-    assert records[0].alteration_type == "kdd"
+    assert records[0].variant_type == "kdd"
     assert records[0].support["VAF"] == 0.42
 
 
-def test_alteration_parser_rejects_missing_supplied_file(tmp_path: Path):
-    from trufflepig.alterations import parse_alteration_inputs
+def test_variant_parser_rejects_missing_supplied_file(tmp_path: Path):
+    from trufflepig.variants import parse_variant_inputs
 
     missing = tmp_path / "missing-variants.tsv"
 
-    with pytest.raises(FileNotFoundError, match="Alteration evidence file not found"):
-        parse_alteration_inputs(str(missing))
+    with pytest.raises(FileNotFoundError, match="Variant evidence file not found"):
+        parse_variant_inputs(str(missing))
 
 
 def test_fusion_parser_reads_hash_prefixed_star_fusion_header(tmp_path: Path):
@@ -635,10 +654,10 @@ def test_rna_only_fusion_hypotheses_require_compatible_context():
     assert {"ANGPTL2", "VEGFA"}.issubset(set(asps["observed_genes"]))
 
 
-def test_mutation_expression_effects_are_hypotheses_not_calls():
-    from trufflepig.alteration_effects import infer_mutation_expression_hypotheses
+def test_variant_expression_effects_are_hypotheses_not_calls():
+    from trufflepig.variant_effects import infer_variant_expression_hypotheses
 
-    findings = infer_mutation_expression_hypotheses(
+    findings = infer_variant_expression_hypotheses(
         {"ESR1": 0.0, "PGR": 0.0, "EGFR": 30.0, "KRT5": 20.0, "KRT14": 12.0},
         tumor_tpm_by_symbol={
             "ESR1": 0.0,
@@ -655,10 +674,10 @@ def test_mutation_expression_effects_are_hypotheses_not_calls():
     assert all(finding["promote_report_scope"] is False for finding in findings)
 
 
-def test_unmeasured_low_markers_do_not_support_mutation_expression_hypotheses():
-    from trufflepig.alteration_effects import infer_mutation_expression_hypotheses
+def test_unmeasured_low_markers_do_not_support_variant_expression_hypotheses():
+    from trufflepig.variant_effects import infer_variant_expression_hypotheses
 
-    findings = infer_mutation_expression_hypotheses(
+    findings = infer_variant_expression_hypotheses(
         {"EGFR": 30.0, "KRT5": 20.0, "KRT14": 12.0},
         cancer_code="BRCA",
     )

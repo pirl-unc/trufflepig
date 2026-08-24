@@ -646,31 +646,31 @@ def format_missing_observation_interp(state: str) -> str:
     return "not measured"
 
 
-def supplied_alterations_for_gene(analysis, gene: str) -> list[dict]:
-    """Return supplied alteration records matching a target gene symbol."""
-    from .alterations import molecular_evidence_for_gene
+def supplied_variants_for_gene(analysis, gene: str) -> list[dict]:
+    """Return supplied variant records matching a target gene symbol."""
+    from .variants import variant_evidence_for_gene
 
     if not isinstance(analysis, dict):
         return []
     wanted = _clean_text(gene).upper()
     if not wanted:
         return []
-    return molecular_evidence_for_gene(analysis, wanted)
+    return variant_evidence_for_gene(analysis, wanted)
 
 
-def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
-    """Return supplied alteration records compatible with a therapy row.
+def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
+    """Return supplied variants compatible with a therapy row.
 
     This is intentionally conservative: a row that requires EGFR KDD is not
     supported by generic EGFR expression or a vague EGFR variant. For broader
-    mutation/fusion/amplification rows, a same-gene supplied alteration of a
+    mutation/fusion/amplification rows, a same-gene supplied variant of a
     compatible coarse class is enough to mark the eligibility evidence as
     present, still with clinical verification language in the reports.
     """
-    from .alterations import classify_alteration_type
+    from .variants import classify_variant_type
 
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
-    records = supplied_alterations_for_gene(analysis, sym)
+    records = supplied_variants_for_gene(analysis, sym)
     if not records:
         return []
     text = " ".join(
@@ -681,7 +681,7 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
     eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
     required_types: set[str] = set()
     if "alk_positive" in eligibility_basis:
-        # Trufflepig currently accepts molecular alteration files, not an IHC
+        # Trufflepig currently accepts variant files, not an IHC
         # result channel. An activating ALK rearrangement is therefore the only
         # supplied evidence that can satisfy an ALK-positive row here.
         required_types.add("fusion")
@@ -689,7 +689,7 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         required_types.update({"kdd", "internal_tandem_duplication"})
     elif re.search(r"\b(itd|internal\s+tandem\s+duplication)\b", text):
         required_types.add("internal_tandem_duplication")
-    elif classify_alteration_type(text) == "fusion":
+    elif classify_variant_type(text) == "fusion":
         required_types.add("fusion")
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
@@ -708,10 +708,10 @@ def supplied_alteration_supports_target_row(target_row, analysis) -> list[dict]:
         return []
     supported: list[dict] = []
     for record in records:
-        observed_type = _clean_text(record.get("alteration_type")).lower()
+        observed_type = _clean_text(record.get("variant_type")).lower()
         observed_text = " ".join(
             _clean_text(record.get(key))
-            for key in ("alteration", "raw_name", "alteration_type")
+            for key in ("variant", "raw_name", "variant_type")
         ).lower()
         if observed_type in required_types:
             supported.append(record)
@@ -733,7 +733,10 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     """
     if not hasattr(target_row, "get"):
         return False
-    if _truthy(target_row.get("requires_supplied_alteration")) or _truthy(
+    if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
+        # Pirlygenes therapy tables retain this legacy column.
+        target_row.get("requires_supplied_alteration")
+    ) or _truthy(
         target_row.get("requires_verified_alteration")
     ):
         return True
@@ -741,28 +744,34 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
-def supplied_alteration_context_for_target_row(target_row, analysis) -> str:
-    """Reader-facing summary of supplied alteration evidence for a target row."""
-    supported = supplied_alteration_supports_target_row(target_row, analysis)
+def supplied_variant_context_for_target_row(target_row, analysis) -> str:
+    """Reader-facing summary of supplied variant evidence for a target row."""
+    supported = supplied_variant_supports_target_row(target_row, analysis)
     if not supported:
         return ""
     labels: list[str] = []
     for record in supported[:3]:
         gene = _clean_text(record.get("gene"))
-        alteration = _clean_text(record.get("alteration")) or _clean_text(
-            record.get("alteration_type")
+        variant = _clean_text(record.get("variant")) or _clean_text(
+            record.get("variant_type")
         )
-        if gene and alteration.upper().startswith(gene.upper()):
-            labels.append(alteration)
+        if gene and variant.upper().startswith(gene.upper()):
+            labels.append(variant)
         else:
-            labels.append(f"{gene} {alteration}".strip())
+            labels.append(f"{gene} {variant}".strip())
     suffix = "" if len(supported) <= 3 else f" (+{len(supported) - 3} more)"
     return (
-        "supplied alteration evidence matches this therapy requirement: "
+        "supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
         + "; verify against the clinical assay report"
     )
+
+
+# Compatibility names for downstream callers of the pre-1.24 reporting API.
+supplied_alterations_for_gene = supplied_variants_for_gene
+supplied_alteration_supports_target_row = supplied_variant_supports_target_row
+supplied_alteration_context_for_target_row = supplied_variant_context_for_target_row
 
 
 def pathway_state_figure_axes(therapy_response_scores) -> list:
@@ -1883,7 +1892,7 @@ def _therapy_rna_context_inactive_rule(target_row, *, analysis=None) -> dict | N
     """
     if not isinstance(analysis, dict) or not hasattr(target_row, "get"):
         return None
-    if supplied_alteration_supports_target_row(target_row, analysis):
+    if supplied_variant_supports_target_row(target_row, analysis):
         return None
     for rule in _THERAPY_EXPOSURE_RULES:
         axis = str(rule.get("axis") or "")
@@ -1901,7 +1910,7 @@ def therapy_rna_context_conflict(target_row, *, analysis=None, disease_state=Non
 
     This is stronger than the medication-reconciliation caution: the row can
     remain visible in full context tables, but should be deprioritized unless
-    clinical HER2/ER status or a compatible supplied alteration confirms
+    clinical HER2/ER status or a compatible supplied variant confirms
     eligibility.
     """
     rule = _therapy_rna_context_inactive_rule(target_row, analysis=analysis)
@@ -2525,7 +2534,7 @@ def cancer_therapy_panel_for_analysis(
     """Return the complete curated therapy panel for the active report scope.
 
     Pirlygenes is the primary disease-curation source. Trufflepig adds a small
-    alteration-gated layer for infantile spindle tumors whose upstream panel is
+    variant-gated layer for infantile spindle tumors whose upstream panel is
     empty. Exact molecular panels take precedence over a generic parent
     fallback; other uncurated descendants retain the historical parent-panel
     behavior.
@@ -2606,7 +2615,7 @@ def cancer_therapy_panel_for_analysis(
     ):
         subtype = targets_df["subtype"].fillna("").astype(str).str.strip()
         molecular_match = targets_df.apply(
-            lambda row: bool(supplied_alteration_supports_target_row(row, analysis)),
+            lambda row: bool(supplied_variant_supports_target_row(row, analysis)),
             axis=1,
         )
         # Parent-wide rows are valid for the broad report. A child-specific

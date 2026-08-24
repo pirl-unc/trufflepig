@@ -43,6 +43,8 @@ class AnalyzeConfig:
     decomposition_templates: str | None = None
     hla_types: str | None = None
     fusions: str | None = None
+    variants: str | None = None
+    # Deprecated constructor compatibility. It is omitted from public output.
     alterations: str | None = None
     alignment_qc: str | None = None
     expression_qc_rescue: str = "auto"
@@ -74,18 +76,26 @@ class AnalyzeConfig:
 
         return split_fusion_paths(self.fusions)
 
-    def alteration_input_list(self) -> list[str]:
-        """Alteration evidence files or inline calls supplied for loose parsing."""
-        from ..alterations import split_alteration_inputs
+    def variant_input_list(self) -> list[str]:
+        """Variant files or symbolic calls supplied for normalization."""
+        from ..variants import split_variant_inputs
 
-        return split_alteration_inputs(self.alterations)
+        if self.variants and self.alterations and self.variants != self.alterations:
+            raise ValueError("Supply variants, not both variants and legacy alterations")
+        return split_variant_inputs(self.variants or self.alterations)
+
+    def alteration_input_list(self) -> list[str]:
+        """Deprecated alias for :meth:`variant_input_list`."""
+        return self.variant_input_list()
 
     def public_dict(self) -> dict[str, Any]:
         """JSON-safe representation for manifests and provenance files."""
         payload = asdict(self)
+        payload.pop("alterations", None)
+        payload["variants"] = self.variants or self.alterations
         payload["hla_type_list"] = self.hla_type_list()
         payload["fusion_path_list"] = self.fusion_path_list()
-        payload["alteration_input_list"] = self.alteration_input_list()
+        payload["variant_input_list"] = self.variant_input_list()
         return payload
 
 

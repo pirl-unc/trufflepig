@@ -4,7 +4,7 @@ import json
 
 import pandas as pd
 
-from trufflepig.alterations import parse_alteration_inputs
+from trufflepig.variants import parse_variant_inputs
 from trufflepig.brief import build_summary
 from trufflepig.fusions import FusionRecord
 from trufflepig.reporting import cancer_therapy_panel_for_analysis
@@ -12,7 +12,7 @@ from trufflepig.reporting import cancer_therapy_panel_for_analysis
 
 def _analysis(code, *alterations):
     records = [
-        parse_alteration_inputs(text)[0].public_dict() for text in alterations
+        parse_variant_inputs(text)[0].public_dict() for text in alterations
     ]
     return {
         "cancer_type": code,
@@ -23,8 +23,8 @@ def _analysis(code, *alterations):
         }.get(code, code),
         "purity": {},
         "therapy_response_scores": {},
-        "alteration_inputs_supplied": bool(records),
-        "alteration_records": records,
+        "variant_inputs_supplied": bool(records),
+        "variant_records": records,
     }
 
 
@@ -118,7 +118,7 @@ def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():
     for alteration in ("ALK rearranged", "ALK rearrangements", "ALK translocations"):
         analysis = _analysis("SARC_IMT", alteration)
 
-        assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
+        assert analysis["variant_records"][0]["variant_type"] == "fusion"
         report = build_summary(
             analysis,
             _ranges(ALK=120.0),
@@ -147,11 +147,11 @@ def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
                 }
             ]
         ).to_csv(path, sep=separator, index=False)
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(
@@ -198,11 +198,11 @@ def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path)
                 ]
             )
         )
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(
@@ -228,11 +228,11 @@ def test_structured_pass_alk_results_enable_crizotinib(tmp_path):
                 }
             ]
         ).to_csv(path, index=False)
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(
@@ -258,11 +258,11 @@ def test_classification_status_does_not_suppress_verified_alk_event(tmp_path):
                 }
             ]
         ).to_csv(path, index=False)
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(
@@ -291,11 +291,11 @@ def test_structured_filter_status_controls_alk_therapy_evidence(tmp_path):
                 }
             ]
         ).to_csv(path, index=False)
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(
@@ -322,11 +322,11 @@ def test_generic_filter_confidence_does_not_suppress_alk_therapy_evidence(tmp_pa
                 }
             ]
         ).to_csv(path, index=False)
-        record = parse_alteration_inputs(str(path))[0].public_dict()
+        record = parse_variant_inputs(str(path))[0].public_dict()
         analysis = _analysis("SARC_IMT")
         analysis.update(
-            alteration_inputs_supplied=True,
-            alteration_records=[record],
+            variant_inputs_supplied=True,
+            variant_records=[record],
         )
 
         report = build_summary(

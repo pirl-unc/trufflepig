@@ -10,7 +10,7 @@ inherit every therapy assigned to unrelated siblings in the broad sarcoma
 table.
 
 Trufflepig uses diagnosis-specific panels and keeps molecular therapies gated
-on supplied alteration evidence. Target RNA abundance provides context but
+on supplied variant evidence. Target RNA abundance provides context but
 does not prove a fusion or create drug eligibility.
 
 ## Inflammatory myofibroblastic tumor (`SARC_IMT`)
@@ -54,5 +54,5 @@ requirement.
 - Exact IMT, DFSP, and PEComa calls use only their own panel.
 - An unmapped sarcoma child can inherit genuinely parent-wide therapies, but
   not rows labeled for other sarcoma subtypes.
-- Every molecularly gated shortlist row requires supplied alteration evidence;
+- Every molecularly gated shortlist row requires supplied variant evidence;
   expression alone is never treated as a structural variant.

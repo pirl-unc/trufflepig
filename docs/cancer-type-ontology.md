@@ -88,7 +88,7 @@ registry codes on the tree (broad lineage at minimum):
 | hematolymphoid | 21 | heme-bcell/tcell/myeloid/plasma |
 | neuroendocrine | 14 | |
 | neural | 11 | cns |
-| embryonal | 4 | poly-phenotypic pediatric; resolved by context + defining alteration |
+| embryonal | 4 | poly-phenotypic pediatric; resolved by context + defining variant |
 | melanocytic | 2 | SKCM/UVM |
 | germ | 1 | TGCT |
 
@@ -121,7 +121,7 @@ up** rather than guessing. Examples from the rep sweep:
   subtype abstained (correct: ATRT is decided by SMARCB1 loss, not lineage).
 - **NUTM** → `LUSC` → epithelial/squamous ✓; NUT carcinoma *is* squamous by
   expression and is distinguished from LUSC only by the NUTM1 fusion — a
-  defining-alteration flag, not a lineage call.
+  defining-variant flag, not a lineage call.
 
 ## Holistic integration: signature + recall + lineage exclusion
 
@@ -214,6 +214,6 @@ in the surfaced candidate set.
 
 - It does not call subtypes that lack a TCGA reference signature; it stops at the
   broad/differentiation level and names the near neighbours.
-- It does not use defining alterations (NUTM1, SMARCB1, fusion surrogates) — those
+- It does not use defining variants (NUTM1, SMARCB1, fusion surrogates) — those
   remain a separate evidence line that the report integrates *alongside* this.
 - It is not IHC; RNA lineage signatures are weakly correlated with protein stains.

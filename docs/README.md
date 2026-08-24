@@ -9,7 +9,7 @@ notes only when you need their implementation detail.
    high-level path from an expression table to the final cancer call,
    decomposition, therapy shortlist, and report.
 2. [Infantile spindle-cell molecular interpretation](./infantile-spindle-molecular-interpretation.md)
-   — IFS, CMN, NTRK-spindle driver overlap, alteration-gated therapies, and
+   — IFS, CMN, NTRK-spindle driver overlap, variant-gated therapies, and
    current trial context.
 3. [Exact spindle-sarcoma therapy panels](./spindle-sarcoma-therapy-panels.md)
    — diagnosis-specific IMT, DFSP, PEComa, and GIST therapy scope without

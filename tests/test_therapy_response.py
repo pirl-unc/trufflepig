@@ -168,11 +168,11 @@ def test_infer_mapk_activity_sources_keeps_driver_uncertainty():
     )
     analysis = {
         "therapy_response_scores": {MAPK_ACTIVITY_AXIS: score},
-        "alteration_records": [
+        "variant_records": [
             {
                 "gene": "EGFR",
-                "alteration": "kinase domain duplication",
-                "alteration_type": "kdd",
+                "variant": "kinase domain duplication",
+                "variant_type": "kdd",
                 "source_path": "alvin.tsv",
                 "confidence": "supplied",
             }

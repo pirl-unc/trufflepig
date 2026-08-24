@@ -183,7 +183,7 @@ Local report audit highlights from blind report regeneration:
 
 The CLI loads a gene-level TPM table, resolves gene identifiers, applies
 technical RNA cleanup, and records sample-level context such as degradation,
-culture-like expression, site hints, fusions, alterations, and HLA inputs.
+culture-like expression, site hints, supplied variants/fusions, and HLA inputs.
 
 The pipeline order is declared as:
 
@@ -508,7 +508,7 @@ it is validated.
   whole-profile residual nearest-neighbor matching, so it should be scored on
   curated identity panels rather than cosine-like whole-profile similarity.
 - Fusion and direct molecular evidence: authoritative for entities where the
-  alteration is defining.
+  variant is defining.
 
 ### Implemented incremental residual-identity path
 
@@ -645,7 +645,7 @@ rules. Each registry label should have:
 
 - `parent_code` and ancestors,
 - whether it is an entity, histologic subtype, molecular subtype, expression
-  state, therapy/status axis, or defining-alteration entity,
+  state, therapy/status axis, or defining-variant entity,
 - compatible compartments/secondary lineages,
 - direct expression-reference availability,
 - fallback expression reference and fallback reason,

@@ -48,7 +48,7 @@ from .reporting import (
     expression_independent_indication,
     indication_biomarker_label,
     normal_expression_context,
-    supplied_alteration_supports_target_row,
+    supplied_variant_supports_target_row,
     target_hla_eligibility,
     therapy_state_caution,
     tumor_attribution_context,
@@ -1136,7 +1136,7 @@ def _priority_target_rows(
         """Score orthogonal eligibility and therapy-state evidence.
 
         Expression is only one piece of the actionability chain. HLA-restricted,
-        alteration-required, or currently-modulated therapy rows should carry
+        variant-required, or currently-modulated therapy rows should carry
         that uncertainty into the rank instead of being promoted by TPM alone.
         """
         if curated is None:
@@ -1161,10 +1161,10 @@ def _priority_target_rows(
             notes.append("HLA mismatch")
 
         if expression_independent_indication(curated):
-            supported = supplied_alteration_supports_target_row(curated, analysis)
+            supported = supplied_variant_supports_target_row(curated, analysis)
             if supported:
                 score += 1.0
-                notes.append("required alteration supplied")
+                notes.append("required variant supplied")
             else:
                 label = indication_biomarker_label(curated)
                 score -= 1.0
@@ -1684,7 +1684,7 @@ def plot_priority_target_context(
     fig.text(
         0.5,
         0.955,
-        "Rows are split by approval/readiness tier; colors show healthy-tissue context, marker shapes show tumor-source support, and scores include HLA/alteration/current-therapy fit plus curated benefit/toxicity when available.",
+        "Rows are split by approval/readiness tier; colors show healthy-tissue context, marker shapes show tumor-source support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
         ha="center",
         va="top",
         fontsize=9,

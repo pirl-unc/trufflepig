@@ -1045,16 +1045,16 @@ def _tumor_tpm_by_symbol_from_ranges(ranges_df) -> dict[str, float]:
     return mapping
 
 
-def _store_alteration_effect_reasoning(
+def _store_variant_effect_reasoning(
     analysis,
     *,
     fusion_records=None,
-    alteration_records=None,
+    variant_records=None,
     sample_tpm_by_symbol=None,
     ranges_df=None,
     cancer_code=None,
 ) -> dict:
-    """Attach uncertainty-aware downstream alteration-effect evidence."""
+    """Attach uncertainty-aware downstream variant-effect evidence."""
     tumor_tpm_by_symbol = _tumor_tpm_by_symbol_from_ranges(ranges_df)
     if tumor_tpm_by_symbol:
         analysis["tumor_tpm_by_symbol"] = tumor_tpm_by_symbol
@@ -1080,41 +1080,41 @@ def _store_alteration_effect_reasoning(
             )
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[alteration-effects] fusion-effect evaluation skipped: {exc}")
+        print(f"[variant-effects] fusion-effect evaluation skipped: {exc}")
         fusion_effects = []
         fusion_hypotheses = []
 
     try:
-        from .alteration_effects import infer_mutation_expression_hypotheses
+        from .variant_effects import infer_variant_expression_hypotheses
 
-        mutation_hypotheses = infer_mutation_expression_hypotheses(
+        variant_hypotheses = infer_variant_expression_hypotheses(
             sample_tpm_by_symbol,
             tumor_tpm_by_symbol=tumor_tpm_by_symbol,
             cancer_code=cancer_code or analysis.get("cancer_type"),
         )
     except Exception as exc:  # noqa: BLE001
-        print(f"[alteration-effects] mutation-effect evaluation skipped: {exc}")
-        mutation_hypotheses = []
+        print(f"[variant-effects] mutation-effect evaluation skipped: {exc}")
+        variant_hypotheses = []
 
     analysis["fusion_expression_effects"] = fusion_effects
     analysis["fusion_expression_hypotheses"] = fusion_hypotheses
-    analysis["mutation_expression_hypotheses"] = mutation_hypotheses
+    analysis["variant_expression_hypotheses"] = variant_hypotheses
     pathway_inferences = infer_mapk_activity_sources(analysis, ranges_df=ranges_df)
     analysis["pathway_activity_inferences"] = pathway_inferences
-    if alteration_records is not None:
-        analysis["alteration_records"] = [
+    if variant_records is not None:
+        analysis["variant_records"] = [
             record.public_dict() if hasattr(record, "public_dict") else dict(record)
-            for record in alteration_records
+            for record in variant_records
         ]
-    analysis["alteration_effect_summary"] = {
+    analysis["variant_effect_summary"] = {
         "fusion_effects": len(fusion_effects),
         "fusion_expression_hypotheses": len(fusion_hypotheses),
-        "mutation_expression_hypotheses": len(mutation_hypotheses),
+        "variant_expression_hypotheses": len(variant_hypotheses),
         "pathway_activity_inferences": len(pathway_inferences),
-        "supplied_alterations": len(alteration_records or []),
+        "supplied_variants": len(variant_records or []),
         "expression_source": "tumor_inferred" if tumor_tpm_by_symbol else "bulk",
     }
-    return analysis["alteration_effect_summary"]
+    return analysis["variant_effect_summary"]
 
 
 def _select_actionable_plot_genes(
@@ -1721,6 +1721,8 @@ def analyze(
     decomposition_templates: Optional[str] = None,
     hla_types: Optional[str] = None,
     fusions: Optional[str] = None,
+    variants: Optional[str] = None,
+    # Deprecated Python compatibility; use ``variants``.
     alterations: Optional[str] = None,
     alignment_qc: Optional[str] = None,
     expression_qc_rescue: str = "auto",
@@ -1766,6 +1768,7 @@ def analyze(
         decomposition_templates=decomposition_templates,
         hla_types=hla_types,
         fusions=fusions,
+        variants=variants,
         alterations=alterations,
         alignment_qc=alignment_qc,
         expression_qc_rescue=expression_qc_rescue,
@@ -1961,7 +1964,7 @@ def _analyze_body(run: AnalyzeRun):
     met_site = config.met_site
     transcript_path = resolution.transcript_input
     fusion_paths = config.fusion_path_list()
-    alteration_inputs = config.alteration_input_list()
+    variant_inputs = config.variant_input_list()
     therapy_target_top_k = config.therapy_target_top_k
     therapy_target_tpm_threshold = config.therapy_target_tpm_threshold
     deprecated_figures = bool(config.deprecated_figures)
@@ -1997,14 +2000,14 @@ def _analyze_body(run: AnalyzeRun):
             f"[fusion] Parsed {len(fusion_records)} fusion calls from "
             f"{len(fusion_paths)} file(s)"
         )
-    alteration_records = []
-    if alteration_inputs:
-        from .alterations import parse_alteration_inputs
+    variant_records = []
+    if variant_inputs:
+        from .variants import parse_variant_inputs
 
-        alteration_records = parse_alteration_inputs(alteration_inputs)
+        variant_records = parse_variant_inputs(variant_inputs)
         print(
-            f"[alteration] Parsed {len(alteration_records)} alteration calls from "
-            f"{len(alteration_inputs)} input(s)"
+            f"[variant] Parsed {len(variant_records)} variant calls from "
+            f"{len(variant_inputs)} input(s)"
         )
     run.note_step(
         "input",
@@ -2013,8 +2016,8 @@ def _analyze_body(run: AnalyzeRun):
             "columns": [str(c) for c in df_expr.columns],
             "fusion_files": len(fusion_paths),
             "fusion_records": len(fusion_records),
-            "alteration_inputs": len(alteration_inputs),
-            "alteration_records": len(alteration_records),
+            "variant_inputs": len(variant_inputs),
+            "variant_records": len(variant_records),
         },
     )
     forced_labels = _parse_always_label_genes(label_genes)
@@ -2328,8 +2331,8 @@ def _analyze_body(run: AnalyzeRun):
     fusion_scope_inference = None
     analysis["fusion_inputs_supplied"] = bool(fusion_paths)
     analysis["fusion_input_paths"] = list(fusion_paths)
-    analysis["alteration_inputs_supplied"] = bool(alteration_inputs)
-    analysis["alteration_inputs"] = list(alteration_inputs)
+    analysis["variant_inputs_supplied"] = bool(variant_inputs)
+    analysis["variant_inputs"] = list(variant_inputs)
     analysis["expression_scale_qc"] = expression_scale_qc
     analysis["raw_expression_scale_qc"] = raw_expression_scale_qc
     analysis["expression_qc_rescue"] = expression_qc_rescue
@@ -2338,10 +2341,17 @@ def _analyze_body(run: AnalyzeRun):
         record.public_dict() if hasattr(record, "public_dict") else dict(record)
         for record in fusion_records
     ]
-    analysis["alteration_records"] = [
+    analysis["variant_records"] = [
         record.public_dict() if hasattr(record, "public_dict") else dict(record)
-        for record in alteration_records
+        for record in variant_records
     ]
+    # One canonical decision stream: dedicated fusion records keep their
+    # source-specific provenance but are normalized and deduplicated here with
+    # every other exact or symbolic variant.
+    from .variants import variant_evidence_records
+
+    analysis["variant_records"] = variant_evidence_records(analysis)
+    variant_records = list(analysis["variant_records"])
     if fusion_records:
         from .rare_inference import (
             infer_rare_cancer_report_scope_from_fusions,
@@ -2456,7 +2466,7 @@ def _analyze_body(run: AnalyzeRun):
         decomposition_templates=template_overrides,
         met_site=met_site,
         hla_types=config.hla_types,
-        alterations=config.alterations,
+        variants=config.variants or config.alterations,
     )
     cancer_type_context = _synchronize_cancer_type_context(
         analysis,
@@ -3814,17 +3824,17 @@ def _analyze_body(run: AnalyzeRun):
                 "path": ranges_tsv,
             },
         )
-        alteration_effect_summary = _store_alteration_effect_reasoning(
+        variant_effect_summary = _store_variant_effect_reasoning(
             analysis,
             fusion_records=fusion_records,
-            alteration_records=alteration_records,
+            variant_records=variant_records,
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             ranges_df=ranges_df,
             cancer_code=report_cancer_type,
         )
         run.note_step(
-            "alteration_effects",
-            outputs=alteration_effect_summary,
+            "variant_effects",
+            outputs=variant_effect_summary,
         )
         if plot_ctx.enabled:
             for cat_key, cat_slug in _range_plot_categories:
@@ -6738,7 +6748,7 @@ def _analysis_constraints(
     decomposition_templates=None,
     met_site=None,
     hla_types=None,
-    alterations=None,
+    variants=None,
 ):
     constraints = {}
     if cancer_type:
@@ -6759,12 +6769,12 @@ def _analysis_constraints(
         parsed_hla = parse_hla_types(hla_types)
         if parsed_hla:
             constraints["hla_types"] = parsed_hla
-    if alterations:
-        from .alterations import split_alteration_inputs
+    if variants:
+        from .variants import split_variant_inputs
 
-        parsed_alterations = split_alteration_inputs(alterations)
-        if parsed_alterations:
-            constraints["alterations"] = parsed_alterations
+        parsed_variants = split_variant_inputs(variants)
+        if parsed_variants:
+            constraints["variants"] = parsed_variants
     return constraints
 
 
@@ -7869,7 +7879,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             f"{finding.get('label')}: RNA-only fusion-effect testing prompt "
             f"({genes}; {source})"
         )
-    for finding in (analysis.get("mutation_expression_hypotheses") or [])[:3]:
+    for finding in (analysis.get("variant_expression_hypotheses") or [])[:3]:
         high = ", ".join(finding.get("observed_up_genes") or [])
         low = ", ".join(finding.get("observed_low_genes") or [])
         support = "; ".join(
@@ -7882,12 +7892,12 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         )
         source = _report_expression_source_label(finding.get("expression_source"))
         active_biology.append(
-            f"{finding.get('label')}: compatible with {finding.get('alteration')} "
+            f"{finding.get('label')}: compatible with {finding.get('variant_class')} "
             f"({support}; {source})"
         )
     if active_biology:
         bullets.append(
-            "- **Active biology / alteration-effect checks**: "
+            "- **Active biology / variant-effect checks**: "
             + "; ".join(dict.fromkeys(active_biology))
             + ". These widen the hypothesis set and should be confirmed with orthogonal assays."
         )
@@ -8137,40 +8147,47 @@ def _rare_marker_hypotheses_markdown(
     return "\n".join(lines)
 
 
-def _alteration_effect_markdown(
+def _variant_effect_markdown(
     analysis,
     *,
-    heading: str = "## Alteration-expression hypotheses",
+    heading: str = "## Variant-expression hypotheses",
 ) -> str:
-    hypotheses = analysis.get("mutation_expression_hypotheses") or []
-    records = analysis.get("alteration_records") or []
-    if not hypotheses and not records and not analysis.get("alteration_inputs_supplied"):
+    hypotheses = analysis.get("variant_expression_hypotheses") or []
+    supplied_records = analysis.get("variant_records") or []
+    from .variants import variant_record_genes
+
+    records = [record for record in supplied_records if variant_record_genes(record)]
+    if (
+        not hypotheses
+        and not supplied_records
+        and not analysis.get("variant_inputs_supplied")
+    ):
         return ""
     lines = [heading, ""]
     if records:
         lines.append(
-            "Supplied alteration calls are carried forward as orthogonal driver or "
+            "Supplied variant calls are carried forward as orthogonal driver or "
             "eligibility evidence. They are not inferred from RNA and should still "
             "be verified against the source molecular report.\n"
         )
-        lines.append("| Gene | Supplied alteration | Type | Source |")
+        lines.append("| Gene | Supplied variant | Type | Source |")
         lines.append("|---|---|---|---|")
         for record in records[:12]:
             if not hasattr(record, "get"):
                 continue
             source = str(record.get("source_path") or "inline/user input")
             lines.append(
-                f"| {record.get('gene') or '—'} | {record.get('alteration') or '—'} | "
-                f"{record.get('alteration_type') or '—'} | {source} |"
+                f"| {record.get('gene') or '—'} | {record.get('variant') or '—'} | "
+                f"{record.get('variant_type') or '—'} | {source} |"
             )
         if len(records) > 12:
             lines.append(f"| ... | {len(records) - 12} additional supplied calls | ... | ... |")
         lines.append("")
-    elif analysis.get("alteration_inputs_supplied"):
+    elif supplied_records or analysis.get("variant_inputs_supplied"):
         lines.append(
-            "Alteration input was supplied, but no usable alteration calls were parsed. "
-            "Review the file format/content before using therapies that require "
-            "alteration evidence.\n"
+            "Variant input was supplied, but no usable positive variant call was "
+            "available. Review the source result before using therapies that require "
+            "variant evidence.\n"
         )
     if not hypotheses:
         return "\n".join(lines)
@@ -8181,7 +8198,7 @@ def _alteration_effect_markdown(
         "DNA/RNA testing rather than replace it.\n"
     )
     lines.append(
-        "| Compatible biology | Alteration class to test | Expression source | Supporting high/low genes | Suggested assay | Caveat |"
+        "| Compatible biology | Variant class to test | Expression source | Supporting high/low genes | Suggested assay | Caveat |"
     )
     lines.append("|---|---|---|---|---|---|")
     for finding in hypotheses[:10]:
@@ -8189,7 +8206,7 @@ def _alteration_effect_markdown(
         low = ", ".join(finding.get("observed_low_genes") or [])
         support = "; ".join(part for part in [f"high {high}" if high else "", f"low {low}" if low else ""] if part) or "—"
         lines.append(
-            f"| {finding.get('label') or '—'} | {finding.get('alteration') or '—'} | "
+            f"| {finding.get('label') or '—'} | {finding.get('variant_class') or '—'} | "
             f"{_report_expression_source_label(finding.get('expression_source'))} | {support} | "
             f"{finding.get('suggested_assay') or '—'} | {finding.get('caveat') or '—'} |"
         )
@@ -8432,9 +8449,9 @@ def _build_evidence_report(
     if rare_marker_body:
         lines.append(rare_marker_body)
         lines.append("")
-    alteration_body = _alteration_effect_markdown(analysis)
-    if alteration_body:
-        lines.append(alteration_body)
+    variant_body = _variant_effect_markdown(analysis)
+    if variant_body:
+        lines.append(variant_body)
         lines.append("")
     decision_trace_body = _cancer_type_decision_trace_markdown(analysis)
     if decision_trace_body:
@@ -8657,12 +8674,12 @@ def _generate_text_reports(
     if rare_marker_body:
         lines.append(rare_marker_body)
         lines.append("")
-    alteration_body = _alteration_effect_markdown(
+    variant_body = _variant_effect_markdown(
         analysis,
         heading="## Mutation/CNV expression-effect hypotheses",
     )
-    if alteration_body:
-        lines.append(alteration_body)
+    if variant_body:
+        lines.append(variant_body)
         lines.append("")
 
     # Tissue-composition screen (#149) — same signal that drives the
@@ -10338,7 +10355,7 @@ def _build_target_report(
                 "approved only in another indication, or not disease-matched. "
                 "The **priority** list is intentionally narrower: it ranks the "
                 "curated cancer-specific therapy landscape by indication fit, "
-                "required alteration or HLA evidence, clinical maturity, and "
+                "required variant or HLA evidence, clinical maturity, and "
                 "tumor-source attribution. A target such as HER3/ERBB3 or "
                 "ADAM9 can therefore appear in the expression screen without "
                 "being a priority recommendation for this sample.\n"
@@ -11221,6 +11238,7 @@ def plot_expression(
     site_hint: Optional[str] = None,
     decomposition_templates: Optional[str] = None,
     hla_types: Optional[str] = None,
+    variants: Optional[str] = None,
     alterations: Optional[str] = None,
     therapy_target_top_k: int = 10,
     therapy_target_tpm_threshold: float = 30.0,
@@ -11252,6 +11270,7 @@ def plot_expression(
         site_hint=site_hint,
         decomposition_templates=decomposition_templates,
         hla_types=hla_types,
+        variants=variants,
         alterations=alterations,
         therapy_target_top_k=therapy_target_top_k,
         therapy_target_tpm_threshold=therapy_target_tpm_threshold,

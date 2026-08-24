@@ -1,21 +1,22 @@
-"""Public alteration-ingestion contracts shared by molecular report layers."""
+"""Public variant-ingestion contracts shared by report layers."""
 
 import pandas as pd
 import pytest
 
-from trufflepig.alterations import (
-    alteration_record_genes,
-    alteration_record_passes_assay_filters,
-    molecular_evidence_for_gene,
-    molecular_evidence_records,
-    parse_alteration_inputs,
+from trufflepig.variants import (
+    classify_variant_type,
+    variant_record_genes,
+    variant_record_passes_assay_filters,
+    variant_evidence_for_gene,
+    variant_evidence_records,
+    parse_variant_inputs,
 )
 from trufflepig.fusions import FusionRecord, parse_fusion_file
-from trufflepig.reporting import supplied_alteration_supports_target_row
+from trufflepig.reporting import supplied_variant_supports_target_row
 
 
 def _record(value):
-    return parse_alteration_inputs(value)[0].public_dict()
+    return parse_variant_inputs(value)[0].public_dict()
 
 
 @pytest.mark.parametrize(
@@ -31,8 +32,8 @@ def test_unknown_event_details_do_not_negate_a_positive_call(
 ):
     record = _record(description)
 
-    assert alteration_record_passes_assay_filters(record)
-    assert alteration_record_genes(record) == expected_genes
+    assert variant_record_passes_assay_filters(record)
+    assert variant_record_genes(record) == expected_genes
 
 
 @pytest.mark.parametrize(
@@ -44,7 +45,7 @@ def test_unknown_event_details_do_not_negate_a_positive_call(
     ),
 )
 def test_explicit_unknown_event_outcomes_are_not_positive_calls(description):
-    assert alteration_record_genes(_record(description)) == ()
+    assert variant_record_genes(_record(description)) == ()
 
 
 @pytest.mark.parametrize("result", ("Unknown", "Unknown (assay unresolved)"))
@@ -56,8 +57,8 @@ def test_structured_unknown_results_fail_closed(tmp_path, result):
 
     record = _record(str(path))
 
-    assert not alteration_record_passes_assay_filters(record)
-    assert alteration_record_genes(record) == ()
+    assert not variant_record_passes_assay_filters(record)
+    assert variant_record_genes(record) == ()
 
 
 @pytest.mark.parametrize("filter_value", ("HighConfidence", "Tier 1", "Tier 10"))
@@ -80,8 +81,9 @@ def test_generic_filter_metadata_does_not_reject_a_positive_call(
     record = _record(str(path))
 
     assert record["filter_semantics"] == "generic"
-    assert alteration_record_passes_assay_filters(record)
-    assert alteration_record_genes(record) == ("ALK",)
+    assert record["variant"] == "rearrangement"
+    assert variant_record_passes_assay_filters(record)
+    assert variant_record_genes(record) == ("ALK",)
 
 
 @pytest.mark.parametrize("filter_value", ("FAIL", "LowQual", "LowConfidence"))
@@ -101,8 +103,8 @@ def test_explicit_generic_filter_failures_are_rejected(tmp_path, filter_value):
     record = _record(str(path))
 
     assert record["filter_semantics"] == "generic"
-    assert not alteration_record_passes_assay_filters(record)
-    assert alteration_record_genes(record) == ()
+    assert not variant_record_passes_assay_filters(record)
+    assert variant_record_genes(record) == ()
 
 
 def test_vcf_filter_column_uses_strict_filter_semantics(tmp_path):
@@ -121,11 +123,11 @@ def test_vcf_filter_column_uses_strict_filter_semantics(tmp_path):
     record = _record(str(path))
 
     assert record["filter_semantics"] == "vcf"
-    assert not alteration_record_passes_assay_filters(record)
-    assert alteration_record_genes(record) == ()
+    assert not variant_record_passes_assay_filters(record)
+    assert variant_record_genes(record) == ()
 
 
-def test_dedicated_fusion_records_share_the_molecular_evidence_contract():
+def test_dedicated_fusion_records_share_the_variant_evidence_contract():
     fusion = FusionRecord(
         gene_a="KIF5B",
         gene_b="RET",
@@ -133,13 +135,13 @@ def test_dedicated_fusion_records_share_the_molecular_evidence_contract():
         confidence="high",
     ).public_dict()
 
-    records = molecular_evidence_records({"fusion_records": [fusion]})
+    records = variant_evidence_records({"fusion_records": [fusion]})
 
     assert len(records) == 1
-    assert records[0]["alteration_type"] == "fusion"
+    assert records[0]["variant_type"] == "fusion"
     assert records[0]["evidence_source_types"] == ["fusion"]
-    assert alteration_record_genes(records[0]) == ("KIF5B", "RET")
-    assert supplied_alteration_supports_target_row(
+    assert variant_record_genes(records[0]) == ("KIF5B", "RET")
+    assert supplied_variant_supports_target_row(
         {
             "symbol": "RET",
             "indication": "RET fusion-positive solid tumor",
@@ -149,37 +151,37 @@ def test_dedicated_fusion_records_share_the_molecular_evidence_contract():
     )
 
 
-def test_same_fusion_from_two_interfaces_is_one_molecular_event():
+def test_same_fusion_from_two_interfaces_is_one_variant():
     alteration = _record("ETV6-NTRK3 fusion")
     fusion = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
 
-    records = molecular_evidence_records(
+    records = variant_evidence_records(
         {
-            "alteration_records": [alteration],
+            "variant_records": [alteration],
             "fusion_records": [fusion],
         }
     )
 
     assert len(records) == 1
-    assert records[0]["evidence_source_types"] == ["alteration", "fusion"]
-    assert alteration_record_genes(records[0]) == ("ETV6", "NTRK3")
+    assert records[0]["evidence_source_types"] == ["variant", "fusion"]
+    assert variant_record_genes(records[0]) == ("ETV6", "NTRK3")
 
 
 def test_conflicting_cross_interface_fusion_calls_do_not_enable_therapy():
     negative = _record("ETV6-NTRK3 fusion not detected")
     positive = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
     analysis = {
-        "alteration_records": [negative],
+        "variant_records": [negative],
         "fusion_records": [positive],
     }
 
-    records = molecular_evidence_records(analysis)
+    records = variant_evidence_records(analysis)
 
     assert len(records) == 1
     assert records[0]["evidence_conflict"] is True
-    assert records[0]["evidence_source_types"] == ["alteration", "fusion"]
-    assert molecular_evidence_for_gene(analysis, "NTRK3") == []
-    assert not supplied_alteration_supports_target_row(
+    assert records[0]["evidence_source_types"] == ["variant", "fusion"]
+    assert variant_evidence_for_gene(analysis, "NTRK3") == []
+    assert not supplied_variant_supports_target_row(
         {
             "symbol": "NTRK3",
             "indication": "NTRK gene fusion-positive solid tumor",
@@ -201,7 +203,7 @@ def test_low_confidence_dedicated_fusion_does_not_enable_therapy(confidence):
         ]
     }
 
-    assert molecular_evidence_for_gene(analysis, "ALK") == []
+    assert variant_evidence_for_gene(analysis, "ALK") == []
 
 
 @pytest.mark.parametrize("status", ("Not Reportable", "Non-reportable"))
@@ -213,8 +215,8 @@ def test_explicitly_nonreportable_fusions_do_not_enable_therapy(status):
     ).public_dict()
     analysis = {"fusion_records": [fusion]}
 
-    assert molecular_evidence_for_gene(analysis, "ALK") == []
-    assert not supplied_alteration_supports_target_row(
+    assert variant_evidence_for_gene(analysis, "ALK") == []
+    assert not supplied_variant_supports_target_row(
         {
             "symbol": "ALK",
             "eligibility_basis": "alk_positive",
@@ -226,13 +228,13 @@ def test_explicitly_nonreportable_fusions_do_not_enable_therapy(status):
 
 def test_negative_same_gene_event_does_not_erase_distinct_positive_event():
     analysis = {
-        "alteration_records": [
+        "variant_records": [
             _record("EGFR amplification"),
             _record("EGFR KDD not detected"),
         ]
     }
 
-    assert supplied_alteration_supports_target_row(
+    assert supplied_variant_supports_target_row(
         {
             "symbol": "EGFR",
             "indication": "EGFR amplification",
@@ -240,7 +242,7 @@ def test_negative_same_gene_event_does_not_erase_distinct_positive_event():
         },
         analysis,
     )
-    assert not supplied_alteration_supports_target_row(
+    assert not supplied_variant_supports_target_row(
         {
             "symbol": "EGFR",
             "indication": "EGFR kinase domain duplication",
@@ -252,24 +254,24 @@ def test_negative_same_gene_event_does_not_erase_distinct_positive_event():
 
 def test_conflicting_same_class_calls_fail_closed():
     analysis = {
-        "alteration_records": [
+        "variant_records": [
             _record("EGFR amplification"),
             _record("EGFR amplification not detected"),
         ]
     }
 
-    assert molecular_evidence_for_gene(analysis, "EGFR") == []
+    assert variant_evidence_for_gene(analysis, "EGFR") == []
 
 
 def test_conflicting_same_variant_calls_fail_closed():
     analysis = {
-        "alteration_records": [
+        "variant_records": [
             _record("BRAF V600E"),
             _record("BRAF V600E not detected"),
         ]
     }
 
-    assert molecular_evidence_for_gene(analysis, "BRAF") == []
+    assert variant_evidence_for_gene(analysis, "BRAF") == []
 
 
 def test_hyphenated_gene_symbol_is_not_split_without_fusion_context(tmp_path):
@@ -284,11 +286,11 @@ def test_hyphenated_gene_symbol_is_not_split_without_fusion_context(tmp_path):
         ]
     ).to_csv(path, index=False)
 
-    record = parse_alteration_inputs(str(path))[0].public_dict()
+    record = parse_variant_inputs(str(path))[0].public_dict()
 
     assert record["gene"] == "NME1-NME2"
-    assert record["alteration_type"] == "amplification"
-    assert alteration_record_genes(record) == ("NME1-NME2",)
+    assert record["variant_type"] == "amplification"
+    assert variant_record_genes(record) == ("NME1-NME2",)
 
 
 def test_structured_nonreportable_fusion_fails_closed(tmp_path):
@@ -299,7 +301,51 @@ def test_structured_nonreportable_fusion_fails_closed(tmp_path):
     record = parse_fusion_file(path)[0]
 
     assert record.reportable == "False"
-    assert molecular_evidence_for_gene(
+    assert variant_evidence_for_gene(
         {"fusion_records": [record.public_dict()]},
         "ALK",
     ) == []
+
+
+def test_sample_level_msi_state_is_not_classified_as_one_variant():
+    assert classify_variant_type("MSI-H / dMMR") == "unknown"
+    with pytest.raises(ValueError, match="sample-level genomic state"):
+        parse_variant_inputs("MSI-H / dMMR")
+
+
+def test_sample_level_msi_table_row_is_not_classified_as_one_variant(tmp_path):
+    path = tmp_path / "states.tsv"
+    pd.DataFrame([{"Gene": "MSI", "Variant": "MSI-H"}]).to_csv(
+        path,
+        sep="\t",
+        index=False,
+    )
+
+    with pytest.raises(ValueError, match="sample-level genomic state"):
+        parse_variant_inputs(path)
+
+
+def test_new_empty_variant_stream_does_not_fall_back_to_stale_legacy_records():
+    analysis = {
+        "variant_records": [],
+        "alteration_records": [
+            {
+                "gene": "ALK",
+                "alteration": "ALK fusion",
+                "alteration_type": "fusion",
+            }
+        ],
+    }
+
+    assert variant_evidence_for_gene(analysis, "ALK") == []
+
+
+def test_legacy_alteration_parser_is_a_narrow_variant_alias():
+    from trufflepig.alterations import parse_alteration_inputs
+
+    record = parse_alteration_inputs("EGFR KDD")[0]
+
+    assert record.variant == "EGFR KDD"
+    assert record.variant_type == "kdd"
+    assert record.alteration == record.variant
+    assert record.alteration_type == record.variant_type

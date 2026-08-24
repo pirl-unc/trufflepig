@@ -54,7 +54,17 @@ def _add_run_parser(sub):
     p.add_argument("--met-site", default=None)
     p.add_argument("--hla-types", default=None)
     p.add_argument("--fusions", default=None)
-    p.add_argument("--alterations", default=None)
+    variant_group = p.add_mutually_exclusive_group()
+    variant_group.add_argument(
+        "--variants",
+        default=None,
+        help="Variant file(s) or symbolic calls such as 'EGFR KDD'.",
+    )
+    variant_group.add_argument(
+        "--alterations",
+        dest="variants",
+        help=argparse.SUPPRESS,
+    )
     p.add_argument("--alignment-qc", default=None)
     p.add_argument("--decomposition-templates", default=None)
     p.add_argument(
@@ -135,7 +145,7 @@ def cmd_run(args) -> int:
         "met_site": args.met_site,
         "hla_types": args.hla_types,
         "fusions": args.fusions,
-        "alterations": args.alterations,
+        "variants": args.variants,
         "alignment_qc": args.alignment_qc,
         "decomposition_templates": args.decomposition_templates,
         "output_image_prefix": args.output_image_prefix,

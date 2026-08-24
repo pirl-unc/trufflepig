@@ -27,13 +27,16 @@ to a release remains grouped under its merging PR.
 
 - Infantile fibrosarcoma, congenital mesoblastic nephroma, and NTRK-rearranged
   spindle-cell neoplasms retain distinct diagnostic contexts and require a
-  verified compatible alteration before molecular therapy is shortlisted.
+  verified compatible variant before molecular therapy is shortlisted.
 - Dedicated report-scope panels cover ALK-positive IMT, COL1A1–PDGFB-positive
   DFSP, and malignant PEComa while preventing sibling sarcoma therapies from
   leaking into an unrelated subtype.
-- Structured alteration parsing now preserves fusion pairs and fails closed for
+- Structured variant parsing now preserves fusion pairs and fails closed for
   negative, inconclusive, pending, failed-filter, and low-quality assay results
   without confusing pathogenicity metadata with assay outcome status.
+- `--variants` and `VariantRecord` are the canonical input API for exact and
+  symbolic somatic variants. Legacy alteration names remain compatibility-only;
+  sample-level genomic states such as MSI-H are kept outside the variant model.
 
 ## 1.23.0 — 2026-07-21 — ancestry-aware sibling entity reasoning
 

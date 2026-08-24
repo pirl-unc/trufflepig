@@ -340,11 +340,11 @@ def test_her2_rows_remain_prioritizable_when_orthogonal_eligibility_is_supplied(
     }
     analysis = {
         "therapy_response_scores": {"HER2_signaling": {"state": "down"}},
-        "alteration_records": [
+        "variant_records": [
             {
                 "gene": "ERBB2",
-                "alteration": "ERBB2 amplification",
-                "alteration_type": "amplification",
+                "variant": "ERBB2 amplification",
+                "variant_type": "amplification",
             }
         ],
     }

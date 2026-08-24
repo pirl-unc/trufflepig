@@ -246,21 +246,21 @@ def _support_genes_for_score(score: TherapyAxisScore, *, max_genes: int = 5) -> 
     return out
 
 
-def _candidate_source_from_alteration(record: Any) -> dict[str, Any] | None:
-    from .alterations import alteration_record_genes
+def _candidate_source_from_variant(record: Any) -> dict[str, Any] | None:
+    from .variants import variant_record_genes
 
     genes = [
         gene
-        for gene in alteration_record_genes(record)
+        for gene in variant_record_genes(record)
         if gene in _MAPK_DRIVER_SOURCE_GENES
     ]
     if not genes:
         return None
     gene = genes[0]
-    alteration_type = str(_record_value(record, "alteration_type") or "").strip()
-    alteration = str(_record_value(record, "alteration") or "").strip()
+    variant_type = str(_record_value(record, "variant_type") or "").strip()
+    variant = str(_record_value(record, "variant") or "").strip()
     raw_name = str(_record_value(record, "raw_name") or "").strip()
-    evidence_text = " ".join([alteration_type, alteration, raw_name]).lower()
+    evidence_text = " ".join([variant_type, variant, raw_name]).lower()
     if gene == "NF1" and any(
         token in evidence_text for token in ("loss", "delet", "lof", "truncat")
     ):
@@ -280,8 +280,8 @@ def _candidate_source_from_alteration(record: Any) -> dict[str, Any] | None:
             "internal tandem duplication",
         )
     ):
-        mechanism = "supplied activating MAPK-source alteration"
-    elif alteration_type in {
+        mechanism = "supplied activating MAPK-source variant"
+    elif variant_type in {
         "kdd",
         "amplification",
         "fusion",
@@ -289,24 +289,24 @@ def _candidate_source_from_alteration(record: Any) -> dict[str, Any] | None:
         "mutation",
         "unknown",
     }:
-        mechanism = "supplied alteration in a MAPK-source gene"
+        mechanism = "supplied variant in a MAPK-source gene"
     else:
         return None
 
-    detail = alteration or raw_name or alteration_type or "alteration"
+    detail = variant or raw_name or variant_type or "variant"
     source_path = _short_source_path(_record_value(record, "source_path"))
-    if alteration_type.lower() == "fusion":
-        pair = str(_record_value(record, "pair") or raw_name or alteration).strip()
+    if variant_type.lower() == "fusion":
+        pair = str(_record_value(record, "pair") or raw_name or variant).strip()
         label = f"supplied fusion involving {gene}"
         if pair:
             label += f" ({pair})"
         kind = "supplied_fusion"
     elif str(detail).strip().upper().startswith(gene):
         label = f"supplied {detail}".strip()
-        kind = "supplied_alteration"
+        kind = "supplied_variant"
     else:
         label = f"supplied {gene} {detail}".strip()
-        kind = "supplied_alteration"
+        kind = "supplied_variant"
     if source_path:
         label += (
             f" from {source_path}"
@@ -385,7 +385,7 @@ def _candidate_sources_from_rna(ranges_df, *, max_sources: int = 4) -> list[dict
                     f"RNA-high {row['symbol']} ({row['tpm']:.0f} tumor-source TPM"
                     f"{fold_clause}{percentile_clause})"
                 ),
-                "mechanism": "high receptor/kinase RNA can be compatible with RTK-driven MAPK signaling but is not alteration proof",
+                "mechanism": "high receptor/kinase RNA can be compatible with RTK-driven MAPK signaling but is not variant proof",
                 "confidence": "expression-only",
             }
         )
@@ -414,20 +414,20 @@ def infer_mapk_activity_sources(
     if fold is None or fold < min_activity_fold:
         return []
 
-    from .alterations import (
-        alteration_record_genes,
-        molecular_evidence_for_gene,
-        molecular_evidence_records,
+    from .variants import (
+        variant_record_genes,
+        variant_evidence_for_gene,
+        variant_evidence_records,
     )
 
     candidate_sources: list[dict[str, Any]] = []
-    for record in molecular_evidence_records(analysis):
-        genes = alteration_record_genes(record)
+    for record in variant_evidence_records(analysis):
+        genes = variant_record_genes(record)
         if not genes or any(
-            not molecular_evidence_for_gene(analysis, gene) for gene in genes
+            not variant_evidence_for_gene(analysis, gene) for gene in genes
         ):
             continue
-        source = _candidate_source_from_alteration(record)
+        source = _candidate_source_from_variant(record)
         if source:
             candidate_sources.append(source)
     candidate_sources.extend(_candidate_sources_from_rna(ranges_df))

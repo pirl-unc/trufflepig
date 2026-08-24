@@ -2,18 +2,18 @@
 
 import pandas as pd
 
-from trufflepig.alterations import alteration_record_genes, parse_alteration_inputs
+from trufflepig.variants import variant_record_genes, parse_variant_inputs
 from trufflepig.brief import build_summary
 from trufflepig.fusions import FusionRecord
 import trufflepig.infantile_spindle as spindle
 from trufflepig.reporting import (
     cancer_therapy_panel_for_analysis,
-    supplied_alteration_supports_target_row,
+    supplied_variant_supports_target_row,
 )
 
 
 def _record(text):
-    return parse_alteration_inputs(text)[0].public_dict()
+    return parse_variant_inputs(text)[0].public_dict()
 
 
 def _analysis(code, *alterations):
@@ -27,8 +27,8 @@ def _analysis(code, *alterations):
         }.get(code, code),
         "purity": {},
         "therapy_response_scores": {},
-        "alteration_inputs_supplied": bool(records),
-        "alteration_records": records,
+        "variant_inputs_supplied": bool(records),
+        "variant_records": records,
     }
 
 
@@ -53,13 +53,13 @@ def _ranges(**values):
 def test_fusion_partner_is_available_to_therapy_matching():
     record = _record("ETV6-NTRK3 fusion")
 
-    assert alteration_record_genes(record) == ("ETV6", "NTRK3")
-    assert supplied_alteration_supports_target_row(
+    assert variant_record_genes(record) == ("ETV6", "NTRK3")
+    assert supplied_variant_supports_target_row(
         {
             "symbol": "NTRK3",
             "indication": "NTRK gene fusion-positive solid tumor",
         },
-        {"alteration_records": [record]},
+        {"variant_records": [record]},
     )
 
 
@@ -111,17 +111,17 @@ def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
             }
         ]
     ).to_csv(path, index=False)
-    record = parse_alteration_inputs(str(path))[0].public_dict()
+    record = parse_variant_inputs(str(path))[0].public_dict()
     analysis = _analysis("SARC_IFS")
     analysis.update(
-        alteration_inputs_supplied=True,
-        alteration_records=[record],
+        variant_inputs_supplied=True,
+        variant_records=[record],
     )
 
     assert record["gene"] == "ETV6"
-    assert record["alteration_type"] == "fusion"
+    assert record["variant_type"] == "fusion"
     assert "ETV6::NTRK3" in record["raw_name"]
-    assert alteration_record_genes(record) == ("ETV6", "NTRK3")
+    assert variant_record_genes(record) == ("ETV6", "NTRK3")
 
     report = build_summary(
         analysis,
@@ -136,7 +136,7 @@ def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
 def test_fusion_commentary_does_not_create_a_negated_partner():
     record = _record("ALK fusion, NTRK3 not detected")
 
-    assert alteration_record_genes(record) == ("ALK",)
+    assert variant_record_genes(record) == ("ALK",)
     report = build_summary(
         _analysis("SARC", "ALK fusion, NTRK3 not detected"),
         _ranges(ALK=80.0, NTRK3=60.0),
@@ -156,7 +156,7 @@ def test_explicitly_negative_fusion_calls_are_not_confirmed():
     ):
         record = _record(alteration)
 
-        assert alteration_record_genes(record) == ()
+        assert variant_record_genes(record) == ()
         report = build_summary(
             _analysis("SARC_IFS", alteration),
             _ranges(NTRK3=60.0),
@@ -174,7 +174,7 @@ def test_inline_negative_egfr_event_never_enables_therapy():
     ):
         record = _record(alteration)
 
-        assert alteration_record_genes(record) == ()
+        assert variant_record_genes(record) == ()
         report = build_summary(
             _analysis("CMN", alteration),
             _ranges(EGFR=583.0),
@@ -192,7 +192,7 @@ def test_singular_and_plural_rearrangement_wording_enable_ntrk_therapy():
     ):
         analysis = _analysis("SARC_IFS", alteration)
 
-        assert analysis["alteration_records"][0]["alteration_type"] == "fusion"
+        assert analysis["variant_records"][0]["variant_type"] == "fusion"
         report = build_summary(
             analysis,
             _ranges(NTRK3=20.0),
@@ -298,7 +298,7 @@ def test_exact_spindle_entities_have_complete_conditional_target_panels():
             set(panel["agent"])
         )
         assert set(panel["subtype"]) == {"infantile_spindle_molecular"}
-        assert panel["requires_supplied_alteration"].fillna(False).all()
+        assert panel["requires_supplied_variant"].fillna(False).all()
 
 
 def test_broad_sarcoma_egfr_kdd_is_context_not_a_cmn_relabel():

@@ -14,7 +14,7 @@ anatomic site. Trufflepig therefore separates three questions:
    establishes an NTRK fusion, EGFR KDD/ITD, BRAF rearrangement/internal
    deletion, or another kinase event.
 3. **Treatment relevance:** a therapy row is shortlisted only when the supplied
-   alteration matches its biomarker requirement. High NTRK or EGFR RNA alone is
+   variant matches its biomarker requirement. High NTRK or EGFR RNA alone is
    context, not eligibility.
 
 ## How the entities differ
@@ -90,10 +90,10 @@ RNA-expression-based rescue therapy.
 
 ## Implementation contract
 
-- The full therapy landscape shows the alteration-gated possibilities and their
+- The full therapy landscape shows the variant-gated possibilities and their
   missing evidence.
-- The concise shortlist shows one only when a supplied alteration matches the
-  target and alteration class.
+- The concise shortlist shows one only when a supplied variant matches the
+  target and variant class.
 - Fusion matching checks both partners, so `ETV6-NTRK3 fusion` correctly gates
   an NTRK3 therapy row even when the input parser's primary label is ETV6.
 - Exact IFS/CMN/NTRK-spindle reports receive their molecular panel without

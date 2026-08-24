@@ -2,7 +2,7 @@
 
 These entities overlap morphologically and molecularly.  The helpers in this
 module do not classify a tumor from a driver or from RNA expression.  They add
-diagnostic-workup context and alteration-gated therapy rows after the report
+diagnostic-workup context and variant-gated therapy rows after the report
 scope has been selected.
 """
 
@@ -13,11 +13,7 @@ import logging
 
 import pandas as pd
 
-from .alterations import (
-    alteration_record_genes,
-    classify_alteration_type,
-    molecular_evidence_for_gene,
-)
+from .variants import classify_variant_type, variant_evidence_for_gene, variant_record_genes
 from .molecular_therapy import NTRK_GENES, ntrk_fusion_therapy_targets, therapy_row
 
 
@@ -34,22 +30,22 @@ def _clean(value) -> str:
 def _is_fusion(record) -> bool:
     text = " ".join(
         _clean(record.get(key))
-        for key in ("alteration_type", "alteration", "raw_name")
+        for key in ("variant_type", "variant", "raw_name")
     ).lower()
     return (
-        _clean(record.get("alteration_type")).lower() == "fusion"
-        or classify_alteration_type(text) == "fusion"
+        _clean(record.get("variant_type")).lower() == "fusion"
+        or classify_variant_type(text) == "fusion"
     )
 
 
 def _is_egfr_kdd(record) -> bool:
-    if "EGFR" not in alteration_record_genes(record):
+    if "EGFR" not in variant_record_genes(record):
         return False
     text = " ".join(
         _clean(record.get(key))
-        for key in ("alteration_type", "alteration", "raw_name")
+        for key in ("variant_type", "variant", "raw_name")
     ).lower()
-    return _clean(record.get("alteration_type")).lower() in {
+    return _clean(record.get("variant_type")).lower() in {
         "kdd",
         "internal_tandem_duplication",
     } or any(
@@ -69,7 +65,7 @@ def _confirmed_ntrk_fusion_genes(analysis) -> tuple[str, ...]:
     for gene in NTRK_GENES:
         if any(
             _is_fusion(record)
-            for record in molecular_evidence_for_gene(analysis, gene)
+            for record in variant_evidence_for_gene(analysis, gene)
         ):
             if gene not in genes:
                 genes.append(gene)
@@ -79,7 +75,7 @@ def _confirmed_ntrk_fusion_genes(analysis) -> tuple[str, ...]:
 def _has_confirmed_egfr_kdd(analysis) -> bool:
     return any(
         _is_egfr_kdd(record)
-        for record in molecular_evidence_for_gene(analysis, "EGFR")
+        for record in variant_evidence_for_gene(analysis, "EGFR")
     )
 
 
@@ -256,7 +252,7 @@ def infantile_spindle_driver_spectrum_markdown(cancer_code, analysis=None) -> st
 
 
 def infantile_spindle_therapy_targets(cancer_code, analysis=None) -> pd.DataFrame:
-    """Alteration-gated therapy rows for IFS/CMN/NTRK-spindle contexts.
+    """Variant-gated therapy rows for IFS/CMN/NTRK-spindle contexts.
 
     Exact entities receive the complete diagnostic-context panel so the full
     report can show what must be tested.  A broad SARC report receives NTRK
@@ -285,7 +281,7 @@ def infantile_spindle_therapy_targets(cancer_code, analysis=None) -> pd.DataFram
                 phase="off_label",
                 treatment_path_tier="off_label",
                 line_of_therapy="clinical_trial",
-                requires_supplied_alteration=True,
+                requires_supplied_variant=True,
                 eligibility_note=(
                     "requires verified EGFR kinase-domain duplication/internal tandem "
                     "duplication; case-level evidence only; molecular tumor board review"

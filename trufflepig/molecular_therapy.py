@@ -1,7 +1,7 @@
-"""Reusable alteration-gated molecular therapy rows.
+"""Reusable variant-gated therapy rows.
 
 These helpers describe treatment possibilities after a cancer context has been
-selected.  They never infer an alteration from RNA abundance.
+selected. They never infer a variant from RNA abundance.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def ntrk_fusion_therapy_targets(
                     phase="approved",
                     treatment_path_tier="approved_indication_matched",
                     line_of_therapy="approved_biomarker_matched",
-                    requires_supplied_alteration=True,
+                    requires_supplied_variant=True,
                     eligibility_note=(
                         "requires a verified in-frame NTRK gene fusion and the "
                         "label-specific advanced/unresectable or morbidity criteria"
@@ -70,7 +70,7 @@ def ntrk_fusion_therapy_targets(
                     phase="approved",
                     treatment_path_tier="approved_indication_matched",
                     line_of_therapy="approved_biomarker_matched",
-                    requires_supplied_alteration=True,
+                    requires_supplied_variant=True,
                     eligibility_note=(
                         "requires a verified NTRK gene fusion; age >1 month; confirm "
                         "label-specific advanced/unresectable or morbidity criteria"
@@ -89,7 +89,7 @@ def ntrk_fusion_therapy_targets(
                     phase="approved",
                     treatment_path_tier="approved_indication_matched",
                     line_of_therapy="approved_biomarker_matched",
-                    requires_supplied_alteration=True,
+                    requires_supplied_variant=True,
                     eligibility_note=(
                         "requires a verified NTRK gene fusion and age >=12 years; "
                         "confirm label criteria and prior TRK-inhibitor history"

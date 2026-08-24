@@ -60,8 +60,8 @@ from .reporting import (
     target_observation_state,
     same_lineage_material_target_candidate,
     select_mismatch_repair_channel_for_report,
-    supplied_alteration_context_for_target_row,
-    supplied_alteration_supports_target_row,
+    supplied_variant_context_for_target_row,
+    supplied_variant_supports_target_row,
     subtype_curation_scope_note,
     therapy_path_context,
     therapy_path_rank,
@@ -491,7 +491,7 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
     The full target tables can list subtype-specific rows as context. The brief
     top-3 and summary HLA prompts should not imply Ewing/GIST/synovial-specific
     eligibility for a broad SARC call unless that subtype was actually selected
-    or direct alteration evidence supports the row.
+    or a directly supplied variant supports the row.
     """
     if not analysis:
         return False
@@ -506,7 +506,7 @@ def _subtype_specific_row_out_of_scope(target_row, analysis) -> bool:
         return False
     if _subtype_tagged_row_is_parent_scope(target_row, active_code):
         return False
-    return not bool(supplied_alteration_supports_target_row(target_row, analysis))
+    return not bool(supplied_variant_supports_target_row(target_row, analysis))
 
 
 def _has_direct_eligibility_input(analysis, biomarker: str) -> bool:
@@ -519,8 +519,9 @@ def _has_direct_eligibility_input(analysis, biomarker: str) -> bool:
             bool(analysis.get(key))
             for key in (
                 "fusion_inputs_supplied",
-                "alteration_inputs_supplied",
                 "variant_inputs_supplied",
+                # Compatibility for analyses serialized before 1.24.
+                "alteration_inputs_supplied",
                 "mutation_inputs_supplied",
                 "cnv_inputs_supplied",
             )
@@ -580,7 +581,7 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
     """Surface when non-expression eligibility evidence was not provided."""
     if not expression_independent_indication(target_row):
         return ""
-    supplied_context = supplied_alteration_context_for_target_row(
+    supplied_context = supplied_variant_context_for_target_row(
         target_row,
         analysis,
     )
@@ -802,10 +803,10 @@ def _top_therapies(
             disease_state=disease_state,
         ):
             continue
-        supplied_alteration_rank = (
-            0 if supplied_alteration_supports_target_row(t, analysis) else 1
+        supplied_variant_rank = (
+            0 if supplied_variant_supports_target_row(t, analysis) else 1
         )
-        if therapy_row_requires_confirmed_eligibility(t) and supplied_alteration_rank != 0:
+        if therapy_row_requires_confirmed_eligibility(t) and supplied_variant_rank != 0:
             continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):
@@ -816,7 +817,7 @@ def _top_therapies(
                 scored.append(
                     (
                         (
-                            supplied_alteration_rank,
+                            supplied_variant_rank,
                             therapy_path_rank(
                                 t,
                                 analysis=analysis,
@@ -880,7 +881,7 @@ def _top_therapies(
         }.get(reliability_status, 2)
         expression_rank = 1 if expr_independent else 0
         sort_key = (
-            supplied_alteration_rank,
+            supplied_variant_rank,
             therapy_path_rank(
                 t,
                 analysis=analysis,
@@ -1656,35 +1657,48 @@ def _fusion_evidence_line(analysis, cancer_code: str) -> str:
     return ""
 
 
-def _alteration_evidence_line(analysis) -> str:
-    records = analysis.get("alteration_records") or []
+def _variant_evidence_line(analysis) -> str:
+    supplied_records = (
+        analysis.get("variant_records")
+        if "variant_records" in analysis
+        else analysis.get("alteration_records")
+    ) or []
+    from .variants import variant_record_genes
+
+    records = [record for record in supplied_records if variant_record_genes(record)]
     if records:
         labels = []
         for record in records[:4]:
             if not hasattr(record, "get"):
                 continue
             gene = str(record.get("gene") or "").strip()
-            alteration = str(
-                record.get("alteration") or record.get("alteration_type") or ""
+            variant = str(
+                record.get("variant")
+                or record.get("alteration")
+                or record.get("variant_type")
+                or record.get("alteration_type")
+                or ""
             ).strip()
             if gene:
-                if alteration.upper().startswith(gene.upper()):
-                    labels.append(alteration)
+                if variant.upper().startswith(gene.upper()):
+                    labels.append(variant)
                 else:
-                    labels.append(f"{gene} {alteration}".strip())
+                    labels.append(f"{gene} {variant}".strip())
         if labels:
             suffix = "" if len(records) <= 4 else f" (+{len(records) - 4} more)"
             return (
-                "**Alteration evidence:** supplied "
+                "**Variant evidence:** supplied "
                 + ", ".join(labels)
                 + suffix
                 + "; used as driver/eligibility context, not inferred from RNA."
             )
-    if analysis.get("alteration_inputs_supplied"):
+    if supplied_records or analysis.get("variant_inputs_supplied") or analysis.get(
+        "alteration_inputs_supplied"
+    ):
         return (
-            "**Alteration evidence:** alteration input was supplied, but no usable "
-            "calls were parsed; verify the file format before using therapies "
-            "that require alteration evidence."
+            "**Variant evidence:** variant input was supplied, but no usable positive "
+            "call was available; verify the source result before using therapies "
+            "that require variant evidence."
         )
     return ""
 
@@ -2203,7 +2217,7 @@ _OUTLIER_MIN_AMPLIFICATION_FOLD = 10.0
 _OUTLIER_MIN_OBSERVED_TPM = 50.0
 _OUTLIER_HIGH_PERCENTILE = 0.95
 
-# Rationale phrasing that marks a biomarker as gated by a DNA alteration
+# Rationale phrasing that marks a biomarker as gated by a DNA variant
 # (mutation / specific allele / wild-type status) rather than by mRNA level.
 # An amplification / overexpression / IHC / FISH cue WINS (HER2/ERBB2 and MDM2
 # amplicons are legitimately expression-readable), so those are never flagged.
@@ -2237,7 +2251,7 @@ _BIOMARKER_EXPRESSION_BASIS_MARKERS = (
 
 def biomarker_expression_is_not_eligibility(rationale: str) -> bool:
     """True when a biomarker-panel gene's clinical eligibility is gated by a DNA
-    alteration (mutation / specific allele / wild-type status), NOT by mRNA level.
+    variant (mutation / specific allele / wild-type status), NOT by mRNA level.
 
     Keyed off the pirlygenes-authored biomarker ``rationale`` so trufflepig
     surfaces the *consequence* without re-encoding which genes are mutation-driven
@@ -2710,9 +2724,9 @@ def build_summary(
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
     if fusion_line:
         lines.append(fusion_line)
-    alteration_line = _alteration_evidence_line(analysis)
-    if alteration_line:
-        lines.append(alteration_line)
+    variant_line = _variant_evidence_line(analysis)
+    if variant_line:
+        lines.append(variant_line)
     spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
     if spindle_guidance:
         lines.append(spindle_guidance)
@@ -2721,7 +2735,7 @@ def build_summary(
         lines.append(sarcoma_guidance)
     lateral_rare_prompts_are_summary_level = not (
         fusion_line
-        or alteration_line
+        or variant_line
         or analysis.get("rare_report_scope_inference")
         or analysis.get("cancer_type_source") == "user-specified"
     )
@@ -2895,7 +2909,7 @@ def build_summary(
                     ranges_df=ranges_df,
                 )
                 phase = str(target_row.get("phase") or "").strip().lower()
-                if supplied_alteration_supports_target_row(target_row, therapy_analysis):
+                if supplied_variant_supports_target_row(target_row, therapy_analysis):
                     supplied_evidence_bullets.append(bullet)
                 elif phase == "approved":
                     approved_bullets.append(bullet)
@@ -3130,9 +3144,9 @@ def build_actionable(
     fusion_line = _fusion_evidence_line(analysis, cancer_code)
     if fusion_line:
         lines.append(f"\n{fusion_line}")
-    alteration_line = _alteration_evidence_line(analysis)
-    if alteration_line:
-        lines.append(f"\n{alteration_line}")
+    variant_line = _variant_evidence_line(analysis)
+    if variant_line:
+        lines.append(f"\n{variant_line}")
     spindle_guidance = infantile_spindle_guidance_markdown(cancer_code, analysis)
     if spindle_guidance:
         lines.append(f"\n{spindle_guidance}")
