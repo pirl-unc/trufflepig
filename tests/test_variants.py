@@ -1,5 +1,7 @@
 """Public variant-ingestion contracts shared by report layers."""
 
+import json
+
 import pandas as pd
 import pytest
 
@@ -85,6 +87,18 @@ def test_coordinate_variant_has_typed_public_provenance():
         }
     ]
     assert normalize_variant_record(record) == record.public_dict()
+
+
+@pytest.mark.parametrize(
+    "coordinate",
+    (
+        {"contig": "7", "start": 10.5},
+        {"contig": "7", "start": 10, "end": 20.9},
+    ),
+)
+def test_fractional_coordinate_endpoints_are_rejected(coordinate):
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        VariantCoordinate(**coordinate)
 
 
 def test_coordinate_variant_requires_a_build():
@@ -197,6 +211,50 @@ def test_empty_structured_variant_file_fails_closed(tmp_path):
     pd.DataFrame([{"Comment": "no variant records"}]).to_csv(path, index=False)
 
     with pytest.raises(ValueError, match="No recognizable variant records"):
+        parse_variant_file(path)
+
+
+def test_typed_variant_json_round_trips_without_losing_provenance(tmp_path):
+    original = VariantRecord(
+        gene="BRAF",
+        genes=("BRAF",),
+        variant="V600E",
+        variant_type="mutation",
+        source_path="caller-output.csv",
+        row_index=7,
+        source_format="csv",
+        caller_version="caller 2.1",
+        genome_build="GRCh38",
+        ensembl_release=114,
+        coordinates=(
+            VariantCoordinate("7", 140753336, ref="A", alt="T"),
+        ),
+    )
+    path = tmp_path / "variant.json"
+    path.write_text(json.dumps(original.public_dict()))
+
+    parsed = parse_variant_file(path)
+
+    assert len(parsed) == 1
+    assert parsed[0].public_dict() == original.public_dict()
+
+
+def test_typed_variant_json_rejects_fractional_coordinates(tmp_path):
+    path = tmp_path / "variant.json"
+    path.write_text(
+        json.dumps(
+            {
+                "gene": "BRAF",
+                "variant": "V600E",
+                "variant_type": "mutation",
+                "representation": "coordinate",
+                "genome_build": "GRCh38",
+                "coordinates": [{"contig": "7", "start": 140753336.5}],
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
         parse_variant_file(path)
 
 
@@ -361,6 +419,59 @@ def test_distinct_coordinate_variants_are_not_merged_by_gene_label():
     normalized = variant_evidence_records({"variant_records": records})
 
     assert len(normalized) == 2
+
+
+def test_conflicting_coordinate_calls_fail_closed_for_therapy():
+    coordinate = VariantCoordinate("7", 140753336, ref="A", alt="T")
+    analysis = {
+        "variant_records": [
+            VariantRecord(
+                gene="BRAF",
+                variant=variant,
+                variant_type="mutation",
+                genome_build="GRCh38",
+                coordinates=(coordinate,),
+            ).public_dict()
+            for variant in ("BRAF V600E", "BRAF V600E not detected")
+        ]
+    }
+
+    records = variant_evidence_records(analysis)
+
+    assert len(records) == 1
+    assert records[0]["evidence_conflict"] is True
+    assert variant_evidence_for_gene(analysis, "BRAF") == []
+    assert not supplied_variant_supports_target_row(
+        {
+            "symbol": "BRAF",
+            "indication": "BRAF V600E solid tumor",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
+
+
+def test_structured_fusion_participants_drive_target_matching_without_prose_pair():
+    record = VariantRecord(
+        gene="ETV6",
+        genes=("ETV6", "NTRK3"),
+        variant="verified rearrangement",
+        variant_type="fusion",
+    ).public_dict()
+    analysis = {"variant_records": [record]}
+
+    assert variant_record_genes(record) == ("ETV6", "NTRK3")
+    matching = variant_evidence_for_gene(analysis, "NTRK3")
+    assert len(matching) == 1
+    assert matching[0]["genes"] == ["ETV6", "NTRK3"]
+    assert supplied_variant_supports_target_row(
+        {
+            "symbol": "NTRK3",
+            "indication": "NTRK gene fusion-positive solid tumor",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
 
 
 def test_same_fusion_from_two_interfaces_is_one_variant():

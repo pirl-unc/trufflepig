@@ -126,9 +126,15 @@ class VariantCoordinate:
         contig = str(self.contig or "").strip()
         if not contig:
             raise ValueError("Variant coordinates require a contig")
-        start = int(self.start)
-        end = start if self.end is None else int(self.end)
-        if start < 1 or end < start:
+        start = _positive_integer(self.start, field_name="Variant start")
+        if start is None:
+            raise ValueError("Variant coordinates require a start position")
+        end = (
+            start
+            if self.end is None
+            else _positive_integer(self.end, field_name="Variant end")
+        )
+        if end is None or end < start:
             raise ValueError(
                 f"Invalid 1-based variant interval {contig}:{start}-{end}"
             )
@@ -184,10 +190,13 @@ class VariantRecord:
 
     def __post_init__(self) -> None:
         primary = str(self.gene or "").strip().upper()
+        supplied_genes = (
+            (self.genes,) if isinstance(self.genes, str) else self.genes
+        )
         genes = tuple(
             dict.fromkeys(
                 str(gene or "").strip().upper()
-                for gene in (self.genes or (primary,))
+                for gene in (supplied_genes or (primary,))
                 if str(gene or "").strip()
             )
         )
@@ -197,12 +206,22 @@ class VariantRecord:
             event_text = f"{self.variant} {self.raw_name}".upper()
             match = _FUSION_PAIR_RE.search(event_text)
             if match:
-                genes = tuple(dict.fromkeys((*genes, *match.groups())))
+                pair = match.groups()
+                if _FUSION_PAIR_RE.fullmatch(primary):
+                    genes = tuple(gene for gene in genes if gene != primary)
+                    primary = pair[0]
+                genes = tuple(dict.fromkeys((*genes, *pair)))
+        supplied_coordinates = (
+            (self.coordinates,)
+            if isinstance(self.coordinates, VariantCoordinate)
+            or hasattr(self.coordinates, "get")
+            else (self.coordinates or ())
+        )
         coordinates = tuple(
             coordinate
             if isinstance(coordinate, VariantCoordinate)
             else VariantCoordinate(**dict(coordinate))
-            for coordinate in self.coordinates
+            for coordinate in supplied_coordinates
         )
         representation = "coordinate" if coordinates else "symbolic"
         requested_representation = str(self.representation or representation).strip()
@@ -215,9 +234,11 @@ class VariantRecord:
                 f"Variant representation {requested_representation!r} conflicts "
                 f"with {len(coordinates)} coordinate interval(s)"
             )
-        release = self.ensembl_release
-        if release is not None and int(release) < 1:
-            raise ValueError("Ensembl release must be a positive integer")
+        release = (
+            _positive_integer(self.ensembl_release, field_name="Ensembl release")
+            if self.ensembl_release is not None
+            else None
+        )
         genome_build = (
             normalize_genome_build(self.genome_build) if coordinates else ""
         )
@@ -235,7 +256,7 @@ class VariantRecord:
         object.__setattr__(
             self,
             "ensembl_release",
-            int(release) if release is not None else None,
+            release,
         )
 
     @property
@@ -285,6 +306,32 @@ class VariantRecord:
         return self.variant_type
 
 
+def _variant_record_from_mapping(item: dict[str, Any]) -> VariantRecord:
+    gene = str(item.get("gene") or "").strip().upper()
+    genes = item.get("genes") or (gene,)
+    coordinates = item.get("coordinates") or ()
+    return VariantRecord(
+        gene=gene,
+        genes=genes,
+        variant=str(item.get("variant") or ""),
+        variant_type=str(item.get("variant_type") or "unknown"),
+        source_path=str(item.get("source_path") or ""),
+        row_index=item.get("row_index"),
+        confidence=str(item.get("confidence") or ""),
+        support=dict(item.get("support") or {}),
+        raw_name=str(item.get("raw_name") or ""),
+        result_status=str(item.get("result_status") or ""),
+        filter_status=str(item.get("filter_status") or ""),
+        filter_semantics=str(item.get("filter_semantics") or "generic"),
+        representation=str(item.get("representation") or ""),
+        source_format=str(item.get("source_format") or "unknown"),
+        caller_version=str(item.get("caller_version") or ""),
+        genome_build=str(item.get("genome_build") or ""),
+        ensembl_release=item.get("ensembl_release"),
+        coordinates=coordinates,
+    )
+
+
 def normalize_variant_record(record: object) -> dict[str, Any] | None:
     """Return one JSON-safe record using the current public field names.
 
@@ -306,34 +353,7 @@ def normalize_variant_record(record: object) -> dict[str, Any] | None:
     item.pop("alteration", None)
     item.pop("alteration_type", None)
 
-    gene = str(item.get("gene") or "").strip().upper()
-    genes = tuple(item.get("genes") or (gene,))
-    coordinates = tuple(
-        coordinate
-        if isinstance(coordinate, VariantCoordinate)
-        else VariantCoordinate(**dict(coordinate))
-        for coordinate in (item.get("coordinates") or ())
-    )
-    normalized = VariantRecord(
-        gene=gene,
-        genes=genes,
-        variant=str(item.get("variant") or ""),
-        variant_type=str(item.get("variant_type") or "unknown"),
-        source_path=str(item.get("source_path") or ""),
-        row_index=item.get("row_index"),
-        confidence=str(item.get("confidence") or ""),
-        support=dict(item.get("support") or {}),
-        raw_name=str(item.get("raw_name") or ""),
-        result_status=str(item.get("result_status") or ""),
-        filter_status=str(item.get("filter_status") or ""),
-        filter_semantics=str(item.get("filter_semantics") or "generic"),
-        representation=str(item.get("representation") or ""),
-        source_format=str(item.get("source_format") or "unknown"),
-        caller_version=str(item.get("caller_version") or ""),
-        genome_build=str(item.get("genome_build") or ""),
-        ensembl_release=item.get("ensembl_release"),
-        coordinates=coordinates,
-    ).public_dict()
+    normalized = _variant_record_from_mapping(item).public_dict()
     for key, value in item.items():
         normalized.setdefault(key, value)
     return normalized
@@ -606,6 +626,25 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
         variant_type == "fusion"
         or classify_variant_type(event_text) == "fusion"
     )
+    supplied_genes = record.get("genes") or ()
+    if isinstance(supplied_genes, str):
+        supplied_genes = (supplied_genes,)
+    structured_genes = tuple(
+        dict.fromkeys(
+            gene
+            for gene in (_clean_gene(value) for value in supplied_genes)
+            if gene
+        )
+    )
+    if structured_genes:
+        if not variant_record_passes_assay_filters(record):
+            return ()
+        if any(
+            variant_record_gene_is_negated(record, gene)
+            for gene in structured_genes
+        ):
+            return ()
+        return structured_genes
     if fusion_like:
         pair = _explicit_fusion_pair(record)
         if pair:
@@ -725,15 +764,8 @@ def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     return (variant_type, gene, variant)
 
 
-def _record_supports_identity(
-    record: dict[str, Any],
-    identity: tuple[object, ...],
-) -> bool:
-    identity_genes = identity[1:] if identity[0] == "fusion" else identity[1:2]
-    genes = [str(value) for value in identity_genes if str(value)]
-    return bool(genes) and all(
-        not variant_record_gene_is_negated(record, gene) for gene in genes
-    )
+def _record_supports_identity(record: dict[str, Any]) -> bool:
+    return bool(variant_record_genes(record))
 
 
 def _source_types(record: dict[str, Any]) -> set[str]:
@@ -790,10 +822,7 @@ def variant_evidence_records(analysis: object) -> list[dict[str, Any]]:
                 existing_sources,
                 key=lambda value: ({"variant": 0, "fusion": 1}.get(value, 2), value),
             )
-            if _record_supports_identity(
-                existing,
-                identity,
-            ) != _record_supports_identity(item, identity):
+            if _record_supports_identity(existing) != _record_supports_identity(item):
                 existing["result_status"] = (
                     "inconclusive: conflicting supplied records"
                 )
@@ -949,6 +978,70 @@ def _read_text(path: Path) -> str:
         with gzip.open(path, mode="rt", errors="ignore") as handle:
             return handle.read()
     return path.read_text(errors="ignore")
+
+
+def _read_json_rows(path: Path) -> list[dict[str, Any]]:
+    text = _read_text(path)
+    if path.name.lower().endswith((".jsonl", ".jsonl.gz")):
+        payload: object = [
+            json.loads(line) for line in text.splitlines() if line.strip()
+        ]
+    else:
+        payload = json.loads(text)
+    if isinstance(payload, dict):
+        for key in ("variants", "alterations", "mutations", "records", "data"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+        else:
+            payload = [payload]
+    if not isinstance(payload, list):
+        raise ValueError("Variant JSON must contain one record or a list of records")
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise ValueError(f"Variant JSON record {index} must be an object")
+        rows.append(dict(row))
+    return rows
+
+
+def _records_from_typed_json(
+    rows: list[dict[str, Any]],
+    *,
+    source_path: str,
+    genome_build: object = "",
+    ensembl_release: int | None = None,
+) -> list[VariantRecord] | None:
+    typed_rows = [
+        row for row in rows if "coordinates" in row or "representation" in row
+    ]
+    if not typed_rows:
+        return None
+    if len(typed_rows) != len(rows):
+        raise ValueError(
+            "Variant JSON cannot mix typed VariantRecord objects with generic rows"
+        )
+    declared_build = normalize_genome_build(genome_build)
+    records: list[VariantRecord] = []
+    for index, row in enumerate(rows):
+        item = dict(row)
+        coordinates = item.get("coordinates") or ()
+        row_build = normalize_genome_build(item.get("genome_build"))
+        if coordinates and declared_build and row_build and declared_build != row_build:
+            raise ValueError(
+                f"Variant JSON record {index} declares {row_build}, which conflicts "
+                f"with the requested build {declared_build}"
+            )
+        if coordinates and not row_build:
+            item["genome_build"] = declared_build
+        if item.get("ensembl_release") is None and ensembl_release is not None:
+            item["ensembl_release"] = ensembl_release
+        if not item.get("source_path"):
+            item["source_path"] = source_path
+        if not item.get("source_format"):
+            item["source_format"] = "json"
+        records.append(_variant_record_from_mapping(item))
+    return records
 
 
 def _coordinate_from_row(row) -> VariantCoordinate | None:
@@ -1182,16 +1275,7 @@ def _read_variant_table(path: Path) -> pd.DataFrame:
     if source_format == "excel":
         return pd.read_excel(path)
     if source_format == "json":
-        text = _read_text(path)
-        if path.name.lower().endswith((".jsonl", ".jsonl.gz")):
-            return pd.DataFrame(json.loads(line) for line in text.splitlines() if line.strip())
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            for key in ("variants", "alterations", "mutations", "records", "data"):
-                if isinstance(payload.get(key), list):
-                    return pd.DataFrame(payload[key])
-            return pd.DataFrame([payload])
-        return pd.DataFrame(payload)
+        return pd.DataFrame(_read_json_rows(path))
     return pd.read_csv(path, low_memory=False)
 
 
@@ -1246,6 +1330,16 @@ def parse_variant_file(
             f"{source_format.upper()} input requires its source-specific adapter; "
             "the generic variant parser will not guess its semantics"
         )
+    if source_format == "json":
+        typed_records = _records_from_typed_json(
+            _read_json_rows(target),
+            source_path=str(target),
+            genome_build=genome_build,
+            ensembl_release=ensembl_release,
+        )
+        if typed_records is not None:
+            validate_variant_genome_builds(typed_records)
+            return typed_records
     table_error: Exception | None = None
     text_error: Exception | None = None
     try:
