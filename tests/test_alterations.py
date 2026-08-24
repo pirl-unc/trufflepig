@@ -60,7 +60,7 @@ def test_structured_unknown_results_fail_closed(tmp_path, result):
     assert alteration_record_genes(record) == ()
 
 
-@pytest.mark.parametrize("filter_value", ("HighConfidence", "Tier 1"))
+@pytest.mark.parametrize("filter_value", ("HighConfidence", "Tier 1", "Tier 10"))
 def test_generic_filter_metadata_does_not_reject_a_positive_call(
     tmp_path,
     filter_value,
@@ -84,7 +84,7 @@ def test_generic_filter_metadata_does_not_reject_a_positive_call(
     assert alteration_record_genes(record) == ("ALK",)
 
 
-@pytest.mark.parametrize("filter_value", ("FAIL", "LowQual"))
+@pytest.mark.parametrize("filter_value", ("FAIL", "LowQual", "LowConfidence"))
 def test_explicit_generic_filter_failures_are_rejected(tmp_path, filter_value):
     path = tmp_path / "alteration.csv"
     pd.DataFrame(
@@ -189,13 +189,14 @@ def test_conflicting_cross_interface_fusion_calls_do_not_enable_therapy():
     )
 
 
-def test_low_confidence_dedicated_fusion_does_not_enable_therapy():
+@pytest.mark.parametrize("confidence", ("LowQual", "LowConfidence"))
+def test_low_confidence_dedicated_fusion_does_not_enable_therapy(confidence):
     analysis = {
         "fusion_records": [
             FusionRecord(
                 gene_a="TPM3",
                 gene_b="ALK",
-                confidence="LowQual",
+                confidence=confidence,
             ).public_dict()
         ]
     }
@@ -269,6 +270,25 @@ def test_conflicting_same_variant_calls_fail_closed():
     }
 
     assert molecular_evidence_for_gene(analysis, "BRAF") == []
+
+
+def test_hyphenated_gene_symbol_is_not_split_without_fusion_context(tmp_path):
+    path = tmp_path / "readthrough_amplification.csv"
+    pd.DataFrame(
+        [
+            {
+                "Gene": "NME1-NME2",
+                "Alteration": "amplification",
+                "Result": "Positive",
+            }
+        ]
+    ).to_csv(path, index=False)
+
+    record = parse_alteration_inputs(str(path))[0].public_dict()
+
+    assert record["gene"] == "NME1-NME2"
+    assert record["alteration_type"] == "amplification"
+    assert alteration_record_genes(record) == ("NME1-NME2",)
 
 
 def test_structured_nonreportable_fusion_fails_closed(tmp_path):

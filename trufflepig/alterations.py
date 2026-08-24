@@ -27,16 +27,16 @@ _NON_POSITIVE_EVENT_PATTERN = (
     r"insufficient|cancel(?:l?ed)?|not\s+(?:assessed|evaluable)|"
     r"not\s+reportable|non[- ]?reportable|no\s+call|invalid|vus|"
     r"(?:variant\s+of\s+)?uncertain\s+significance|"
-    r"(?:likely\s+)?benign|low[- ]?qual(?:ity)?)"
+    r"(?:likely\s+)?benign|low[- _]?(?:qual(?:ity)?|confidence))"
 )
 _NON_POSITIVE_RESULT_PATTERN = rf"(?:{_NON_POSITIVE_EVENT_PATTERN}|unknown)"
 _NON_POSITIVE_EVENT_RE = re.compile(
     rf"\b{_NON_POSITIVE_EVENT_PATTERN}\b",
     re.IGNORECASE,
 )
-_NEGATIVE_RESULT_RE = re.compile(
-    rf"^\s*(?:(?:false|no|neg|{_NON_POSITIVE_RESULT_PATTERN})\b|"
-    r"0(?:\.0+)?(?![\d.]))",
+_NON_POSITIVE_STATUS_RE = re.compile(
+    rf"(?:\b(?:false|no|neg|{_NON_POSITIVE_RESULT_PATTERN})\b|"
+    r"(?<![\d.])0(?:\.0+)?(?![\d.]))",
     re.IGNORECASE,
 )
 _EXPLICIT_UNKNOWN_OUTCOME_RE = re.compile(
@@ -169,7 +169,7 @@ def _result_status_is_non_positive(value: object) -> bool:
     assay outcomes, so only recognized non-positive vocabulary vetoes a call.
     """
     parts = [part for part in re.split(r"[;,|]", _text(value)) if part.strip()]
-    return any(_NEGATIVE_RESULT_RE.match(part) for part in parts)
+    return any(_NON_POSITIVE_STATUS_RE.search(part) for part in parts)
 
 
 def _filter_status_is_failed(value: object, *, vcf_semantics: bool) -> bool:
@@ -185,7 +185,7 @@ def _filter_status_is_failed(value: object, *, vcf_semantics: bool) -> bool:
     parts = [part for part in parts if part]
     if vcf_semantics:
         return any(part not in {".", "pass", "passed"} for part in parts)
-    return any(_NEGATIVE_RESULT_RE.match(part) for part in parts)
+    return any(_NON_POSITIVE_STATUS_RE.search(part) for part in parts)
 
 
 def alteration_record_passes_assay_filters(record: object) -> bool:
@@ -326,9 +326,6 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
     """
     if not hasattr(record, "get"):
         return ()
-    pair = _explicit_fusion_pair(record)
-    if pair:
-        return pair
     alteration_type = str(record.get("alteration_type") or "").strip().lower()
     event_text = " ".join(
         str(record.get(key) or "")
@@ -338,6 +335,10 @@ def alteration_record_genes(record: object) -> tuple[str, ...]:
         alteration_type == "fusion"
         or classify_alteration_type(event_text) == "fusion"
     )
+    if fusion_like:
+        pair = _explicit_fusion_pair(record)
+        if pair:
+            return pair
     primary_text = str(record.get("gene") or "").upper()
     primary = _clean_gene(primary_text)
     if not primary:
@@ -527,8 +528,11 @@ def _valid_fusion_pair_genes(genes: tuple[str, str]) -> bool:
     )
 
 
-def _has_connected_fusion_pair(value: object) -> bool:
+def _has_unambiguous_fusion_pair(value: object) -> bool:
+    """Whether a gene cell uses pair syntax that cannot be an HGNC hyphen."""
     text = _text(value).upper()
+    if not re.search(r"(?:::|--|/|\|)", text):
+        return False
     return any(
         _valid_fusion_pair_genes((match.group(1), match.group(2)))
         for match in _FUSION_PAIR_RE.finditer(text)
@@ -717,7 +721,7 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Alter
         # recovery while retaining ``gene`` as the normalized primary symbol.
         full_text = f"{raw_gene or gene} {alteration}".strip()
         alteration_type = classify_alteration_type(full_text)
-        if alteration_type == "unknown" and _has_connected_fusion_pair(raw_gene):
+        if alteration_type == "unknown" and _has_unambiguous_fusion_pair(raw_gene):
             alteration_type = "fusion"
         filter_status, filter_semantics = _filter_status_from_row(
             row,
