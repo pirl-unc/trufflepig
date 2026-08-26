@@ -16,6 +16,15 @@ from trufflepig.decomposition.plot import (
     plot_decomposition_composition,
 )
 from trufflepig.tumor_purity import _summarize_candidate_family
+from trufflepig.report_view import build_report_view
+
+
+def _generate_text_reports(analysis, *args, **kwargs):
+    finalized = dict(analysis)
+    finalized.setdefault("sample_mode", "solid")
+    finalized.setdefault("purity", {})
+    report_view = build_report_view(finalized)
+    return cli_mod._generate_text_reports(analysis, report_view, *args, **kwargs)
 
 
 def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
@@ -577,7 +586,7 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     }
     prefix = str(tmp_path / "sample")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # The old free-form summary.md that carried family-call phrasing
     # (CRC-family, retained-labels, subtype-candidates clause) was
@@ -627,7 +636,7 @@ def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
     }
     prefix = str(tmp_path / "heme")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # Heme-mode "malignant-lineage fraction proxy" phrasing lived in
     # the retired summary.md paragraph; analysis.md still carries the
@@ -681,7 +690,7 @@ def test_generate_text_reports_separates_rare_identity_from_purity(tmp_path):
         },
     }
     prefix = str(tmp_path / "nutm")
-    cli_mod._generate_text_reports(
+    _generate_text_reports(
         analysis,
         {
             "method": "hierarchy",
@@ -786,7 +795,7 @@ def test_generate_text_reports_handles_missing_lineage_summary(
         "trufflepig.common.build_sample_tpm_by_symbol",
         lambda _df: {"ESR1": 0.003},
     )
-    cli_mod._generate_text_reports(
+    _generate_text_reports(
         analysis,
         embedding_meta,
         prefix,
@@ -941,7 +950,7 @@ def test_generate_text_reports_mentions_analysis_constraints(tmp_path):
     }
     prefix = str(tmp_path / "constrained")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # "constrained working subtype" + the one-line "Analysis constraints"
     # recap lived in the retired summary.md paragraph. Analysis.md
@@ -1791,6 +1800,7 @@ def test_plot_sample_summary_abstains_from_composition_when_purity_is_unresolved
         cancer_type="READ",
         sample_mode="solid",
         analysis=analysis,
+        report_view=analysis["report_view"],
     )
 
     panel = fig.axes[1]
@@ -1827,6 +1837,8 @@ def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
         "candidate_trace": [{"code": "HL"}, {"code": "BRCA"}],
     }
 
+    from trufflepig.report_view import build_report_view
+
     fig, _analysis = purity_mod.plot_sample_summary(
         pd.DataFrame(
             {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
@@ -1834,6 +1846,7 @@ def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
         cancer_type="BRCA",
         sample_mode="solid",
         analysis=mock_analysis,
+        report_view=build_report_view({**mock_analysis, "sample_mode": "solid"}),
     )
 
     ranker_panel = fig.axes[0]

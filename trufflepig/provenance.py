@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from .report_view import finalized_purity_context, finalized_purity_headline
+from .report_view import ReportView
 from .reporting import (
     partition_tumor_core_rows,
     summarize_reliability_reasons,
@@ -52,6 +52,8 @@ def build_provenance_md(
     decomp_results,
     cancer_code: str,
     sample_id: Optional[str] = None,
+    *,
+    report_view: ReportView,
 ) -> str:
     """Render ``*-provenance.md`` — the 5-step attribution chain.
 
@@ -154,7 +156,8 @@ def build_provenance_md(
     best = decomp_results[0] if decomp_results else None
     if best is not None:
         fractions = dict(getattr(best, "fractions", {}) or {})
-        purity_status, purity_scenarios = finalized_purity_context(analysis)
+        conclusion = report_view.purity
+        purity_status, purity_scenarios = conclusion.status, conclusion.scenarios
         purity_is_unresolved = purity_status == "discordant_estimators"
         # Display the FINALIZED headline purity as tumor%, not the
         # decomposition's own pre-fusion tumor fraction. best.purity is frozen
@@ -165,7 +168,7 @@ def build_provenance_md(
         # non-tumor components so they sum to 1 - tumor%, preserving their
         # relative proportions, so the coarse composition equals the headline
         # by construction.
-        headline_tumor = finalized_purity_headline(analysis)[0]
+        headline_tumor = conclusion.estimate
         decomp_tumor = float(getattr(best, "purity", 0.0) or 0.0)
         tumor_frac = decomp_tumor if headline_tumor is None else float(headline_tumor)
         tumor_frac = min(max(tumor_frac, 0.0), 1.0)
@@ -303,8 +306,9 @@ def build_provenance_md(
     # purity dict) so the "subtracts X% as non-tumor" figure equals the
     # 1 - tumor% of the coarse-composition section above by construction — the
     # two must not disagree within one provenance page (#85.1).
-    overall = finalized_purity_headline(analysis)[0]
-    purity_status, _purity_scenarios = finalized_purity_context(analysis)
+    conclusion = report_view.purity
+    overall = conclusion.estimate
+    purity_status = conclusion.status
     if purity_status == "discordant_estimators":
         lines.append(
             "**Chain summary:** observed expression → library-prep-aware "
@@ -333,6 +337,8 @@ def plot_provenance_funnel(
     decomp_results,
     save_to_filename: str,
     save_dpi: int = 150,
+    *,
+    report_view: ReportView,
 ):
     """Render ``*-provenance.png`` — horizontal stacked bar showing the
     compartment fractions with tumor-linked signal on the right and non-tumor
@@ -350,8 +356,9 @@ def plot_provenance_funnel(
     if not fractions:
         return None
 
-    purity_status, _purity_scenarios = finalized_purity_context(analysis)
-    purity_is_unresolved = purity_status == "discordant_estimators"
+    purity_is_unresolved = (
+        report_view.purity.status == "discordant_estimators"
+    )
 
     if purity_is_unresolved:
         fig, ax = plt.subplots(figsize=(10, 2.6))

@@ -14,6 +14,7 @@ VCF or MAF parser.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
 import gzip
 import json
@@ -207,6 +208,78 @@ class VariantRecord:
     ensembl_release: int | None = None
     coordinates: tuple[VariantCoordinate, ...] = ()
 
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        genome_build: object = "",
+        ensembl_release: int | None = None,
+        source_path: str = "",
+        source_format: str = "",
+    ) -> "VariantRecord":
+        """Build one record from a mapping using the public variant contract.
+
+        Coordinates, rather than incidental metadata columns, determine whether
+        an assembly applies.  Symbolic records therefore ignore both row-level
+        and requested assembly labels.  Coordinate records canonicalize and
+        reconcile those labels here, so every file adapter follows the same
+        rule instead of reimplementing it.
+        """
+        item = dict(value)
+        item.setdefault("variant", item.get("alteration", ""))
+        item.setdefault("variant_type", item.get("alteration_type", "unknown"))
+        item.pop("alteration", None)
+        item.pop("alteration_type", None)
+
+        coordinates = item.get("coordinates") or ()
+        if coordinates:
+            requested_build = normalize_genome_build(genome_build)
+            row_build = normalize_genome_build(item.get("genome_build"))
+            if requested_build and row_build and requested_build != row_build:
+                row_index = item.get("row_index")
+                location = (
+                    f"record {row_index}" if row_index is not None else "record"
+                )
+                raise ValueError(
+                    f"Variant {location} declares {row_build}, which conflicts "
+                    f"with the requested build {requested_build}"
+                )
+            item["genome_build"] = row_build or requested_build
+        else:
+            # A symbolic event has no locus to interpret in an assembly.  Do not
+            # reject an irrelevant exporter metadata value such as T2T-CHM13.
+            item["genome_build"] = ""
+
+        if item.get("ensembl_release") is None and ensembl_release is not None:
+            item["ensembl_release"] = ensembl_release
+        if not item.get("source_path") and source_path:
+            item["source_path"] = source_path
+        if not item.get("source_format") and source_format:
+            item["source_format"] = source_format
+
+        gene = str(item.get("gene") or "").strip().upper()
+        return cls(
+            gene=gene,
+            genes=item.get("genes") or (gene,),
+            variant=str(item.get("variant") or ""),
+            variant_type=str(item.get("variant_type") or "unknown"),
+            source_path=str(item.get("source_path") or ""),
+            row_index=item.get("row_index"),
+            confidence=str(item.get("confidence") or ""),
+            support=dict(item.get("support") or {}),
+            raw_name=str(item.get("raw_name") or ""),
+            result_status=str(item.get("result_status") or ""),
+            filter_status=str(item.get("filter_status") or ""),
+            filter_semantics=str(item.get("filter_semantics") or "generic"),
+            representation=str(item.get("representation") or ""),
+            source_format=str(item.get("source_format") or "unknown"),
+            caller_version=str(item.get("caller_version") or ""),
+            genome_build=str(item.get("genome_build") or ""),
+            ensembl_release=item.get("ensembl_release"),
+            coordinates=coordinates,
+        )
+
     def __post_init__(self) -> None:
         primary = str(self.gene or "").strip().upper()
         supplied_genes = (
@@ -325,32 +398,6 @@ class VariantRecord:
         return self.variant_type
 
 
-def _variant_record_from_mapping(item: dict[str, Any]) -> VariantRecord:
-    gene = str(item.get("gene") or "").strip().upper()
-    genes = item.get("genes") or (gene,)
-    coordinates = item.get("coordinates") or ()
-    return VariantRecord(
-        gene=gene,
-        genes=genes,
-        variant=str(item.get("variant") or ""),
-        variant_type=str(item.get("variant_type") or "unknown"),
-        source_path=str(item.get("source_path") or ""),
-        row_index=item.get("row_index"),
-        confidence=str(item.get("confidence") or ""),
-        support=dict(item.get("support") or {}),
-        raw_name=str(item.get("raw_name") or ""),
-        result_status=str(item.get("result_status") or ""),
-        filter_status=str(item.get("filter_status") or ""),
-        filter_semantics=str(item.get("filter_semantics") or "generic"),
-        representation=str(item.get("representation") or ""),
-        source_format=str(item.get("source_format") or "unknown"),
-        caller_version=str(item.get("caller_version") or ""),
-        genome_build=str(item.get("genome_build") or ""),
-        ensembl_release=item.get("ensembl_release"),
-        coordinates=coordinates,
-    )
-
-
 def normalize_variant_record(record: object) -> dict[str, Any] | None:
     """Return one JSON-safe record using the current public field names.
 
@@ -372,7 +419,7 @@ def normalize_variant_record(record: object) -> dict[str, Any] | None:
     item.pop("alteration", None)
     item.pop("alteration_type", None)
 
-    normalized = _variant_record_from_mapping(item).public_dict()
+    normalized = VariantRecord.from_mapping(item).public_dict()
     for key, value in item.items():
         normalized.setdefault(key, value)
     return normalized
@@ -1056,26 +1103,18 @@ def _records_from_typed_json(
         raise ValueError(
             "Variant JSON cannot mix typed VariantRecord objects with generic rows"
         )
-    declared_build = normalize_genome_build(genome_build)
     records: list[VariantRecord] = []
-    for index, row in enumerate(rows):
+    for row in rows:
         item = dict(row)
-        coordinates = item.get("coordinates") or ()
-        row_build = normalize_genome_build(item.get("genome_build"))
-        if coordinates and declared_build and row_build and declared_build != row_build:
-            raise ValueError(
-                f"Variant JSON record {index} declares {row_build}, which conflicts "
-                f"with the requested build {declared_build}"
+        records.append(
+            VariantRecord.from_mapping(
+                item,
+                genome_build=genome_build,
+                ensembl_release=ensembl_release,
+                source_path=source_path,
+                source_format="json",
             )
-        if coordinates and not row_build:
-            item["genome_build"] = declared_build
-        if item.get("ensembl_release") is None and ensembl_release is not None:
-            item["ensembl_release"] = ensembl_release
-        if not item.get("source_path"):
-            item["source_path"] = source_path
-        if not item.get("source_format"):
-            item["source_format"] = "json"
-        records.append(_variant_record_from_mapping(item))
+        )
     return records
 
 
@@ -1222,7 +1261,6 @@ def _records_from_dataframe(
     build_col = _find_column(df.columns, _GENOME_BUILD_COLUMNS)
     release_col = _find_column(df.columns, _ENSEMBL_RELEASE_COLUMNS)
     caller_version_col = _find_column(df.columns, _CALLER_VERSION_COLUMNS)
-    declared_build = normalize_genome_build(genome_build)
     records: list[VariantRecord] = []
     for idx, row in df.iterrows():
         raw_gene = _text(row.get(gene_col)) if gene_col is not None else ""
@@ -1250,15 +1288,6 @@ def _records_from_dataframe(
             source_path=source_path,
         )
         coordinate = _coordinate_from_row(row)
-        row_build = normalize_genome_build(
-            row.get(build_col) if build_col is not None else ""
-        )
-        if coordinate and declared_build and row_build and declared_build != row_build:
-            raise ValueError(
-                f"Variant row {idx} declares {row_build}, which conflicts with "
-                f"the requested build {declared_build}"
-            )
-        active_build = (row_build or declared_build) if coordinate else ""
         row_release = (
             _positive_integer(
                 row.get(release_col),
@@ -1269,27 +1298,32 @@ def _records_from_dataframe(
         )
         active_release = row_release or ensembl_release
         records.append(
-            VariantRecord(
-                gene=gene,
-                variant=variant or full_text,
-                variant_type=variant_type,
-                source_path=source_path,
-                row_index=int(idx),
-                confidence=_confidence_from_row(row),
-                result_status=_result_status_from_row(row),
-                filter_status=filter_status,
-                filter_semantics=filter_semantics,
-                support=_support_from_row(row),
-                raw_name=full_text,
-                source_format=source_format,
-                caller_version=(
-                    _text(row.get(caller_version_col))
-                    if caller_version_col is not None
-                    else ""
-                ),
-                genome_build=active_build,
-                ensembl_release=active_release,
-                coordinates=(coordinate,) if coordinate else (),
+            VariantRecord.from_mapping(
+                {
+                    "gene": gene,
+                    "variant": variant or full_text,
+                    "variant_type": variant_type,
+                    "source_path": source_path,
+                    "row_index": int(idx),
+                    "confidence": _confidence_from_row(row),
+                    "result_status": _result_status_from_row(row),
+                    "filter_status": filter_status,
+                    "filter_semantics": filter_semantics,
+                    "support": _support_from_row(row),
+                    "raw_name": full_text,
+                    "source_format": source_format,
+                    "caller_version": (
+                        _text(row.get(caller_version_col))
+                        if caller_version_col is not None
+                        else ""
+                    ),
+                    "genome_build": (
+                        row.get(build_col) if build_col is not None else ""
+                    ),
+                    "ensembl_release": active_release,
+                    "coordinates": (coordinate,) if coordinate else (),
+                },
+                genome_build=genome_build,
             )
         )
     return records

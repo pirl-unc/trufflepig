@@ -14,7 +14,10 @@ import importlib.util
 import inspect
 from pathlib import Path
 
+import pytest
+
 from trufflepig import report_document as rd
+from trufflepig.report_view import build_report_view
 
 
 def _load_pdf_builder():
@@ -180,10 +183,8 @@ def test_headline_cards_prefer_reportview_headline_over_records():
     assert "STALE" not in call and "99%" not in purity
 
 
-def test_headline_cards_fall_back_to_records_without_reportview_shape():
+def test_headline_cards_require_the_structured_headline():
     b = _load_pdf_builder()
-    # Fallback headline shape (standalone build / an analyze dir predating the
-    # sidecar): no cancer_type/purity fields, so the cards read the parsed records.
     doc = {
         "headline": {"cancer_type_name": "PRAD", "purity_display": "10% ..."},
         "records": [
@@ -193,9 +194,8 @@ def test_headline_cards_fall_back_to_records_without_reportview_shape():
              "value": "10% (model interval 6%-16%, moderate confidence)", "text": ""},
         ],
     }
-    call, purity = b._headline_cards(doc)
-    assert call == "PRAD (Prostate adenocarcinoma)"
-    assert "10%" in purity
+    with pytest.raises(ValueError, match="cancer_type"):
+        b._headline_cards(doc)
 
 
 def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
@@ -205,5 +205,20 @@ def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     (tmp_path / "s-summary.md").write_text("# Sample s\n\n- **Cancer call:** SARC\n")
     assert rd._therapy_table(tmp_path, "s") is None
     assert rd._priority_target_table(tmp_path, "s") is None
+    view = build_report_view(
+        {
+            "cancer_type": "SARC",
+            "cancer_name": "Sarcoma",
+            "sample_mode": "mesenchymal",
+            "top_cancers": [("SARC", 1.0)],
+            "purity": {
+                "overall_estimate": 0.5,
+                "overall_lower": 0.3,
+                "overall_upper": 0.7,
+            },
+        },
+        sample_id="s",
+    )
+    rd.write_report_document(tmp_path, "s", report_view=view)
     out = b.build_interpretive_report_pdf(tmp_path)
     assert out.exists() and out.stat().st_size > 0

@@ -3,9 +3,9 @@
 import pandas as pd
 
 from trufflepig.brief import (
-    build_actionable,
-    build_brief,
-    build_summary,
+    build_actionable as _build_actionable,
+    build_brief as _build_brief,
+    build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
     _format_therapy_bullet,
     _empty_therapy_shortlist_message,
@@ -16,6 +16,29 @@ from trufflepig.brief import (
     mismatch_repair_summary_line,
 )
 from trufflepig.confidence import ConfidenceTier
+from trufflepig.report_view import build_report_view
+
+
+def _render_call(builder, analysis, *args, **kwargs):
+    if "report_view" not in kwargs:
+        finalized = dict(analysis)
+        finalized.setdefault("cancer_type", kwargs.get("cancer_code") or "UNKNOWN")
+        finalized.setdefault("sample_mode", "solid")
+        finalized.setdefault("purity", {})
+        kwargs["report_view"] = build_report_view(finalized)
+    return builder(analysis, *args, **kwargs)
+
+
+def build_summary(analysis, *args, **kwargs):
+    return _render_call(_build_summary, analysis, *args, **kwargs)
+
+
+def build_actionable(analysis, *args, **kwargs):
+    return _render_call(_build_actionable, analysis, *args, **kwargs)
+
+
+def build_brief(analysis, *args, **kwargs):
+    return _render_call(_build_brief, analysis, *args, **kwargs)
 
 
 def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
@@ -161,6 +184,7 @@ def _make_analysis(
     return {
         "cancer_type": "PRAD",
         "cancer_name": "Prostate adenocarcinoma",
+        "sample_mode": "solid",
         "purity": {
             "overall_estimate": purity_point,
             "overall_lower": ci_low,
@@ -231,15 +255,13 @@ def _make_ranges_df():
 
 
 def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
-    """Cross-artifact invariant (text side): the summary markdown renders the FINALIZED purity from
-    the frozen ReportView snapshot, so it can never disagree with the sample-summary figure — both
-    route through finalized_purity_headline. Here the live dict still holds a stale 78% candidate
-    purity while the snapshot captured the finalized 10%."""
+    """Summary purity comes only from the explicit frozen report."""
     from trufflepig.report_view import build_report_view
 
     analysis = _make_analysis(purity_point=0.78, ci_low=0.70, ci_high=0.85)
-    analysis["report_view"] = build_report_view(
+    report_view = build_report_view(
         {
+            **analysis,
             "purity": {
                 "overall_estimate": 0.10,
                 "overall_lower": 0.06,
@@ -253,20 +275,20 @@ def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
         cancer_code="PRAD",
         disease_state="",
         sample_id="sample_X",
+        report_view=report_view,
     )
     assert "**Purity:** 10% (model interval 6%–16%" in md
     assert "78%" not in md  # the stale candidate purity never reaches the report
 
 
 def test_actionable_purity_reads_frozen_snapshot_not_stale_live_dict():
-    """Cross-artifact invariant (actionable side): build_actionable was ported onto the frozen
-    ReportView surface in PR-8, so the longer clinical review renders the SAME finalized purity as
-    the summary and the figure. Stale 78% candidate in the live dict, finalized 10% in the snapshot."""
+    """The actionable report uses the same explicit frozen purity."""
     from trufflepig.report_view import build_report_view
 
     analysis = _make_analysis(purity_point=0.78, ci_low=0.70, ci_high=0.85)
-    analysis["report_view"] = build_report_view(
+    report_view = build_report_view(
         {
+            **analysis,
             "purity": {
                 "overall_estimate": 0.10,
                 "overall_lower": 0.06,
@@ -280,27 +302,26 @@ def test_actionable_purity_reads_frozen_snapshot_not_stale_live_dict():
         cancer_code="PRAD",
         disease_state="",
         sample_id="sample_X",
+        report_view=report_view,
     )
     assert "Purity point estimate: **10%** (model interval 6%–16%" in md
     assert "78%" not in md  # the stale candidate purity never reaches the actionable review
 
 
 def test_actionable_purity_degrades_to_bare_point_when_interval_missing():
-    """Robustness: when the finalized headline carries a point but NO interval — both the frozen
-    snapshot and the live dict lack CI bounds — the actionable review renders a bare point estimate
-    instead of crashing on `{lower:.0%}`. Mirrors build_summary's all-three guard so an absent bound
-    degrades gracefully rather than raising TypeError."""
+    """A purity estimate without bounds renders as a bare point."""
     from trufflepig.report_view import build_report_view
 
     analysis = _make_analysis()
     analysis["purity"] = {"overall_estimate": 0.30}  # point only, no CI bounds
-    analysis["report_view"] = build_report_view({"purity": {"overall_estimate": 0.30}})
+    report_view = build_report_view(analysis)
     md = build_actionable(
         analysis,
         _make_ranges_df(),
         cancer_code="PRAD",
         disease_state="",
         sample_id="sample_X",
+        report_view=report_view,
     )
     assert "Purity point estimate: **30%**." in md
     assert "model interval" not in md  # no interval clause when a bound is missing
@@ -333,6 +354,18 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
             ],
         }
     )
+    report_view = build_report_view(analysis)
+    # Simulate later accidental mutation of the working analysis dictionary.
+    # Every report field must still come from the one frozen conclusion.
+    analysis["purity"].update(
+        {
+            "overall_estimate": 0.78,
+            "overall_lower": 0.70,
+            "overall_upper": 0.85,
+            "quantitative_status": "resolved",
+            "estimator_scenarios": [],
+        }
+    )
 
     summary = build_summary(
         analysis,
@@ -340,6 +373,7 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
         cancer_code="PRAD",
         disease_state="",
         sample_id="sample_X",
+        report_view=report_view,
     )
     actionable = build_actionable(
         analysis,
@@ -347,6 +381,7 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
         cancer_code="PRAD",
         disease_state="",
         sample_id="sample_X",
+        report_view=report_view,
     )
 
     assert "**Purity:** quantitatively unresolved" in summary

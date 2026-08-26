@@ -2,7 +2,34 @@
 
 import pandas as pd
 
-from trufflepig.provenance import build_provenance_md, plot_provenance_funnel
+from trufflepig.provenance import (
+    build_provenance_md as _build_provenance_md,
+    plot_provenance_funnel as _plot_provenance_funnel,
+)
+from trufflepig.report_view import build_report_view
+
+
+def _view(analysis, cancer_code="UNKNOWN"):
+    finalized = dict(analysis)
+    finalized.setdefault("cancer_type", cancer_code)
+    finalized.setdefault("sample_mode", "solid")
+    finalized.setdefault("purity", {})
+    return build_report_view(finalized)
+
+
+def build_provenance_md(analysis, *args, **kwargs):
+    if "report_view" not in kwargs:
+        kwargs["report_view"] = _view(
+            analysis,
+            kwargs.get("cancer_code") or "UNKNOWN",
+        )
+    return _build_provenance_md(analysis, *args, **kwargs)
+
+
+def plot_provenance_funnel(analysis, *args, **kwargs):
+    if "report_view" not in kwargs:
+        kwargs["report_view"] = _view(analysis)
+    return _plot_provenance_funnel(analysis, *args, **kwargs)
 
 
 class _Ctx:
@@ -167,13 +194,14 @@ def test_provenance_abstains_from_consensus_composition_when_purity_is_unresolve
             ],
         },
     }
-    analysis["report_view"] = build_report_view(analysis)
+    report_view = build_report_view(analysis)
 
     md = build_provenance_md(
         analysis,
         _ranges_df(),
         [_Decomp(purity=0.05)],
         cancer_code="READ",
+        report_view=report_view,
     )
 
     assert "**Quantitative purity is unresolved.**" in md
@@ -190,6 +218,7 @@ def test_provenance_abstains_from_consensus_composition_when_purity_is_unresolve
         _ranges_df(),
         [_Decomp(purity=0.05)],
         save_to_filename=str(out),
+        report_view=report_view,
     )
     assert out.exists() and out.stat().st_size > 1000
 

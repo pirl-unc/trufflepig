@@ -1,10 +1,4 @@
-"""Tests for the frozen ReportView snapshot (Tier-1 Phase 1 instrumentation).
-
-See docs/report-belief-consistency-and-friendliness-plan.md. The view is the
-single read surface renderers will migrate onto; these pin that it extracts the
-FINALIZED conclusions and never drifts from the live confidence computations the
-markdown uses.
-"""
+"""Tests for the validated report-finalization boundary."""
 
 from __future__ import annotations
 
@@ -17,9 +11,8 @@ from trufflepig.confidence import (
     purity_confidence_for_analysis,
 )
 from trufflepig.report_view import (
-    ReportView,
+    Purity,
     build_report_view,
-    finalized_purity_context,
 )
 
 
@@ -48,11 +41,11 @@ def _read_analysis():
 
 def test_build_report_view_extracts_finalized_purity():
     view = build_report_view(_read_analysis(), sample_id="S1")
-    assert view.purity == pytest.approx(0.10)
-    assert view.purity_lo == pytest.approx(0.06)
-    assert view.purity_hi == pytest.approx(0.16)
+    assert view.purity.estimate == pytest.approx(0.10)
+    assert view.purity.lower == pytest.approx(0.06)
+    assert view.purity.upper == pytest.approx(0.16)
     # purity_source wins over the integration source.
-    assert view.purity_method == "decomposition"
+    assert view.purity.method == "decomposition"
     assert view.sample_id == "S1"
 
 
@@ -60,7 +53,7 @@ def test_purity_method_falls_back_to_integration_source():
     analysis = _read_analysis()
     del analysis["purity"]["purity_source"]
     view = build_report_view(analysis)
-    assert view.purity_method == "estimate+decomposition"
+    assert view.purity.method == "estimate+decomposition"
 
 
 def test_report_view_freezes_discordant_purity_status_and_scenarios():
@@ -86,15 +79,19 @@ def test_report_view_freezes_discordant_purity_status_and_scenarios():
     )
 
     view = build_report_view(analysis)
-    analysis["report_view"] = view
     analysis["purity"]["quantitative_status"] = "resolved"
     analysis["purity"]["estimator_scenarios"] = []
 
-    assert view.purity_status == "discordant_estimators"
-    assert view.purity_scenarios[1] == ("signature", 0.43, 0.32, 0.55)
-    assert finalized_purity_context(analysis) == (
-        "discordant_estimators",
-        view.purity_scenarios,
+    assert view.purity.status == "discordant_estimators"
+    assert view.purity.scenarios[1] == ("signature", 0.43, 0.32, 0.55)
+    assert view.purity == Purity(
+        estimate=0.10,
+        lower=0.06,
+        upper=0.16,
+        method="decomposition",
+        confidence=view.purity.confidence,
+        status="discordant_estimators",
+        scenarios=view.purity.scenarios,
     )
 
 
@@ -135,28 +132,42 @@ def test_confidence_tiers_do_not_drift_from_live_computation():
     so a report can never show one tier in a figure and another in text."""
     analysis = _read_analysis()
     view = build_report_view(analysis)
-    assert view.cancer_type_confidence == compute_call_confidence(analysis).tier
-    assert view.purity_confidence == purity_confidence_for_analysis(analysis).tier
+    assert view.call_confidence == compute_call_confidence(analysis)
+    assert view.purity.confidence == purity_confidence_for_analysis(analysis)
 
 
 def test_report_view_is_frozen():
     view = build_report_view(_read_analysis())
     with pytest.raises(dataclasses.FrozenInstanceError):
-        view.purity = 0.99  # type: ignore[misc]
+        view.purity.estimate = 0.99  # type: ignore[misc]
 
 
-def test_build_report_view_is_defensive_on_empty_analysis():
-    view = build_report_view({})
-    assert isinstance(view, ReportView)
-    assert view.cancer_type == ""
-    assert view.purity is None
-    assert view.purity_lo is None
-    assert view.cancer_type_alternatives == ()
-
-
-def test_alternatives_skip_malformed_entries():
+@pytest.mark.parametrize("missing", ("cancer_type", "sample_mode", "purity"))
+def test_build_report_view_requires_finalized_analysis_fields(missing):
     analysis = _read_analysis()
-    # a None support and a non-tuple entry must be skipped, not raise.
-    analysis["top_cancers"] = [("READ", 1.0), ("COAD", None), "garbage", ("LUSC", 0.7)]
-    view = build_report_view(analysis)
-    assert view.cancer_type_alternatives == (("LUSC", 0.7),)
+    del analysis[missing]
+
+    with pytest.raises(ValueError, match=missing):
+        build_report_view(analysis)
+
+
+@pytest.mark.parametrize("sample_mode", (None, "", "auto", 7, []))
+def test_build_report_view_rejects_nonfinal_sample_modes(sample_mode):
+    analysis = _read_analysis()
+    analysis["sample_mode"] = sample_mode
+
+    with pytest.raises(ValueError, match="sample_mode"):
+        build_report_view(analysis)
+
+
+def test_report_finalization_rejects_malformed_alternatives():
+    analysis = _read_analysis()
+    analysis["top_cancers"] = [
+        ("READ", 1.0),
+        ("COAD", None),
+        "garbage",
+        ("LUSC", 0.7),
+    ]
+
+    with pytest.raises(TypeError, match="candidate support"):
+        build_report_view(analysis)

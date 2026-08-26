@@ -41,11 +41,13 @@ without pulling in matplotlib/pandas.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from .report_view import ReportView
 
 SCHEMA_VERSION = 1
 
@@ -548,18 +550,6 @@ def find_figure(analyze_dir: Path, prefix: str, suffix: str) -> Optional[Path]:
 # --------------------------------------------------------------------------- #
 # Document assembly.
 # --------------------------------------------------------------------------- #
-def report_view_headline(report_view) -> Optional[dict]:
-    """A JSON-serializable headline dict from a frozen :class:`ReportView`, or
-    ``None`` if no view is available. ``dataclasses.asdict`` turns the nested
-    alternatives tuple-of-tuples into JSON lists."""
-    if report_view is None:
-        return None
-    try:
-        return dataclasses.asdict(report_view)
-    except TypeError:
-        return None
-
-
 def build_figure_manifest(
     analyze_dir: Path,
     prefix: str,
@@ -609,15 +599,13 @@ def build_report_document(
     analyze_dir: Path,
     prefix: Optional[str] = None,
     *,
-    report_view=None,
+    report_view: "ReportView",
 ) -> dict:
     """Assemble the structured report document for one analyze directory.
 
-    ``report_view`` (the in-memory frozen :class:`ReportView`) is the authoritative
-    source for the headline when called from the pipeline; standalone callers omit
-    it and the headline falls back to the parsed ``Cancer call`` / ``Purity``
-    records. Everything else is parsed once from the just-emitted markdown so the
-    document is a faithful, byte-stable projection of the reports.
+    ``report_view`` is the authoritative headline. Everything else is parsed once
+    from the just-emitted markdown so the document is a faithful, byte-stable
+    projection of the reports.
     """
     analyze_dir = Path(analyze_dir)
     if prefix is None:
@@ -626,17 +614,12 @@ def build_report_document(
     analysis_path = analyze_dir / f"{prefix}-analysis.md"
 
     records = parse_summary_records(summary_path)
-    headline = report_view_headline(report_view)
-    if headline is None:
-        headline = {
-            "cancer_type_name": record_value(records, "Cancer call"),
-            "purity_display": record_value(records, "Purity"),
-        }
+    headline = report_view.public_dict()
 
     return {
         "schema_version": SCHEMA_VERSION,
         "prefix": prefix,
-        "sample_id": headline.get("sample_id") if headline else None,
+        "sample_id": report_view.sample_id,
         "headline": headline,
         "records": records,
         "highlights": highlight_lines(summary_path, analysis_path),
@@ -645,7 +628,7 @@ def build_report_document(
         "figures": build_figure_manifest(
             analyze_dir,
             prefix,
-            purity_status=str((headline or {}).get("purity_status") or "resolved"),
+            purity_status=report_view.purity.status,
         ),
     }
 
@@ -654,7 +637,7 @@ def write_report_document(
     analyze_dir: Path,
     prefix: str,
     *,
-    report_view=None,
+    report_view: "ReportView",
 ) -> Path:
     """Build and write ``<prefix>-report.json`` into *analyze_dir*; return its path."""
     analyze_dir = Path(analyze_dir)
@@ -665,13 +648,14 @@ def write_report_document(
 
 
 def load_report_document(analyze_dir: Path, prefix: Optional[str] = None) -> dict:
-    """Load ``<prefix>-report.json`` if the pipeline wrote one; otherwise build it
-    on the fly from the directory (backward compatibility for analyze dirs produced
-    before the sidecar existed, and for standalone PDF builds)."""
+    """Load the structured ``<prefix>-report.json`` written by the pipeline."""
     analyze_dir = Path(analyze_dir)
     if prefix is None:
         prefix = find_prefix(analyze_dir)
     path = analyze_dir / f"{prefix}-report.json"
-    if path.exists():
-        return json.loads(path.read_text(errors="replace"))
-    return build_report_document(analyze_dir, prefix)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No structured report document found at {path}; rerun analysis to "
+            "create it"
+        )
+    return json.loads(path.read_text(errors="replace"))

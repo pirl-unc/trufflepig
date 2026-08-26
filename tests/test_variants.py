@@ -59,6 +59,38 @@ def test_symbolic_variant_is_explicitly_assembly_neutral():
     assert programmatic.genome_build == ""
 
 
+@pytest.mark.parametrize("source_format", ("table", "typed_json"))
+def test_symbolic_file_records_ignore_irrelevant_assembly_metadata(
+    tmp_path,
+    source_format,
+):
+    """Assembly validation belongs to coordinate construction, not adapters."""
+    if source_format == "table":
+        path = tmp_path / "variants.csv"
+        pd.DataFrame(
+            [{"Gene": "EGFR", "Variant": "KDD", "Assembly": "T2T-CHM13"}]
+        ).to_csv(path, index=False)
+    else:
+        path = tmp_path / "variants.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "gene": "EGFR",
+                    "variant": "KDD",
+                    "variant_type": "kdd",
+                    "representation": "symbolic",
+                    "genome_build": "T2T-CHM13",
+                    "coordinates": [],
+                }
+            )
+        )
+
+    record = parse_variant_file(path)[0]
+
+    assert record.representation == "symbolic"
+    assert record.genome_build == ""
+
+
 def test_coordinate_variant_has_typed_public_provenance():
     record = VariantRecord(
         gene="BRAF",

@@ -3468,23 +3468,12 @@ def _analyze_body(run: AnalyzeRun):
         }
         run.note_step("cancer_call", outputs=final_call_outputs)
 
-    # Build the frozen ReportView snapshot now that purity is finalized
-    # (decomposition adoption + lineage-panel override + interval cap above) and
-    # the decomposition results are attached. Phase 1 instrumentation: renderers
-    # are migrated onto this single read surface incrementally, so building it
-    # here is behavior-neutral. See
-    # docs/report-belief-consistency-and-friendliness-plan.md (Tier 1).
+    # Cross the report-finalization boundary exactly once. A missing or malformed
+    # report conclusion is a pipeline bug: do not silently fall back to mutable
+    # analysis state and let different artifacts disagree.
     from .report_view import build_report_view
 
-    try:
-        analysis["report_view"] = build_report_view(
-            analysis, sample_id=sample_display_id or None
-        )
-    except Exception:  # noqa: BLE001 - instrumentation must never abort a run
-        _LOGGER.warning(
-            "build_report_view failed; report_view unavailable", exc_info=True
-        )
-        analysis["report_view"] = None
+    report_view = build_report_view(analysis, sample_id=sample_display_id or None)
 
     # #97 sample-summary panels, rendered HERE — after purity finalization
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -3500,6 +3489,7 @@ def _analyze_body(run: AnalyzeRun):
             save_to_filename=summary_png,
             save_dpi=output_dpi,
             analysis=analysis,
+            report_view=report_view,
         )
         plot_cancer_type_hypotheses(
             analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
@@ -3541,7 +3531,7 @@ def _analyze_body(run: AnalyzeRun):
             save_to_filename=methods_png,
             save_dpi=output_dpi,
             decomposition_result=best_for_methods,
-            report_view=analysis.get("report_view"),
+            report_view=report_view,
         )
         _plt.close("all")
 
@@ -3764,6 +3754,7 @@ def _analyze_body(run: AnalyzeRun):
     _embedding_meta = get_embedding_feature_metadata(method="panref")
     _generate_text_reports(
         analysis,
+        report_view,
         _embedding_meta,
         prefix,
         decomp_results=decomp_results,
@@ -4120,6 +4111,7 @@ def _analyze_body(run: AnalyzeRun):
             sample_id = sample_display_id or None
             _generate_text_reports(
                 analysis,
+                report_view,
                 _embedding_meta,
                 prefix,
                 decomp_results=decomp_results,
@@ -4134,9 +4126,11 @@ def _analyze_body(run: AnalyzeRun):
                 cancer_code=report_cancer_type,
                 disease_state=disease_state_for_summary,
                 sample_id=sample_id,
+                report_view=report_view,
             )
             evidence_md = _build_evidence_report(
                 analysis,
+                report_view,
                 ranges_df,
                 decomp_results,
                 cancer_code=report_cancer_type,
@@ -4161,6 +4155,7 @@ def _analyze_body(run: AnalyzeRun):
                     decomp_results,
                     save_to_filename=prov_png,
                     save_dpi=output_dpi,
+                    report_view=report_view,
                 )
                 if fig_out:
                     print(f"[plot] Saved {prov_png}")
@@ -4741,28 +4736,14 @@ inferred from expression alone.
     # carries the frozen ReportView headline + the just-emitted reports (parsed once,
     # server-side, so the markdown stays byte-stable) + a belief-gated figure
     # manifest. Written before manifest discovery so it is itself catalogued.
-    # Best-effort: a serialization failure must never abort the analysis (the PDF
-    # falls back to building the document from the markdown directly).
-    try:
-        from .report_document import write_report_document
+    from .report_document import write_report_document
 
-        report_document_path = write_report_document(
-            paths.out_dir,
-            paths.prefix_base,
-            report_view=analysis.get("report_view"),
-        )
-        print(f"[output] Wrote {report_document_path}")
-    except (OSError, ValueError, TypeError):
-        # Tolerate only the realistic failure surface of "parse the reports, build a
-        # dict, json.dump it, write the file": filesystem errors and value/type
-        # errors from (de)serialization. Anything else here — a KeyError,
-        # AttributeError — is a bug in the document builder, not a runtime data
-        # condition, so let it surface loudly instead of silently shipping a run
-        # whose interpretive PDF has to fall back to scraping the markdown.
-        _LOGGER.warning(
-            "write_report_document failed; interpretive PDF will fall back to markdown",
-            exc_info=True,
-        )
+    report_document_path = write_report_document(
+        paths.out_dir,
+        paths.prefix_base,
+        report_view=report_view,
+    )
+    print(f"[output] Wrote {report_document_path}")
 
     manifest_path = "%s-manifest.json" % prefix if prefix else "manifest.json"
     run.artifacts = discover_output_artifacts(paths.out_dir, paths.prefix_base)
@@ -8397,6 +8378,7 @@ def _cancer_type_decision_trace_markdown(analysis):
 
 def _build_evidence_report(
     analysis,
+    report_view,
     ranges_df,
     decomp_results,
     cancer_code,
@@ -8412,6 +8394,7 @@ def _build_evidence_report(
         decomp_results,
         cancer_code=cancer_code,
         sample_id=sample_id,
+        report_view=report_view,
     )
     provenance_body = _demote_markdown_headings(
         _strip_markdown_wrapper(provenance_md),
@@ -8523,6 +8506,7 @@ def _classify_lineage_calibration_genes(sorted_genes, median_p):
 
 def _generate_text_reports(
     analysis,
+    report_view,
     embedding_meta,
     prefix,
     decomp_results=None,
@@ -8532,22 +8516,16 @@ def _generate_text_reports(
     df_expr=None,
 ):
     """Write the detailed ``*-analysis.md`` report."""
-    from .report_view import finalized_purity_headline
-
     cancer_code = analysis["cancer_type"]
     purity = analysis["purity"]
-    # Pin the adopted-purity headline to the single frozen ReportView surface so
-    # analysis.md can never show a stale pre-finalization purity — figure ==
-    # summary == analysis.md by construction. Byte-stable today (rendered after
-    # finalization); the guard survives a future reorder that isn't.
-    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
-    if _fp_overall is not None:
-        purity = {
-            **purity,
-            "overall_estimate": _fp_overall,
-            "overall_lower": _fp_lower,
-            "overall_upper": _fp_upper,
-        }
+    conclusion = report_view.purity
+    purity = {
+        **purity,
+        "overall_estimate": conclusion.estimate,
+        "overall_lower": conclusion.lower,
+        "overall_upper": conclusion.upper,
+        "quantitative_status": conclusion.status,
+    }
     mhc1 = analysis["mhc1"]
     top_tissues = analysis["tissue_scores"][:5]
     tissue_score_details = {
@@ -9806,6 +9784,7 @@ def _generate_text_reports(
                 cancer_code=cancer_code,
                 disease_state=disease_state_display,
                 sample_id=sample_id,
+                report_view=report_view,
             )
             therapy_section = _extract_markdown_section(
                 therapy_md,

@@ -2,13 +2,15 @@
 serialized decision, not by scraping the markdown, so figure/table/headline
 content can't disagree with the reports. These tests pin the belief-gated figure
 manifest, the ReportView-authoritative headline, cross-artifact parity, and the
-load-vs-build-on-the-fly fallback.
+structured sidecar contract.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pytest
 
 from trufflepig import report_document as rd
 from trufflepig.report_view import build_report_view
@@ -184,15 +186,6 @@ def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_pa
     ]
 
 
-def test_headline_falls_back_to_records_without_report_view(tmp_path):
-    # Standalone build (no ReportView): the headline is derived from the parsed
-    # summary records so the document is still self-describing.
-    _write_reports(tmp_path)
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=None)
-    assert doc["headline"]["cancer_type_name"].startswith("PRAD")
-    assert "10%" in doc["headline"]["purity_display"]
-
-
 def test_write_and_load_roundtrip(tmp_path):
     _write_reports(tmp_path)
     path = rd.write_report_document(tmp_path, _PREFIX, report_view=_report_view())
@@ -203,24 +196,18 @@ def test_write_and_load_roundtrip(tmp_path):
     assert on_disk["headline"]["purity"] == 0.10
 
 
-def test_load_builds_on_the_fly_when_sidecar_absent(tmp_path):
-    # Backward compatibility: an analyze dir produced before the sidecar existed
-    # (reports present, no <prefix>-report.json) still yields a usable document.
+def test_load_requires_structured_sidecar(tmp_path):
     _write_reports(tmp_path)
     assert not (tmp_path / f"{_PREFIX}-report.json").exists()
-    doc = rd.load_report_document(tmp_path)  # prefix auto-discovered
-    assert doc["prefix"] == _PREFIX
-    assert doc["therapy"]["rows"]
-    # Without a written sidecar there is no ReportView, so the headline is the
-    # records-derived fallback shape.
-    assert "purity_display" in doc["headline"]
+    with pytest.raises(FileNotFoundError, match="rerun analysis"):
+        rd.load_report_document(tmp_path)
 
 
 def test_empty_dir_therapy_and_targets_are_none(tmp_path):
     # No therapy/target tables in the reports -> null table sections, not a crash.
     (tmp_path / f"{_PREFIX}-summary.md").write_text("# Summary\n\n**Cancer call:** UNKNOWN.\n")
     (tmp_path / f"{_PREFIX}-analysis.md").write_text("# Analysis\n")
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=None)
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
     assert doc["therapy"] is None
     assert doc["targets"] is None
     assert all(f["present"] is False for f in doc["figures"])
