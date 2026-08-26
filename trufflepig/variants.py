@@ -1,9 +1,10 @@
 """Normalize supplied exact or symbolic variants for analysis.
 
 A :class:`VariantRecord` represents an exact or symbolic assertion such as a
-small variant, ``EGFR KDD``, an amplification, or a fusion. Explicit coordinate
-fields are part of the follow-up contract in issue #141. Sample-level genomic
-states such as MSI-H are deliberately outside this contract.
+small variant, ``EGFR KDD``, an amplification, or a fusion. Coordinate-bearing
+records carry validated 1-based intervals and an explicit GRCh37 or GRCh38
+build. Sample-level genomic states such as MSI-H are deliberately outside this
+contract.
 
 The permissive table/text reader is retained for compatibility. New,
 source-specific adapters and coordinate provenance are tracked in issues #140
@@ -405,15 +406,16 @@ def normalize_variant_record(record: object) -> dict[str, Any] | None:
     Coordinates are validated through :class:`VariantCoordinate` so callers do
     not need a second, private normalization contract.
     """
-    if hasattr(record, "public_dict"):
-        public = record.public_dict()
-        item = dict(public) if hasattr(public, "get") else None
-    elif hasattr(record, "get"):
+    if isinstance(record, Mapping):
         item = dict(record)
     else:
-        return None
-    if item is None:
-        return None
+        public_dict = getattr(record, "public_dict", None)
+        if not callable(public_dict):
+            return None
+        public = public_dict()
+        if not isinstance(public, Mapping):
+            return None
+        item = dict(public)
     item.setdefault("variant", item.get("alteration", ""))
     item.setdefault("variant_type", item.get("alteration_type", "unknown"))
     item.pop("alteration", None)
@@ -550,29 +552,30 @@ def variant_record_passes_assay_filters(record: object) -> bool:
     text event negation remains gene-specific and is handled by
     :func:`variant_record_gene_is_negated`.
     """
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return False
     if any(
-        _result_status_is_non_positive(record.get(key))
+        _result_status_is_non_positive(item.get(key))
         for key in ("result_status", "result", "status")
     ):
         return False
 
-    filter_semantics = str(record.get("filter_semantics") or "").lower()
+    filter_semantics = str(item.get("filter_semantics") or "").lower()
     stored_filter_is_vcf = filter_semantics == "vcf" or (
-        not filter_semantics and bool(_text(record.get("filter_status")))
+        not filter_semantics and bool(_text(item.get("filter_status")))
     )
     if _filter_status_is_failed(
-        record.get("filter_status"),
+        item.get("filter_status"),
         vcf_semantics=stored_filter_is_vcf,
     ):
         return False
     # Preserve sensible behavior for callers that pass unnormalized records.
     # Exact uppercase FILTER follows VCF semantics; a generic ``filter`` key
     # rejects only explicit failure vocabulary.
-    if _filter_status_is_failed(record.get("FILTER"), vcf_semantics=True):
+    if _filter_status_is_failed(item.get("FILTER"), vcf_semantics=True):
         return False
-    if _filter_status_is_failed(record.get("filter"), vcf_semantics=False):
+    if _filter_status_is_failed(item.get("filter"), vcf_semantics=False):
         return False
     return True
 
@@ -601,17 +604,18 @@ def _clean_gene(value: object) -> str:
 
 def variant_record_gene_is_negated(record: object, gene: str) -> bool:
     """Whether prose explicitly negates this gene's molecular finding."""
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return False
     wanted = str(gene or "").strip().upper()
     if not wanted:
         return False
-    if not variant_record_passes_assay_filters(record):
+    if not variant_record_passes_assay_filters(item):
         return True
     event_texts = [
-        str(record.get(key) or "")
+        str(item.get(key) or "")
         for key in ("variant", "alteration", "raw_name", "confidence")
-        if str(record.get(key) or "").strip()
+        if str(item.get(key) or "").strip()
     ]
     escaped = re.escape(wanted)
     # A negative outcome applies to the complete variant clause, not only
@@ -679,20 +683,21 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
     ``ETV6-NTRK3`` or ``ETV6::NTRK3``. Other genes mentioned in commentary are
     not part of the event, and explicitly negated findings are excluded.
     """
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return ()
     variant_type = str(
-        record.get("variant_type") or record.get("alteration_type") or ""
+        item.get("variant_type") or item.get("alteration_type") or ""
     ).strip().lower()
     event_text = " ".join(
-        str(record.get(key) or "")
+        str(item.get(key) or "")
         for key in ("variant", "alteration", "raw_name")
     ).lower()
     fusion_like = (
         variant_type == "fusion"
         or classify_variant_type(event_text) == "fusion"
     )
-    supplied_genes = record.get("genes") or ()
+    supplied_genes = item.get("genes") or ()
     if isinstance(supplied_genes, str):
         supplied_genes = (supplied_genes,)
     structured_genes = tuple(
@@ -703,19 +708,19 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
         )
     )
     if structured_genes:
-        if not variant_record_passes_assay_filters(record):
+        if not variant_record_passes_assay_filters(item):
             return ()
         if any(
-            variant_record_gene_is_negated(record, gene)
+            variant_record_gene_is_negated(item, gene)
             for gene in structured_genes
         ):
             return ()
         return structured_genes
     if fusion_like:
-        pair = _explicit_fusion_pair(record)
+        pair = _explicit_fusion_pair(item)
         if pair:
             return pair
-    primary_text = str(record.get("gene") or "").upper()
+    primary_text = str(item.get("gene") or "").upper()
     primary = _clean_gene(primary_text)
     if not primary:
         return ()
@@ -723,7 +728,7 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
         # A connected pair was present but rejected above (for example because
         # the event was explicitly reported as not detected).
         return ()
-    if variant_record_gene_is_negated(record, primary):
+    if variant_record_gene_is_negated(item, primary):
         return ()
     return (primary,)
 
@@ -867,7 +872,7 @@ def variant_evidence_records(analysis: object) -> list[dict[str, Any]]:
     event. The same biological event supplied through both interfaces is
     retained once and carries both source types, so it cannot become two votes.
     """
-    if not isinstance(analysis, dict):
+    if not isinstance(analysis, Mapping):
         return []
     normalized: list[dict[str, Any]] = []
     by_identity: dict[tuple[object, ...], dict[str, Any]] = {}
@@ -1019,7 +1024,7 @@ _SUPPORT_COLUMNS = {
 def _numeric(value: object) -> float | None:
     try:
         result = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if result != result:
         return None

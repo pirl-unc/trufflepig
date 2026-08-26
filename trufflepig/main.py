@@ -4814,19 +4814,18 @@ def _format_purity_interval(estimate, lower, upper) -> str:
     return estimate_text
 
 
-def _purity_ci_phrase(purity):
+def _purity_ci_phrase(estimate, lower, upper):
     """Render the purity estimate and heuristic range with an explicit low-confidence
     tag when the interval is so wide it provides almost no constraint
     (issue #79). A 19%-100% range should NOT look the same to a reader as
     a 58%-70% range.
     """
-    est = purity["overall_estimate"]
-    lo = purity["overall_lower"]
-    hi = purity["overall_upper"]
-    if est is None or lo is None or hi is None:
+    if estimate is None or lower is None or upper is None:
         return "**not estimated**"
-    tier = _ci_confidence_tier(lo, hi)
-    core = f"**{est:.0%}** (model interval {lo:.0%}–{hi:.0%})"
+    tier = _ci_confidence_tier(lower, upper)
+    core = (
+        f"**{estimate:.0%}** (model interval {lower:.0%}–{upper:.0%})"
+    )
     if tier == "degenerate":
         core += (
             " — **degenerate range**: input had no per-gene variation so "
@@ -4836,7 +4835,7 @@ def _purity_ci_phrase(purity):
     elif tier == "low":
         core += (
             " — **low confidence**: the range spans "
-            f"{(hi - lo):.0%}, so per-gene tumor-expression estimates "
+            f"{(upper - lower):.0%}, so per-gene tumor-expression estimates "
             "derived from this purity carry wide error bars"
         )
     elif tier == "moderate":
@@ -8519,13 +8518,6 @@ def _generate_text_reports(
     cancer_code = analysis["cancer_type"]
     purity = analysis["purity"]
     conclusion = report_view.purity
-    purity = {
-        **purity,
-        "overall_estimate": conclusion.estimate,
-        "overall_lower": conclusion.lower,
-        "overall_upper": conclusion.upper,
-        "quantitative_status": conclusion.status,
-    }
     mhc1 = analysis["mhc1"]
     top_tissues = analysis["tissue_scores"][:5]
     tissue_score_details = {
@@ -8637,14 +8629,17 @@ def _generate_text_reports(
                 f"{_cancer_label(cancer_code)} remains the report label."
             )
     purity_heading = _purity_metric_label(sample_mode).title()
-    if purity.get("quantitative_status") == "discordant_estimators":
+    if conclusion.status == "discordant_estimators":
         lines.append(
             f"- **{purity_heading}**: **quantitatively unresolved**; operational "
-            f"model {_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))} "
+            f"model {_format_purity_interval(conclusion.estimate, conclusion.lower, conclusion.upper)} "
             "for downstream calculations only."
         )
     else:
-        lines.append(f"- **{purity_heading}**: {_purity_ci_phrase(purity)}.")
+        lines.append(
+            f"- **{purity_heading}**: "
+            f"{_purity_ci_phrase(conclusion.estimate, conclusion.lower, conclusion.upper)}."
+        )
     if call_summary.get("site_indeterminate"):
         lines.append("- **Background/site context**: indeterminate.")
     elif call_summary.get("reported_site"):
@@ -9286,17 +9281,7 @@ def _generate_text_reports(
 
     # Purity / composition
     lines.append(f"## {_purity_metric_label(sample_mode).title()}\n")
-    # #109: compute the sample-level confidence tier once and surface it
-    # inline so readers see a 19–100% CI render visibly different from a
-    # 58–70% CI (#79). The tier consumes purity CI width, point estimate,
-    # degradation severity, and sample-context flags.
-    from .confidence import purity_confidence_for_analysis
-
-    # Single source shared with the ReportView snapshot (report_view.py) so a
-    # report can never show one purity tier in a figure and a different one in
-    # text.
-    purity_tier = purity_confidence_for_analysis(analysis)
-    analysis["purity_confidence"] = purity_tier
+    purity_tier = conclusion.confidence
     # Sample-level low-purity flag rides along on ranges_df so every tumor-source TPM
     # cell (via reporting.tumor_attribution_context) carries the caveat inline, not just
     # the summary caveats block. ranges_df is not reassigned after it is built, so the
@@ -9314,13 +9299,12 @@ def _generate_text_reports(
         tier_suffix = f" — **{purity_tier.tier} confidence** ({tier_note})"
     else:
         tier_suffix = ""
-    quantitative_status = str(purity.get("quantitative_status") or "resolved")
     purity_interval_text = _format_purity_interval(
-        purity.get("overall_estimate"),
-        purity.get("overall_lower"),
-        purity.get("overall_upper"),
+        conclusion.estimate,
+        conclusion.lower,
+        conclusion.upper,
     )
-    if quantitative_status == "discordant_estimators":
+    if conclusion.status == "discordant_estimators":
         lines.append(
             "- **Quantitative conclusion**: **unresolved** — independent purity "
             "estimators support incompatible scenarios."
@@ -9336,13 +9320,13 @@ def _generate_text_reports(
             "signature": "upstream expression model",
         }
         scenario_text = []
-        for scenario in purity.get("estimator_scenarios") or []:
-            estimate = scenario.get("estimate")
+        for source, estimate, lower, upper in conclusion.scenarios:
             if not isinstance(estimate, (int, float)):
                 continue
-            source = str(scenario.get("source") or "unspecified")
             value = _format_purity_interval(
-                estimate, scenario.get("lower"), scenario.get("upper")
+                estimate,
+                lower,
+                upper,
             )
             scenario_text.append(
                 f"{source_labels.get(source, source.replace('_', ' '))}: {value}"
@@ -9354,7 +9338,7 @@ def _generate_text_reports(
             "- **Overall estimate**: "
             f"{purity_interval_text}{tier_suffix}"
         )
-    purity_source = str(purity.get("purity_source") or "").strip()
+    purity_source = conclusion.method or ""
     if purity_source == "background_residual":
         residual_fraction = (
             (purity.get("components") or {})
@@ -10754,7 +10738,7 @@ def _build_target_report(
     lines.append(f"- **Analysis mode**: {_sample_mode_display(sample_mode)}.")
     lines.append(
         f"- **{_purity_metric_label(sample_mode).title()}**: "
-        f"{_purity_ci_phrase(purity_result)}."
+        f"{_purity_ci_phrase(p_mid, p_lo, p_hi)}."
     )
     if disease_state:
         lines.append(f"- **Disease-state synthesis**: {disease_state.rstrip('.')}.")

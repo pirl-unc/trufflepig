@@ -59,6 +59,15 @@ def test_symbolic_variant_is_explicitly_assembly_neutral():
     assert programmatic.genome_build == ""
 
 
+def test_public_evidence_helpers_accept_records_returned_by_parser():
+    record = parse_variant_inputs("ETV6-NTRK3 fusion")[0]
+    analysis = {"variant_records": [record]}
+
+    assert variant_record_passes_assay_filters(record) is True
+    assert variant_record_genes(record) == ("ETV6", "NTRK3")
+    assert variant_evidence_for_gene(analysis, "NTRK3")[0]["variant_type"] == "fusion"
+
+
 @pytest.mark.parametrize("source_format", ("table", "typed_json"))
 def test_symbolic_file_records_ignore_irrelevant_assembly_metadata(
     tmp_path,

@@ -64,13 +64,7 @@ def test_guess_gene_cols_and_pick_genes():
 
 
 def test_purity_ci_phrase_uses_text_not_warning_icon():
-    phrase = cli_mod._purity_ci_phrase(
-        {
-            "overall_estimate": 0.50,
-            "overall_lower": 0.10,
-            "overall_upper": 1.00,
-        }
-    )
+    phrase = cli_mod._purity_ci_phrase(0.50, 0.10, 1.00)
     assert "low confidence" in phrase
     assert "\u26a0" not in phrase
 
