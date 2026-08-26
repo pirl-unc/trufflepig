@@ -16,6 +16,7 @@ from .flow import (
     reconcile_decomposition_purity,
     resolve_analyze_inputs,
     should_adopt_decomposition_purity,
+    write_analysis_output_records,
     write_json,
 )
 from .comparison import (
@@ -97,6 +98,7 @@ __all__ = [
     "registry_parent_code",
     "resolve_analyze_inputs",
     "should_adopt_decomposition_purity",
+    "write_analysis_output_records",
     "write_deltas_json",
     "write_json",
 ]

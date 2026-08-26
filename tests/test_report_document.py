@@ -13,6 +13,13 @@ from pathlib import Path
 import pytest
 
 from trufflepig import report_document as rd
+from trufflepig.analyze import (
+    AnalyzeConfig,
+    AnalyzePaths,
+    AnalyzeRun,
+    InputResolution,
+    write_analysis_output_records,
+)
 from trufflepig.report_view import build_report_view
 
 _SUMMARY = """# Summary
@@ -194,6 +201,40 @@ def test_write_and_load_roundtrip(tmp_path):
     # load_report_document reads the sidecar verbatim when present.
     assert rd.load_report_document(tmp_path, _PREFIX) == on_disk
     assert on_disk["headline"]["purity"] == 0.10
+
+
+def test_output_finalization_writes_structured_records_without_figures(tmp_path):
+    _write_reports(tmp_path, emit_figures=())
+    run = AnalyzeRun(
+        config=AnalyzeConfig(input_path="sample.tsv", output_dir=str(tmp_path)),
+        inputs=InputResolution(
+            gene_input="sample.tsv",
+            transcript_input=None,
+            aggregate_gene_expression=False,
+            input_level="gene",
+        ),
+        paths=AnalyzePaths(
+            out_dir=tmp_path,
+            prefix_base=_PREFIX,
+            sample_display_id=_PREFIX,
+        ),
+    )
+
+    outputs = write_analysis_output_records(run, _report_view())
+
+    report_path = Path(outputs["report_document"])
+    manifest_path = Path(outputs["manifest"])
+    assert report_path.name == f"{_PREFIX}-report.json"
+    assert report_path.exists()
+    assert manifest_path.name == f"{_PREFIX}-manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["steps"]["output"]["outputs"]["report_document"] == str(
+        report_path
+    )
+    assert not any(
+        artifact["kind"] == "figure" for artifact in manifest["artifacts"]
+    )
 
 
 def test_load_requires_structured_sidecar(tmp_path):

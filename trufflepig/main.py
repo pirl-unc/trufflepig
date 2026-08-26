@@ -41,10 +41,10 @@ from .analyze import (
     cancer_type_context_from_analysis,
     cancer_type_tree_relationship,
     decomposition_purity_stability,
-    discover_output_artifacts,
     reconcile_decomposition_purity,
     resolve_analyze_inputs,
     should_adopt_decomposition_purity,
+    write_analysis_output_records,
     write_json,
 )
 from .tumor_purity import (
@@ -4169,6 +4169,9 @@ def _analyze_body(run: AnalyzeRun):
 
     if not plot_ctx.enabled:
         print("[output] --no-figures: skipped figure PDF collection")
+        output_records = write_analysis_output_records(run, report_view)
+        print(f"[output] Wrote {output_records['report_document']}")
+        print(f"[output] Wrote {output_records['manifest']}")
         return
 
     # Collect all figures into one PDF (native resolution)
@@ -4731,38 +4734,9 @@ inferred from expression alone.
     readme_path.write_text(readme)
     print(f"[output] Wrote {readme_path}")
 
-    # Structured report document (§2.6b): one serialized artifact the interpretive
-    # PDF renders from, so the PDF can never disagree with the figures/markdown. It
-    # carries the frozen ReportView headline + the just-emitted reports (parsed once,
-    # server-side, so the markdown stays byte-stable) + a belief-gated figure
-    # manifest. Written before manifest discovery so it is itself catalogued.
-    from .report_document import write_report_document
-
-    report_document_path = write_report_document(
-        paths.out_dir,
-        paths.prefix_base,
-        report_view=report_view,
-    )
-    print(f"[output] Wrote {report_document_path}")
-
-    manifest_path = "%s-manifest.json" % prefix if prefix else "manifest.json"
-    run.artifacts = discover_output_artifacts(paths.out_dir, paths.prefix_base)
-    run.add_artifact(
-        manifest_path,
-        kind="metadata",
-        step="output",
-        role="run_manifest",
-        description="Machine-readable list of emitted reports, figures, tables, and metadata.",
-    )
-    run.note_step(
-        "output",
-        outputs={
-            "manifest": manifest_path,
-            "n_artifacts": len(run.artifacts),
-        },
-    )
-    write_json(manifest_path, run.public_manifest())
-    print(f"[output] Wrote {manifest_path}")
+    output_records = write_analysis_output_records(run, report_view)
+    print(f"[output] Wrote {output_records['report_document']}")
+    print(f"[output] Wrote {output_records['manifest']}")
 
 
 def _sample_mode_display(sample_mode):

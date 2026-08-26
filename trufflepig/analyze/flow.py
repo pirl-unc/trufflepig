@@ -9,9 +9,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from .models import AnalyzeArtifact, AnalyzeConfig, AnalyzePaths, InputResolution
+if TYPE_CHECKING:
+    from ..report_view import ReportView
+
+from .models import (
+    AnalyzeArtifact,
+    AnalyzeConfig,
+    AnalyzePaths,
+    AnalyzeRun,
+    InputResolution,
+)
 
 
 def resolve_analyze_inputs(
@@ -629,3 +638,50 @@ def discover_output_artifacts(
             )
         )
     return artifacts
+
+
+def write_analysis_output_records(
+    run: AnalyzeRun,
+    report_view: "ReportView",
+) -> dict[str, str]:
+    """Write the structured report and run manifest for every analyze mode.
+
+    Figure generation is optional, but output finalization is not. Keeping this
+    transaction in one public function prevents ``--no-figures`` and full-report
+    runs from drifting into different metadata contracts.
+    """
+    from ..report_document import write_report_document
+
+    report_document_path = write_report_document(
+        run.paths.out_dir,
+        run.paths.prefix_base,
+        report_view=report_view,
+    )
+    manifest_path = run.paths.file("manifest.json")
+    run.artifacts = discover_output_artifacts(
+        run.paths.out_dir,
+        run.paths.prefix_base,
+    )
+    run.add_artifact(
+        manifest_path,
+        kind="metadata",
+        step="output",
+        role="run_manifest",
+        description=(
+            "Machine-readable list of emitted reports, figures, tables, and "
+            "metadata."
+        ),
+    )
+    run.note_step(
+        "output",
+        outputs={
+            "report_document": str(report_document_path),
+            "manifest": manifest_path,
+            "n_artifacts": len(run.artifacts),
+        },
+    )
+    write_json(manifest_path, run.public_manifest())
+    return {
+        "report_document": str(report_document_path),
+        "manifest": manifest_path,
+    }
