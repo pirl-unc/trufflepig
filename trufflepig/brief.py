@@ -575,7 +575,10 @@ def _scope_level_eligibility_context(target_row, analysis) -> str:
             "externally supplied NUTM label supports report scope; verify "
             "clinical diagnosis/fusion status before treating as eligible"
         )
-    return ""
+    return (
+        "NUTM report label is RNA-inferred; confirm NUTM1 fusion/IHC/FISH/"
+        "pathology before treating as eligible"
+    )
 
 
 def _expression_independent_evidence_gap(target_row, analysis) -> str:

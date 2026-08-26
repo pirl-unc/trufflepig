@@ -1528,6 +1528,40 @@ def test_nutm_scope_level_rows_reference_report_scope_not_target_specific_mutati
     assert "no target-specific supporting call" not in line
 
 
+def test_nutm_therapy_does_not_treat_an_unrelated_brd4_fusion_as_eligibility():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "NUTM",
+            "variant_inputs_supplied": True,
+            "variant_records": [
+                {
+                    "gene": "BRD4",
+                    "genes": ("BRD4", "LINC00486"),
+                    "variant": "BRD4--LINC00486 fusion",
+                    "variant_type": "fusion",
+                }
+            ],
+        }
+    )
+    target = pd.Series(
+        {
+            "cancer_code": "NUTM",
+            "symbol": "BRD4",
+            "agent": "molibresib",
+            "agent_class": "small_molecule",
+            "phase": "phase_1",
+            "indication": "NUT carcinoma",
+        }
+    )
+
+    line = _format_therapy_bullet(target, None, analysis=analysis)
+
+    assert "NUTM report label is RNA-inferred" in line
+    assert "confirm NUTM1 fusion/IHC/FISH/pathology" in line
+    assert "supplied variant evidence matches" not in line
+
+
 def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillover():
     analysis = _make_analysis()
     analysis.update(
