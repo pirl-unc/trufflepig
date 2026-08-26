@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 from collections import Counter
 from pathlib import Path
+
+from trufflepig.report_document import parse_therapy_recommendations
 
 try:
     from .analyze_reports import (
@@ -97,6 +100,7 @@ def _sample_paths(analysis_md: Path, sample_id: str) -> dict[str, Path | None]:
         "signal_matrix": _first_existing(
             [root / f"{sample_id}-cancer-type-signal-matrix.tsv"]
         ),
+        "report": _first_existing([root / f"{sample_id}-report.json"]),
     }
 
 
@@ -334,6 +338,33 @@ def _sample_issues(
                 "detail": f"summary={summary_call}; analysis={','.join(working_codes)}",
             }
         )
+    report_path = paths.get("report")
+    if report_path is not None:
+        try:
+            report_document = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            issues.append(
+                {
+                    "sample": sample_id,
+                    "severity": "error",
+                    "category": "invalid_structured_report",
+                    "detail": str(error),
+                }
+            )
+        else:
+            summary_therapy = parse_therapy_recommendations(paths["summary"])
+            if report_document.get("therapy") != summary_therapy:
+                issues.append(
+                    {
+                        "sample": sample_id,
+                        "severity": "error",
+                        "category": "therapy_shortlist_mismatch",
+                        "detail": (
+                            "structured therapy recommendations differ from "
+                            "the reader summary"
+                        ),
+                    }
+                )
     if expected and working_codes and not any(
         compat(code, accepted)
         for code in working_codes

@@ -1,3 +1,5 @@
+import json
+
 from scripts.analyze_reports import Compat, expected_codes
 from scripts.audit_generated_reports import _sample_issues
 
@@ -248,5 +250,37 @@ def test_full_report_audit_requires_matching_provisional_status(tmp_path):
         issue
         for issue in issues
         if issue["category"] == "cancer_call_provisional_status_mismatch"
+    )
+    assert issue["severity"] == "error"
+
+
+def test_full_report_audit_requires_structured_therapy_to_match_summary(tmp_path):
+    paths = _write_report_tree(
+        tmp_path,
+        "**Working cancer call**: READ (Rectum Adenocarcinoma).\n",
+    )
+    paths["summary"].write_text(
+        """**Cancer call:** READ (Rectum Adenocarcinoma)
+
+## Top candidate therapies
+
+- **EGFR** — cetuximab (Approved, RAS-WT mCRC). mixed-source; 20 tumor-source bulk TPM (model interval 10-30); confirm RAS-WT status.
+"""
+    )
+    report_path = tmp_path / "sample-report.json"
+    report_path.write_text(json.dumps({"therapy": None}))
+    paths["report"] = report_path
+
+    issues = _sample_issues(
+        sample_id="sample",
+        expected="READ|CRC",
+        paths=paths,
+        compat=_compat(),
+    )
+
+    issue = next(
+        issue
+        for issue in issues
+        if issue["category"] == "therapy_shortlist_mismatch"
     )
     assert issue["severity"] == "error"
