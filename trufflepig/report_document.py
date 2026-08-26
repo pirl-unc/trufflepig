@@ -346,56 +346,92 @@ def safety_band(tme: str, attribution: str) -> str:
     return short_text(band, max_chars=58)
 
 
-def _therapy_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
-    """``{"columns", "rows"}`` for the therapy shortlist, or ``None``.
+def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
+    """Return the exact reader-facing therapy shortlist from a summary.
 
-    Reads the ``## Therapy Prioritization`` table from the analysis report, dedups
-    repeated targets (one target can list several agents), and keeps the top 3.
+    The detailed analysis intentionally includes a broader therapy landscape,
+    including conditional and comparator rows that did not qualify for the
+    summary. The structured report represents the reader decision, so it
+    serializes the bullets under ``Top candidate therapies`` instead of making
+    a second selection from that broader table.
     """
-    tables = parse_markdown_tables(analyze_dir / f"{prefix}-analysis.md")
-    table = find_table(
-        tables,
-        section_contains="therapy prioritization",
-        header_all=("target", "agent", "phase"),
-        subsection_excludes="not supported by this sample",
-    )
-    if table is None:
+    summary_path = Path(summary_path)
+    if not summary_path.exists():
         return None
-    headers = table["headers"]
-    i_target = col_index(headers, "target", "gene")
-    i_agent = col_index(headers, "agent")
-    i_phase = col_index(headers, "phase")
-    i_tumor = col_index(headers, "tumor-source", "tumor-attributed", "tumor source")
-    i_interp = col_index(headers, "interpretation")
+
+    in_therapy_section = False
     rows: List[List[str]] = []
-    seen: set = set()
-    for cells in table["rows"]:
-        target = cell(cells, i_target)
-        if not target or target in seen:
+    bullet = re.compile(r"^- \*\*([^*]+)\*\*\s+[—-]\s+(.+)$")
+    recommendation = re.compile(
+        r"^(.*?)\s+\((Approved|Phase\s+\d(?:/\d)?|"
+        r"Off-label\s*/\s*transfer rationale)(?:,\s*[^)]*)?\)\.\s*(.*)$",
+        re.IGNORECASE,
+    )
+    for raw in summary_path.read_text(errors="replace").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("## "):
+            heading = clean_markdown(stripped.lstrip("# ")).lower()
+            if in_therapy_section and heading != "top candidate therapies":
+                break
+            in_therapy_section = heading == "top candidate therapies"
             continue
-        seen.add(target)
-        agent = cell(cells, i_agent)
-        phase = cell(cells, i_phase)
-        agent_phase = agent + (f" · {phase}" if phase else "")
+        if not in_therapy_section:
+            continue
+        match = bullet.match(stripped)
+        if not match:
+            continue
+
+        target = clean_markdown(match.group(1))
+        body = match.group(2).strip()
+        parsed = recommendation.match(body)
+        if parsed:
+            agent = clean_markdown(parsed.group(1))
+            phase = clean_markdown(parsed.group(2))
+            interpretation = clean_markdown(parsed.group(3))
+        else:
+            agent = lead_clause(body, max_chars=80)
+            phase = ""
+            interpretation = body
+
+        tumor_match = re.search(
+            r"([0-9.]+)\s+tumor-source bulk TPM\s+"
+            r"\(model interval\s+([^)]+)\)",
+            interpretation,
+            re.IGNORECASE,
+        )
+        context_match = re.search(
+            r"target RNA is context only\s+\(bulk\s+([0-9.]+)\s+TPM",
+            interpretation,
+            re.IGNORECASE,
+        )
+        if tumor_match:
+            tumor = f"{tumor_match.group(1)} ({tumor_match.group(2)})"
+        elif context_match:
+            tumor = f"{context_match.group(1)} bulk; context only"
+        else:
+            tumor = "—"
         rows.append(
             [
                 target,
-                agent_phase or "—",
-                cell(cells, i_tumor) or "—",
-                lead_clause(cell(cells, i_interp)) or "—",
+                " · ".join(part for part in (agent, phase) if part),
+                tumor,
+                lead_clause(interpretation),
             ]
         )
         if len(rows) >= 3:
             break
+
     if not rows:
         return None
-    columns = [
-        ["Target", 15],
-        ["Agent / phase", 33],
-        ["Tumor-src TPM", 20],
-        ["Eligibility / RNA source", 44],
-    ]
-    return {"columns": columns, "rows": rows}
+    return {
+        "columns": [
+            ["Target", 15],
+            ["Recommendation", 38],
+            ["Tumor-src TPM", 20],
+            ["Eligibility / RNA source", 44],
+        ],
+        "rows": rows,
+    }
 
 
 def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
@@ -623,7 +659,7 @@ def build_report_document(
         "headline": headline,
         "records": records,
         "highlights": highlight_lines(summary_path, analysis_path),
-        "therapy": _therapy_table(analyze_dir, prefix),
+        "therapy": parse_therapy_recommendations(summary_path),
         "targets": _priority_target_table(analyze_dir, prefix),
         "figures": build_figure_manifest(
             analyze_dir,

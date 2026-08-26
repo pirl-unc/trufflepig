@@ -108,6 +108,19 @@ _SUMMARY_WITH_ATTR_MD = """\
 | BRAF | 9.2 | 1.33 | 14% | myeloid | 1.87 | RNA is context only |
 """
 
+_SUMMARY_WITH_THERAPIES_MD = """\
+# Sample coad_medoid
+
+## Top candidate therapies
+
+### Approved / disease-matched
+
+- **CD274** — pembrolizumab (Approved, MSI-H / dMMR mCRC). target expression is not the eligibility criterion — confirm MSI-H / dMMR status; target RNA is context only (bulk 2.5 TPM; it does not establish eligibility).
+- **CEACAM5** — labetuzumab govitecan (Phase 2, CEACAM5+ mCRC). tumor-supported; 847 tumor-source bulk TPM (model interval 353-895); mid-clinical ADC.
+- **EGFR** — cetuximab (Approved, RAS-WT mCRC). background-dominant; 0 tumor-source bulk TPM (model interval 0-3); approved antibody.
+- **BRAF** — encorafenib (Approved, BRAF V600E mCRC). target expression is not the eligibility criterion; target RNA is context only (bulk 9.2 TPM; it does not establish eligibility).
+"""
+
 
 def test_parse_markdown_tables_tags_sections_and_strips_separator(tmp_path):
     md = tmp_path / "x-analysis.md"
@@ -122,17 +135,22 @@ def test_parse_markdown_tables_tags_sections_and_strips_separator(tmp_path):
     assert table["rows"][0][0] == "CD274"  # markdown bold stripped
 
 
-def test_therapy_table_dedups_targets_and_limits_to_three(tmp_path):
-    (tmp_path / "s-analysis.md").write_text(_ANALYSIS_MD)
-    table = rd._therapy_table(tmp_path, "s")
+def test_therapy_recommendations_follow_summary_and_limit_to_three(tmp_path):
+    summary = tmp_path / "s-summary.md"
+    summary.write_text(_SUMMARY_WITH_THERAPIES_MD)
+    table = rd.parse_therapy_recommendations(summary)
     cols, rows = table["columns"], table["rows"]
-    assert [c[0] for c in cols] == ["Target", "Agent / phase", "Tumor-src TPM", "Eligibility / RNA source"]
-    # EGFR appears twice in the source but is deduped; capped at 3 rows.
+    assert [c[0] for c in cols] == [
+        "Target",
+        "Recommendation",
+        "Tumor-src TPM",
+        "Eligibility / RNA source",
+    ]
     assert [r[0] for r in rows] == ["CD274", "CEACAM5", "EGFR"]
     assert rows[0][1] == "pembrolizumab · Approved"
-    assert rows[0][2] == "0 (0-0)"  # tumor-source TPM column, not bulk
+    assert rows[0][2] == "2.5 bulk; context only"
     # leading actionable clause only, not the whole eligibility tail
-    assert rows[0][3] == "target expression is not the eligibility criterion"
+    assert rows[0][3].startswith("target expression is not the eligibility criterion")
     assert rows[1][3] == "tumor-supported"
 
 
@@ -202,8 +220,9 @@ def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     b = _load_pdf_builder()
     # A report with no therapy/target tables (the local-sweep safety case): the
     # extractors return None and the PDF still renders from the document.
-    (tmp_path / "s-summary.md").write_text("# Sample s\n\n- **Cancer call:** SARC\n")
-    assert rd._therapy_table(tmp_path, "s") is None
+    summary = tmp_path / "s-summary.md"
+    summary.write_text("# Sample s\n\n- **Cancer call:** SARC\n")
+    assert rd.parse_therapy_recommendations(summary) is None
     assert rd._priority_target_table(tmp_path, "s") is None
     view = build_report_view(
         {

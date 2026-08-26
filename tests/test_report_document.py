@@ -32,6 +32,13 @@ _SUMMARY = """# Summary
 **Mismatch-repair RNA context:** MMR ensemble favors proficient.
 **Disease state:** castrate-resistant pattern.
 
+## Top candidate therapies
+
+### Approved / disease-matched
+
+- **FOLH1** — lutetium-177 PSMA (Approved, mCRPC). tumor-supported; 128 tumor-source bulk TPM (model interval 100-150); guideline-standard approved pathway.
+- **AR** — enzalutamide (Approved, mCRPC). mixed-source; 48 tumor-source bulk TPM (model interval 40-50); guideline-standard approved pathway.
+
 ## Notable biomarker outliers
 
 - FOLH1 - amplified, top 2%.
@@ -254,11 +261,9 @@ def test_empty_dir_therapy_and_targets_are_none(tmp_path):
     assert all(f["present"] is False for f in doc["figures"])
 
 
-# Issue #105: when the analysis markdown splits Therapy Prioritization into a
-# "Sample-supported" active subsection and an "Audit-only" subsection (background-
-# attributed disease-curation rows), the PDF therapy shortlist must read only the
-# active subsection — otherwise a host-attributed FGFR3/erdafitinib row would
-# still surface in the PDF as if it were an expression-supported target.
+# The detailed analysis contains a broader therapy landscape than the reader
+# summary. The structured document must reproduce the summary decision exactly
+# rather than independently selecting from the broader table.
 _ANALYSIS_AUDIT_SPLIT = """# Analysis
 
 ## Therapy Prioritization
@@ -279,18 +284,21 @@ These rows remain visible as disease-curation provenance or negative evidence.
 """
 
 
-def test_therapy_table_reads_active_subsection_not_audit_only(tmp_path):
+def test_therapy_recommendations_follow_summary_not_broader_analysis(tmp_path):
     (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
     (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_AUDIT_SPLIT)
     (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
 
-    table = rd._therapy_table(tmp_path, _PREFIX)
+    table = rd.parse_therapy_recommendations(
+        tmp_path / f"{_PREFIX}-summary.md"
+    )
     assert table is not None
     targets = {row[0] for row in table["rows"]}
-    # Active row is surfaced; the host-attributed audit-only row is not.
-    assert "FOLH1" in targets
+    assert targets == {"FOLH1", "AR"}
     assert "FGFR3" not in targets
     assert "erdafitinib" not in {cell for row in table["rows"] for cell in row}
+    assert table["rows"][0][1] == "lutetium-177 PSMA · Approved"
+    assert table["rows"][0][2] == "128 (100-150)"
 
 
 _ANALYSIS_ALL_AUDIT = """# Analysis
@@ -309,8 +317,15 @@ _ANALYSIS_ALL_AUDIT = """# Analysis
 """
 
 
-def test_therapy_table_is_none_when_only_audit_only_rows(tmp_path):
-    # If every curated therapy row is audit-only (active subsection has no table),
-    # the PDF shortlist is empty rather than falling back to the audit rows.
+def test_therapy_recommendations_are_none_when_summary_shortlist_is_empty(tmp_path):
+    summary = """# Summary
+
+## Top candidate therapies
+
+*Therapy shortlist is empty: no curated row qualified.*
+"""
+    (tmp_path / f"{_PREFIX}-summary.md").write_text(summary)
     (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_ALL_AUDIT)
-    assert rd._therapy_table(tmp_path, _PREFIX) is None
+    assert rd.parse_therapy_recommendations(
+        tmp_path / f"{_PREFIX}-summary.md"
+    ) is None
