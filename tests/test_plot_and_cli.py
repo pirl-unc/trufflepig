@@ -587,6 +587,7 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     # retired in 4.41.0 as ~80% redundant with analysis.md. The
     # content below is now only checked in analysis.md.
     detailed = (tmp_path / "sample-analysis.md").read_text()
+    assert "Working cancer call**: COAD (Colon Adenocarcinoma) (provisional" in detailed
     assert "not literal" in detailed  # tissue-score caveat
     assert "Retained alternatives" in detailed
     assert "Broad family context" in detailed

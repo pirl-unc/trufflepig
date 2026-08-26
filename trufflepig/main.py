@@ -8575,14 +8575,18 @@ def _generate_text_reports(
         lines.append("- " + rescue_line)
     if call_summary.get("label_options"):
         active_label = call_summary["label_options"][0]
-        if len(call_summary["label_options"]) == 1:
-            lines.append(f"- **Working cancer call**: {_cancer_label(active_label)}.")
-        else:
+        call_is_provisional = (
+            report_view.call_confidence.tier == "low"
+            or len(call_summary["label_options"]) > 1
+        )
+        if call_is_provisional:
             lines.append(
                 f"- **Working cancer call**: {_cancer_label(active_label)} "
                 "(provisional; retained alternatives are summarized under "
                 "Cancer-Type Differential)."
             )
+        else:
+            lines.append(f"- **Working cancer call**: {_cancer_label(active_label)}.")
     context_line = _cancer_type_context_line(cancer_type_context)
     if context_line:
         lines.append(context_line)

@@ -225,3 +225,28 @@ def test_full_report_audit_rejects_zero_width_purity_interval(tmp_path):
     )
     assert issue["severity"] == "error"
     assert "70%–70%" in issue["detail"]
+
+
+def test_full_report_audit_requires_matching_provisional_status(tmp_path):
+    paths = _write_report_tree(
+        tmp_path,
+        "**Working cancer call**: READ (Rectum Adenocarcinoma).\n",
+    )
+    paths["summary"].write_text(
+        "**Cancer call:** READ (Rectum Adenocarcinoma) — "
+        "**low confidence, provisional**\n"
+    )
+
+    issues = _sample_issues(
+        sample_id="sample",
+        expected="READ|CRC",
+        paths=paths,
+        compat=_compat(),
+    )
+
+    issue = next(
+        issue
+        for issue in issues
+        if issue["category"] == "cancer_call_provisional_status_mismatch"
+    )
+    assert issue["severity"] == "error"

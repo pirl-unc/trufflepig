@@ -303,6 +303,28 @@ def _sample_issues(
 
     summary_call = _summary_call(summary_text)
     working_codes = _working_codes(analysis_text)
+    _analysis_calls, analysis_provisional = _calls_of(paths["analysis"])
+    summary_call_line = next(
+        (
+            line
+            for line in summary_text.splitlines()
+            if line.startswith("**Cancer call:**")
+        ),
+        "",
+    )
+    summary_provisional = "provisional" in summary_call_line.lower()
+    if summary_call and summary_provisional != analysis_provisional:
+        issues.append(
+            {
+                "sample": sample_id,
+                "severity": "error",
+                "category": "cancer_call_provisional_status_mismatch",
+                "detail": (
+                    f"summary provisional={summary_provisional}; "
+                    f"analysis provisional={analysis_provisional}"
+                ),
+            }
+        )
     if summary_call and working_codes and summary_call not in working_codes:
         issues.append(
             {
