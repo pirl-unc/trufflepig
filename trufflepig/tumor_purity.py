@@ -2397,6 +2397,10 @@ def plot_tumor_purity(
         result = estimate_tumor_purity(df_gene_expr, cancer_type=cancer_type)
     else:
         result = purity_result
+    purity_is_unresolved = (
+        str(result.get("quantitative_status") or "resolved")
+        == "discordant_estimators"
+    )
     cancer_code = result["cancer_type"]
     reference_code = result.get("reference_cancer_type") or cancer_code
     comp = result["components"]
@@ -2444,7 +2448,11 @@ def plot_tumor_purity(
         component_title = "Purity components"
         summary_title = "Tumor purity estimate"
         signature_label = "Tumor signature"
-        overall_label = "Overall estimate"
+        overall_label = (
+            "Operational scenario\n(not consensus)"
+            if purity_is_unresolved
+            else "Overall estimate"
+        )
         if bulk_reference:
             left_title = (
                 f"{reference_code} reference signature gene purity estimates\n"
@@ -2687,11 +2695,21 @@ def plot_tumor_purity(
     ax2.spines["top"].set_visible(False)
     ax2.spines["right"].set_visible(False)
 
+    if purity_is_unresolved and result["overall_estimate"] is not None:
+        summary = (
+            f"Quantitative purity unresolved — operational scenario: "
+            f"{result['overall_estimate']:.0%} "
+            f"[{result['overall_lower']:.0%}–{result['overall_upper']:.0%}]"
+        )
+    elif result["overall_estimate"] is not None:
+        summary = (
+            f"{summary_title}: {result['overall_estimate']:.0%} "
+            f"[{result['overall_lower']:.0%}–{result['overall_upper']:.0%}]"
+        )
+    else:
+        summary = f"{summary_title}: N/A"
     fig.suptitle(
-        f"{summary_title}: {result['overall_estimate']:.0%} "
-        f"[{result['overall_lower']:.0%}–{result['overall_upper']:.0%}]"
-        if result["overall_estimate"] is not None
-        else f"{summary_title}: N/A",
+        summary,
         fontsize=13,
         fontweight="bold",
         y=1.02,
@@ -2767,6 +2785,12 @@ def plot_purity_method_comparison(
     import matplotlib.pyplot as plt
 
     comp = purity_result.get("components", {}) or {}
+    purity_status = str(
+        getattr(report_view, "purity_status", None)
+        or purity_result.get("quantitative_status")
+        or "resolved"
+    )
+    purity_is_unresolved = purity_status == "discordant_estimators"
     cancer_code = purity_result.get("cancer_type") or ""
     tcga_median = purity_result.get("tcga_median_purity")
     reference_source = str(purity_result.get("reference_expression_source") or "")
@@ -2931,7 +2955,11 @@ def plot_purity_method_comparison(
     if overall is not None:
         rows.append(
             (
-                "Final estimate",
+                (
+                    "Operational scenario (not consensus)"
+                    if purity_is_unresolved
+                    else "Final estimate"
+                ),
                 float(overall),
                 _safe_float(overall_lower),
                 _safe_float(overall_upper),
@@ -3033,7 +3061,17 @@ def plot_purity_method_comparison(
     ax.spines["right"].set_visible(False)
 
     if title is None:
-        if (
+        if purity_is_unresolved and overall is not None:
+            title = (
+                f"Purity estimators disagree — {cancer_code} · "
+                f"operational scenario {overall * 100:.0f}%"
+            )
+            if overall_lower is not None and overall_upper is not None:
+                title += (
+                    f" (range {overall_lower * 100:.0f}–"
+                    f"{overall_upper * 100:.0f}%)"
+                )
+        elif (
             overall is not None
             and overall_lower is not None
             and overall_upper is not None
@@ -5135,7 +5173,10 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
 
 
 # Shared with brief.py's summary markdown so figure and text route through one read surface.
-from .report_view import finalized_purity_headline as _finalized_purity_headline
+from .report_view import (
+    finalized_purity_context as _finalized_purity_context,
+    finalized_purity_headline as _finalized_purity_headline,
+)
 
 
 def plot_sample_summary(
@@ -5255,15 +5296,10 @@ def plot_sample_summary(
     # this patient-facing panel can never draw a stale candidate purity; the composition-detail
     # components below still come from the live purity dict. See _finalized_purity_headline.
     overall, purity_lo, purity_hi = _finalized_purity_headline(analysis)
+    purity_status, purity_scenarios = _finalized_purity_context(analysis)
+    purity_is_unresolved = purity_status == "discordant_estimators"
     stromal_enr = purity["components"]["stromal"]["enrichment"]
     immune_enr = purity["components"]["immune"]["enrichment"]
-
-    # Stacked composition bar
-    tumor_frac = overall if overall else 0
-    stromal_frac = min(
-        stromal_enr / (stromal_enr + immune_enr + 0.001), 1 - tumor_frac
-    ) * (1 - tumor_frac)
-    immune_frac = 1 - tumor_frac - stromal_frac
 
     if sample_mode == "heme":
         main_label = "Malignant-like"
@@ -5287,29 +5323,49 @@ def plot_sample_summary(
         comp_xlabel = "Estimated composition (%)"
         detail_prefix = "Tumor purity"
 
-    ax2.barh(
-        0,
-        tumor_frac * 100,
-        color="#2166ac",
-        height=0.5,
-        label=f"{main_label} ({tumor_frac:.0%})",
-    )
-    ax2.barh(
-        0,
-        stromal_frac * 100,
-        left=tumor_frac * 100,
-        color="#d6604d",
-        height=0.5,
-        label=f"{stromal_label} ({stromal_frac:.0%})",
-    )
-    ax2.barh(
-        0,
-        immune_frac * 100,
-        left=(tumor_frac + stromal_frac) * 100,
-        color="#4393c3",
-        height=0.5,
-        label=f"{immune_label} ({immune_frac:.0%})",
-    )
+    if purity_is_unresolved:
+        # Do not turn an operational 5% scenario into a definitive 95%
+        # non-tumor composition. The underlying decomposition remains available
+        # in audit plots, but this summary panel abstains from a consensus bar.
+        ax2.barh(
+            0,
+            100,
+            color="#9e9e9e",
+            height=0.5,
+            hatch="//",
+            label="Composition unresolved",
+        )
+        comp_title += " — Purity Unresolved"
+        comp_xlabel = "No consensus tumor / non-tumor fraction assigned"
+    else:
+        tumor_frac = overall if overall else 0
+        stromal_frac = min(
+            stromal_enr / (stromal_enr + immune_enr + 0.001), 1 - tumor_frac
+        ) * (1 - tumor_frac)
+        immune_frac = 1 - tumor_frac - stromal_frac
+        ax2.barh(
+            0,
+            tumor_frac * 100,
+            color="#2166ac",
+            height=0.5,
+            label=f"{main_label} ({tumor_frac:.0%})",
+        )
+        ax2.barh(
+            0,
+            stromal_frac * 100,
+            left=tumor_frac * 100,
+            color="#d6604d",
+            height=0.5,
+            label=f"{stromal_label} ({stromal_frac:.0%})",
+        )
+        ax2.barh(
+            0,
+            immune_frac * 100,
+            left=(tumor_frac + stromal_frac) * 100,
+            color="#4393c3",
+            height=0.5,
+            label=f"{immune_label} ({immune_frac:.0%})",
+        )
 
     ax2.set_xlim(0, 100)
     ax2.set_yticks([])
@@ -5319,10 +5375,36 @@ def plot_sample_summary(
     # Add text annotations below (headline CI from the frozen snapshot, same source as `overall`)
     lo = purity_lo
     hi = purity_hi
-    details = [
-        f"{detail_prefix}: {overall:.0%}"
-        + (f" [{lo:.0%}–{hi:.0%}]" if lo is not None else "")
-    ]
+    if purity_is_unresolved:
+        operational = f"Operational model: {overall:.0%}"
+        if lo is not None and hi is not None:
+            operational += f" [{lo:.0%}–{hi:.0%}]"
+        source_labels = {
+            "background_residual": "background residual",
+            "lineage_panel": "matched-normal lineage",
+            "signature": "upstream expression",
+        }
+        scenario_values = []
+        for source, estimate, lower, upper in purity_scenarios:
+            if estimate is None:
+                continue
+            value = f"{estimate:.0%}"
+            if lower is not None and upper is not None:
+                value += f" [{lower:.0%}–{upper:.0%}]"
+            scenario_values.append(
+                f"{source_labels.get(source, source.replace('_', ' '))} {value}"
+            )
+        details = [
+            f"{detail_prefix}: quantitatively unresolved",
+            operational + " (not consensus)",
+        ]
+        if scenario_values:
+            details.append("Scenarios: " + "; ".join(scenario_values))
+    else:
+        details = [
+            f"{detail_prefix}: {overall:.0%}"
+            + (f" [{lo:.0%}–{hi:.0%}]" if lo is not None else "")
+        ]
     if sample_mode == "solid":
         tcga_median = purity.get("tcga_median_purity")
         tcga_median_text = (

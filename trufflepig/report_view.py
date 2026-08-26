@@ -64,6 +64,10 @@ class ReportView:
     purity_hi: Optional[float]
     purity_method: Optional[str]  # integration source, e.g. "estimate+decomposition"
     purity_confidence: str
+    purity_status: str  # resolved | discordant_estimators
+    purity_scenarios: Tuple[
+        Tuple[str, Optional[float], Optional[float], Optional[float]], ...
+    ]
 
     sample_mode: str
     sample_id: Optional[str] = None
@@ -95,6 +99,26 @@ def finalized_purity_headline(analysis):
     )
 
 
+def finalized_purity_context(analysis):
+    """Return frozen ``(status, scenarios)`` alongside the purity headline.
+
+    A scenario is ``(source, estimate, lower, upper)``. Keeping this on the
+    same immutable surface as :func:`finalized_purity_headline` prevents a
+    figure from presenting an operational model as consensus after text
+    reports have already declared estimator disagreement.
+    """
+    purity = (analysis or {}).get("purity") or {}
+    view = (analysis or {}).get("report_view")
+    status = getattr(view, "purity_status", None) if view is not None else None
+    scenarios = (
+        getattr(view, "purity_scenarios", None) if view is not None else None
+    )
+    return (
+        str(status or purity.get("quantitative_status") or "resolved"),
+        scenarios if scenarios is not None else _purity_scenarios(purity),
+    )
+
+
 def _purity_method(purity: dict) -> Optional[str]:
     source = purity.get("purity_source")
     if source:
@@ -102,6 +126,30 @@ def _purity_method(purity: dict) -> Optional[str]:
     integration = (purity.get("components") or {}).get("integration") or {}
     src = integration.get("source")
     return str(src) if src else None
+
+
+def _purity_scenarios(purity: dict):
+    scenarios = []
+    for row in purity.get("estimator_scenarios") or ():
+        if not hasattr(row, "get"):
+            continue
+
+        def _number(key):
+            value = row.get(key)
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        scenarios.append(
+            (
+                str(row.get("source") or "unspecified"),
+                _number("estimate"),
+                _number("lower"),
+                _number("upper"),
+            )
+        )
+    return tuple(scenarios)
 
 
 def _alternatives(analysis) -> Tuple[Tuple[str, float], ...]:
@@ -165,6 +213,8 @@ def build_report_view(analysis, sample_id: Optional[str] = None) -> ReportView:
         purity_confidence=str(
             getattr(purity_confidence_for_analysis(analysis), "tier", "unknown")
         ),
+        purity_status=str(purity.get("quantitative_status") or "resolved"),
+        purity_scenarios=_purity_scenarios(purity),
         sample_mode=str(analysis.get("sample_mode") or ""),
         sample_id=sample_id,
     )

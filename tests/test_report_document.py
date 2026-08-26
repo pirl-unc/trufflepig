@@ -135,6 +135,55 @@ def test_headline_purity_agrees_with_parsed_purity_record(tmp_path):
     assert f"{round(doc['headline']['purity'] * 100)}%" in purity_record  # "10%"
 
 
+def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_path):
+    _write_reports(tmp_path)
+    view = build_report_view(
+        {
+            "cancer_type": "READ",
+            "cancer_name": "Rectum Adenocarcinoma",
+            "purity": {
+                "overall_estimate": 0.05,
+                "overall_lower": 0.01,
+                "overall_upper": 0.12,
+                "quantitative_status": "discordant_estimators",
+                "estimator_scenarios": [
+                    {
+                        "source": "lineage_panel",
+                        "estimate": 0.05,
+                        "lower": 0.01,
+                        "upper": 0.12,
+                    },
+                    {
+                        "source": "signature",
+                        "estimate": 0.43,
+                        "lower": 0.32,
+                        "upper": 0.55,
+                    },
+                ],
+            },
+            "top_cancers": [("READ", 1.0)],
+            "sample_mode": "solid",
+        }
+    )
+
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=view)
+    figures = {row["suffix"]: row for row in doc["figures"]}
+
+    assert doc["headline"]["purity_status"] == "discordant_estimators"
+    assert doc["headline"]["purity_scenarios"][1] == (
+        "signature",
+        0.43,
+        0.32,
+        0.55,
+    )
+    assert "no consensus tumor/non-tumor fraction" in figures[
+        "sample-summary.png"
+    ]["caption"]
+    assert "not a fused consensus estimate" in figures["purity-methods.png"][
+        "caption"
+    ]
+
+
 def test_headline_falls_back_to_records_without_report_view(tmp_path):
     # Standalone build (no ReportView): the headline is derived from the parsed
     # summary records so the document is still self-describing.

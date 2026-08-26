@@ -1602,6 +1602,50 @@ def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     assert "Malignant-lineage fraction estimate" in fig._suptitle.get_text()
 
 
+def test_plot_tumor_purity_labels_discordant_result_as_non_consensus():
+    purity = {
+        "cancer_type": "READ",
+        "tcga_median_purity": 0.6,
+        "reference_expression_source": "pan_cancer",
+        "overall_estimate": 0.05,
+        "overall_lower": 0.01,
+        "overall_upper": 0.12,
+        "quantitative_status": "discordant_estimators",
+        "components": {
+            "signature": {
+                "per_gene": [],
+                "purity": None,
+                "lower": None,
+                "upper": None,
+                "genes": [],
+            },
+            "lineage": {
+                "per_gene": [],
+                "purity": None,
+                "lower": None,
+                "upper": None,
+                "genes": [],
+            },
+            "stromal": {"n_genes": 10, "enrichment": 4.0},
+            "immune": {"n_genes": 10, "enrichment": 3.0},
+            "estimate_purity": None,
+            "decomposition": {"mode": "solid", "residual_fraction": 0.05},
+        },
+    }
+    frame = pd.DataFrame(
+        {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
+    )
+
+    fig, _ = purity_mod.plot_tumor_purity(
+        frame, cancer_type="READ", sample_mode="solid", purity_result=purity
+    )
+
+    assert "Quantitative purity unresolved" in fig._suptitle.get_text()
+    labels = [label.get_text() for label in fig.axes[1].get_yticklabels()]
+    assert any("Operational scenario" in label for label in labels)
+    assert not any(label == "Overall estimate" for label in labels)
+
+
 def test_purity_plots_explain_rare_reference_and_use_physical_residual():
     """Rare tumor-only references must not manufacture 100% ESTIMATE/NNLS
     rows or claim that no genes exist when a lineage panel is available."""
@@ -1698,6 +1742,67 @@ def test_plot_sample_summary_is_mode_aware(monkeypatch):
     assert fig.axes[1].get_title() == "Heme Composition Context"
     assert fig.axes[2].get_title().startswith("Lineage / Background Context")
     assert "hematologic / lymphoid bulk" in fig._suptitle.get_text()
+
+
+def test_plot_sample_summary_abstains_from_composition_when_purity_is_unresolved():
+    from trufflepig.report_view import build_report_view
+
+    analysis = {
+        "cancer_type": "READ",
+        "cancer_name": "Rectum Adenocarcinoma",
+        "top_cancers": [("READ", 1.0), ("COAD", 0.8)],
+        "purity": {
+            "overall_estimate": 0.05,
+            "overall_lower": 0.01,
+            "overall_upper": 0.12,
+            "quantitative_status": "discordant_estimators",
+            "estimator_scenarios": [
+                {
+                    "source": "lineage_panel",
+                    "estimate": 0.05,
+                    "lower": 0.01,
+                    "upper": 0.12,
+                },
+                {
+                    "source": "signature",
+                    "estimate": 0.43,
+                    "lower": 0.32,
+                    "upper": 0.55,
+                },
+            ],
+            "tcga_median_purity": 0.70,
+            "components": {
+                "stromal": {"enrichment": 4.2},
+                "immune": {"enrichment": 0.9},
+            },
+        },
+        "tissue_scores": [("appendix", 0.77, 20)],
+        "mhc1": {"HLA-A": 40, "HLA-B": 55, "HLA-C": 30, "B2M": 200},
+        "mhc2": {},
+        "candidate_trace": [{"code": "READ"}, {"code": "COAD"}],
+        "sample_mode": "solid",
+    }
+    analysis["report_view"] = build_report_view(analysis)
+
+    fig, _analysis = purity_mod.plot_sample_summary(
+        pd.DataFrame(
+            {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
+        ),
+        cancer_type="READ",
+        sample_mode="solid",
+        analysis=analysis,
+    )
+
+    panel = fig.axes[1]
+    assert panel.get_title() == "Sample Composition — Purity Unresolved"
+    assert [text.get_text() for text in panel.get_legend().get_texts()] == [
+        "Composition unresolved"
+    ]
+    panel_text = "\n".join(text.get_text() for text in panel.texts)
+    assert "Tumor purity: quantitatively unresolved" in panel_text
+    assert "Operational model: 5% [1%–12%] (not consensus)" in panel_text
+    assert "upstream expression 43% [32%–55%]" in panel_text
+    assert "95%" not in panel_text
 
 
 def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():

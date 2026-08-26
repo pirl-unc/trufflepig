@@ -560,12 +560,37 @@ def report_view_headline(report_view) -> Optional[dict]:
         return None
 
 
-def build_figure_manifest(analyze_dir: Path, prefix: str) -> List[dict]:
+def build_figure_manifest(
+    analyze_dir: Path,
+    prefix: str,
+    *,
+    purity_status: str = "resolved",
+) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
     only does when the underlying belief passed threshold) and its resolved path."""
     manifest: List[dict] = []
+    unresolved_captions = {
+        "sample-summary.png": (
+            "One-page synthesis of the cancer-type call and the incompatible "
+            "purity scenarios; no consensus tumor/non-tumor fraction is assigned."
+        ),
+        "decomposition-composition.png": (
+            "Selected operational tumor/background model used for attribution; "
+            "not a resolved sample-composition measurement."
+        ),
+        "purity-methods.png": (
+            "Independent purity estimators support incompatible scenarios; the "
+            "operational value is not a fused consensus estimate."
+        ),
+        "purity.png": (
+            "Operational purity scenario and its within-estimator interval; "
+            "quantitative consensus is unresolved."
+        ),
+    }
     for suffix, title, caption in FIGURE_REGISTRY:
+        if purity_status == "discordant_estimators":
+            caption = unresolved_captions.get(suffix, caption)
         figure = find_figure(analyze_dir, prefix, suffix)
         present = figure is not None
         manifest.append(
@@ -617,7 +642,11 @@ def build_report_document(
         "highlights": highlight_lines(summary_path, analysis_path),
         "therapy": _therapy_table(analyze_dir, prefix),
         "targets": _priority_target_table(analyze_dir, prefix),
-        "figures": build_figure_manifest(analyze_dir, prefix),
+        "figures": build_figure_manifest(
+            analyze_dir,
+            prefix,
+            purity_status=str((headline or {}).get("purity_status") or "resolved"),
+        ),
     }
 
 

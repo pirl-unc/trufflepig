@@ -136,6 +136,64 @@ def test_provenance_composition_falls_back_to_decomp_when_no_headline():
     assert "**tumor 28%**" in md
 
 
+def test_provenance_abstains_from_consensus_composition_when_purity_is_unresolved(
+    tmp_path,
+):
+    from trufflepig.report_view import build_report_view
+
+    analysis = {
+        "sample_context": _Ctx(),
+        "cancer_type": "READ",
+        "cancer_name": "Rectum Adenocarcinoma",
+        "sample_mode": "solid",
+        "purity": {
+            "overall_estimate": 0.05,
+            "overall_lower": 0.01,
+            "overall_upper": 0.12,
+            "quantitative_status": "discordant_estimators",
+            "estimator_scenarios": [
+                {
+                    "source": "lineage_panel",
+                    "estimate": 0.05,
+                    "lower": 0.01,
+                    "upper": 0.12,
+                },
+                {
+                    "source": "signature",
+                    "estimate": 0.43,
+                    "lower": 0.32,
+                    "upper": 0.55,
+                },
+            ],
+        },
+    }
+    analysis["report_view"] = build_report_view(analysis)
+
+    md = build_provenance_md(
+        analysis,
+        _ranges_df(),
+        [_Decomp(purity=0.05)],
+        cancer_code="READ",
+    )
+
+    assert "**Quantitative purity is unresolved.**" in md
+    assert "matched-normal lineage model: 5% [1%–12%]" in md
+    assert "upstream expression model: 43% [32%–55%]" in md
+    assert "operational tumor model 5%" in md
+    assert "not a resolved sample-composition measurement" in md
+    assert "subtracts 95% as non-tumor" not in md
+    assert "quantitative tumor/non-tumor split remains unresolved" in md
+
+    out = tmp_path / "unresolved-provenance.png"
+    plot_provenance_funnel(
+        analysis,
+        _ranges_df(),
+        [_Decomp(purity=0.05)],
+        save_to_filename=str(out),
+    )
+    assert out.exists() and out.stat().st_size > 1000
+
+
 def test_provenance_handles_missing_decomposition():
     analysis = {
         "sample_context": _Ctx(),

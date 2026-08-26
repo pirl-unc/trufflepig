@@ -16,7 +16,11 @@ from trufflepig.confidence import (
     compute_call_confidence,
     purity_confidence_for_analysis,
 )
-from trufflepig.report_view import ReportView, build_report_view
+from trufflepig.report_view import (
+    ReportView,
+    build_report_view,
+    finalized_purity_context,
+)
 
 
 def _read_analysis():
@@ -57,6 +61,41 @@ def test_purity_method_falls_back_to_integration_source():
     del analysis["purity"]["purity_source"]
     view = build_report_view(analysis)
     assert view.purity_method == "estimate+decomposition"
+
+
+def test_report_view_freezes_discordant_purity_status_and_scenarios():
+    analysis = _read_analysis()
+    analysis["purity"].update(
+        {
+            "quantitative_status": "discordant_estimators",
+            "estimator_scenarios": [
+                {
+                    "source": "lineage_panel",
+                    "estimate": 0.10,
+                    "lower": 0.06,
+                    "upper": 0.16,
+                },
+                {
+                    "source": "signature",
+                    "estimate": 0.43,
+                    "lower": 0.32,
+                    "upper": 0.55,
+                },
+            ],
+        }
+    )
+
+    view = build_report_view(analysis)
+    analysis["report_view"] = view
+    analysis["purity"]["quantitative_status"] = "resolved"
+    analysis["purity"]["estimator_scenarios"] = []
+
+    assert view.purity_status == "discordant_estimators"
+    assert view.purity_scenarios[1] == ("signature", 0.43, 0.32, 0.55)
+    assert finalized_purity_context(analysis) == (
+        "discordant_estimators",
+        view.purity_scenarios,
+    )
 
 
 def test_alternatives_are_ranker_candidates_minus_the_headline():

@@ -451,6 +451,32 @@ def test_conflicting_coordinate_calls_fail_closed_for_therapy():
     )
 
 
+def test_coordinate_reconciliation_canonicalizes_primary_contig_aliases():
+    analysis = {
+        "variant_records": [
+            VariantRecord(
+                gene="BRAF",
+                variant=variant,
+                variant_type="mutation",
+                genome_build="GRCh38",
+                coordinates=(
+                    VariantCoordinate(contig, 140753336, ref="A", alt="T"),
+                ),
+            ).public_dict()
+            for contig, variant in (
+                ("7", "BRAF V600E"),
+                ("chr7", "BRAF V600E not detected"),
+            )
+        ]
+    }
+
+    records = variant_evidence_records(analysis)
+
+    assert len(records) == 1
+    assert records[0]["evidence_conflict"] is True
+    assert variant_evidence_for_gene(analysis, "BRAF") == []
+
+
 def test_structured_fusion_participants_drive_target_matching_without_prose_pair():
     record = VariantRecord(
         gene="ETV6",
@@ -492,6 +518,41 @@ def test_same_fusion_from_two_interfaces_is_one_variant():
 
 def test_conflicting_cross_interface_fusion_calls_do_not_enable_therapy():
     negative = _record("ETV6-NTRK3 fusion not detected")
+    positive = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
+    analysis = {
+        "variant_records": [negative],
+        "fusion_records": [positive],
+    }
+
+    records = variant_evidence_records(analysis)
+
+    assert len(records) == 1
+    assert records[0]["evidence_conflict"] is True
+    assert records[0]["evidence_source_types"] == ["variant", "fusion"]
+    assert variant_evidence_for_gene(analysis, "NTRK3") == []
+    assert not supplied_variant_supports_target_row(
+        {
+            "symbol": "NTRK3",
+            "indication": "NTRK gene fusion-positive solid tumor",
+            "eligibility_basis": "tumor_agnostic_alteration",
+        },
+        analysis,
+    )
+
+
+def test_coordinate_fusion_reconciles_with_dedicated_fusion_by_pair():
+    negative = VariantRecord(
+        gene="ETV6",
+        genes=("ETV6", "NTRK3"),
+        variant="ETV6-NTRK3 fusion not detected",
+        variant_type="fusion",
+        result_status="not detected",
+        genome_build="GRCh38",
+        coordinates=(
+            VariantCoordinate("chr12", 12000000, role="5p_breakpoint"),
+            VariantCoordinate("15", 88000000, role="3p_breakpoint"),
+        ),
+    ).public_dict()
     positive = FusionRecord(gene_a="ETV6", gene_b="NTRK3").public_dict()
     analysis = {
         "variant_records": [negative],

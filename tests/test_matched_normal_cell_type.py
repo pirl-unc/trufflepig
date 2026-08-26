@@ -86,7 +86,14 @@ def test_all_leaf_tissues_either_covered_or_documented():
     from pirlygenes.gene_sets_cancer import cancer_type_registry
 
     reg = cancer_type_registry()
-    leaf = reg[reg["parent_code"].fillna("").astype(str).eq("")]
+    # Ontology-only candidates (for example the non-testicular GCT nodes) are
+    # intentionally not decomposition inputs until a classification reference
+    # is published.  Enforce matched-normal coverage on the production target
+    # surface rather than treating every vocabulary node as a runnable cancer.
+    classification_target = reg["is_classification_target"].fillna(False).astype(bool)
+    leaf = reg[
+        reg["parent_code"].fillna("").astype(str).eq("") & classification_target
+    ]
     all_tissues = set(leaf["primary_tissue"].dropna().astype(str))
 
     covered = set(MATCHED_NORMAL_CELL_TYPE) | set(MATCHED_NORMAL_CELL_TYPE_PROXY)

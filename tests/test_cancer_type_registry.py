@@ -292,10 +292,14 @@ def test_expanded_sarcomas_present():
     assert not missing, f"expanded-sarcoma codes missing: {missing}"
 
 
-def test_subtype_key_maps_sarc_subtypes_to_key_genes_entries():
-    """The subtype_key column must match the actual subtype values
-    used in cancer-key-genes.csv, otherwise the cancers CLI
-    subcommand will report bm=0 / tg=0 for curated subtypes."""
+def test_curated_subtype_entities_resolve_exact_or_parent_key_gene_tiles():
+    """Every subtype with key-gene metadata must resolve through the public API.
+
+    New panels may be keyed directly to an exact child entity (for example
+    ``SARC_IMT``), while older panels remain parent/subtype tiles.  Exact child
+    curation is authoritative and must not be mistaken for a missing legacy
+    tile.
+    """
     from pirlygenes.gene_sets_cancer import (
         cancer_biomarker_genes,
         cancer_therapy_targets,
@@ -305,14 +309,16 @@ def test_subtype_key_maps_sarc_subtypes_to_key_genes_entries():
     mapped = df[df["subtype_key"].fillna("").astype(str).ne("")]
     assert len(mapped) >= 7, "expected at least 7 rows with subtype_key populated"
     for _, row in mapped.iterrows():
+        code = row["code"]
         parent = row["parent_code"]
         subtype = row["subtype_key"]
-        bm = cancer_biomarker_genes(parent, subtype=subtype)
-        tg = cancer_therapy_targets(parent, subtype=subtype)
-        assert len(bm) > 0 or len(tg) > 0, (
-            f"subtype_key {parent}/{subtype} (code {row['code']}) has "
-            f"no key-genes rows — either the subtype_key is wrong or "
-            f"cancer-key-genes.csv is missing the tile"
+        exact_bm = cancer_biomarker_genes(code)
+        exact_tg = cancer_therapy_targets(code)
+        legacy_bm = cancer_biomarker_genes(parent, subtype=subtype)
+        legacy_tg = cancer_therapy_targets(parent, subtype=subtype)
+        assert any(map(len, (exact_bm, exact_tg, legacy_bm, legacy_tg))), (
+            f"subtype entity {code} has neither an exact key-gene panel nor "
+            f"a legacy {parent}/{subtype} tile"
         )
 
 

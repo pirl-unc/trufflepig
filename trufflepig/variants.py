@@ -111,6 +111,25 @@ def normalize_genome_build(value: object) -> str:
     )
 
 
+def normalize_variant_contig(value: object) -> str:
+    """Canonicalize recognized GRCh primary-contig aliases for comparison.
+
+    ``7`` and ``chr7`` (likewise X/Y and M/MT) identify the same locus. Unknown
+    alternate contigs are preserved verbatim rather than guessed.
+    """
+    contig = str(value or "").strip()
+    if not contig:
+        return ""
+    token = re.sub(r"^chr", "", contig, flags=re.IGNORECASE).upper()
+    if token.isdigit() and 1 <= int(token) <= 22:
+        return str(int(token))
+    if token in {"X", "Y"}:
+        return token
+    if token in {"M", "MT"}:
+        return "MT"
+    return contig
+
+
 @dataclass(frozen=True)
 class VariantCoordinate:
     """One 1-based genomic interval carried by a :class:`VariantRecord`."""
@@ -705,9 +724,36 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
 
 def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     variant_type = _text(record.get("variant_type")).lower() or "unknown"
+    # A fusion is biologically identified by its participating pair across both
+    # the generic variant and dedicated fusion interfaces. Coordinates remain
+    # provenance, but must not prevent a positive and negative report for that
+    # same pair from reconciling and failing closed.
+    if variant_type == "fusion":
+        for key in ("pair", "variant", "raw_name", "gene"):
+            match = _FUSION_PAIR_RE.search(_text(record.get(key)).upper())
+            if match:
+                pair = (match.group(1), match.group(2))
+                if _valid_fusion_pair_genes(pair):
+                    return ("fusion", *sorted(pair))
+        gene_a = _clean_gene(record.get("gene_a"))
+        gene_b = _clean_gene(record.get("gene_b"))
+        if gene_a and gene_b and gene_a != gene_b:
+            return ("fusion", *sorted((gene_a, gene_b)))
+        supplied_genes = record.get("genes") or ()
+        if isinstance(supplied_genes, str):
+            supplied_genes = (supplied_genes,)
+        participants = tuple(
+            dict.fromkeys(
+                gene
+                for gene in (_clean_gene(value) for value in supplied_genes)
+                if gene
+            )
+        )
+        if len(participants) >= 2:
+            return ("fusion", *sorted(participants[:2]))
     coordinates = tuple(
         (
-            _text(coordinate.get("contig")),
+            normalize_variant_contig(coordinate.get("contig")),
             coordinate.get("start"),
             coordinate.get("end"),
             _text(coordinate.get("ref")).upper(),
@@ -724,17 +770,6 @@ def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
             variant_type,
             *coordinates,
         )
-    if variant_type == "fusion":
-        for key in ("pair", "gene", "variant", "raw_name"):
-            match = _FUSION_PAIR_RE.search(_text(record.get(key)).upper())
-            if match:
-                pair = (match.group(1), match.group(2))
-                if _valid_fusion_pair_genes(pair):
-                    return ("fusion", *sorted(pair))
-        gene_a = _clean_gene(record.get("gene_a"))
-        gene_b = _clean_gene(record.get("gene_b"))
-        if gene_a and gene_b and gene_a != gene_b:
-            return ("fusion", *sorted((gene_a, gene_b)))
     gene = _clean_gene(record.get("gene"))
     if variant_type == "fusion" and gene:
         return ("fusion", gene)
