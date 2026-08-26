@@ -352,7 +352,12 @@ def _sample_issues(
                 }
             )
         else:
-            summary_therapy = parse_therapy_recommendations(paths["summary"])
+            summary_path = paths.get("summary")
+            summary_therapy = (
+                parse_therapy_recommendations(summary_path)
+                if summary_path is not None
+                else None
+            )
             if report_document.get("therapy") != summary_therapy:
                 issues.append(
                     {
