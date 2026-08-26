@@ -1145,6 +1145,43 @@ def test_low_confidence_call_punctuation_is_clean():
     assert "). —" not in working_line
 
 
+def test_fusion_scoped_low_confidence_call_remains_explicitly_provisional():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "NUTM",
+            "cancer_name": "NUT Carcinoma",
+            "candidate_trace": [
+                {
+                    "code": "NUTM",
+                    "support_geomean": 0.4,
+                    "signature_score": 0.4,
+                }
+            ],
+            "fit_quality": {
+                "label": "weak",
+                "message": "Top subtype candidates remain close",
+            },
+            "fusion_report_scope_inference": {
+                "cancer_type": "NUTM",
+                "expected_pair": "BRD4--NUTM1",
+            },
+        }
+    )
+
+    summary = build_brief(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="NUTM",
+        disease_state="",
+    )
+    cancer_line = next(
+        line for line in summary.splitlines() if line.startswith("**Cancer call:**")
+    )
+
+    assert "**low confidence, provisional**" in cancer_line
+
+
 def test_brief_excludes_absent_targets():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()

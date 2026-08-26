@@ -2640,11 +2640,6 @@ def build_summary(
         concise=True,
         include_reasons=False,
     )
-    rare_scope = analysis.get("rare_report_scope_inference") or {}
-    fusion_scope = analysis.get("fusion_report_scope_inference") or {}
-    if rare_scope or fusion_scope:
-        tier = getattr(call_tier, "tier", "unknown")
-        suffix = f" — **{tier} confidence**"
 
     # #171/#198: resolve subtype evidence separately from the report-scope
     # cancer label. The subtype signal is useful context, but rendering it
