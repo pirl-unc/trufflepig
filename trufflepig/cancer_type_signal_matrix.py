@@ -499,6 +499,14 @@ def build_cancer_type_signal_matrix(
                 "ontology_candidate_code"
             ),
             "decision_basis": residual_identity.get("decision_basis"),
+            "source_resolved_identity": residual_identity.get(
+                "source_resolved_identity"
+            ),
+            "background_attributed_expected_low_genes": (
+                residual_identity.get(
+                    "background_attributed_expected_low_genes"
+                )
+            ),
             "adjudication_eligible": residual_identity.get(
                 "adjudication_eligible"
             ),
@@ -519,9 +527,16 @@ def build_cancer_type_signal_matrix(
                 {
                     "template": row.get("template"),
                     "components": row.get("components"),
+                    "model_role": row.get("model_role"),
                     "realizations": row.get("realizations"),
                     "candidate_code": row.get("candidate_code"),
                     "panel_candidate": row.get("panel_candidate"),
+                    "complete_panel_or_background_candidate": row.get(
+                        "complete_panel_or_background_candidate"
+                    ),
+                    "background_attributed_expected_low_genes": row.get(
+                        "background_attributed_expected_low_genes"
+                    ),
                     "ontology_candidate": row.get("ontology_candidate"),
                 }
                 for row in (residual_identity.get("background_models") or ())

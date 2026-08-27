@@ -1763,8 +1763,8 @@ def test_invariant_residual_consensus_does_not_require_a_learned_entity():
     assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
 
 
-def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
-    """Host-resolved identity is compound evidence, not duplicated marker votes."""
+def test_source_resolved_residual_is_one_compound_identity_selector():
+    """Host-resolved identity is decisive without duplicating marker votes."""
 
     from trufflepig.cancer_type_evidence import (
         CancerTypeEvidence,
@@ -1817,9 +1817,6 @@ def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
     assert result.selected_by == "entity_evidence_consensus"
     consensus = result.details["entity_evidence_consensus"]
     assert consensus["source_resolved_identity_decisive"] is True
-    assert consensus["source_resolved_identity_corroborators"] == [
-        "learned_family_leader"
-    ]
     # The CRC panel is already part of residual identity and must not appear as
     # a second independent marker vote.
     marker_axis = next(
@@ -1830,14 +1827,14 @@ def test_source_resolved_residual_uses_learned_family_as_bulk_corroboration():
     assert marker_axis["available"] is False
 
 
-def test_source_resolved_residual_rejects_hierarchy_inconsistent_family_vote():
-    """A child stage cannot corroborate a cross-compartment residual call.
+def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
+    """A background-derived bulk compartment cannot veto resolved tumor RNA.
 
-    This exercises the report-label decision seam represented by a
-    smooth-muscle-rich sarcoma: the family view may prefer CRC, but that family
-    is semantically incompatible with the confident mesenchymal compartment.
-    The internally inconsistent child stage must not overturn the selected
-    sarcoma using the source-resolved residual exception.
+    This exercises the ASY decision seam without a sample-specific rule: a
+    smooth-muscle-rich bulk profile can coherently look mesenchymal while a
+    candidate-independent decomposition recovers a complete and invariant CRC
+    tumor program. The host-confounded compartment must not be counted as an
+    independent veto against the separated tumor identity.
     """
 
     from trufflepig.cancer_type_evidence import (
@@ -1887,9 +1884,14 @@ def test_source_resolved_residual_rejects_hierarchy_inconsistent_family_vote():
         },
     )
 
-    assert result is selected
+    assert result is candidate
+    assert result.selected_by == "entity_evidence_consensus"
     assert "decomposition_residual_identity" in candidate.evidence_sources
-    assert candidate.can_select_report_label is False
+    assert candidate.can_select_report_label is True
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["selected_votes"] >= consensus["candidate_votes"]
+    assert consensus["majority_decisive_candidate"] is False
 
 
 def test_residual_identity_preserves_explicit_entity_blockers():

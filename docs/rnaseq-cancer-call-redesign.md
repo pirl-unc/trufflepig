@@ -547,7 +547,15 @@ attribution, and therapy curation stay on the resolved branch. Ancestor or
 descendant decomposition rows are named explicitly as such and do not silently
 refine the report label.
 
-The result is one independent entity-consensus axis, not a direct selector.
+An ordinary invariant residual contributes one independent entity-consensus
+axis. A stricter source-resolved result can select the entity as one compound
+tumor-identity result when candidate-independent background subtraction makes
+a complete expected-high/expected-low panel agree with ontology identity and
+every usable background model agrees. Its internal panel and ontology views
+are not recounted as separate votes, and conflicting bulk axes are treated as
+possible host context rather than required corroboration. Persistent molecular
+or ontology vetoes still apply, and production accepts a changed scope only
+when a fresh decomposition fitted for that final scope reproduces the result.
 An invariant residual may add one parent-level entity to the small consensus
 beam. Cross-branch eligibility requires either a matching lineage panel or an
 ontology result whose identity is invariant across every usable background

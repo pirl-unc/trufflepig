@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -48,14 +49,19 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
             "current_code": "BLCA",
             "models_evaluated": 1,
             "realizations_evaluated": 5,
+            "source_resolved_identity": True,
+            "background_attributed_expected_low_genes": ["ALB"],
             "reason": "BLCA remained invariant across liver-host residuals",
             "background_models": [
                 {
                     "template": "met_liver",
                     "components": ["hepatocyte", "endothelial"],
+                    "model_role": "identity_background",
                     "realizations": 5,
                     "candidate_code": "BLCA",
                     "panel_candidate": "BLCA",
+                    "complete_panel_or_background_candidate": "BLCA",
+                    "background_attributed_expected_low_genes": ["ALB"],
                     "ontology_candidate": None,
                 }
             ],
@@ -166,6 +172,14 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     assert residual["predicted_code"] == "BLCA"
     assert residual["support_metric"] == "structural_unanimity"
     assert bool(residual["selects_report_label"]) is False
+    residual_details = json.loads(residual["details"])
+    assert residual_details["source_resolved_identity"] is True
+    assert residual_details["background_attributed_expected_low_genes"] == [
+        "ALB"
+    ]
+    assert residual_details["background_models"][0]["model_role"] == (
+        "identity_background"
+    )
 
     summary = build_signal_matrix_summary_markdown(matrix)
     assert "Final call" in summary

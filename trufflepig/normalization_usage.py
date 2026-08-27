@@ -106,7 +106,8 @@ NORMALIZATION_USAGE: dict[str, dict[str, object]] = {
             "error 5.9e-11, versus 0.013 for the best HK fit and 0.081 for percentile. Earlier "
             "bulk-cancer dilution scores were invalid as fraction truth because the TCGA cancer "
             "profiles already contain unknown normal tissue and TME. Percentile/log-cohort "
-            "residual identity remains a sequential, independent corroborator after NNLS."
+            "residual identity remains a sequential, independent tumor-identity result "
+            "after NNLS."
         ),
     },
     "input_scale_qc": {

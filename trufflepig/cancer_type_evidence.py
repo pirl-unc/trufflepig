@@ -14,7 +14,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -5436,9 +5436,10 @@ def _entity_consensus_candidate_beam(
 
     The hierarchy and quantifier-robust flat views may have different leaders.
     An invariant post-background identity may add one parent-level entity to
-    that small union, but is still only one consensus axis. Lower-ranked
-    learned tails remain audit-only. Every candidate retains the same
-    available-axis majority and hard-blocker requirements.
+    that small union, but is still only one consensus axis. A stronger
+    source-resolved identity can select without asking confounded bulk axes to
+    restate the same conclusion. Lower-ranked learned tails remain audit-only,
+    and every candidate retains the same hard-blocker requirements.
     """
 
     predictions = _learned_entity_prediction_codes(hierarchy_details)
@@ -5498,10 +5499,11 @@ def _entity_consensus_candidate_beam(
         candidate_lineage = _code_lineage_token(entity_code)
         # A parent-level residual result may corroborate a learned child as one
         # branch-level axis, but it did not originate that child hypothesis.
-        # Only the exact parent row appended above receives the residual-origin
-        # audit label and the corresponding cross-lineage admission path.
+        # Only the exact residual entity receives the residual-origin audit
+        # label and corresponding cross-lineage admission path, whether it was
+        # already in the learned beam or appended here.
         residual_origin = bool(
-            residual_prediction_appended
+            residual_code
             and raw_code == residual_code
             and entity_code == residual_code
         )
@@ -5838,9 +5840,12 @@ def _residual_identity_support(
 ) -> float:
     """Return one structural residual-identity vote for a compatible branch.
 
-    Residual identity is one consensus vote, never a standalone selector. A
-    cross-branch result must either have a matching lineage-panel program or a
-    fully audited ontology result invariant across every background model.
+    Ordinary invariant residual identity is one consensus vote. A
+    source-resolved result is stronger: it is a compound selector whose
+    positive/negative tumor program and ontology identity agree after
+    candidate-independent background subtraction. The consensus layer still
+    represents that compound result as one axis rather than duplicating its
+    internal evidence.
     """
 
     if not isinstance(residual_identity_evidence, Mapping):
@@ -5914,63 +5919,6 @@ def _residual_identity_is_source_resolved(
             residual_identity_evidence
         )
     )
-
-
-def _source_resolved_identity_corroborators(
-    candidate: CancerTypeEvidence,
-    selected: CancerTypeEvidence,
-    hierarchy_details: Mapping[str, Any],
-    axes: Iterable[Mapping[str, Any]],
-) -> tuple[str, ...]:
-    """Independent bulk views that agree with a source-resolved residual.
-
-    The residual object already integrates the curated positive/negative
-    program with candidate-independent background subtraction, so the bulk
-    marker axis is intentionally not counted again.  A separate whole-profile,
-    reference, composition, or learned-family result must still agree before a
-    cross-entity label can change.
-    """
-
-    corroborators = [
-        _clean(axis.get("axis"))
-        for axis in axes
-        if _clean(axis.get("preference")) == "candidate"
-        and _clean(axis.get("axis"))
-        not in {
-            _ENTITY_CONSENSUS_MARKER_AXIS,
-            _ENTITY_CONSENSUS_RESIDUAL_AXIS,
-        }
-    ]
-    top_family = _clean(
-        hierarchy_details.get("learned_expression_top_family_label")
-    )
-    if top_family:
-        try:
-            from .expression_classifier import _learned_family_for_code
-        except ImportError:
-            candidate_family = selected_family = ""
-        else:
-            candidate_family = _clean(
-                _learned_family_for_code(candidate.cancer_type)
-            )
-            selected_family = _clean(
-                _learned_family_for_code(selected.cancer_type)
-            )
-        top_compartment = _clean(
-            hierarchy_details.get("learned_expression_top_compartment_label")
-        )
-        candidate_path_consistent = _learned_hierarchy_path_consistent(
-            candidate.cancer_type,
-            family_label=top_family,
-            compartment_label=top_compartment,
-        )
-        if (
-            top_family == candidate_family
-            and top_family != selected_family
-            and candidate_path_consistent
-        ):
-            corroborators.append("learned_family_leader")
-    return tuple(dict.fromkeys(corroborators))
 
 
 def _qualified_residual_identity_candidate(
@@ -6219,25 +6167,16 @@ def _entity_evidence_consensus(
         residual_identity_evidence,
         candidate.cancer_type,
     )
-    source_resolved_corroborators = (
-        _source_resolved_identity_corroborators(
-            candidate,
-            selected,
-            hierarchy_details,
-            axes,
-        )
-        if source_resolved_identity and candidate_has_residual_vote
-        else ()
-    )
-    # This is not a plurality exception.  A source-resolved residual is a
-    # compound identity selector: every positive/negative tumor program agreed
-    # across a candidate-independent background beam, and a separate bulk view
-    # must corroborate it.  It is therefore adjudicated alongside, rather than
-    # pretending to be several independent votes inside, the majority rule.
+    # This is not a plurality exception. A source-resolved residual is one
+    # compound tumor-identity selector: the complete positive/negative marker
+    # program and ontology identity agree across a candidate-independent
+    # background beam. Requiring a second bulk vote would reintroduce the host
+    # RNA that the decomposition explicitly separated. The selector remains
+    # subject to persistent molecular/ontology blockers here and must reproduce
+    # after the final-scope decomposition refit in the production pipeline.
     source_resolved_decisive_candidate = bool(
         source_resolved_identity
         and candidate_has_residual_vote
-        and source_resolved_corroborators
     )
     decisive_candidate = bool(
         majority_decisive_candidate or source_resolved_decisive_candidate
@@ -6259,16 +6198,14 @@ def _entity_evidence_consensus(
         "source_resolved_identity_decisive": (
             source_resolved_decisive_candidate
         ),
-        "source_resolved_identity_corroborators": list(
-            source_resolved_corroborators
-        ),
         "decisive_candidate": decisive_candidate,
         "conflicted": bool(candidate_votes > 0 and selected_votes > 0),
         "decision_rule": (
             "a learned-view or invariant-residual entity plus independent "
             "evidence groups must win the available-axis majority; a complete "
-            "source-resolved residual may instead select only with separate "
-            "bulk corroboration"
+            "source-resolved residual may instead select as one compound "
+            "tumor-identity result, subject to hard blockers and final-scope "
+            "refit confirmation"
         ),
     }
 
