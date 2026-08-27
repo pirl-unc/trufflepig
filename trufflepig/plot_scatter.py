@@ -97,20 +97,20 @@ def _prepare_sample_vs_cancer_data(
             resolved_reference_code,
             resolved_reference_code,
         )
-        cohort_label = (
-            f"{cancer_label} cohort ({resolved_reference_code})"
+        cohort_axis_label = (
+            f"{cancer_label} ({resolved_reference_code}) cohort TPM"
             if resolved_reference_code == requested_cancer_type
             else (
-                f"{cancer_label} parent cohort ({resolved_reference_code}; "
-                f"requested {requested_cancer_type})"
+                f"{cancer_label} ({resolved_reference_code}) parent-cohort TPM — "
+                f"requested {requested_cancer_type}"
             )
         )
     else:
         cohort_cols = [c for c in ref.columns if c.endswith("_TPM")]
         ref["_ref_tpm"] = ref[cohort_cols].astype(float).mean(axis=1)
-        cohort_label = "Mean across available pan-cancer cohorts"
+        cohort_axis_label = "Mean pan-cancer cohort TPM"
         if requested_cancer_type:
-            cohort_label += f" (no {requested_cancer_type} pan-cancer cohort)"
+            cohort_axis_label += f" — no {requested_cancer_type} reference"
 
     ref_lookup = dict(
         zip(
@@ -166,7 +166,6 @@ def _prepare_sample_vs_cancer_data(
     cat_to_color = dict(zip(named_cats, palette))
 
     sample_label = "Sample TPM"
-    cohort_axis_label = f"{cohort_label} (TPM)"
 
     return plot_df, named_cats, cat_to_color, sample_label, cohort_axis_label
 

@@ -1913,12 +1913,12 @@ def test_background_tissue_plot_labels_model_proxy_without_claiming_origin():
     [
         (
             "SARC_LPS_UNSPEC",
-            "parent cohort (SARC; requested SARC_LPS_UNSPEC)",
+            "Sarcoma (SARC) parent-cohort TPM — "
+            "requested SARC_LPS_UNSPEC",
         ),
         (
             "NUTM",
-            "Mean across available pan-cancer cohorts "
-            "(no NUTM pan-cancer cohort)",
+            "Mean pan-cancer cohort TPM — no NUTM reference",
         ),
     ],
 )
@@ -1942,21 +1942,57 @@ def test_scatter_uses_an_honest_available_reference_fallback(
         lambda **_kwargs: ref.copy(),
     )
 
-    _plot_df, _cats, _colors, _sample_label, cohort_label = (
-        plot_scatter_mod._prepare_sample_vs_cancer_data(
-            pd.DataFrame(
-                {
-                    "gene_id": ["ENSG1"],
-                    "gene_display_name": ["GENE1"],
-                    "TPM": [10.0],
-                }
-            ),
-            {"markers": ["ENSG1"]},
-            cancer_type,
-        )
+    figures = plot_scatter_mod.plot_sample_vs_cancer(
+        pd.DataFrame(
+            {
+                "gene_id": ["ENSG1"],
+                "gene_display_name": ["GENE1"],
+                "TPM": [10.0],
+            }
+        ),
+        {"markers": ["ENSG1"]},
+        cancer_type,
+        num_labels_per_category=0,
     )
 
-    assert expected_label in cohort_label
+    cohort_label = figures["markers"].axes[0].get_ylabel()
+    assert cohort_label == expected_label
+    assert ") (" not in cohort_label
+    plot_scatter_mod.plt.close(figures["markers"])
+
+
+def test_scatter_axis_describes_exact_reference_and_unit_as_one_phrase(monkeypatch):
+    """Exact-cohort axes avoid adjacent parenthetical labels."""
+    ref = pd.DataFrame(
+        {
+            "Ensembl_Gene_ID": ["ENSG1"],
+            "Symbol": ["GENE1"],
+            "BRCA_TPM": [2.0],
+        }
+    )
+    monkeypatch.setattr(
+        plot_scatter_mod,
+        "pan_cancer_expression",
+        lambda **_kwargs: ref.copy(),
+    )
+
+    figures = plot_scatter_mod.plot_sample_vs_cancer(
+        pd.DataFrame(
+            {
+                "gene_id": ["ENSG1"],
+                "gene_display_name": ["GENE1"],
+                "TPM": [10.0],
+            }
+        ),
+        {"markers": ["ENSG1"]},
+        "BRCA",
+        num_labels_per_category=0,
+    )
+
+    cohort_label = figures["markers"].axes[0].get_ylabel()
+    assert cohort_label == "Breast Invasive Carcinoma (BRCA) cohort TPM"
+    assert ") (" not in cohort_label
+    plot_scatter_mod.plt.close(figures["markers"])
 
 
 def test_hierarchy_embedding_plot_adds_family_legend_and_neighbors(monkeypatch):
