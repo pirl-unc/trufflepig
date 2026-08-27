@@ -1,9 +1,10 @@
 """Normalize supplied exact or symbolic variants for analysis.
 
 A :class:`VariantRecord` represents an exact or symbolic assertion such as a
-small variant, ``EGFR KDD``, an amplification, or a fusion. Explicit coordinate
-fields are part of the follow-up contract in issue #141. Sample-level genomic
-states such as MSI-H are deliberately outside this contract.
+small variant, ``EGFR KDD``, an amplification, or a fusion. Coordinate-bearing
+records carry validated 1-based intervals and an explicit GRCh37 or GRCh38
+build. Sample-level genomic states such as MSI-H are deliberately outside this
+contract.
 
 The permissive table/text reader is retained for compatibility. New,
 source-specific adapters and coordinate provenance are tracked in issues #140
@@ -14,7 +15,9 @@ VCF or MAF parser.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from pathlib import Path
+import gzip
 import json
 import re
 from typing import Any, Iterable
@@ -88,6 +91,94 @@ _PATH_SUFFIX_RE = re.compile(
     r"\.(csv|tsv|txt|xlsx|xls|json|jsonl|maf|vcf)(?:\.gz)?$",
     re.IGNORECASE,
 )
+_GENOME_BUILD_ALIASES = {
+    "grch37": "GRCh37",
+    "hg19": "GRCh37",
+    "b37": "GRCh37",
+    "grch38": "GRCh38",
+    "hg38": "GRCh38",
+}
+
+
+def normalize_genome_build(value: object) -> str:
+    """Return one canonical genome-build label or an empty unknown value."""
+    build = str(value or "").strip()
+    if not build or build.lower() in {"nan", "<na>", "none"}:
+        return ""
+    compact = re.sub(r"[^a-z0-9]+", "", build.lower())
+    if compact in _GENOME_BUILD_ALIASES:
+        return _GENOME_BUILD_ALIASES[compact]
+    raise ValueError(
+        f"Unsupported genome build {build!r}; use GRCh37/hg19 or GRCh38/hg38"
+    )
+
+
+def normalize_variant_contig(value: object) -> str:
+    """Canonicalize recognized GRCh primary-contig aliases for comparison.
+
+    ``7`` and ``chr7`` (likewise X/Y and M/MT) identify the same locus. Unknown
+    alternate contigs are preserved verbatim rather than guessed.
+    """
+    contig = str(value or "").strip()
+    if not contig:
+        return ""
+    token = re.sub(r"^chr", "", contig, flags=re.IGNORECASE).upper()
+    if token.isdigit() and 1 <= int(token) <= 22:
+        return str(int(token))
+    if token in {"X", "Y"}:
+        return token
+    if token in {"M", "MT"}:
+        return "MT"
+    return contig
+
+
+@dataclass(frozen=True)
+class VariantCoordinate:
+    """One 1-based genomic interval carried by a :class:`VariantRecord`."""
+
+    contig: str
+    start: int
+    end: int | None = None
+    ref: str = ""
+    alt: str = ""
+    role: str = ""
+
+    def __post_init__(self) -> None:
+        contig = str(self.contig or "").strip()
+        if not contig:
+            raise ValueError("Variant coordinates require a contig")
+        start = _positive_integer(self.start, field_name="Variant start")
+        if start is None:
+            raise ValueError("Variant coordinates require a start position")
+        end = (
+            start
+            if self.end is None
+            else _positive_integer(self.end, field_name="Variant end")
+        )
+        if end is None or end < start:
+            raise ValueError(
+                f"Invalid 1-based variant interval {contig}:{start}-{end}"
+            )
+        object.__setattr__(self, "contig", contig)
+        object.__setattr__(self, "start", start)
+        object.__setattr__(self, "end", end)
+        object.__setattr__(self, "ref", str(self.ref or "").strip().upper())
+        object.__setattr__(self, "alt", str(self.alt or "").strip().upper())
+        object.__setattr__(self, "role", str(self.role or "").strip())
+
+    @property
+    def key(self) -> tuple[object, ...]:
+        return (self.contig, self.start, self.end, self.ref, self.alt, self.role)
+
+    def public_dict(self) -> dict[str, Any]:
+        return {
+            "contig": self.contig,
+            "start": self.start,
+            "end": self.end,
+            "ref": self.ref,
+            "alt": self.alt,
+            "role": self.role,
+        }
 
 
 @dataclass(frozen=True)
@@ -110,15 +201,167 @@ class VariantRecord:
     result_status: str = ""
     filter_status: str = ""
     filter_semantics: str = "generic"
+    genes: tuple[str, ...] = ()
+    representation: str = ""
+    source_format: str = "unknown"
+    caller_version: str = ""
+    genome_build: str = ""
+    ensembl_release: int | None = None
+    coordinates: tuple[VariantCoordinate, ...] = ()
+
+    @classmethod
+    def from_mapping(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        genome_build: object = "",
+        ensembl_release: int | None = None,
+        source_path: str = "",
+        source_format: str = "",
+    ) -> "VariantRecord":
+        """Build one record from a mapping using the public variant contract.
+
+        Coordinates, rather than incidental metadata columns, determine whether
+        an assembly applies.  Symbolic records therefore ignore both row-level
+        and requested assembly labels.  Coordinate records canonicalize and
+        reconcile those labels here, so every file adapter follows the same
+        rule instead of reimplementing it.
+        """
+        item = dict(value)
+        item.setdefault("variant", item.get("alteration", ""))
+        item.setdefault("variant_type", item.get("alteration_type", "unknown"))
+        item.pop("alteration", None)
+        item.pop("alteration_type", None)
+
+        coordinates = item.get("coordinates") or ()
+        if coordinates:
+            requested_build = normalize_genome_build(genome_build)
+            row_build = normalize_genome_build(item.get("genome_build"))
+            if requested_build and row_build and requested_build != row_build:
+                row_index = item.get("row_index")
+                location = (
+                    f"record {row_index}" if row_index is not None else "record"
+                )
+                raise ValueError(
+                    f"Variant {location} declares {row_build}, which conflicts "
+                    f"with the requested build {requested_build}"
+                )
+            item["genome_build"] = row_build or requested_build
+        else:
+            # A symbolic event has no locus to interpret in an assembly.  Do not
+            # reject an irrelevant exporter metadata value such as T2T-CHM13.
+            item["genome_build"] = ""
+
+        if item.get("ensembl_release") is None and ensembl_release is not None:
+            item["ensembl_release"] = ensembl_release
+        if not item.get("source_path") and source_path:
+            item["source_path"] = source_path
+        if not item.get("source_format") and source_format:
+            item["source_format"] = source_format
+
+        gene = str(item.get("gene") or "").strip().upper()
+        return cls(
+            gene=gene,
+            genes=item.get("genes") or (gene,),
+            variant=str(item.get("variant") or ""),
+            variant_type=str(item.get("variant_type") or "unknown"),
+            source_path=str(item.get("source_path") or ""),
+            row_index=item.get("row_index"),
+            confidence=str(item.get("confidence") or ""),
+            support=dict(item.get("support") or {}),
+            raw_name=str(item.get("raw_name") or ""),
+            result_status=str(item.get("result_status") or ""),
+            filter_status=str(item.get("filter_status") or ""),
+            filter_semantics=str(item.get("filter_semantics") or "generic"),
+            representation=str(item.get("representation") or ""),
+            source_format=str(item.get("source_format") or "unknown"),
+            caller_version=str(item.get("caller_version") or ""),
+            genome_build=str(item.get("genome_build") or ""),
+            ensembl_release=item.get("ensembl_release"),
+            coordinates=coordinates,
+        )
+
+    def __post_init__(self) -> None:
+        primary = str(self.gene or "").strip().upper()
+        supplied_genes = (
+            (self.genes,) if isinstance(self.genes, str) else self.genes
+        )
+        genes = tuple(
+            dict.fromkeys(
+                str(gene or "").strip().upper()
+                for gene in (supplied_genes or (primary,))
+                if str(gene or "").strip()
+            )
+        )
+        if primary and primary not in genes:
+            genes = (primary, *genes)
+        if self.variant_type == "fusion" and len(genes) < 2:
+            event_text = f"{self.variant} {self.raw_name}".upper()
+            match = _FUSION_PAIR_RE.search(event_text)
+            if match:
+                pair = match.groups()
+                if _FUSION_PAIR_RE.fullmatch(primary):
+                    genes = tuple(gene for gene in genes if gene != primary)
+                    primary = pair[0]
+                genes = tuple(dict.fromkeys((*genes, *pair)))
+        supplied_coordinates = (
+            (self.coordinates,)
+            if isinstance(self.coordinates, VariantCoordinate)
+            or hasattr(self.coordinates, "get")
+            else (self.coordinates or ())
+        )
+        coordinates = tuple(
+            coordinate
+            if isinstance(coordinate, VariantCoordinate)
+            else VariantCoordinate(**dict(coordinate))
+            for coordinate in supplied_coordinates
+        )
+        representation = "coordinate" if coordinates else "symbolic"
+        requested_representation = str(self.representation or representation).strip()
+        if requested_representation not in {"symbolic", "coordinate"}:
+            raise ValueError(
+                "Variant representation must be 'symbolic' or 'coordinate'"
+            )
+        if requested_representation != representation:
+            raise ValueError(
+                f"Variant representation {requested_representation!r} conflicts "
+                f"with {len(coordinates)} coordinate interval(s)"
+            )
+        release = (
+            _positive_integer(self.ensembl_release, field_name="Ensembl release")
+            if self.ensembl_release is not None
+            else None
+        )
+        genome_build = (
+            normalize_genome_build(self.genome_build) if coordinates else ""
+        )
+        object.__setattr__(self, "gene", primary)
+        object.__setattr__(self, "genes", genes)
+        object.__setattr__(self, "coordinates", coordinates)
+        object.__setattr__(self, "representation", representation)
+        object.__setattr__(
+            self,
+            "source_format",
+            str(self.source_format or "unknown").strip().lower(),
+        )
+        object.__setattr__(self, "caller_version", str(self.caller_version or ""))
+        object.__setattr__(self, "genome_build", genome_build)
+        object.__setattr__(
+            self,
+            "ensembl_release",
+            release,
+        )
 
     @property
-    def key(self) -> tuple[str, str, str, str, int | None]:
+    def key(self) -> tuple[object, ...]:
         return (
             self.gene,
             self.variant_type,
             self.variant.lower(),
             self.source_path,
             self.row_index,
+            self.genome_build,
+            tuple(coordinate.key for coordinate in self.coordinates),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -132,6 +375,15 @@ class VariantRecord:
             "result_status": self.result_status,
             "filter_status": self.filter_status,
             "filter_semantics": self.filter_semantics,
+            "genes": list(self.genes),
+            "representation": self.representation,
+            "source_format": self.source_format,
+            "caller_version": self.caller_version,
+            "genome_build": self.genome_build,
+            "ensembl_release": self.ensembl_release,
+            "coordinates": [
+                coordinate.public_dict() for coordinate in self.coordinates
+            ],
             "support": dict(self.support),
             "raw_name": self.raw_name,
         }
@@ -145,6 +397,90 @@ class VariantRecord:
     @property
     def alteration_type(self) -> str:
         return self.variant_type
+
+
+def normalize_variant_record(record: object) -> dict[str, Any] | None:
+    """Return one JSON-safe record using the current public field names.
+
+    Pre-1.24 ``alteration`` field names remain readable, but are never emitted.
+    Coordinates are validated through :class:`VariantCoordinate` so callers do
+    not need a second, private normalization contract.
+    """
+    if isinstance(record, Mapping):
+        item = dict(record)
+    else:
+        public_dict = getattr(record, "public_dict", None)
+        if not callable(public_dict):
+            return None
+        public = public_dict()
+        if not isinstance(public, Mapping):
+            return None
+        item = dict(public)
+    item.setdefault("variant", item.get("alteration", ""))
+    item.setdefault("variant_type", item.get("alteration_type", "unknown"))
+    item.pop("alteration", None)
+    item.pop("alteration_type", None)
+
+    normalized = VariantRecord.from_mapping(item).public_dict()
+    for key, value in item.items():
+        normalized.setdefault(key, value)
+    return normalized
+
+
+def validate_variant_genome_builds(
+    records: Iterable[object],
+    *,
+    expected_build: object = "",
+    require_coordinate_build: bool = True,
+) -> dict[str, Any]:
+    """Validate coordinate-bearing records and summarize build provenance.
+
+    Symbolic calls such as ``EGFR KDD`` are assembly-neutral. Coordinate calls
+    must declare one build by default, and a collection may not mix builds.
+    This function validates provenance only; it never performs liftover.
+    """
+    expected = normalize_genome_build(expected_build)
+    coordinate_records = 0
+    assembly_neutral_records = 0
+    builds: set[str] = set()
+    missing_build_sources: list[str] = []
+    for record in records:
+        item = normalize_variant_record(record)
+        if item is None:
+            continue
+        if not item["coordinates"]:
+            assembly_neutral_records += 1
+            continue
+        coordinate_records += 1
+        build = normalize_genome_build(item.get("genome_build"))
+        if not build:
+            source = str(item.get("source_path") or "<programmatic record>")
+            missing_build_sources.append(source)
+            continue
+        builds.add(build)
+    if require_coordinate_build and missing_build_sources:
+        sources = ", ".join(sorted(set(missing_build_sources)))
+        raise ValueError(
+            "Coordinate variants require an explicit genome build; missing for "
+            f"{sources}"
+        )
+    if len(builds) > 1:
+        raise ValueError(
+            "Variant inputs use contradictory genome builds: "
+            + ", ".join(sorted(builds))
+        )
+    observed = next(iter(builds), "")
+    if expected and observed and expected != observed:
+        raise ValueError(
+            f"Variant input build {observed} does not match expected build {expected}"
+        )
+    return {
+        "genome_build": observed,
+        "expected_genome_build": expected,
+        "coordinate_records": coordinate_records,
+        "assembly_neutral_records": assembly_neutral_records,
+        "coordinate_records_without_build": len(missing_build_sources),
+    }
 
 
 def split_variant_inputs(value: object) -> list[str]:
@@ -216,29 +552,30 @@ def variant_record_passes_assay_filters(record: object) -> bool:
     text event negation remains gene-specific and is handled by
     :func:`variant_record_gene_is_negated`.
     """
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return False
     if any(
-        _result_status_is_non_positive(record.get(key))
+        _result_status_is_non_positive(item.get(key))
         for key in ("result_status", "result", "status")
     ):
         return False
 
-    filter_semantics = str(record.get("filter_semantics") or "").lower()
+    filter_semantics = str(item.get("filter_semantics") or "").lower()
     stored_filter_is_vcf = filter_semantics == "vcf" or (
-        not filter_semantics and bool(_text(record.get("filter_status")))
+        not filter_semantics and bool(_text(item.get("filter_status")))
     )
     if _filter_status_is_failed(
-        record.get("filter_status"),
+        item.get("filter_status"),
         vcf_semantics=stored_filter_is_vcf,
     ):
         return False
     # Preserve sensible behavior for callers that pass unnormalized records.
     # Exact uppercase FILTER follows VCF semantics; a generic ``filter`` key
     # rejects only explicit failure vocabulary.
-    if _filter_status_is_failed(record.get("FILTER"), vcf_semantics=True):
+    if _filter_status_is_failed(item.get("FILTER"), vcf_semantics=True):
         return False
-    if _filter_status_is_failed(record.get("filter"), vcf_semantics=False):
+    if _filter_status_is_failed(item.get("filter"), vcf_semantics=False):
         return False
     return True
 
@@ -267,17 +604,18 @@ def _clean_gene(value: object) -> str:
 
 def variant_record_gene_is_negated(record: object, gene: str) -> bool:
     """Whether prose explicitly negates this gene's molecular finding."""
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return False
     wanted = str(gene or "").strip().upper()
     if not wanted:
         return False
-    if not variant_record_passes_assay_filters(record):
+    if not variant_record_passes_assay_filters(item):
         return True
     event_texts = [
-        str(record.get(key) or "")
+        str(item.get(key) or "")
         for key in ("variant", "alteration", "raw_name", "confidence")
-        if str(record.get(key) or "").strip()
+        if str(item.get(key) or "").strip()
     ]
     escaped = re.escape(wanted)
     # A negative outcome applies to the complete variant clause, not only
@@ -345,24 +683,44 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
     ``ETV6-NTRK3`` or ``ETV6::NTRK3``. Other genes mentioned in commentary are
     not part of the event, and explicitly negated findings are excluded.
     """
-    if not hasattr(record, "get"):
+    item = normalize_variant_record(record)
+    if item is None:
         return ()
     variant_type = str(
-        record.get("variant_type") or record.get("alteration_type") or ""
+        item.get("variant_type") or item.get("alteration_type") or ""
     ).strip().lower()
     event_text = " ".join(
-        str(record.get(key) or "")
+        str(item.get(key) or "")
         for key in ("variant", "alteration", "raw_name")
     ).lower()
     fusion_like = (
         variant_type == "fusion"
         or classify_variant_type(event_text) == "fusion"
     )
+    supplied_genes = item.get("genes") or ()
+    if isinstance(supplied_genes, str):
+        supplied_genes = (supplied_genes,)
+    structured_genes = tuple(
+        dict.fromkeys(
+            gene
+            for gene in (_clean_gene(value) for value in supplied_genes)
+            if gene
+        )
+    )
+    if structured_genes:
+        if not variant_record_passes_assay_filters(item):
+            return ()
+        if any(
+            variant_record_gene_is_negated(item, gene)
+            for gene in structured_genes
+        ):
+            return ()
+        return structured_genes
     if fusion_like:
-        pair = _explicit_fusion_pair(record)
+        pair = _explicit_fusion_pair(item)
         if pair:
             return pair
-    primary_text = str(record.get("gene") or "").upper()
+    primary_text = str(item.get("gene") or "").upper()
     primary = _clean_gene(primary_text)
     if not primary:
         return ()
@@ -370,27 +728,13 @@ def variant_record_genes(record: object) -> tuple[str, ...]:
         # A connected pair was present but rejected above (for example because
         # the event was explicitly reported as not detected).
         return ()
-    if variant_record_gene_is_negated(record, primary):
+    if variant_record_gene_is_negated(item, primary):
         return ()
     return (primary,)
 
 
 def _record_dict(record: object) -> dict[str, Any] | None:
-    if hasattr(record, "public_dict"):
-        public = record.public_dict()
-        item = dict(public) if hasattr(public, "get") else None
-    elif hasattr(record, "get"):
-        item = dict(record)
-    else:
-        return None
-    if item is not None:
-        # Read old serialized analyses without perpetuating their vocabulary in
-        # newly emitted records.
-        item.setdefault("variant", item.get("alteration", ""))
-        item.setdefault("variant_type", item.get("alteration_type", "unknown"))
-        item.pop("alteration", None)
-        item.pop("alteration_type", None)
-    return item
+    return normalize_variant_record(record)
 
 
 def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
@@ -408,6 +752,7 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
     normalized.update(
         {
             "gene": gene_a,
+            "genes": [gene_a, gene_b],
             "pair": pair,
             "variant": f"{pair} fusion",
             "variant_type": "fusion",
@@ -417,6 +762,11 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
             "filter_status": _text(source.get("filter_status"))
             or _text(source.get("confidence")),
             "filter_semantics": _text(source.get("filter_semantics")) or "generic",
+            "source_format": (
+                _text(source.get("source_format"))
+                if _text(source.get("source_format")) not in {"", "unknown"}
+                else "fusion"
+            ),
             "evidence_source_type": "fusion",
             "evidence_source_types": ["fusion"],
         }
@@ -426,8 +776,12 @@ def _fusion_record_as_variant(record: object) -> dict[str, Any] | None:
 
 def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     variant_type = _text(record.get("variant_type")).lower() or "unknown"
+    # A fusion is biologically identified by its participating pair across both
+    # the generic variant and dedicated fusion interfaces. Coordinates remain
+    # provenance, but must not prevent a positive and negative report for that
+    # same pair from reconciling and failing closed.
     if variant_type == "fusion":
-        for key in ("pair", "gene", "variant", "raw_name"):
+        for key in ("pair", "variant", "raw_name", "gene"):
             match = _FUSION_PAIR_RE.search(_text(record.get(key)).upper())
             if match:
                 pair = (match.group(1), match.group(2))
@@ -437,6 +791,37 @@ def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
         gene_b = _clean_gene(record.get("gene_b"))
         if gene_a and gene_b and gene_a != gene_b:
             return ("fusion", *sorted((gene_a, gene_b)))
+        supplied_genes = record.get("genes") or ()
+        if isinstance(supplied_genes, str):
+            supplied_genes = (supplied_genes,)
+        participants = tuple(
+            dict.fromkeys(
+                gene
+                for gene in (_clean_gene(value) for value in supplied_genes)
+                if gene
+            )
+        )
+        if len(participants) >= 2:
+            return ("fusion", *sorted(participants[:2]))
+    coordinates = tuple(
+        (
+            normalize_variant_contig(coordinate.get("contig")),
+            coordinate.get("start"),
+            coordinate.get("end"),
+            _text(coordinate.get("ref")).upper(),
+            _text(coordinate.get("alt")).upper(),
+            _text(coordinate.get("role")),
+        )
+        for coordinate in (record.get("coordinates") or ())
+        if hasattr(coordinate, "get")
+    )
+    if coordinates:
+        return (
+            "coordinate",
+            normalize_genome_build(record.get("genome_build")),
+            variant_type,
+            *coordinates,
+        )
     gene = _clean_gene(record.get("gene"))
     if variant_type == "fusion" and gene:
         return ("fusion", gene)
@@ -466,15 +851,8 @@ def _variant_record_identity(record: dict[str, Any]) -> tuple[object, ...]:
     return (variant_type, gene, variant)
 
 
-def _record_supports_identity(
-    record: dict[str, Any],
-    identity: tuple[object, ...],
-) -> bool:
-    identity_genes = identity[1:] if identity[0] == "fusion" else identity[1:2]
-    genes = [str(value) for value in identity_genes if str(value)]
-    return bool(genes) and all(
-        not variant_record_gene_is_negated(record, gene) for gene in genes
-    )
+def _record_supports_identity(record: dict[str, Any]) -> bool:
+    return bool(variant_record_genes(record))
 
 
 def _source_types(record: dict[str, Any]) -> set[str]:
@@ -494,7 +872,7 @@ def variant_evidence_records(analysis: object) -> list[dict[str, Any]]:
     event. The same biological event supplied through both interfaces is
     retained once and carries both source types, so it cannot become two votes.
     """
-    if not isinstance(analysis, dict):
+    if not isinstance(analysis, Mapping):
         return []
     normalized: list[dict[str, Any]] = []
     by_identity: dict[tuple[object, ...], dict[str, Any]] = {}
@@ -531,10 +909,7 @@ def variant_evidence_records(analysis: object) -> list[dict[str, Any]]:
                 existing_sources,
                 key=lambda value: ({"variant": 0, "fusion": 1}.get(value, 2), value),
             )
-            if _record_supports_identity(
-                existing,
-                identity,
-            ) != _record_supports_identity(item, identity):
+            if _record_supports_identity(existing) != _record_supports_identity(item):
                 existing["result_status"] = (
                     "inconclusive: conflicting supplied records"
                 )
@@ -624,6 +999,14 @@ _RESULT_STATUS_COLUMNS = {
     "status",
 }
 _FILTER_STATUS_COLUMNS = {"filter", "filterstatus", "vcffilter"}
+_CONTIG_COLUMNS = {"chromosome", "chrom", "chr", "contig"}
+_START_COLUMNS = {"position", "pos", "start", "startposition"}
+_END_COLUMNS = {"end", "stop", "endposition"}
+_REF_COLUMNS = {"ref", "reference", "referenceallele", "refallele"}
+_ALT_COLUMNS = {"alt", "alternate", "alternateallele", "tumorseqallele2"}
+_GENOME_BUILD_COLUMNS = {"genomebuild", "assembly", "ncbibuild", "referencebuild"}
+_ENSEMBL_RELEASE_COLUMNS = {"ensemblrelease", "generelease"}
+_CALLER_VERSION_COLUMNS = {"callerversion", "toolversion", "softwareversion"}
 _SUPPORT_COLUMNS = {
     "readcount",
     "reads",
@@ -641,11 +1024,135 @@ _SUPPORT_COLUMNS = {
 def _numeric(value: object) -> float | None:
     try:
         result = float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if result != result:
         return None
     return result
+
+
+def _positive_integer(value: object, *, field_name: str) -> int | None:
+    text = _text(value)
+    if not text:
+        return None
+    numeric = _numeric(text)
+    if numeric is None or numeric < 1 or not numeric.is_integer():
+        raise ValueError(f"{field_name} must be a positive integer, got {text!r}")
+    return int(numeric)
+
+
+def _source_format(path: Path) -> str:
+    name = path.name.lower()
+    if name.endswith(".csv") or name.endswith(".csv.gz"):
+        return "csv"
+    if name.endswith(".tsv") or name.endswith(".tsv.gz"):
+        return "tsv"
+    if name.endswith((".xlsx", ".xls")):
+        return "excel"
+    if name.endswith((".json", ".json.gz", ".jsonl", ".jsonl.gz")):
+        return "json"
+    if name.endswith(".txt") or name.endswith(".txt.gz"):
+        return "text"
+    if name.endswith(".vcf") or name.endswith(".vcf.gz"):
+        return "vcf"
+    if name.endswith(".maf") or name.endswith(".maf.gz"):
+        return "maf"
+    return "table"
+
+
+def _read_text(path: Path) -> str:
+    if path.name.lower().endswith(".gz"):
+        with gzip.open(path, mode="rt", errors="ignore") as handle:
+            return handle.read()
+    return path.read_text(errors="ignore")
+
+
+def _read_json_rows(path: Path) -> list[dict[str, Any]]:
+    text = _read_text(path)
+    if path.name.lower().endswith((".jsonl", ".jsonl.gz")):
+        payload: object = [
+            json.loads(line) for line in text.splitlines() if line.strip()
+        ]
+    else:
+        payload = json.loads(text)
+    if isinstance(payload, dict):
+        for key in ("variants", "alterations", "mutations", "records", "data"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+        else:
+            payload = [payload]
+    if not isinstance(payload, list):
+        raise ValueError("Variant JSON must contain one record or a list of records")
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(payload):
+        if not isinstance(row, dict):
+            raise ValueError(f"Variant JSON record {index} must be an object")
+        rows.append(dict(row))
+    return rows
+
+
+def _records_from_typed_json(
+    rows: list[dict[str, Any]],
+    *,
+    source_path: str,
+    genome_build: object = "",
+    ensembl_release: int | None = None,
+) -> list[VariantRecord] | None:
+    typed_rows = [
+        row for row in rows if "coordinates" in row or "representation" in row
+    ]
+    if not typed_rows:
+        return None
+    if len(typed_rows) != len(rows):
+        raise ValueError(
+            "Variant JSON cannot mix typed VariantRecord objects with generic rows"
+        )
+    records: list[VariantRecord] = []
+    for row in rows:
+        item = dict(row)
+        records.append(
+            VariantRecord.from_mapping(
+                item,
+                genome_build=genome_build,
+                ensembl_release=ensembl_release,
+                source_path=source_path,
+                source_format="json",
+            )
+        )
+    return records
+
+
+def _coordinate_from_row(row) -> VariantCoordinate | None:
+    contig_col = _find_column(row.index, _CONTIG_COLUMNS)
+    start_col = _find_column(row.index, _START_COLUMNS)
+    end_col = _find_column(row.index, _END_COLUMNS)
+    ref_col = _find_column(row.index, _REF_COLUMNS)
+    alt_col = _find_column(row.index, _ALT_COLUMNS)
+    contig = _text(row.get(contig_col)) if contig_col is not None else ""
+    start = (
+        _positive_integer(row.get(start_col), field_name="Variant start")
+        if start_col is not None
+        else None
+    )
+    if not contig and start is None:
+        return None
+    if not contig or start is None:
+        raise ValueError(
+            "Coordinate variant rows require both chromosome/contig and position/start"
+        )
+    end = (
+        _positive_integer(row.get(end_col), field_name="Variant end")
+        if end_col is not None
+        else None
+    )
+    return VariantCoordinate(
+        contig=contig,
+        start=start,
+        end=end,
+        ref=_text(row.get(ref_col)) if ref_col is not None else "",
+        alt=_text(row.get(alt_col)) if alt_col is not None else "",
+    )
 
 
 def _support_from_row(row) -> dict[str, float]:
@@ -723,6 +1230,7 @@ def _record_from_text_line(
     line: str,
     *,
     source_path: str = "",
+    source_format: str = "inline",
     row_index: int | None = None,
 ) -> VariantRecord | None:
     text = str(line or "").strip()
@@ -739,31 +1247,40 @@ def _record_from_text_line(
         variant=variant,
         variant_type=variant_type,
         source_path=source_path,
+        source_format=source_format,
         row_index=row_index,
         raw_name=text,
     )
 
 
-def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[VariantRecord]:
+def _records_from_dataframe(
+    df: pd.DataFrame,
+    *,
+    source_path: str,
+    source_format: str,
+    genome_build: object = "",
+    ensembl_release: int | None = None,
+) -> list[VariantRecord]:
     gene_col = _find_column(df.columns, _GENE_COLUMNS)
     variant_col = _find_column(df.columns, _VARIANT_COLUMNS)
+    build_col = _find_column(df.columns, _GENOME_BUILD_COLUMNS)
+    release_col = _find_column(df.columns, _ENSEMBL_RELEASE_COLUMNS)
+    caller_version_col = _find_column(df.columns, _CALLER_VERSION_COLUMNS)
     records: list[VariantRecord] = []
     for idx, row in df.iterrows():
         raw_gene = _text(row.get(gene_col)) if gene_col is not None else ""
         gene = _clean_gene(raw_gene)
         variant = _text(row.get(variant_col)) if variant_col is not None else ""
-        raw_parts = [variant]
+        if not gene and variant:
+            gene = _clean_gene(variant)
         if not gene:
-            raw_parts.extend(_text(value) for value in row.values)
-            gene = _clean_gene(" ".join(raw_parts))
+            continue
         if not variant:
             variant = " ".join(
                 part
                 for part in (_text(value) for value in row.values)
                 if part
             ).strip()
-        if not gene:
-            continue
         # Keep the complete structured gene cell for connected fusion-pair
         # recovery while retaining ``gene`` as the normalized primary symbol.
         full_text = f"{raw_gene or gene} {variant}".strip()
@@ -775,78 +1292,160 @@ def _records_from_dataframe(df: pd.DataFrame, *, source_path: str) -> list[Varia
             row,
             source_path=source_path,
         )
+        coordinate = _coordinate_from_row(row)
+        row_release = (
+            _positive_integer(
+                row.get(release_col),
+                field_name="Ensembl release",
+            )
+            if release_col is not None
+            else None
+        )
+        active_release = row_release or ensembl_release
         records.append(
-            VariantRecord(
-                gene=gene,
-                variant=variant or full_text,
-                variant_type=variant_type,
-                source_path=source_path,
-                row_index=int(idx),
-                confidence=_confidence_from_row(row),
-                result_status=_result_status_from_row(row),
-                filter_status=filter_status,
-                filter_semantics=filter_semantics,
-                support=_support_from_row(row),
-                raw_name=full_text,
+            VariantRecord.from_mapping(
+                {
+                    "gene": gene,
+                    "variant": variant or full_text,
+                    "variant_type": variant_type,
+                    "source_path": source_path,
+                    "row_index": int(idx),
+                    "confidence": _confidence_from_row(row),
+                    "result_status": _result_status_from_row(row),
+                    "filter_status": filter_status,
+                    "filter_semantics": filter_semantics,
+                    "support": _support_from_row(row),
+                    "raw_name": full_text,
+                    "source_format": source_format,
+                    "caller_version": (
+                        _text(row.get(caller_version_col))
+                        if caller_version_col is not None
+                        else ""
+                    ),
+                    "genome_build": (
+                        row.get(build_col) if build_col is not None else ""
+                    ),
+                    "ensembl_release": active_release,
+                    "coordinates": (coordinate,) if coordinate else (),
+                },
+                genome_build=genome_build,
             )
         )
     return records
 
 
 def _read_variant_table(path: Path) -> pd.DataFrame:
-    suffix = path.suffix.lower()
-    if suffix in {".tsv", ".txt", ".maf", ".vcf"}:
+    source_format = _source_format(path)
+    if source_format in {"vcf", "maf"}:
+        raise ValueError(
+            f"{source_format.upper()} input requires its source-specific adapter; "
+            "the generic variant-table parser will not guess its semantics"
+        )
+    if source_format in {"tsv", "text"}:
         try:
             return pd.read_csv(path, sep="\t", low_memory=False, comment="#")
         except Exception:
             return pd.read_csv(path, sep=None, engine="python", comment="#")
-    if suffix in {".xlsx", ".xls"}:
+    if source_format == "excel":
         return pd.read_excel(path)
-    if suffix in {".json", ".jsonl"}:
-        text = path.read_text()
-        if suffix == ".jsonl":
-            return pd.DataFrame(json.loads(line) for line in text.splitlines() if line.strip())
-        payload = json.loads(text)
-        if isinstance(payload, dict):
-            for key in ("variants", "alterations", "mutations", "records", "data"):
-                if isinstance(payload.get(key), list):
-                    return pd.DataFrame(payload[key])
-            return pd.DataFrame([payload])
-        return pd.DataFrame(payload)
+    if source_format == "json":
+        return pd.DataFrame(_read_json_rows(path))
     return pd.read_csv(path, low_memory=False)
 
 
-def _records_from_text(text: str, *, source_path: str = "") -> list[VariantRecord]:
+def _records_from_text(
+    text: str,
+    *,
+    source_path: str = "",
+    source_format: str = "inline",
+) -> list[VariantRecord]:
     records: list[VariantRecord] = []
     for idx, line in enumerate(str(text or "").splitlines()):
-        record = _record_from_text_line(line, source_path=source_path, row_index=idx)
+        record = _record_from_text_line(
+            line,
+            source_path=source_path,
+            source_format=source_format,
+            row_index=idx,
+        )
         if record is not None:
             records.append(record)
     if not records:
-        record = _record_from_text_line(text, source_path=source_path, row_index=None)
+        record = _record_from_text_line(
+            text,
+            source_path=source_path,
+            source_format=source_format,
+            row_index=None,
+        )
         if record is not None:
             records.append(record)
     return records
 
 
-def parse_variant_file(path: str | Path) -> list[VariantRecord]:
-    """Parse one variant evidence file into normalized records."""
+def parse_variant_file(
+    path: str | Path,
+    *,
+    genome_build: object = "",
+    ensembl_release: int | None = None,
+) -> list[VariantRecord]:
+    """Parse a generic variant table or text file into normalized records.
+
+    VCF and MAF are intentionally rejected until their dedicated adapters are
+    implemented. Treating either standard as an arbitrary table silently loses
+    semantics that are required for safe therapy evidence.
+    """
     target = Path(path).expanduser()
     if not target.exists():
         raise FileNotFoundError(f"Variant evidence file not found: {target}")
     if not target.is_file():
         raise ValueError(f"Variant evidence path is not a file: {target}")
+    source_format = _source_format(target)
+    if source_format in {"vcf", "maf"}:
+        raise ValueError(
+            f"{source_format.upper()} input requires its source-specific adapter; "
+            "the generic variant parser will not guess its semantics"
+        )
+    if source_format == "json":
+        typed_records = _records_from_typed_json(
+            _read_json_rows(target),
+            source_path=str(target),
+            genome_build=genome_build,
+            ensembl_release=ensembl_release,
+        )
+        if typed_records is not None:
+            validate_variant_genome_builds(typed_records)
+            return typed_records
     table_error: Exception | None = None
     text_error: Exception | None = None
     try:
         df = _read_variant_table(target)
-        records = _records_from_dataframe(df, source_path=str(target))
-        if records:
-            return records
     except Exception as exc:  # noqa: BLE001
         table_error = exc
+    else:
+        records = _records_from_dataframe(
+            df,
+            source_path=str(target),
+            source_format=source_format,
+            genome_build=genome_build,
+            ensembl_release=ensembl_release,
+        )
+        if records:
+            validate_variant_genome_builds(records)
+            return records
+    if source_format not in {"text", "table"}:
+        details = f": {table_error}" if table_error else ""
+        raise ValueError(
+            f"No recognizable variant records in {source_format.upper()} file "
+            f"{target}{details}"
+        )
     try:
-        return _records_from_text(target.read_text(errors="ignore"), source_path=str(target))
+        text_records = _records_from_text(
+            _read_text(target),
+            source_path=str(target),
+            source_format="text",
+        )
+        if text_records:
+            return text_records
+        text_error = ValueError("no recognizable gene-bearing variant records")
     except Exception as exc:  # noqa: BLE001
         text_error = exc
     details = []
@@ -872,19 +1471,33 @@ def _looks_like_path(text: str) -> bool:
     return "/" in candidate or "\\" in candidate
 
 
-def parse_variant_inputs(inputs: object) -> list[VariantRecord]:
+def parse_variant_inputs(
+    inputs: object,
+    *,
+    genome_build: object = "",
+    ensembl_release: int | None = None,
+) -> list[VariantRecord]:
     """Parse files or inline variant strings, deduplicating records."""
     records: list[VariantRecord] = []
-    seen: set[tuple[str, str, str, str, int | None]] = set()
+    seen: set[tuple[object, ...]] = set()
     for raw in split_variant_inputs(inputs):
         target = Path(str(raw)).expanduser()
         if target.exists() or _looks_like_path(str(raw)):
-            parsed = parse_variant_file(target)
+            parsed = parse_variant_file(
+                target,
+                genome_build=genome_build,
+                ensembl_release=ensembl_release,
+            )
         else:
-            parsed = _records_from_text(str(raw), source_path="")
+            parsed = _records_from_text(
+                str(raw),
+                source_path="",
+                source_format="inline",
+            )
         for record in parsed:
             if record.key in seen:
                 continue
             seen.add(record.key)
             records.append(record)
+    validate_variant_genome_builds(records)
     return records

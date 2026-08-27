@@ -74,6 +74,8 @@ def test_plot_sample_summary_accepts_precomputed_analysis(tmp_path):
     df_expr = pd.DataFrame({"gene": ["ESR1"], "TPM": [10.0]})
 
     with patch.object(tp, "analyze_sample") as mock_analyze:
+        from trufflepig.report_view import build_report_view
+
         out_png = tmp_path / "summary.png"
         plot_sample_summary(
             df_expr,
@@ -81,6 +83,13 @@ def test_plot_sample_summary_accepts_precomputed_analysis(tmp_path):
             sample_mode="solid",
             save_to_filename=str(out_png),
             analysis=analysis,
+            report_view=build_report_view(
+                {
+                    **analysis,
+                    "cancer_type": "BRCA",
+                    "sample_mode": "solid",
+                }
+            ),
         )
         mock_analyze.assert_not_called()
 

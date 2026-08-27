@@ -8,6 +8,19 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## Unreleased — typed variant provenance (issues #140 and #141)
+
+- `VariantRecord` now distinguishes assembly-neutral symbolic calls from
+  coordinate-bearing calls and retains source format, caller version, genome
+  build, Ensembl release, and validated 1-based intervals.
+- Generic CSV/TSV/Excel/JSON tables can preserve ordinary coordinate and build
+  columns. Coordinate records require one consistent GRCh37 or GRCh38 build;
+  callers can validate an expected build without changing assembly-neutral
+  symbolic calls.
+- VCF and MAF inputs now fail closed instead of passing through the generic
+  table reader. Dedicated standards-aware adapters and opt-in liftover remain
+  tracked in issues #140 and #141.
+
 ## 1.24.0 — 2026-08-21 — residual identity and spindle-sarcoma therapy safety
 
 ### Cancer identity and decomposition

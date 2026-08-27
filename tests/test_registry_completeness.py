@@ -227,6 +227,7 @@ _TOLERATED_GAPS_EXPLICIT = {
     "cSCC": {"lineage"},
     "GBC": {"lineage", "biomarker"},
     "PENSCC": {"lineage", "biomarker", "therapy"},
+    # Direct VSCC expression landed in oncoref 1.8.184 / pirlygenes 5.23.55.
     "VSCC": {"lineage", "biomarker", "therapy"},
     "VAGC": {"lineage", "biomarker", "therapy"},
     "URETH": {"lineage", "biomarker", "therapy"},

@@ -19,7 +19,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from .report_view import finalized_purity_headline
+from .report_view import ReportView
 from .reporting import (
     partition_tumor_core_rows,
     summarize_reliability_reasons,
@@ -52,6 +52,8 @@ def build_provenance_md(
     decomp_results,
     cancer_code: str,
     sample_id: Optional[str] = None,
+    *,
+    report_view: ReportView,
 ) -> str:
     """Render ``*-provenance.md`` — the 5-step attribution chain.
 
@@ -154,6 +156,9 @@ def build_provenance_md(
     best = decomp_results[0] if decomp_results else None
     if best is not None:
         fractions = dict(getattr(best, "fractions", {}) or {})
+        conclusion = report_view.purity
+        purity_status, purity_scenarios = conclusion.status, conclusion.scenarios
+        purity_is_unresolved = purity_status == "discordant_estimators"
         # Display the FINALIZED headline purity as tumor%, not the
         # decomposition's own pre-fusion tumor fraction. best.purity is frozen
         # at fit time from the pre-fusion purity, but _finalize_fused_purity
@@ -163,7 +168,7 @@ def build_provenance_md(
         # non-tumor components so they sum to 1 - tumor%, preserving their
         # relative proportions, so the coarse composition equals the headline
         # by construction.
-        headline_tumor = finalized_purity_headline(analysis)[0]
+        headline_tumor = conclusion.estimate
         decomp_tumor = float(getattr(best, "purity", 0.0) or 0.0)
         tumor_frac = decomp_tumor if headline_tumor is None else float(headline_tumor)
         tumor_frac = min(max(tumor_frac, 0.0), 1.0)
@@ -172,18 +177,51 @@ def build_provenance_md(
             key=lambda kv: -kv[1],
         )
         non_tumor_mass = sum(f for _, f in non_tumor)
-        if non_tumor_mass > 0:
+        if non_tumor_mass > 0 and not purity_is_unresolved:
             rescale = (1.0 - tumor_frac) / non_tumor_mass
             non_tumor = [(c, f * rescale) for c, f in non_tumor]
         top = non_tumor[:5]
-        parts = [f"**tumor {tumor_frac:.0%}**"]
+        if purity_is_unresolved:
+            lines.append(
+                "**Quantitative purity is unresolved.** Independent estimators "
+                "support incompatible scenarios, so this page does not assign a "
+                "consensus tumor/non-tumor percentage."
+            )
+            source_labels = {
+                "background_residual": "background-residual decomposition",
+                "lineage_panel": "matched-normal lineage model",
+                "signature": "upstream expression model",
+            }
+            scenario_text = []
+            for source, estimate, lower, upper in purity_scenarios:
+                if estimate is None:
+                    continue
+                value = f"{estimate:.0%}"
+                if lower is not None and upper is not None:
+                    value += f" [{lower:.0%}–{upper:.0%}]"
+                scenario_text.append(
+                    f"{source_labels.get(source, source.replace('_', ' '))}: {value}"
+                )
+            if scenario_text:
+                lines.append("\nEstimator scenarios: " + "; ".join(scenario_text) + ".")
+            parts = [f"operational tumor model {tumor_frac:.0%}"]
+            fraction_prefix = "Selected operational decomposition fractions"
+        else:
+            parts = [f"**tumor {tumor_frac:.0%}**"]
+            fraction_prefix = "Fitted fractions"
         for comp, frac in top:
             if frac >= 0.005:
                 parts.append(f"{_compartment_label(comp)} {frac:.0%}")
         rest_frac = sum(f for _, f in non_tumor if f < 0.005)
         if rest_frac > 0:
             parts.append(f"other {rest_frac:.0%}")
-        lines.append("Fitted fractions: " + ", ".join(parts) + ".")
+        lines.append(f"\n{fraction_prefix}: " + ", ".join(parts) + ".")
+        if purity_is_unresolved:
+            lines.append(
+                "These fractions belong to the selected operational model and "
+                "are used for target attribution only; they are not a resolved "
+                "sample-composition measurement."
+            )
         lines.append(
             "\nEach non-tumor component is subtracted from the observed "
             "TPM per gene (#108). A target whose signal is mostly assigned "
@@ -268,8 +306,18 @@ def build_provenance_md(
     # purity dict) so the "subtracts X% as non-tumor" figure equals the
     # 1 - tumor% of the coarse-composition section above by construction — the
     # two must not disagree within one provenance page (#85.1).
-    overall = finalized_purity_headline(analysis)[0]
-    if overall is not None:
+    conclusion = report_view.purity
+    overall = conclusion.estimate
+    purity_status = conclusion.status
+    if purity_status == "discordant_estimators":
+        lines.append(
+            "**Chain summary:** observed expression → library-prep-aware "
+            "artifact expectations → preservation-adjusted quantification → "
+            "the selected decomposition supplies an operational background "
+            "model for target attribution, while the quantitative tumor/non-tumor "
+            "split remains unresolved."
+        )
+    elif overall is not None:
         tumor_pct = min(max(float(overall), 0.0), 1.0)
         lines.append(
             f"**Chain summary:** observed expression → library-prep-aware "
@@ -289,6 +337,8 @@ def plot_provenance_funnel(
     decomp_results,
     save_to_filename: str,
     save_dpi: int = 150,
+    *,
+    report_view: ReportView,
 ):
     """Render ``*-provenance.png`` — horizontal stacked bar showing the
     compartment fractions with tumor-linked signal on the right and non-tumor
@@ -305,6 +355,45 @@ def plot_provenance_funnel(
     fractions = dict(getattr(best, "fractions", {}) or {})
     if not fractions:
         return None
+
+    purity_is_unresolved = (
+        report_view.purity.status == "discordant_estimators"
+    )
+
+    if purity_is_unresolved:
+        fig, ax = plt.subplots(figsize=(10, 2.6))
+        ax.barh(
+            [0],
+            [1.0],
+            color="#9e9e9e",
+            edgecolor="white",
+            hatch="//",
+            label="composition unresolved",
+        )
+        ax.text(
+            0.5,
+            0,
+            "Tumor / non-tumor\ncomposition unresolved",
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="white",
+            fontweight="bold",
+        )
+        ax.set_xlim(0, 1.0)
+        ax.set_yticks([])
+        ax.set_xlabel("")
+        ax.set_title("Sample composition — unresolved", fontsize=11, fontweight="bold")
+        ax.legend(
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.2),
+            fontsize=8,
+            frameon=False,
+        )
+        plt.tight_layout()
+        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        plt.close(fig)
+        return save_to_filename
 
     tumor_frac = float(fractions.pop("tumor", 0.0))
     non_tumor = sorted(

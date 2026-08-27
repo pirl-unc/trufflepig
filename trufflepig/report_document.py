@@ -41,11 +41,13 @@ without pulling in matplotlib/pandas.
 
 from __future__ import annotations
 
-import dataclasses
 import json
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from .report_view import ReportView
 
 SCHEMA_VERSION = 1
 
@@ -344,56 +346,92 @@ def safety_band(tme: str, attribution: str) -> str:
     return short_text(band, max_chars=58)
 
 
-def _therapy_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
-    """``{"columns", "rows"}`` for the therapy shortlist, or ``None``.
+def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
+    """Return the exact reader-facing therapy shortlist from a summary.
 
-    Reads the ``## Therapy Prioritization`` table from the analysis report, dedups
-    repeated targets (one target can list several agents), and keeps the top 3.
+    The detailed analysis intentionally includes a broader therapy landscape,
+    including conditional and comparator rows that did not qualify for the
+    summary. The structured report represents the reader decision, so it
+    serializes the bullets under ``Top candidate therapies`` instead of making
+    a second selection from that broader table.
     """
-    tables = parse_markdown_tables(analyze_dir / f"{prefix}-analysis.md")
-    table = find_table(
-        tables,
-        section_contains="therapy prioritization",
-        header_all=("target", "agent", "phase"),
-        subsection_excludes="not supported by this sample",
-    )
-    if table is None:
+    summary_path = Path(summary_path)
+    if not summary_path.exists():
         return None
-    headers = table["headers"]
-    i_target = col_index(headers, "target", "gene")
-    i_agent = col_index(headers, "agent")
-    i_phase = col_index(headers, "phase")
-    i_tumor = col_index(headers, "tumor-source", "tumor-attributed", "tumor source")
-    i_interp = col_index(headers, "interpretation")
+
+    in_therapy_section = False
     rows: List[List[str]] = []
-    seen: set = set()
-    for cells in table["rows"]:
-        target = cell(cells, i_target)
-        if not target or target in seen:
+    bullet = re.compile(r"^- \*\*([^*]+)\*\*\s+[—-]\s+(.+)$")
+    recommendation = re.compile(
+        r"^(.*?)\s+\((Approved|Phase\s+\d(?:/\d)?|"
+        r"Off-label\s*/\s*transfer rationale)(?:,\s*[^)]*)?\)\.\s*(.*)$",
+        re.IGNORECASE,
+    )
+    for raw in summary_path.read_text(errors="replace").splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("## "):
+            heading = clean_markdown(stripped.lstrip("# ")).lower()
+            if in_therapy_section and heading != "top candidate therapies":
+                break
+            in_therapy_section = heading == "top candidate therapies"
             continue
-        seen.add(target)
-        agent = cell(cells, i_agent)
-        phase = cell(cells, i_phase)
-        agent_phase = agent + (f" · {phase}" if phase else "")
+        if not in_therapy_section:
+            continue
+        match = bullet.match(stripped)
+        if not match:
+            continue
+
+        target = clean_markdown(match.group(1))
+        body = match.group(2).strip()
+        parsed = recommendation.match(body)
+        if parsed:
+            agent = clean_markdown(parsed.group(1))
+            phase = clean_markdown(parsed.group(2))
+            interpretation = clean_markdown(parsed.group(3))
+        else:
+            agent = lead_clause(body, max_chars=80)
+            phase = ""
+            interpretation = body
+
+        tumor_match = re.search(
+            r"([0-9.]+)\s+tumor-source bulk TPM\s+"
+            r"\(model interval\s+([^)]+)\)",
+            interpretation,
+            re.IGNORECASE,
+        )
+        context_match = re.search(
+            r"target RNA is context only\s+\(bulk\s+([0-9.]+)\s+TPM",
+            interpretation,
+            re.IGNORECASE,
+        )
+        if tumor_match:
+            tumor = f"{tumor_match.group(1)} ({tumor_match.group(2)})"
+        elif context_match:
+            tumor = f"{context_match.group(1)} bulk; context only"
+        else:
+            tumor = "—"
         rows.append(
             [
                 target,
-                agent_phase or "—",
-                cell(cells, i_tumor) or "—",
-                lead_clause(cell(cells, i_interp)) or "—",
+                " · ".join(part for part in (agent, phase) if part),
+                tumor,
+                lead_clause(interpretation),
             ]
         )
         if len(rows) >= 3:
             break
+
     if not rows:
         return None
-    columns = [
-        ["Target", 15],
-        ["Agent / phase", 33],
-        ["Tumor-src TPM", 20],
-        ["Eligibility / RNA source", 44],
-    ]
-    return {"columns": columns, "rows": rows}
+    return {
+        "columns": [
+            ["Target", 15],
+            ["Recommendation", 38],
+            ["Tumor-src TPM", 20],
+            ["Eligibility / RNA source", 44],
+        ],
+        "rows": rows,
+    }
 
 
 def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
@@ -548,24 +586,37 @@ def find_figure(analyze_dir: Path, prefix: str, suffix: str) -> Optional[Path]:
 # --------------------------------------------------------------------------- #
 # Document assembly.
 # --------------------------------------------------------------------------- #
-def report_view_headline(report_view) -> Optional[dict]:
-    """A JSON-serializable headline dict from a frozen :class:`ReportView`, or
-    ``None`` if no view is available. ``dataclasses.asdict`` turns the nested
-    alternatives tuple-of-tuples into JSON lists."""
-    if report_view is None:
-        return None
-    try:
-        return dataclasses.asdict(report_view)
-    except TypeError:
-        return None
-
-
-def build_figure_manifest(analyze_dir: Path, prefix: str) -> List[dict]:
+def build_figure_manifest(
+    analyze_dir: Path,
+    prefix: str,
+    *,
+    purity_status: str = "resolved",
+) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
     only does when the underlying belief passed threshold) and its resolved path."""
     manifest: List[dict] = []
+    unresolved_captions = {
+        "sample-summary.png": (
+            "One-page synthesis of the cancer-type call and the incompatible "
+            "purity scenarios; no consensus tumor/non-tumor fraction is assigned."
+        ),
+        "decomposition-composition.png": (
+            "Selected operational tumor/background model used for attribution; "
+            "not a resolved sample-composition measurement."
+        ),
+        "purity-methods.png": (
+            "Independent purity estimators support incompatible scenarios; the "
+            "operational value is not a fused consensus estimate."
+        ),
+        "purity.png": (
+            "Operational purity scenario and its within-estimator interval; "
+            "quantitative consensus is unresolved."
+        ),
+    }
     for suffix, title, caption in FIGURE_REGISTRY:
+        if purity_status == "discordant_estimators":
+            caption = unresolved_captions.get(suffix, caption)
         figure = find_figure(analyze_dir, prefix, suffix)
         present = figure is not None
         manifest.append(
@@ -584,15 +635,13 @@ def build_report_document(
     analyze_dir: Path,
     prefix: Optional[str] = None,
     *,
-    report_view=None,
+    report_view: "ReportView",
 ) -> dict:
     """Assemble the structured report document for one analyze directory.
 
-    ``report_view`` (the in-memory frozen :class:`ReportView`) is the authoritative
-    source for the headline when called from the pipeline; standalone callers omit
-    it and the headline falls back to the parsed ``Cancer call`` / ``Purity``
-    records. Everything else is parsed once from the just-emitted markdown so the
-    document is a faithful, byte-stable projection of the reports.
+    ``report_view`` is the authoritative headline. Everything else is parsed once
+    from the just-emitted markdown so the document is a faithful, byte-stable
+    projection of the reports.
     """
     analyze_dir = Path(analyze_dir)
     if prefix is None:
@@ -601,23 +650,22 @@ def build_report_document(
     analysis_path = analyze_dir / f"{prefix}-analysis.md"
 
     records = parse_summary_records(summary_path)
-    headline = report_view_headline(report_view)
-    if headline is None:
-        headline = {
-            "cancer_type_name": record_value(records, "Cancer call"),
-            "purity_display": record_value(records, "Purity"),
-        }
+    headline = report_view.public_dict()
 
     return {
         "schema_version": SCHEMA_VERSION,
         "prefix": prefix,
-        "sample_id": headline.get("sample_id") if headline else None,
+        "sample_id": report_view.sample_id,
         "headline": headline,
         "records": records,
         "highlights": highlight_lines(summary_path, analysis_path),
-        "therapy": _therapy_table(analyze_dir, prefix),
+        "therapy": parse_therapy_recommendations(summary_path),
         "targets": _priority_target_table(analyze_dir, prefix),
-        "figures": build_figure_manifest(analyze_dir, prefix),
+        "figures": build_figure_manifest(
+            analyze_dir,
+            prefix,
+            purity_status=report_view.purity.status,
+        ),
     }
 
 
@@ -625,7 +673,7 @@ def write_report_document(
     analyze_dir: Path,
     prefix: str,
     *,
-    report_view=None,
+    report_view: "ReportView",
 ) -> Path:
     """Build and write ``<prefix>-report.json`` into *analyze_dir*; return its path."""
     analyze_dir = Path(analyze_dir)
@@ -636,13 +684,14 @@ def write_report_document(
 
 
 def load_report_document(analyze_dir: Path, prefix: Optional[str] = None) -> dict:
-    """Load ``<prefix>-report.json`` if the pipeline wrote one; otherwise build it
-    on the fly from the directory (backward compatibility for analyze dirs produced
-    before the sidecar existed, and for standalone PDF builds)."""
+    """Load the structured ``<prefix>-report.json`` written by the pipeline."""
     analyze_dir = Path(analyze_dir)
     if prefix is None:
         prefix = find_prefix(analyze_dir)
     path = analyze_dir / f"{prefix}-report.json"
-    if path.exists():
-        return json.loads(path.read_text(errors="replace"))
-    return build_report_document(analyze_dir, prefix)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No structured report document found at {path}; rerun analysis to "
+            "create it"
+        )
+    return json.loads(path.read_text(errors="replace"))

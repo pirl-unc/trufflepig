@@ -130,3 +130,14 @@ def test_comparison_plot_without_overall_still_renders(tmp_path: Path):
     fig = plot_purity_method_comparison(result, save_to_filename=str(out))
     labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
     assert "Final estimate" not in labels
+
+
+def test_comparison_plot_labels_discordant_purity_as_non_consensus(tmp_path: Path):
+    result = _purity_result(quantitative_status="discordant_estimators")
+    out = tmp_path / "cmp_unresolved.png"
+    fig = plot_purity_method_comparison(result, save_to_filename=str(out))
+
+    labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
+    assert "Final estimate" not in labels
+    assert "Operational scenario (not consensus)" in labels
+    assert "Purity estimators disagree" in fig.axes[0].get_title(loc="left")

@@ -451,8 +451,6 @@ def test_cancer_reference_manifest_uses_loader_identity_and_metadata_counts(
     import oncoref
     import oncoref.expression as oncoref_expression
     import pandas as pd
-    from pirlygenes.expression import accessors
-
     from trufflepig import cancer_ontology
 
     metadata = pd.DataFrame(
@@ -509,7 +507,6 @@ def test_cancer_reference_manifest_uses_loader_identity_and_metadata_counts(
         oncoref_expression,
         reject_heavy_path,
     )
-    monkeypatch.setattr(accessors, "_full_canonical_views", reject_heavy_path)
     monkeypatch.setattr(
         gsc._pirlygenes,
         "available_cancer_expression_references",

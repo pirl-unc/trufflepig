@@ -264,15 +264,15 @@ def test_grouping_uses_its_typed_member_union_reference():
         assert record.direct
 
 
-def test_unavailable_grouping_does_not_claim_a_direct_reference():
-    # BTC remains an evidence/source scope until both CHOL and GBC are backed.
-    # Retain the safe in-branch CHOL fallback rather than advertising a
-    # CHOL-only aggregate as a pan-biliary direct reference.
+def test_complete_btc_grouping_uses_its_direct_member_union_reference():
+    # pirlygenes 5.23.55 ships a complete CHOL + GBC union.  The grouping is
+    # therefore loadable without borrowing either child as a stand-in.
     record = effective_expression_reference("BTC")
     assert record is not None
-    assert record.reference_code == "CHOL"
-    assert record.fallback_reason == "member cohort"
-    assert not record.direct
+    assert record.reference_code == "BTC"
+    assert record.source_kind == "computed_member_union_reference"
+    assert record.fallback_reason == ""
+    assert record.direct
 
 
 def test_context_markdown_reports_expression_fallback_without_parent_context():
@@ -296,6 +296,25 @@ def test_expression_reference_options_canonicalize_source_codes():
         and record.source_kind == "deconvolved_tumor_reference"
         for record in records
     )
+
+
+def test_vscc_uses_the_new_direct_reference_instead_of_squamous_fallback():
+    records = expression_reference_options("VSCC", include_fallback=False)
+
+    assert records
+    assert all(record.reference_code == "VSCC" for record in records)
+    assert any(record.direct for record in records)
+    effective = effective_expression_reference("VSCC")
+    assert effective is not None
+    assert effective.reference_code == "VSCC"
+    assert effective.direct
+
+    expression = reference_module.cancer_reference_expression(
+        cancer_types=["VSCC"],
+        genes=["KRT14"],
+    )
+    assert not expression.empty
+    assert set(expression["cancer_code"].astype(str)) == {"VSCC"}
 
 
 @pytest.mark.parametrize(
@@ -568,14 +587,20 @@ def test_reference_discovery_does_not_materialize_full_observed_bulk(monkeypatch
 
 
 def test_effective_references_never_borrow_a_sibling_cohort():
+    registry = cancer_type_registry()
+    classification_codes = registry.loc[
+        registry["is_classification_target"].fillna(False).astype(bool), "code"
+    ].dropna()
     missing = [
         code
-        for code in cancer_type_registry()["code"].dropna().astype(str)
+        for code in classification_codes.astype(str)
         if effective_expression_reference(code) is None
     ]
 
     assert not missing
-    for code in cancer_type_registry()["code"].dropna().astype(str):
+    # Non-classifying ontology candidates may deliberately have no expression
+    # reference, but any fallback they do expose must still remain in-branch.
+    for code in registry["code"].dropna().astype(str):
         record = effective_expression_reference(code)
         if record is None:
             continue

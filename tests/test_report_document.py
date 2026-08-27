@@ -2,7 +2,7 @@
 serialized decision, not by scraping the markdown, so figure/table/headline
 content can't disagree with the reports. These tests pin the belief-gated figure
 manifest, the ReportView-authoritative headline, cross-artifact parity, and the
-load-vs-build-on-the-fly fallback.
+structured sidecar contract.
 """
 
 from __future__ import annotations
@@ -10,7 +10,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from trufflepig import report_document as rd
+from trufflepig.analyze import (
+    AnalyzeConfig,
+    AnalyzePaths,
+    AnalyzeRun,
+    InputResolution,
+    write_analysis_output_records,
+)
 from trufflepig.report_view import build_report_view
 
 _SUMMARY = """# Summary
@@ -22,6 +31,13 @@ _SUMMARY = """# Summary
 **Cancer-type basis:** RNA-inferred PRAD context.
 **Mismatch-repair RNA context:** MMR ensemble favors proficient.
 **Disease state:** castrate-resistant pattern.
+
+## Top candidate therapies
+
+### Approved / disease-matched
+
+- **FOLH1** — lutetium-177 PSMA (Approved, mCRPC). tumor-supported; 128 tumor-source bulk TPM (model interval 100-150); guideline-standard approved pathway.
+- **AR** — enzalutamide (Approved, mCRPC). mixed-source; 48 tumor-source bulk TPM (model interval 40-50); guideline-standard approved pathway.
 
 ## Notable biomarker outliers
 
@@ -135,13 +151,53 @@ def test_headline_purity_agrees_with_parsed_purity_record(tmp_path):
     assert f"{round(doc['headline']['purity'] * 100)}%" in purity_record  # "10%"
 
 
-def test_headline_falls_back_to_records_without_report_view(tmp_path):
-    # Standalone build (no ReportView): the headline is derived from the parsed
-    # summary records so the document is still self-describing.
+def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_path):
     _write_reports(tmp_path)
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=None)
-    assert doc["headline"]["cancer_type_name"].startswith("PRAD")
-    assert "10%" in doc["headline"]["purity_display"]
+    view = build_report_view(
+        {
+            "cancer_type": "READ",
+            "cancer_name": "Rectum Adenocarcinoma",
+            "purity": {
+                "overall_estimate": 0.05,
+                "overall_lower": 0.01,
+                "overall_upper": 0.12,
+                "quantitative_status": "discordant_estimators",
+                "estimator_scenarios": [
+                    {
+                        "source": "lineage_panel",
+                        "estimate": 0.05,
+                        "lower": 0.01,
+                        "upper": 0.12,
+                    },
+                    {
+                        "source": "signature",
+                        "estimate": 0.43,
+                        "lower": 0.32,
+                        "upper": 0.55,
+                    },
+                ],
+            },
+            "top_cancers": [("READ", 1.0)],
+            "sample_mode": "solid",
+        }
+    )
+
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=view)
+    figures = {row["suffix"]: row for row in doc["figures"]}
+
+    assert doc["headline"]["purity_status"] == "discordant_estimators"
+    assert doc["headline"]["purity_scenarios"][1] == (
+        "signature",
+        0.43,
+        0.32,
+        0.55,
+    )
+    assert "no consensus tumor/non-tumor fraction" in figures[
+        "sample-summary.png"
+    ]["caption"]
+    assert "not a fused consensus estimate" in figures["purity-methods.png"][
+        "caption"
+    ]
 
 
 def test_write_and_load_roundtrip(tmp_path):
@@ -154,34 +210,60 @@ def test_write_and_load_roundtrip(tmp_path):
     assert on_disk["headline"]["purity"] == 0.10
 
 
-def test_load_builds_on_the_fly_when_sidecar_absent(tmp_path):
-    # Backward compatibility: an analyze dir produced before the sidecar existed
-    # (reports present, no <prefix>-report.json) still yields a usable document.
+def test_output_finalization_writes_structured_records_without_figures(tmp_path):
+    _write_reports(tmp_path, emit_figures=())
+    run = AnalyzeRun(
+        config=AnalyzeConfig(input_path="sample.tsv", output_dir=str(tmp_path)),
+        inputs=InputResolution(
+            gene_input="sample.tsv",
+            transcript_input=None,
+            aggregate_gene_expression=False,
+            input_level="gene",
+        ),
+        paths=AnalyzePaths(
+            out_dir=tmp_path,
+            prefix_base=_PREFIX,
+            sample_display_id=_PREFIX,
+        ),
+    )
+
+    outputs = write_analysis_output_records(run, _report_view())
+
+    report_path = Path(outputs["report_document"])
+    manifest_path = Path(outputs["manifest"])
+    assert report_path.name == f"{_PREFIX}-report.json"
+    assert report_path.exists()
+    assert manifest_path.name == f"{_PREFIX}-manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest["steps"]["output"]["outputs"]["report_document"] == str(
+        report_path
+    )
+    assert not any(
+        artifact["kind"] == "figure" for artifact in manifest["artifacts"]
+    )
+
+
+def test_load_requires_structured_sidecar(tmp_path):
     _write_reports(tmp_path)
     assert not (tmp_path / f"{_PREFIX}-report.json").exists()
-    doc = rd.load_report_document(tmp_path)  # prefix auto-discovered
-    assert doc["prefix"] == _PREFIX
-    assert doc["therapy"]["rows"]
-    # Without a written sidecar there is no ReportView, so the headline is the
-    # records-derived fallback shape.
-    assert "purity_display" in doc["headline"]
+    with pytest.raises(FileNotFoundError, match="rerun analysis"):
+        rd.load_report_document(tmp_path)
 
 
 def test_empty_dir_therapy_and_targets_are_none(tmp_path):
     # No therapy/target tables in the reports -> null table sections, not a crash.
     (tmp_path / f"{_PREFIX}-summary.md").write_text("# Summary\n\n**Cancer call:** UNKNOWN.\n")
     (tmp_path / f"{_PREFIX}-analysis.md").write_text("# Analysis\n")
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=None)
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
     assert doc["therapy"] is None
     assert doc["targets"] is None
     assert all(f["present"] is False for f in doc["figures"])
 
 
-# Issue #105: when the analysis markdown splits Therapy Prioritization into a
-# "Sample-supported" active subsection and an "Audit-only" subsection (background-
-# attributed disease-curation rows), the PDF therapy shortlist must read only the
-# active subsection — otherwise a host-attributed FGFR3/erdafitinib row would
-# still surface in the PDF as if it were an expression-supported target.
+# The detailed analysis contains a broader therapy landscape than the reader
+# summary. The structured document must reproduce the summary decision exactly
+# rather than independently selecting from the broader table.
 _ANALYSIS_AUDIT_SPLIT = """# Analysis
 
 ## Therapy Prioritization
@@ -202,18 +284,21 @@ These rows remain visible as disease-curation provenance or negative evidence.
 """
 
 
-def test_therapy_table_reads_active_subsection_not_audit_only(tmp_path):
+def test_therapy_recommendations_follow_summary_not_broader_analysis(tmp_path):
     (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
     (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_AUDIT_SPLIT)
     (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
 
-    table = rd._therapy_table(tmp_path, _PREFIX)
+    table = rd.parse_therapy_recommendations(
+        tmp_path / f"{_PREFIX}-summary.md"
+    )
     assert table is not None
     targets = {row[0] for row in table["rows"]}
-    # Active row is surfaced; the host-attributed audit-only row is not.
-    assert "FOLH1" in targets
+    assert targets == {"FOLH1", "AR"}
     assert "FGFR3" not in targets
     assert "erdafitinib" not in {cell for row in table["rows"] for cell in row}
+    assert table["rows"][0][1] == "lutetium-177 PSMA · Approved"
+    assert table["rows"][0][2] == "128 (100-150)"
 
 
 _ANALYSIS_ALL_AUDIT = """# Analysis
@@ -232,8 +317,15 @@ _ANALYSIS_ALL_AUDIT = """# Analysis
 """
 
 
-def test_therapy_table_is_none_when_only_audit_only_rows(tmp_path):
-    # If every curated therapy row is audit-only (active subsection has no table),
-    # the PDF shortlist is empty rather than falling back to the audit rows.
+def test_therapy_recommendations_are_none_when_summary_shortlist_is_empty(tmp_path):
+    summary = """# Summary
+
+## Top candidate therapies
+
+*Therapy shortlist is empty: no curated row qualified.*
+"""
+    (tmp_path / f"{_PREFIX}-summary.md").write_text(summary)
     (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_ALL_AUDIT)
-    assert rd._therapy_table(tmp_path, _PREFIX) is None
+    assert rd.parse_therapy_recommendations(
+        tmp_path / f"{_PREFIX}-summary.md"
+    ) is None

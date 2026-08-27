@@ -406,8 +406,10 @@ _REFERENCE_FAMILY_FALLBACKS: Mapping[str, tuple[str, ...]] = {
     "carcinoma-lung": ("LUAD", "LUSC"),
     # Keratinocyte carcinomas (BCC, cSCC): nearest bulk squamous reference.
     "carcinoma-skin": ("HNSC",),
-    # HPV-associated GU squamous carcinomas (VSCC, VAGC, PENSCC, URETH):
-    # cervical SCC is the closest cohort; urothelial as secondary.
+    # GU squamous carcinomas without a direct reference (VAGC, PENSCC, URETH):
+    # cervical SCC is the closest cohort; urothelial as secondary. VSCC now has
+    # a direct reference in oncoref 1.8.184 / pirlygenes 5.23.55 and therefore
+    # resolves before this fallback is considered.
     "carcinoma-gu": ("CESC", "BLCA"),
     "cns": ("MBL", "GBM", "LGG"),
     "endocrine": ("THCA", "PCPG", "ACC"),

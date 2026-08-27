@@ -41,10 +41,10 @@ from .analyze import (
     cancer_type_context_from_analysis,
     cancer_type_tree_relationship,
     decomposition_purity_stability,
-    discover_output_artifacts,
     reconcile_decomposition_purity,
     resolve_analyze_inputs,
     should_adopt_decomposition_purity,
+    write_analysis_output_records,
     write_json,
 )
 from .tumor_purity import (
@@ -3436,10 +3436,17 @@ def _analyze_body(run: AnalyzeRun):
         final_purity.get("purity_source")
     )
     source_suffix = f"; basis: {final_purity_source}" if final_purity_source else ""
-    print(
-        f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])} estimate: "
-        f"{final_purity_text}{source_suffix}"
-    )
+    if final_purity.get("quantitative_status") == "discordant_estimators":
+        print(
+            f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])}: "
+            "quantitatively unresolved; operational model "
+            f"{final_purity_text}{source_suffix}"
+        )
+    else:
+        print(
+            f"[analysis] Final {_purity_metric_label(analysis['sample_mode'])} estimate: "
+            f"{final_purity_text}{source_suffix}"
+        )
 
     # The cancer-call manifest step is created before decomposition so progress
     # reporting has an early call.  Purity is finalized later; refresh only that
@@ -3454,26 +3461,19 @@ def _analyze_body(run: AnalyzeRun):
             "overall_lower": final_purity.get("overall_lower"),
             "overall_upper": final_purity.get("overall_upper"),
             "source": final_purity.get("purity_source"),
+            "quantitative_status": final_purity.get(
+                "quantitative_status", "resolved"
+            ),
+            "estimator_scenarios": final_purity.get("estimator_scenarios", []),
         }
         run.note_step("cancer_call", outputs=final_call_outputs)
 
-    # Build the frozen ReportView snapshot now that purity is finalized
-    # (decomposition adoption + lineage-panel override + interval cap above) and
-    # the decomposition results are attached. Phase 1 instrumentation: renderers
-    # are migrated onto this single read surface incrementally, so building it
-    # here is behavior-neutral. See
-    # docs/report-belief-consistency-and-friendliness-plan.md (Tier 1).
+    # Cross the report-finalization boundary exactly once. A missing or malformed
+    # report conclusion is a pipeline bug: do not silently fall back to mutable
+    # analysis state and let different artifacts disagree.
     from .report_view import build_report_view
 
-    try:
-        analysis["report_view"] = build_report_view(
-            analysis, sample_id=sample_display_id or None
-        )
-    except Exception:  # noqa: BLE001 - instrumentation must never abort a run
-        _LOGGER.warning(
-            "build_report_view failed; report_view unavailable", exc_info=True
-        )
-        analysis["report_view"] = None
+    report_view = build_report_view(analysis, sample_id=sample_display_id or None)
 
     # #97 sample-summary panels, rendered HERE — after purity finalization
     # (decomposition adoption + lineage-panel override + interval cap above) and
@@ -3489,6 +3489,7 @@ def _analyze_body(run: AnalyzeRun):
             save_to_filename=summary_png,
             save_dpi=output_dpi,
             analysis=analysis,
+            report_view=report_view,
         )
         plot_cancer_type_hypotheses(
             analysis, save_to_filename=hypotheses_png, save_dpi=output_dpi
@@ -3530,7 +3531,7 @@ def _analyze_body(run: AnalyzeRun):
             save_to_filename=methods_png,
             save_dpi=output_dpi,
             decomposition_result=best_for_methods,
-            report_view=analysis.get("report_view"),
+            report_view=report_view,
         )
         _plt.close("all")
 
@@ -3753,6 +3754,7 @@ def _analyze_body(run: AnalyzeRun):
     _embedding_meta = get_embedding_feature_metadata(method="panref")
     _generate_text_reports(
         analysis,
+        report_view,
         _embedding_meta,
         prefix,
         decomp_results=decomp_results,
@@ -4109,6 +4111,7 @@ def _analyze_body(run: AnalyzeRun):
             sample_id = sample_display_id or None
             _generate_text_reports(
                 analysis,
+                report_view,
                 _embedding_meta,
                 prefix,
                 decomp_results=decomp_results,
@@ -4123,9 +4126,11 @@ def _analyze_body(run: AnalyzeRun):
                 cancer_code=report_cancer_type,
                 disease_state=disease_state_for_summary,
                 sample_id=sample_id,
+                report_view=report_view,
             )
             evidence_md = _build_evidence_report(
                 analysis,
+                report_view,
                 ranges_df,
                 decomp_results,
                 cancer_code=report_cancer_type,
@@ -4150,6 +4155,7 @@ def _analyze_body(run: AnalyzeRun):
                     decomp_results,
                     save_to_filename=prov_png,
                     save_dpi=output_dpi,
+                    report_view=report_view,
                 )
                 if fig_out:
                     print(f"[plot] Saved {prov_png}")
@@ -4163,6 +4169,9 @@ def _analyze_body(run: AnalyzeRun):
 
     if not plot_ctx.enabled:
         print("[output] --no-figures: skipped figure PDF collection")
+        output_records = write_analysis_output_records(run, report_view)
+        print(f"[output] Wrote {output_records['report_document']}")
+        print(f"[output] Wrote {output_records['manifest']}")
         return
 
     # Collect all figures into one PDF (native resolution)
@@ -4725,52 +4734,9 @@ inferred from expression alone.
     readme_path.write_text(readme)
     print(f"[output] Wrote {readme_path}")
 
-    # Structured report document (§2.6b): one serialized artifact the interpretive
-    # PDF renders from, so the PDF can never disagree with the figures/markdown. It
-    # carries the frozen ReportView headline + the just-emitted reports (parsed once,
-    # server-side, so the markdown stays byte-stable) + a belief-gated figure
-    # manifest. Written before manifest discovery so it is itself catalogued.
-    # Best-effort: a serialization failure must never abort the analysis (the PDF
-    # falls back to building the document from the markdown directly).
-    try:
-        from .report_document import write_report_document
-
-        report_document_path = write_report_document(
-            paths.out_dir,
-            paths.prefix_base,
-            report_view=analysis.get("report_view"),
-        )
-        print(f"[output] Wrote {report_document_path}")
-    except (OSError, ValueError, TypeError):
-        # Tolerate only the realistic failure surface of "parse the reports, build a
-        # dict, json.dump it, write the file": filesystem errors and value/type
-        # errors from (de)serialization. Anything else here — a KeyError,
-        # AttributeError — is a bug in the document builder, not a runtime data
-        # condition, so let it surface loudly instead of silently shipping a run
-        # whose interpretive PDF has to fall back to scraping the markdown.
-        _LOGGER.warning(
-            "write_report_document failed; interpretive PDF will fall back to markdown",
-            exc_info=True,
-        )
-
-    manifest_path = "%s-manifest.json" % prefix if prefix else "manifest.json"
-    run.artifacts = discover_output_artifacts(paths.out_dir, paths.prefix_base)
-    run.add_artifact(
-        manifest_path,
-        kind="metadata",
-        step="output",
-        role="run_manifest",
-        description="Machine-readable list of emitted reports, figures, tables, and metadata.",
-    )
-    run.note_step(
-        "output",
-        outputs={
-            "manifest": manifest_path,
-            "n_artifacts": len(run.artifacts),
-        },
-    )
-    write_json(manifest_path, run.public_manifest())
-    print(f"[output] Wrote {manifest_path}")
+    output_records = write_analysis_output_records(run, report_view)
+    print(f"[output] Wrote {output_records['report_document']}")
+    print(f"[output] Wrote {output_records['manifest']}")
 
 
 def _sample_mode_display(sample_mode):
@@ -4822,19 +4788,18 @@ def _format_purity_interval(estimate, lower, upper) -> str:
     return estimate_text
 
 
-def _purity_ci_phrase(purity):
+def _purity_ci_phrase(estimate, lower, upper):
     """Render the purity estimate and heuristic range with an explicit low-confidence
     tag when the interval is so wide it provides almost no constraint
     (issue #79). A 19%-100% range should NOT look the same to a reader as
     a 58%-70% range.
     """
-    est = purity["overall_estimate"]
-    lo = purity["overall_lower"]
-    hi = purity["overall_upper"]
-    if est is None or lo is None or hi is None:
+    if estimate is None or lower is None or upper is None:
         return "**not estimated**"
-    tier = _ci_confidence_tier(lo, hi)
-    core = f"**{est:.0%}** (model interval {lo:.0%}–{hi:.0%})"
+    tier = _ci_confidence_tier(lower, upper)
+    core = (
+        f"**{estimate:.0%}** (model interval {lower:.0%}–{upper:.0%})"
+    )
     if tier == "degenerate":
         core += (
             " — **degenerate range**: input had no per-gene variation so "
@@ -4844,7 +4809,7 @@ def _purity_ci_phrase(purity):
     elif tier == "low":
         core += (
             " — **low confidence**: the range spans "
-            f"{(hi - lo):.0%}, so per-gene tumor-expression estimates "
+            f"{(upper - lower):.0%}, so per-gene tumor-expression estimates "
             "derived from this purity carry wide error bars"
         )
     elif tier == "moderate":
@@ -5686,6 +5651,13 @@ def _reconcile_purity_after_decomposition(
     ``_set_analysis_purity``) in place, and returns the possibly-updated
     ``effective_purity`` the caller threads onward.
     """
+    # Snapshot the independent pre-decomposition estimate before any adoption.
+    # The previous implementation captured it after ``_set_analysis_purity`` and
+    # therefore logged the adopted 5% estimate as its own 5% comparator.
+    classifier_purity = analysis.get("purity")
+    classifier_purity_snapshot = (
+        dict(classifier_purity) if isinstance(classifier_purity, dict) else {}
+    )
     if should_adopt_decomposition_purity(reference_cancer_code, best_decomp):
         decomp_purity = best_decomp.purity_result
         if isinstance(decomp_purity, dict):
@@ -5696,10 +5668,9 @@ def _reconcile_purity_after_decomposition(
             # range. A non-fragile fit is adopted unchanged (prior behavior). On "reject",
             # effective_purity stays the classifier purity (set by the caller), so the
             # lineage-panel override below never promotes the rejected fit.
-            classifier_purity = analysis.get("purity")
             stability = (analysis.get("decomposition") or {}).get("purity_stability")
             action, reconciled = reconcile_decomposition_purity(
-                classifier_purity, decomp_purity, stability
+                classifier_purity_snapshot, decomp_purity, stability
             )
             if isinstance(analysis.get("decomposition"), dict):
                 analysis["decomposition"]["purity_reconciliation"] = action
@@ -5712,9 +5683,8 @@ def _reconcile_purity_after_decomposition(
     # Propagate a lineage-panel purity override back into ``analysis["purity"]`` so every
     # downstream report is consistent (bug 2026-04-14: user saw 23% in the headline and 64%
     # in the decomposition-hypotheses table). When the decomposition's best hypothesis used a
-    # non-signature purity source we promote it, preserve the original estimate as
-    # ``signature_based_estimate``, and reset the CI widening and downstream pct_cancer_median
-    # math to use the new anchor.
+    # lineage estimator we promote it and preserve the original estimate under an accurately
+    # named pre-decomposition audit record.
     purity_source_best = (
         effective_purity.get("purity_source")
         if isinstance(effective_purity, dict)
@@ -5725,12 +5695,19 @@ def _reconcile_purity_after_decomposition(
         and isinstance(effective_purity, dict)
         and "overall_estimate" in effective_purity
     ):
-        orig_purity = dict(analysis["purity"])
-        analysis["purity"]["signature_based_estimate"] = orig_purity.get(
+        orig_purity = classifier_purity_snapshot
+        analysis["purity"]["pre_decomposition_estimate"] = orig_purity.get(
             "overall_estimate"
         )
-        analysis["purity"]["signature_based_lower"] = orig_purity.get("overall_lower")
-        analysis["purity"]["signature_based_upper"] = orig_purity.get("overall_upper")
+        analysis["purity"]["pre_decomposition_lower"] = orig_purity.get(
+            "overall_lower"
+        )
+        analysis["purity"]["pre_decomposition_upper"] = orig_purity.get(
+            "overall_upper"
+        )
+        analysis["purity"]["pre_decomposition_source"] = orig_purity.get(
+            "purity_source"
+        )
         analysis["purity"]["overall_estimate"] = effective_purity["overall_estimate"]
         analysis["purity"]["overall_lower"] = effective_purity.get(
             "overall_lower", effective_purity["overall_estimate"]
@@ -5745,7 +5722,7 @@ def _reconcile_purity_after_decomposition(
         print(
             f"[analysis] Adopted lineage-panel purity "
             f"{analysis['purity']['overall_estimate']:.0%} "
-            f"(signature-based estimate was "
+            f"(pre-decomposition estimate was "
             f"{orig_purity.get('overall_estimate', 0):.0%})"
         )
 
@@ -8374,6 +8351,7 @@ def _cancer_type_decision_trace_markdown(analysis):
 
 def _build_evidence_report(
     analysis,
+    report_view,
     ranges_df,
     decomp_results,
     cancer_code,
@@ -8389,6 +8367,7 @@ def _build_evidence_report(
         decomp_results,
         cancer_code=cancer_code,
         sample_id=sample_id,
+        report_view=report_view,
     )
     provenance_body = _demote_markdown_headings(
         _strip_markdown_wrapper(provenance_md),
@@ -8500,6 +8479,7 @@ def _classify_lineage_calibration_genes(sorted_genes, median_p):
 
 def _generate_text_reports(
     analysis,
+    report_view,
     embedding_meta,
     prefix,
     decomp_results=None,
@@ -8509,22 +8489,9 @@ def _generate_text_reports(
     df_expr=None,
 ):
     """Write the detailed ``*-analysis.md`` report."""
-    from .report_view import finalized_purity_headline
-
     cancer_code = analysis["cancer_type"]
     purity = analysis["purity"]
-    # Pin the adopted-purity headline to the single frozen ReportView surface so
-    # analysis.md can never show a stale pre-finalization purity — figure ==
-    # summary == analysis.md by construction. Byte-stable today (rendered after
-    # finalization); the guard survives a future reorder that isn't.
-    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
-    if _fp_overall is not None:
-        purity = {
-            **purity,
-            "overall_estimate": _fp_overall,
-            "overall_lower": _fp_lower,
-            "overall_upper": _fp_upper,
-        }
+    conclusion = report_view.purity
     mhc1 = analysis["mhc1"]
     top_tissues = analysis["tissue_scores"][:5]
     tissue_score_details = {
@@ -8608,14 +8575,18 @@ def _generate_text_reports(
         lines.append("- " + rescue_line)
     if call_summary.get("label_options"):
         active_label = call_summary["label_options"][0]
-        if len(call_summary["label_options"]) == 1:
-            lines.append(f"- **Working cancer call**: {_cancer_label(active_label)}.")
-        else:
+        call_is_provisional = (
+            report_view.call_confidence.tier == "low"
+            or len(call_summary["label_options"]) > 1
+        )
+        if call_is_provisional:
             lines.append(
                 f"- **Working cancer call**: {_cancer_label(active_label)} "
                 "(provisional; retained alternatives are summarized under "
                 "Cancer-Type Differential)."
             )
+        else:
+            lines.append(f"- **Working cancer call**: {_cancer_label(active_label)}.")
     context_line = _cancer_type_context_line(cancer_type_context)
     if context_line:
         lines.append(context_line)
@@ -8635,9 +8606,18 @@ def _generate_text_reports(
                 "an exact expression reference is not available; "
                 f"{_cancer_label(cancer_code)} remains the report label."
             )
-    lines.append(
-        f"- **{_purity_metric_label(sample_mode).title()}**: {_purity_ci_phrase(purity)}."
-    )
+    purity_heading = _purity_metric_label(sample_mode).title()
+    if conclusion.status == "discordant_estimators":
+        lines.append(
+            f"- **{purity_heading}**: **quantitatively unresolved**; operational "
+            f"model {_format_purity_interval(conclusion.estimate, conclusion.lower, conclusion.upper)} "
+            "for downstream calculations only."
+        )
+    else:
+        lines.append(
+            f"- **{purity_heading}**: "
+            f"{_purity_ci_phrase(conclusion.estimate, conclusion.lower, conclusion.upper)}."
+        )
     if call_summary.get("site_indeterminate"):
         lines.append("- **Background/site context**: indeterminate.")
     elif call_summary.get("reported_site"):
@@ -9279,17 +9259,7 @@ def _generate_text_reports(
 
     # Purity / composition
     lines.append(f"## {_purity_metric_label(sample_mode).title()}\n")
-    # #109: compute the sample-level confidence tier once and surface it
-    # inline so readers see a 19–100% CI render visibly different from a
-    # 58–70% CI (#79). The tier consumes purity CI width, point estimate,
-    # degradation severity, and sample-context flags.
-    from .confidence import purity_confidence_for_analysis
-
-    # Single source shared with the ReportView snapshot (report_view.py) so a
-    # report can never show one purity tier in a figure and a different one in
-    # text.
-    purity_tier = purity_confidence_for_analysis(analysis)
-    analysis["purity_confidence"] = purity_tier
+    purity_tier = conclusion.confidence
     # Sample-level low-purity flag rides along on ranges_df so every tumor-source TPM
     # cell (via reporting.tumor_attribution_context) carries the caveat inline, not just
     # the summary caveats block. ranges_df is not reassigned after it is built, so the
@@ -9307,12 +9277,46 @@ def _generate_text_reports(
         tier_suffix = f" — **{purity_tier.tier} confidence** ({tier_note})"
     else:
         tier_suffix = ""
-    lines.append(
-        "- **Overall estimate**: "
-        f"{_format_purity_interval(purity.get('overall_estimate'), purity.get('overall_lower'), purity.get('overall_upper'))}"
-        f"{tier_suffix}"
+    purity_interval_text = _format_purity_interval(
+        conclusion.estimate,
+        conclusion.lower,
+        conclusion.upper,
     )
-    purity_source = str(purity.get("purity_source") or "").strip()
+    if conclusion.status == "discordant_estimators":
+        lines.append(
+            "- **Quantitative conclusion**: **unresolved** — independent purity "
+            "estimators support incompatible scenarios."
+        )
+        lines.append(
+            "- **Operational model**: "
+            f"{purity_interval_text}; retained for downstream calculations, not "
+            "reported as a consensus purity estimate."
+        )
+        source_labels = {
+            "background_residual": "background-residual decomposition",
+            "lineage_panel": "matched-normal lineage model",
+            "signature": "upstream expression model",
+        }
+        scenario_text = []
+        for source, estimate, lower, upper in conclusion.scenarios:
+            if not isinstance(estimate, (int, float)):
+                continue
+            value = _format_purity_interval(
+                estimate,
+                lower,
+                upper,
+            )
+            scenario_text.append(
+                f"{source_labels.get(source, source.replace('_', ' '))}: {value}"
+            )
+        if scenario_text:
+            lines.append("- **Estimator scenarios**: " + "; ".join(scenario_text) + ".")
+    else:
+        lines.append(
+            "- **Overall estimate**: "
+            f"{purity_interval_text}{tier_suffix}"
+        )
+    purity_source = conclusion.method or ""
     if purity_source == "background_residual":
         residual_fraction = (
             (purity.get("components") or {})
@@ -9356,6 +9360,10 @@ def _generate_text_reports(
         uncertainty_basis.append(
             "the fit is marked fragile because background components can over-absorb "
             "tumor expression"
+        )
+    if stability.get("estimator_disagreement"):
+        uncertainty_basis.append(
+            "different quantitative estimators support non-overlapping scenarios"
         )
     caveat = purity.get("degradation_caveat") or {}
     if caveat.get("severity") and caveat.get("severity") != "none":
@@ -9738,6 +9746,7 @@ def _generate_text_reports(
                 cancer_code=cancer_code,
                 disease_state=disease_state_display,
                 sample_id=sample_id,
+                report_view=report_view,
             )
             therapy_section = _extract_markdown_section(
                 therapy_md,
@@ -10707,7 +10716,7 @@ def _build_target_report(
     lines.append(f"- **Analysis mode**: {_sample_mode_display(sample_mode)}.")
     lines.append(
         f"- **{_purity_metric_label(sample_mode).title()}**: "
-        f"{_purity_ci_phrase(purity_result)}."
+        f"{_purity_ci_phrase(p_mid, p_lo, p_hi)}."
     )
     if disease_state:
         lines.append(f"- **Disease-state synthesis**: {disease_state.rstrip('.')}.")

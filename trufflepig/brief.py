@@ -79,6 +79,7 @@ from .confidence import concise_confidence_reasons
 from .analyze import cancer_type_context_from_analysis, cancer_type_context_label
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
+from .report_view import ReportView
 from .sample_context import (
     heuristic_support_label,
     library_prep_clause,
@@ -574,7 +575,10 @@ def _scope_level_eligibility_context(target_row, analysis) -> str:
             "externally supplied NUTM label supports report scope; verify "
             "clinical diagnosis/fusion status before treating as eligible"
         )
-    return ""
+    return (
+        "NUTM report label is RNA-inferred; confirm NUTM1 fusion/IHC/FISH/"
+        "pathology before treating as eligible"
+    )
 
 
 def _expression_independent_evidence_gap(target_row, analysis) -> str:
@@ -2560,12 +2564,39 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     )
 
 
+def purity_estimator_scenario_text(scenarios) -> str:
+    """Render source-preserving purity scenarios without implying one CI.
+
+    Different decomposition templates can invoke different quantitative
+    estimators. This formatter deliberately names each estimator and keeps its
+    own interval, rather than presenting their union as uncertainty around one
+    point estimate.
+    """
+    labels = {
+        "background_residual": "background-residual decomposition",
+        "lineage_panel": "matched-normal lineage model",
+        "signature": "upstream expression model",
+    }
+    rendered = []
+    for source, estimate, lower, upper in scenarios or ():
+        source = str(source or "unspecified")
+        if not isinstance(estimate, (int, float)):
+            continue
+        value = f"{float(estimate):.0%}"
+        if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+            value += f" [{float(lower):.0%}–{float(upper):.0%}]"
+        rendered.append(f"{labels.get(source, source.replace('_', ' '))}: {value}")
+    return "; ".join(rendered)
+
+
 def build_summary(
     analysis,
     ranges_df,
     cancer_code: str,
     disease_state: str,
     sample_id: Optional[str] = None,
+    *,
+    report_view: ReportView,
 ) -> str:
     """Return the one-page ``*-summary.md`` content (≤ 40 lines).
 
@@ -2576,22 +2607,8 @@ def build_summary(
     """
     from pirlygenes.gene_sets_cancer import cancer_key_genes_cancer_types
 
-    from .report_view import finalized_purity_headline
-
-    purity = analysis.get("purity") or {}
-    # Pin the whole renderer's adopted purity to the single frozen ReportView
-    # surface (not just the headline below) so the tissue-composition banner and
-    # the headline read one finalized number — no figure/text divergence. Byte-
-    # stable: build_summary always renders after purity finalization.
-    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
-    if _fp_overall is not None:
-        purity = {
-            **purity,
-            "overall_estimate": _fp_overall,
-            "overall_lower": _fp_lower,
-            "overall_upper": _fp_upper,
-        }
-    purity_tier = analysis.get("purity_confidence")
+    conclusion = report_view.purity
+    purity_tier = conclusion.confidence
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code
 
@@ -2608,7 +2625,7 @@ def build_summary(
     hvt = analysis.get("healthy_vs_tumor")
     if hvt is not None:
         banner = hvt.brief_banner(
-            purity=purity.get("overall_estimate") if purity else None,
+            purity=conclusion.estimate,
             signature_score=_top_candidate_signature_score(analysis),
             active_cancer_code=cancer_code,
             active_cancer_label=cancer_name,
@@ -2620,19 +2637,12 @@ def build_summary(
     # Cancer call — annotated with #169 contested-call confidence when
     # orthogonal signals (lineage concordance, runner-up gap, tissue-composition
     # top-ρ cohort) disagree with the classifier's pick.
-    from .confidence import compute_call_confidence
-
-    call_tier = compute_call_confidence(analysis)
+    call_tier = report_view.call_confidence
     suffix = _call_confidence_suffix(
         call_tier,
         concise=True,
         include_reasons=False,
     )
-    rare_scope = analysis.get("rare_report_scope_inference") or {}
-    fusion_scope = analysis.get("fusion_report_scope_inference") or {}
-    if rare_scope or fusion_scope:
-        tier = getattr(call_tier, "tier", "unknown")
-        suffix = f" — **{tier} confidence**"
 
     # #171/#198: resolve subtype evidence separately from the report-scope
     # cancer label. The subtype signal is useful context, but rendering it
@@ -2779,16 +2789,26 @@ def build_summary(
     if subtype_line:
         lines.append(subtype_line)
 
-    # Purity — headline read through the shared ReportView surface so the summary text and the
-    # sample-summary figure cannot disagree (both call finalized_purity_headline; imported above).
-    overall, lower, upper = finalized_purity_headline(analysis)
-    if overall is not None and lower is not None and upper is not None:
-        tier_label = (
-            getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"
+    # Purity is one frozen value: estimate, interval, status, and scenarios can
+    # never be mixed with mutable analysis state.
+    overall, lower, upper = conclusion.estimate, conclusion.lower, conclusion.upper
+    if conclusion.status == "discordant_estimators" and overall is not None:
+        operational_range = (
+            f" [{lower:.0%}–{upper:.0%}]"
+            if lower is not None and upper is not None
+            else ""
         )
+        scenarios = purity_estimator_scenario_text(conclusion.scenarios)
+        scenario_clause = f" Scenarios: {scenarios}." if scenarios else ""
+        lines.append(
+            "**Purity:** quantitatively unresolved; the selected operational "
+            f"model uses {overall:.0%}{operational_range}, not a consensus estimate."
+            f"{scenario_clause}"
+        )
+    elif overall is not None and lower is not None and upper is not None:
         lines.append(
             f"**Purity:** {overall:.0%} (model interval {lower:.0%}–{upper:.0%}, "
-            f"{tier_label} confidence)."
+            f"{conclusion.confidence.tier} confidence)."
         )
     rescue_line = _cancer_call_rescue_summary_line(analysis)
     if rescue_line:
@@ -3026,6 +3046,8 @@ def build_actionable(
     cancer_code: str,
     disease_state: str,
     sample_id: Optional[str] = None,
+    *,
+    report_view: ReportView,
 ) -> str:
     """Return the longer ``*-actionable.md`` content (~2-3 pages).
 
@@ -3034,23 +3056,8 @@ def build_actionable(
     biomarker panel and therapy landscape inline; no pipeline-
     internal jargon.
     """
-    from .report_view import finalized_purity_headline
-
-    purity = analysis.get("purity") or {}
-    # Read the finalized purity from the single frozen ReportView surface so this
-    # renderer can't diverge from the figure / summary markdown — even if a future
-    # reorder rendered it before the live purity dict was updated (the 78%-vs-10%
-    # belief-consistency bug). Byte-stable today: every caller renders after
-    # finalization, so the frozen value already equals the live dict here.
-    _fp_overall, _fp_lower, _fp_upper = finalized_purity_headline(analysis)
-    if _fp_overall is not None:
-        purity = {
-            **purity,
-            "overall_estimate": _fp_overall,
-            "overall_lower": _fp_lower,
-            "overall_upper": _fp_upper,
-        }
-    purity_tier = analysis.get("purity_confidence")
+    conclusion = report_view.purity
+    purity_tier = conclusion.confidence
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code
 
@@ -3090,19 +3097,30 @@ def build_actionable(
     if rescue_line:
         lines.append("\n" + rescue_line)
 
-    overall = purity.get("overall_estimate")
-    lower = purity.get("overall_lower")
-    upper = purity.get("overall_upper")
-    tier_label = getattr(purity_tier, "tier", "unknown") if purity_tier else "unknown"
+    overall = conclusion.estimate
+    lower = conclusion.lower
+    upper = conclusion.upper
+    tier_label = conclusion.confidence.tier
     tier_reasons = getattr(purity_tier, "reasons", []) if purity_tier else []
-    if overall is not None:
+    if conclusion.status == "discordant_estimators" and overall is not None:
+        operational_range = (
+            f" (within-estimator interval {lower:.0%}–{upper:.0%})"
+            if lower is not None and upper is not None
+            else ""
+        )
+        scenarios = purity_estimator_scenario_text(conclusion.scenarios)
+        scenario_clause = f" The incompatible scenarios are {scenarios}." if scenarios else ""
+        lines.append(
+            "\nPurity is **quantitatively unresolved**. The selected model uses "
+            f"{overall:.0%}{operational_range} for downstream calculations only; "
+            "it is not a consensus tumor-purity estimate."
+            f"{scenario_clause}"
+        )
+    elif overall is not None:
         confidence_clause = f"**{tier_label}** confidence"
         if tier_reasons and tier_label in {"low", "moderate"}:
             confidence_clause += " (" + "; ".join(tier_reasons) + ")"
-        # Render the interval only when both bounds are present. The field-by-field
-        # headline pick can leave a bound None (view carries a point but no CI, and
-        # the live dict has none either); guard the same way build_summary does so a
-        # missing bound degrades to a bare point estimate instead of a format crash.
+        # Render a bare point when this estimator did not produce both bounds.
         interval_clause = (
             f" (model interval {lower:.0%}–{upper:.0%})"
             if lower is not None and upper is not None
@@ -3117,9 +3135,7 @@ def build_actionable(
 
     # Cancer call + disease state
     lines.append("## Cancer call and disease state\n")
-    from .confidence import compute_call_confidence
-
-    call_tier = compute_call_confidence(analysis)
+    call_tier = report_view.call_confidence
     call_suffix = _call_confidence_suffix(call_tier, concise=True)
     call_punctuation = call_suffix or "."
     lines.append(f"Working call: **{cancer_code}** ({cancer_name}){call_punctuation}")
@@ -3160,7 +3176,7 @@ def build_actionable(
     hvt = analysis.get("healthy_vs_tumor")
     if hvt is not None:
         banner = hvt.brief_banner(
-            purity=purity.get("overall_estimate") if purity else None,
+            purity=conclusion.estimate,
             signature_score=_top_candidate_signature_score(analysis),
             active_cancer_code=cancer_code,
             active_cancer_label=cancer_code_display_name(cancer_code, cancer_code),

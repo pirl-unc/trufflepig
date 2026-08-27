@@ -828,10 +828,27 @@ def test_should_adopt_decomposition_purity_contract():
     assert not should_adopt_decomposition_purity("COAD", missing)
 
 
-def _decomp_hyp(cancer_type, purity, recon, template, warnings=()):
+def _decomp_hyp(
+    cancer_type,
+    purity,
+    recon,
+    template,
+    warnings=(),
+    *,
+    purity_source="signature",
+    lower=None,
+    upper=None,
+):
     return SimpleNamespace(
         cancer_type=cancer_type,
         purity=purity,
+        purity_source=purity_source,
+        purity_result={
+            "overall_estimate": purity,
+            "overall_lower": purity if lower is None else lower,
+            "overall_upper": purity if upper is None else upper,
+            "purity_source": purity_source,
+        },
         reconstruction_error=recon,
         template=template,
         warnings=list(warnings),
@@ -869,6 +886,139 @@ def test_decomposition_purity_stability_flags_fragile_and_stable():
 
     # Defensive: empty input → empty dict, no raise.
     assert decomposition_purity_stability([]) == {}
+
+
+def test_purity_stability_keeps_incompatible_estimators_as_scenarios():
+    """A matched-normal estimate and an upstream estimate are not repeated
+    measurements and must never become opposite ends of one confidence interval.
+    """
+    from trufflepig.analyze import (
+        decomposition_purity_stability,
+        reconcile_decomposition_purity,
+    )
+
+    hypotheses = [
+        _decomp_hyp(
+            "READ",
+            0.05,
+            2.26,
+            "solid_primary",
+            ["Many genes are overexplained by the TME background"],
+            purity_source="lineage_panel",
+            lower=0.01,
+            upper=0.12,
+        ),
+        _decomp_hyp(
+            "READ",
+            0.43,
+            2.37,
+            "met_peritoneal",
+            purity_source="signature",
+            lower=0.32,
+            upper=0.55,
+        ),
+    ]
+
+    stability = decomposition_purity_stability(hypotheses)
+
+    assert stability["hypothesis_purity_spread"] == pytest.approx(0.0)
+    assert stability["hypothesis_purity_lo"] == pytest.approx(0.05)
+    assert stability["hypothesis_purity_hi"] == pytest.approx(0.05)
+    assert stability["estimator_disagreement"] is True
+    assert stability["quantitatively_resolved"] is False
+    assert [row["source"] for row in stability["estimator_scenarios"]] == [
+        "lineage_panel",
+        "signature",
+    ]
+
+    action, purity = reconcile_decomposition_purity(
+        {
+            "overall_estimate": 0.43,
+            "overall_lower": 0.32,
+            "overall_upper": 0.55,
+        },
+        hypotheses[0].purity_result,
+        stability,
+    )
+
+    assert action == "discordant"
+    assert purity["overall_estimate"] == pytest.approx(0.05)
+    assert purity["overall_lower"] == pytest.approx(0.01)
+    assert purity["overall_upper"] == pytest.approx(0.12)
+    assert purity["quantitative_status"] == "discordant_estimators"
+    assert purity["operational_estimate_only"] is True
+
+
+def test_post_decomposition_reconciliation_preserves_the_true_prior_estimate():
+    from trufflepig.main import _reconcile_purity_after_decomposition
+
+    classifier = {
+        "overall_estimate": 0.43,
+        "overall_lower": 0.32,
+        "overall_upper": 0.55,
+        "purity_source": "signature",
+        "components": {},
+    }
+    scenarios = [
+        {
+            "source": "lineage_panel",
+            "estimate": 0.05,
+            "lower": 0.01,
+            "upper": 0.12,
+            "templates": ["solid_primary"],
+        },
+        {
+            "source": "signature",
+            "estimate": 0.43,
+            "lower": 0.32,
+            "upper": 0.55,
+            "templates": ["met_peritoneal"],
+        },
+    ]
+    lineage = {
+        "overall_estimate": 0.05,
+        "overall_lower": 0.01,
+        "overall_upper": 0.12,
+        "purity_source": "lineage_panel",
+        "components": {},
+    }
+    best = SimpleNamespace(
+        cancer_type="READ",
+        purity_result=lineage,
+        purity_source="lineage_panel",
+        purity=0.05,
+        fractions={"tumor": 0.05, "matched_normal_rectum": 0.95},
+        warnings=["Many genes are overexplained by the TME background"],
+    )
+    analysis = {
+        "cancer_type": "READ",
+        "purity": classifier,
+        "candidate_trace": [{"code": "READ", "purity_result": classifier}],
+        "decomposition": {
+            "purity_stability": {
+                "fragile": True,
+                "quantitatively_resolved": False,
+                "estimator_disagreement": True,
+                "estimator_scenarios": scenarios,
+            }
+        },
+    }
+    run = SimpleNamespace(note_step=lambda *args, **kwargs: None)
+
+    _reconcile_purity_after_decomposition(
+        analysis,
+        best,
+        reference_cancer_code="READ",
+        effective_purity=classifier,
+        run=run,
+    )
+
+    assert analysis["purity"]["overall_estimate"] == pytest.approx(0.05)
+    assert analysis["purity"]["overall_upper"] == pytest.approx(0.12)
+    assert analysis["purity"]["pre_decomposition_estimate"] == pytest.approx(0.43)
+    assert analysis["purity"]["pre_decomposition_lower"] == pytest.approx(0.32)
+    assert analysis["purity"]["pre_decomposition_source"] == "signature"
+    assert analysis["purity"]["quantitative_status"] == "discordant_estimators"
 
 
 def test_reconcile_decomposition_purity_rejects_fragile_and_fully_inconsistent():

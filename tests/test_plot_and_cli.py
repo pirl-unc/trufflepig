@@ -16,6 +16,15 @@ from trufflepig.decomposition.plot import (
     plot_decomposition_composition,
 )
 from trufflepig.tumor_purity import _summarize_candidate_family
+from trufflepig.report_view import build_report_view
+
+
+def _generate_text_reports(analysis, *args, **kwargs):
+    finalized = dict(analysis)
+    finalized.setdefault("sample_mode", "solid")
+    finalized.setdefault("purity", {})
+    report_view = build_report_view(finalized)
+    return cli_mod._generate_text_reports(analysis, report_view, *args, **kwargs)
 
 
 def _write_target_report(ranges_df, analysis, prefix, cancer_type, purity_result):
@@ -55,13 +64,7 @@ def test_guess_gene_cols_and_pick_genes():
 
 
 def test_purity_ci_phrase_uses_text_not_warning_icon():
-    phrase = cli_mod._purity_ci_phrase(
-        {
-            "overall_estimate": 0.50,
-            "overall_lower": 0.10,
-            "overall_upper": 1.00,
-        }
-    )
+    phrase = cli_mod._purity_ci_phrase(0.50, 0.10, 1.00)
     assert "low confidence" in phrase
     assert "\u26a0" not in phrase
 
@@ -577,13 +580,14 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     }
     prefix = str(tmp_path / "sample")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # The old free-form summary.md that carried family-call phrasing
     # (CRC-family, retained-labels, subtype-candidates clause) was
     # retired in 4.41.0 as ~80% redundant with analysis.md. The
     # content below is now only checked in analysis.md.
     detailed = (tmp_path / "sample-analysis.md").read_text()
+    assert "Working cancer call**: COAD (Colon Adenocarcinoma) (provisional" in detailed
     assert "not literal" in detailed  # tissue-score caveat
     assert "Retained alternatives" in detailed
     assert "Broad family context" in detailed
@@ -627,7 +631,7 @@ def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
     }
     prefix = str(tmp_path / "heme")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # Heme-mode "malignant-lineage fraction proxy" phrasing lived in
     # the retired summary.md paragraph; analysis.md still carries the
@@ -681,7 +685,7 @@ def test_generate_text_reports_separates_rare_identity_from_purity(tmp_path):
         },
     }
     prefix = str(tmp_path / "nutm")
-    cli_mod._generate_text_reports(
+    _generate_text_reports(
         analysis,
         {
             "method": "hierarchy",
@@ -786,7 +790,7 @@ def test_generate_text_reports_handles_missing_lineage_summary(
         "trufflepig.common.build_sample_tpm_by_symbol",
         lambda _df: {"ESR1": 0.003},
     )
-    cli_mod._generate_text_reports(
+    _generate_text_reports(
         analysis,
         embedding_meta,
         prefix,
@@ -941,7 +945,7 @@ def test_generate_text_reports_mentions_analysis_constraints(tmp_path):
     }
     prefix = str(tmp_path / "constrained")
 
-    cli_mod._generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
 
     # "constrained working subtype" + the one-line "Analysis constraints"
     # recap lived in the retired summary.md paragraph. Analysis.md
@@ -1602,6 +1606,50 @@ def test_plot_tumor_purity_is_mode_aware(monkeypatch):
     assert "Malignant-lineage fraction estimate" in fig._suptitle.get_text()
 
 
+def test_plot_tumor_purity_labels_discordant_result_as_non_consensus():
+    purity = {
+        "cancer_type": "READ",
+        "tcga_median_purity": 0.6,
+        "reference_expression_source": "pan_cancer",
+        "overall_estimate": 0.05,
+        "overall_lower": 0.01,
+        "overall_upper": 0.12,
+        "quantitative_status": "discordant_estimators",
+        "components": {
+            "signature": {
+                "per_gene": [],
+                "purity": None,
+                "lower": None,
+                "upper": None,
+                "genes": [],
+            },
+            "lineage": {
+                "per_gene": [],
+                "purity": None,
+                "lower": None,
+                "upper": None,
+                "genes": [],
+            },
+            "stromal": {"n_genes": 10, "enrichment": 4.0},
+            "immune": {"n_genes": 10, "enrichment": 3.0},
+            "estimate_purity": None,
+            "decomposition": {"mode": "solid", "residual_fraction": 0.05},
+        },
+    }
+    frame = pd.DataFrame(
+        {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
+    )
+
+    fig, _ = purity_mod.plot_tumor_purity(
+        frame, cancer_type="READ", sample_mode="solid", purity_result=purity
+    )
+
+    assert "Quantitative purity unresolved" in fig._suptitle.get_text()
+    labels = [label.get_text() for label in fig.axes[1].get_yticklabels()]
+    assert any("Operational scenario" in label for label in labels)
+    assert not any(label == "Overall estimate" for label in labels)
+
+
 def test_purity_plots_explain_rare_reference_and_use_physical_residual():
     """Rare tumor-only references must not manufacture 100% ESTIMATE/NNLS
     rows or claim that no genes exist when a lineage panel is available."""
@@ -1700,6 +1748,68 @@ def test_plot_sample_summary_is_mode_aware(monkeypatch):
     assert "hematologic / lymphoid bulk" in fig._suptitle.get_text()
 
 
+def test_plot_sample_summary_abstains_from_composition_when_purity_is_unresolved():
+    from trufflepig.report_view import build_report_view
+
+    analysis = {
+        "cancer_type": "READ",
+        "cancer_name": "Rectum Adenocarcinoma",
+        "top_cancers": [("READ", 1.0), ("COAD", 0.8)],
+        "purity": {
+            "overall_estimate": 0.05,
+            "overall_lower": 0.01,
+            "overall_upper": 0.12,
+            "quantitative_status": "discordant_estimators",
+            "estimator_scenarios": [
+                {
+                    "source": "lineage_panel",
+                    "estimate": 0.05,
+                    "lower": 0.01,
+                    "upper": 0.12,
+                },
+                {
+                    "source": "signature",
+                    "estimate": 0.43,
+                    "lower": 0.32,
+                    "upper": 0.55,
+                },
+            ],
+            "tcga_median_purity": 0.70,
+            "components": {
+                "stromal": {"enrichment": 4.2},
+                "immune": {"enrichment": 0.9},
+            },
+        },
+        "tissue_scores": [("appendix", 0.77, 20)],
+        "mhc1": {"HLA-A": 40, "HLA-B": 55, "HLA-C": 30, "B2M": 200},
+        "mhc2": {},
+        "candidate_trace": [{"code": "READ"}, {"code": "COAD"}],
+        "sample_mode": "solid",
+    }
+    analysis["report_view"] = build_report_view(analysis)
+
+    fig, _analysis = purity_mod.plot_sample_summary(
+        pd.DataFrame(
+            {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
+        ),
+        cancer_type="READ",
+        sample_mode="solid",
+        analysis=analysis,
+        report_view=analysis["report_view"],
+    )
+
+    panel = fig.axes[1]
+    assert panel.get_title() == "Sample Composition — Purity Unresolved"
+    assert [text.get_text() for text in panel.get_legend().get_texts()] == [
+        "Composition unresolved"
+    ]
+    panel_text = "\n".join(text.get_text() for text in panel.texts)
+    assert "Tumor purity: quantitatively unresolved" in panel_text
+    assert "Operational model: 5% [1%–12%] (not consensus)" in panel_text
+    assert "upstream expression 43% [32%–55%]" in panel_text
+    assert "95%" not in panel_text
+
+
 def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
     mock_analysis = {
         "cancer_type": "BRCA",
@@ -1722,6 +1832,8 @@ def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
         "candidate_trace": [{"code": "HL"}, {"code": "BRCA"}],
     }
 
+    from trufflepig.report_view import build_report_view
+
     fig, _analysis = purity_mod.plot_sample_summary(
         pd.DataFrame(
             {"gene_id": ["ENSG1"], "gene_display_name": ["A"], "TPM": [1.0]}
@@ -1729,6 +1841,7 @@ def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
         cancer_type="BRCA",
         sample_mode="solid",
         analysis=mock_analysis,
+        report_view=build_report_view({**mock_analysis, "sample_mode": "solid"}),
     )
 
     ranker_panel = fig.axes[0]

@@ -3,8 +3,9 @@
 import pandas as pd
 
 from trufflepig.variants import variant_record_genes, parse_variant_inputs
-from trufflepig.brief import build_summary
+from trufflepig.brief import build_summary as _build_summary
 from trufflepig.fusions import FusionRecord
+from trufflepig.report_view import build_report_view
 import trufflepig.infantile_spindle as spindle
 from trufflepig.reporting import (
     cancer_therapy_panel_for_analysis,
@@ -30,6 +31,13 @@ def _analysis(code, *alterations):
         "variant_inputs_supplied": bool(records),
         "variant_records": records,
     }
+
+
+def build_summary(analysis, *args, **kwargs):
+    finalized = dict(analysis)
+    finalized.setdefault("sample_mode", "mesenchymal")
+    kwargs["report_view"] = build_report_view(finalized)
+    return _build_summary(analysis, *args, **kwargs)
 
 
 def _ranges(**values):

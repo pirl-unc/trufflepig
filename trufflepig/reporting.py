@@ -531,7 +531,11 @@ def indication_biomarker(target_row) -> str:
         target_row.get("symbol") if hasattr(target_row, "get") else ""
     )
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
-        return "mutation"
+        # BET/EP300/HDAC studies are scoped to an established NUT carcinoma
+        # diagnosis, not to an arbitrary alteration in the row's drug-target
+        # gene. In particular, a BRD4 fusion with a non-NUTM1 partner must not
+        # masquerade as the defining NUTM1 rearrangement.
+        return "histology_only"
     if cancer_code == "ADCC" and "lenvatinib" in agent_low:
         return "histology_only"
     if _MSI_HIGH_INDICATION.search(low) and not _MMR_PROFICIENT.search(low):

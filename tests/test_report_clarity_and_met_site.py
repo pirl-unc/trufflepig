@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pytest
+from trufflepig.report_view import build_report_view
 
 from trufflepig.main import (
     _build_target_report,
@@ -467,6 +468,7 @@ def test_summary_md_structure_for_report_clarity(tmp_path):
     }
     _generate_text_reports(
         analysis,
+        build_report_view(analysis),
         embedding_meta,
         prefix,
         decomp_results=[],
@@ -583,7 +585,13 @@ def test_analysis_renders_background_tissue_driver_genes(tmp_path):
     }
     prefix = str(tmp_path / "sarcoma-bg")
 
-    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(
+        analysis,
+        build_report_view(analysis),
+        embedding_meta,
+        prefix,
+        decomp_results=[],
+    )
 
     detailed = (tmp_path / "sarcoma-bg-analysis.md").read_text()
     assert "Top matching genes" in detailed
@@ -679,7 +687,13 @@ def test_detailed_report_uses_generic_lineage_caveat(tmp_path):
     }
     prefix = str(tmp_path / "hnsccase")
 
-    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    _generate_text_reports(
+        analysis,
+        build_report_view(analysis),
+        embedding_meta,
+        prefix,
+        decomp_results=[],
+    )
 
     detailed = (tmp_path / "hnsccase-analysis.md").read_text()
     assert "Lineage caveat" in detailed

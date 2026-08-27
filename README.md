@@ -108,7 +108,10 @@ All have the same meaning as in the old `pirlygenes analyze`.
 `"EGFR KDD"`. Fusions supplied through `--fusions` enter the same normalized
 variant evidence stream. MSI-H/TMB-like sample states are not variants and are
 kept separate. The old `--alterations` spelling remains a hidden compatibility
-alias; explicit VCF/MAF/caller adapters are tracked in issues #140 and #141.
+alias. VCF and MAF fail closed until their standards-aware adapters land; see
+[variant input and coordinate provenance](docs/variant-inputs.md) and issues
+[#140](https://github.com/pirl-unc/trufflepig/issues/140) and
+[#141](https://github.com/pirl-unc/trufflepig/issues/141).
 
 ### Multi-sample (longitudinal)
 

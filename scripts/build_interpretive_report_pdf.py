@@ -11,9 +11,8 @@ The PDF renders entirely from the structured report document
 (``<prefix>-report.json``; see :mod:`trufflepig.report_document`) — the finalized
 headline, the at-a-glance records, the therapy and target tables, and a
 belief-gated figure manifest — and never re-reads the markdown, so it cannot
-disagree with the figures or the reports. When the sidecar is absent (an analyze
-dir produced before it existed, or a standalone build) the document is
-reconstructed from the reports on the fly.
+disagree with the figures or the reports. The PDF requires that structured
+document and asks the caller to rerun analysis when it is absent.
 """
 
 from __future__ import annotations
@@ -33,11 +32,6 @@ from trufflepig.report_document import (
     section_records,
     short_text,
 )
-
-# The draw helpers below were written against the underscore-prefixed names these
-# parsers used before they moved to the shared module; alias to keep them verbatim.
-_clean_markdown = clean_markdown
-_short_text = short_text
 
 PAGE_W, PAGE_H = 2550, 3300
 MARGIN = 150
@@ -119,7 +113,7 @@ def _draw_rich_wrapped(
 
 
 def _therapy_summary(line: str) -> tuple[str, str]:
-    text = _clean_markdown(line).lstrip("- ").strip()
+    text = clean_markdown(line).lstrip("- ").strip()
     if " - " in text:
         gene, rest = text.split(" - ", 1)
     elif " — " in text:
@@ -142,7 +136,7 @@ def _therapy_summary(line: str) -> tuple[str, str]:
         caveats.append("target RNA is context only")
     suffix = "; ".join(caveats)
     body = headline.rstrip(".") + (f". {suffix}." if suffix else ".")
-    return gene.strip(), _short_text(body, max_chars=210)
+    return gene.strip(), short_text(body, max_chars=210)
 
 
 def _draw_card(
@@ -161,7 +155,7 @@ def _draw_card(
     draw.rectangle((x0, y0, x0 + 12, y1), fill=accent)
     draw.text((x0 + 34, y0 + 26), label.upper(), fill=accent, font=label_font)
     max_width = x1 - x0 - 62
-    words = re.findall(r"\S+\s*", _short_text(value or "Not reported", max_chars=120))
+    words = re.findall(r"\S+\s*", short_text(value or "Not reported", max_chars=120))
     lines: list[str] = []
     current = ""
     for word in words:
@@ -176,7 +170,7 @@ def _draw_card(
     max_lines = 4
     if len(lines) > max_lines:
         lines = lines[:max_lines]
-        lines[-1] = _short_text(lines[-1], max_chars=max(12, len(lines[-1]) - 3))
+        lines[-1] = short_text(lines[-1], max_chars=max(12, len(lines[-1]) - 3))
     y = y0 + 72
     for line in lines:
         draw.text((x0 + 34, y), line, fill=TEXT_COLOR, font=value_font)
@@ -205,7 +199,7 @@ def _draw_labeled_bullet(
     segments = []
     if label:
         segments.append((f"{label}: ", bold_font, TEXT_COLOR))
-    segments.append((_short_text(body, max_chars=360), body_font, fill))
+    segments.append((short_text(body, max_chars=360), body_font, fill))
     return (
         _draw_rich_wrapped(
             draw,
@@ -319,25 +313,14 @@ def _draw_table(
 
 
 def _headline_cards(document: dict) -> tuple[str, str]:
-    """The (cancer-call, purity) card strings, preferring the structural ReportView
-    headline over the parsed markdown.
-
-    The headline dict carries the finalized decision (``cancer_type`` / ``purity`` /
-    ``purity_lo`` / ``purity_hi`` / ``purity_confidence``) — the same values the
-    figures and the markdown headline render — so formatting the cards from it makes
-    the PDF's headline agree with them by construction. Falls back per field to the
-    parsed ``Cancer call`` / ``Purity`` records for the fallback headline shape (a
-    standalone build with no ReportView) or an analyze dir predating the sidecar.
-    """
-    records = document.get("records") or []
+    """Format the cancer-call and purity cards from the structured headline."""
     headline = document.get("headline") or {}
 
     ctype = headline.get("cancer_type")
-    if ctype:
-        name = headline.get("cancer_type_name") or ""
-        call = f"{ctype} ({name})" if name and name != ctype else str(ctype)
-    else:
-        call = record_value(records, "Cancer call")
+    if not ctype:
+        raise ValueError("Structured report headline is missing cancer_type")
+    name = headline.get("cancer_type_name") or ""
+    call = f"{ctype} ({name})" if name and name != ctype else str(ctype)
 
     purity_value = headline.get("purity")
     if purity_value is not None:
@@ -351,7 +334,7 @@ def _headline_cards(document: dict) -> tuple[str, str]:
             text += f" ({conf} confidence)"
         purity = text
     else:
-        purity = record_value(records, "Purity")
+        purity = "Not estimated"
     return call, purity
 
 
@@ -374,11 +357,8 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     )
     draw.rectangle((MARGIN, MARGIN + 130, PAGE_W - MARGIN, MARGIN + 136), fill=ACCENT)
 
-    # Read the call + purity cards from the structural ReportView headline (the
-    # authoritative finalized decision the figures also read), so the PDF's headline
-    # can't drift from the figures/markdown by construction — not merely by the
-    # parity test. Falls back to the parsed records for the fallback headline shape
-    # or an analyze dir produced before the sidecar existed.
+    # Read the call + purity cards from the authoritative finalized headline so
+    # the PDF cannot drift from the figures or markdown by construction.
     call, purity = _headline_cards(document)
     mmr = record_value(records, "Mismatch-repair RNA context")
     sample = record_value(records, "Sample")

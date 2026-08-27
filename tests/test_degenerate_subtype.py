@@ -7,12 +7,22 @@ data-integrity contract on both CSV files.
 
 from pirlygenes.gene_sets_cancer import cancer_type_registry
 
+from trufflepig.brief import build_summary
 from trufflepig.degenerate_subtype import (
     degenerate_subtype_pairs,
     fusion_surrogate_expression,
     fusion_surrogate_genes_for,
     resolve_degenerate_subtype,
 )
+from trufflepig.report_view import build_report_view
+
+
+def render_summary(analysis, *args, **kwargs):
+    finalized = dict(analysis)
+    finalized.setdefault("cancer_type", kwargs.get("cancer_code") or "UNKNOWN")
+    finalized.setdefault("sample_mode", "solid")
+    kwargs["report_view"] = build_report_view(finalized)
+    return build_summary(analysis, *args, **kwargs)
 
 
 def test_degenerate_pairs_csv_loads_and_parses():
@@ -408,7 +418,6 @@ def test_brief_renders_corrected_subtype():
     ranges_df, not from an analysis key."""
     import pandas as pd
 
-    from trufflepig.brief import build_summary
     from trufflepig.reporting import cancer_key_genes_lookup_for_analysis
 
     analysis = {
@@ -438,7 +447,7 @@ def test_brief_renders_corrected_subtype():
             {"symbol": "FRS2", "attr_tumor_tpm": 137.0},
         ]
     )
-    summary = build_summary(
+    summary = render_summary(
         analysis,
         ranges_df=ranges_df,
         cancer_code="SARC",
@@ -462,7 +471,6 @@ def test_brief_uses_site_hint_for_corrected_subtype_without_decomposition():
     did not produce a best template."""
     import pandas as pd
 
-    from trufflepig.brief import build_summary
 
     analysis = {
         "cancer_type": "SARC",
@@ -496,7 +504,7 @@ def test_brief_uses_site_hint_for_corrected_subtype_without_decomposition():
         ]
     )
 
-    summary = build_summary(
+    summary = render_summary(
         analysis,
         ranges_df=ranges_df,
         cancer_code="SARC",
@@ -576,7 +584,6 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
     """
     import pandas as pd
 
-    from trufflepig.brief import build_summary
 
     analysis = {
         "purity": {
@@ -627,7 +634,7 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
             },
         ]
     )
-    summary = build_summary(
+    summary = render_summary(
         analysis,
         ranges_df=ranges_df,
         cancer_code="SARC",
@@ -644,7 +651,6 @@ def test_forced_cancer_type_does_not_inherit_unrelated_subtype():
     unconstrained classifier trace."""
     import pandas as pd
 
-    from trufflepig.brief import build_summary
     from trufflepig.reporting import (
         cancer_key_genes_lookup_for_analysis,
         candidate_winning_subtype_for_analysis,
@@ -689,7 +695,7 @@ def test_forced_cancer_type_does_not_inherit_unrelated_subtype():
     assert candidate_winning_subtype_for_analysis(analysis) is None
     assert cancer_key_genes_lookup_for_analysis("COAD", analysis) == ("COAD", None)
 
-    summary = build_summary(
+    summary = render_summary(
         analysis,
         ranges_df=ranges_df,
         cancer_code="COAD",
@@ -849,7 +855,6 @@ def test_brief_lusc_with_high_prame_mage_does_not_flag_nutm():
     fix, vote-based disambiguation would have mis-called this as NUTM."""
     import pandas as pd
 
-    from trufflepig.brief import build_summary
 
     analysis = {
         "purity": {
@@ -879,7 +884,7 @@ def test_brief_lusc_with_high_prame_mage_does_not_flag_nutm():
             {"symbol": "NUTM1", "attr_tumor_tpm": 0.1},
         ]
     )
-    summary = build_summary(
+    summary = render_summary(
         analysis,
         ranges_df=ranges_df,
         cancer_code="LUSC",
