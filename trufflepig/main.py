@@ -7580,6 +7580,24 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         best = candidate_trace[0]
         best_code = str(best.get("code") or "").strip()
         runner = candidate_trace[1] if len(candidate_trace) > 1 else None
+        selected_evidence = (
+            (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+        )
+        residual_identity = analysis.get("residual_identity_evidence") or {}
+        source_resolved_selection = bool(
+            selected_evidence.get("selected_by")
+            == "entity_evidence_consensus"
+            and residual_identity.get("source_resolved_identity")
+            and cancer_codes_entity_compatible(
+                residual_identity.get("candidate_code"),
+                cancer_code,
+            )
+            and (
+                analysis.get("post_residual_decomposition_refit") or {}
+            ).get("accepted")
+            is True
+        )
+        ranker_detail_applicable = not source_resolved_selection
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         supplied_discordant = (
             analysis.get("cancer_type_source") == "user-specified"
@@ -7590,7 +7608,17 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             and best_code != str(cancer_code).strip()
             and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
         )
-        if evidence_selected_discordant:
+        if evidence_selected_discordant and source_resolved_selection:
+            sentence = (
+                "- **Tumor-versus-host identity line**: the bulk pan-cancer "
+                f"signature ranker favors {_cancer_label(best_code)}, retained "
+                "as host/background differential context; candidate-independent "
+                "background subtraction recovered a complete marker and ontology "
+                f"program for {_cancer_label(cancer_code)} across every usable "
+                "model, and the final-scope decomposition refit reproduced that "
+                "identity"
+            )
+        elif evidence_selected_discordant:
             sentence = (
                 "- **RNA classifier line**: the pan-cancer signature ranker "
                 "does not independently set the report label; integrated evidence selected "
@@ -7626,7 +7654,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 sentence = (
                     f"- **Classifier line**: {_cancer_label(best['code'])} is the leading label"
                 )
-        if supplied_discordant and runner is not None:
+        if ranker_detail_applicable and supplied_discordant and runner is not None:
             runner_norm = float(runner.get("support_fraction_of_top", 0.0) or 0.0)
             if str(runner.get("code") or "").strip() == str(cancer_code).strip():
                 if runner_norm > 0:
@@ -7644,7 +7672,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 )
             else:
                 sentence += f", with {_cancer_label(runner['code'])} the next candidate"
-        elif runner is not None:
+        elif ranker_detail_applicable and runner is not None:
             runner_norm = float(runner.get("support_fraction_of_top", 0.0) or 0.0)
             runner_code = str(runner.get("code") or "").strip()
             if (
@@ -7665,9 +7693,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 )
             else:
                 sentence += f", with {_cancer_label(runner['code'])} the next candidate"
-        if best.get("signature_score") is not None:
+        if ranker_detail_applicable and best.get("signature_score") is not None:
             sentence += f"; signature {best['signature_score']:.2f}"
-        if best.get("lineage_concordance") is not None:
+        if ranker_detail_applicable and best.get("lineage_concordance") is not None:
             sentence += f", lineage concordance {best['lineage_concordance']:.2f}"
         sentence += "."
         bullets.append(sentence)

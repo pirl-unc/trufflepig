@@ -538,6 +538,42 @@ def test_summary_marks_supplied_cancer_type_basis():
     assert "RNA-inferred — treat it as a hypothesis" not in md
 
 
+def test_summary_names_source_resolved_tumor_identity_basis():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "CRC",
+            "cancer_type_source": "auto-detected",
+            "report_scope_cancer_type": "CRC",
+            "cancer_type_evidence": {
+                "selected": {
+                    "cancer_type": "CRC",
+                    "selected_by": "entity_evidence_consensus",
+                }
+            },
+            "residual_identity_evidence": {
+                "status": "corroborated",
+                "candidate_code": "CRC",
+                "source_resolved_identity": True,
+            },
+            "post_residual_decomposition_refit": {"accepted": True},
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="CRC",
+        disease_state="",
+    )
+
+    assert "Cancer-type basis" in md
+    assert "candidate-independent background decomposition recovered" in md
+    assert "complete and invariant CRC (Colorectal Adenocarcinoma)" in md
+    assert "refitted for that final scope reproduced it" in md
+    assert "host/background differential context" in md
+
+
 def test_summary_marks_supplied_cancer_type_rna_concordance():
     analysis = _make_analysis()
     analysis["analysis_constraints"] = {"cancer_type": "PRAD"}

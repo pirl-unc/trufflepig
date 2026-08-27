@@ -264,6 +264,47 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     assert "SARC (Sarcoma) is the leading label" not in text
 
 
+def test_source_resolved_call_names_bulk_signal_as_host_context():
+    analysis = _base_analysis(
+        cancer_type="CRC",
+        cancer_type_source="auto-detected",
+        report_scope_cancer_type="CRC",
+        cancer_type_evidence={
+            "selected": {
+                "cancer_type": "CRC",
+                "selected_by": "entity_evidence_consensus",
+            }
+        },
+        residual_identity_evidence={
+            "status": "corroborated",
+            "candidate_code": "CRC",
+            "source_resolved_identity": True,
+        },
+        post_residual_decomposition_refit={"accepted": True},
+        candidate_trace=[
+            {
+                "code": "SARC_DDLPS",
+                "signature_score": 0.74,
+                "support_fraction_of_top": 1.0,
+            },
+            {
+                "code": "SARC_PLEOLPS",
+                "support_fraction_of_top": 0.98,
+            },
+        ],
+        call_summary={"label_options": ["CRC"], "label_display": "CRC"},
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis))
+
+    assert "**Tumor-versus-host identity line**" in text
+    assert "bulk pan-cancer signature ranker favors SARC_DDLPS" in text
+    assert "retained as host/background differential context" in text
+    assert "final-scope decomposition refit reproduced" in text
+    assert "ahead of SARC_PLEOLPS" not in text
+    assert "; signature 0.74" not in text
+
+
 def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference():
     analysis = _base_analysis(
         cancer_type="BRCA_Basal",
