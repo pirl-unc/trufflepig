@@ -1827,6 +1827,155 @@ def test_source_resolved_residual_is_one_compound_identity_selector():
     assert marker_axis["available"] is False
 
 
+def test_source_resolved_parent_selects_parent_not_learned_child():
+    """A CRC residual cannot manufacture READ precision from a weak tail."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "SARC_DDLPS",
+            entity_support=0.40,
+            entity_margin=0.20,
+            family="CRC",
+            family_support=0.80,
+            compartment="epithelial",
+            compartment_support=0.90,
+        ),
+        ("SARC_DDLPS", 0.40),
+        ("READ", 0.01),
+    )
+    selected = _selectable("SARC_DDLPS", "fused_evidence", (3, 2.0, 4))
+    selected.broad_rna_support = 0.20
+    selected.coarse_composition_support = 0.20
+    selected.admit_adjudication_support(
+        "composition_reference",
+        selected.coarse_composition_support,
+        selector="test_composition",
+    )
+    selected.details.update(details)
+    selected.details["signature_score"] = 0.20
+    # READ is the leader of the alternate flat view, but only at negligible
+    # support. That keeps it in the real production beam without making it a
+    # credible child-level origin.
+    selected.details["learned_expression_flat_entity_supports"] = {
+        "READ": 0.01,
+    }
+    read = CancerTypeEvidence(
+        cancer_type="READ",
+        broad_rna_rank=2,
+        broad_rna_support=0.10,
+        details={"signature_score": 0.10},
+    )
+    read.coarse_composition_support = 0.80
+    read.admit_adjudication_support(
+        "composition_reference",
+        read.coarse_composition_support,
+        selector="test_composition",
+    )
+    crc = CancerTypeEvidence(
+        cancer_type="CRC",
+        broad_rna_support=0.10,
+        details={"signature_score": 0.10},
+    )
+    crc.coarse_composition_support = 0.30
+    crc.admit_adjudication_support(
+        "composition_reference",
+        crc.coarse_composition_support,
+        selector="test_composition",
+    )
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC_DDLPS": selected, "READ": read, "CRC": crc},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": "CRC",
+            "ontology_candidate_code": "CRC",
+            "source_resolved_identity": True,
+            "current_code": "SARC_DDLPS",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 2,
+                    "template": "identity_background",
+                },
+            ],
+        },
+    )
+
+    assert result is crc
+    assert result.selected_by == "entity_evidence_consensus"
+    assert result.details["entity_evidence_consensus"][
+        "source_resolved_identity_decisive"
+    ] is True
+    assert result.details["entity_evidence_consensus"][
+        "entity_prediction_origin"
+    ] == "invariant_residual_identity"
+
+
+def test_source_resolved_parent_broadens_an_existing_child_call():
+    """Exact parent identity outranks compatibility with the current child."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("READ", "fused_evidence", (3, 2.0, 4))
+    selected.details.update(
+        _add_entity_prediction_vector(
+            _top_hierarchy_details(
+                "READ",
+                entity_support=0.40,
+                entity_margin=0.20,
+                family="CRC",
+                family_support=0.80,
+                compartment="epithelial",
+                compartment_support=0.90,
+            ),
+            ("READ", 0.40),
+            ("COAD", 0.20),
+        )
+    )
+    crc = CancerTypeEvidence(cancer_type="CRC")
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"READ": selected, "CRC": crc},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": "CRC",
+            "ontology_candidate_code": "CRC",
+            "source_resolved_identity": True,
+            "current_code": "READ",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 2,
+                    "template": "identity_background",
+                },
+            ],
+        },
+    )
+
+    assert result is crc
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["source_resolved_identity_decisive"] is True
+    residual_axis = next(
+        axis
+        for axis in consensus["axes"]
+        if axis["axis"] == "decomposition_residual_identity"
+    )
+    assert residual_axis["candidate_support"] == 1.0
+    assert residual_axis["selected_support"] == 0.0
+
+
 def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
     """A background-derived bulk compartment cannot veto resolved tumor RNA.
 

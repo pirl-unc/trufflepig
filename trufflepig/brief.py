@@ -76,8 +76,11 @@ from .reporting import (
     tumor_attribution_context,
 )
 from .confidence import concise_confidence_reasons
-from .analyze import cancer_type_context_from_analysis, cancer_type_context_label
-from .cancer_ontology import cancer_codes_entity_compatible
+from .analyze import (
+    ResidualIdentityScope,
+    cancer_type_context_from_analysis,
+    cancer_type_context_label,
+)
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
 from .report_view import ReportView
@@ -1418,31 +1421,45 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     call_rescue = analysis.get("cancer_call_rescue") or {}
     if call_rescue and not constrained_code and source != "user-specified":
         return _cancer_call_rescue_basis_line(analysis, cancer_code)
-    selected_evidence = (
-        (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
-    )
-    residual_identity = analysis.get("residual_identity_evidence") or {}
-    final_refit = analysis.get("post_residual_decomposition_refit") or {}
+    residual_scope = ResidualIdentityScope.from_analysis(analysis, cancer_code)
     if (
         not constrained_code
         and source != "user-specified"
-        and selected_evidence.get("selected_by")
-        == "entity_evidence_consensus"
-        and residual_identity.get("source_resolved_identity")
-        and cancer_codes_entity_compatible(
-            residual_identity.get("candidate_code"),
-            cancer_code,
-        )
-        and final_refit.get("accepted") is True
+        and residual_scope.is_selection_basis
     ):
         return (
             "**Cancer-type basis:** candidate-independent background "
-            f"decomposition recovered a complete and invariant {_cancer_type_context_label(cancer_code)} "
+            f"decomposition recovered a complete and invariant {_cancer_type_context_label(residual_scope.residual_code)} "
             "tumor-identity program, and a decomposition refitted for that final "
             "scope reproduced it. Conflicting bulk whole-profile signals remain "
             "host/background differential context; confirm the RNA-inferred "
             "label with pathology or clinical diagnosis before using the "
             "therapy shortlist."
+        )
+    if (
+        not constrained_code
+        and source != "user-specified"
+        and residual_scope.is_confirmed_context
+        and residual_scope.relationship != "same"
+    ):
+        if residual_scope.relationship == "ancestor":
+            relationship_clause = (
+                "That establishes the broader branch but does not by itself "
+                f"establish {_cancer_type_context_label(cancer_code)}."
+            )
+        else:
+            relationship_clause = (
+                "That result is residual context, not the recorded selection "
+                f"basis for {_cancer_type_context_label(cancer_code)}."
+            )
+        return (
+            "**Cancer-type basis:** integrated RNA evidence sets "
+            f"{_cancer_type_context_label(cancer_code)} as a provisional report "
+            "label. Candidate-independent background decomposition resolved "
+            f"{_cancer_type_context_label(residual_scope.residual_code)} residual "
+            f"identity. {relationship_clause} Confirm "
+            "the finer label with pathology or clinical diagnosis before using "
+            "the therapy shortlist."
         )
     if constrained_code or source == "user-specified":
         supplied = report_context_code or constrained_code or str(cancer_code or "").strip()
@@ -1530,10 +1547,7 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         )
         if gene
     ]
-    residual_matches_panel = cancer_codes_entity_compatible(
-        residual_candidate,
-        top_panel,
-    )
+    residual_matches_panel = residual_candidate == top_panel
     source_resolved = bool(
         residual_identity.get("source_resolved_identity")
         and residual_matches_panel

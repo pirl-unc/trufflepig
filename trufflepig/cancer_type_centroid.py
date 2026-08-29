@@ -73,7 +73,7 @@ def _bulk_centroids():
     """``(log1p reference DataFrame [Symbol x COHORT], informative-gene index)``, cached.
 
     The reference is the FULL set of representative cohort medoids from pirlygenes
-    (``available_representative_cohorts`` -> ``cohort_expression_views().clean_tpm``) —
+    (``available_representative_cohorts`` -> ``cohort_expression_matrices().clean_tpm``) —
     ~118 cohorts INCLUDING subtypes (BRCA_Basal / BRCA_LumA / …, the SARC_* subtypes,
     and the rare / non-TCGA types). This is deliberately NOT the 33 TCGA bulk
     centroids: a bulk pan-cancer centroid is subtype-averaged (the BRCA column is
@@ -92,11 +92,11 @@ def _bulk_centroids():
     try:
         from pirlygenes.expression import (
             available_representative_cohorts,
-            cohort_expression_views,
+            cohort_expression_matrices,
         )
 
         reps = [c for c in available_representative_cohorts() if str(c) != "SARC"]
-        view = cohort_expression_views(reps).clean_tpm
+        view = cohort_expression_matrices(reps).clean_tpm
         if "Symbol" in getattr(view, "columns", []):
             view = view.set_index("Symbol")
         view = view.drop(

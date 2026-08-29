@@ -549,6 +549,9 @@ def test_summary_names_source_resolved_tumor_identity_basis():
                 "selected": {
                     "cancer_type": "CRC",
                     "selected_by": "entity_evidence_consensus",
+                    "entity_evidence_consensus": {
+                        "source_resolved_identity_decisive": True,
+                    },
                 }
             },
             "residual_identity_evidence": {
@@ -572,6 +575,44 @@ def test_summary_names_source_resolved_tumor_identity_basis():
     assert "complete and invariant CRC (Colorectal Adenocarcinoma)" in md
     assert "refitted for that final scope reproduced it" in md
     assert "host/background differential context" in md
+
+
+def test_summary_keeps_parent_residual_at_parent_scope():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "READ",
+            "cancer_type_source": "auto-detected",
+            "report_scope_cancer_type": "READ",
+            "cancer_type_evidence": {
+                "selected": {
+                    "cancer_type": "READ",
+                    "selected_by": "entity_evidence_consensus",
+                    "entity_evidence_consensus": {
+                        "source_resolved_identity_decisive": False,
+                    },
+                }
+            },
+            "residual_identity_evidence": {
+                "status": "corroborated",
+                "candidate_code": "CRC",
+                "source_resolved_identity": True,
+            },
+            "post_residual_decomposition_refit": {"accepted": True},
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="READ",
+        disease_state="",
+    )
+
+    assert "CRC (Colorectal Adenocarcinoma) residual identity" in md
+    assert "establishes the broader branch but does not by itself establish" in md
+    assert "READ" in md
+    assert "complete and invariant READ" not in md
 
 
 def test_summary_marks_supplied_cancer_type_rna_concordance():

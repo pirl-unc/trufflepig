@@ -35,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 from .analyze import (
     AnalyzeConfig,
     AnalyzeRun,
+    ResidualIdentityScope,
     apply_sample_context_to_purity,
     build_analysis_parameters,
     build_analyze_paths,
@@ -7580,23 +7581,11 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         best = candidate_trace[0]
         best_code = str(best.get("code") or "").strip()
         runner = candidate_trace[1] if len(candidate_trace) > 1 else None
-        selected_evidence = (
-            (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
+        residual_scope = ResidualIdentityScope.from_analysis(
+            analysis,
+            cancer_code,
         )
-        residual_identity = analysis.get("residual_identity_evidence") or {}
-        source_resolved_selection = bool(
-            selected_evidence.get("selected_by")
-            == "entity_evidence_consensus"
-            and residual_identity.get("source_resolved_identity")
-            and cancer_codes_entity_compatible(
-                residual_identity.get("candidate_code"),
-                cancer_code,
-            )
-            and (
-                analysis.get("post_residual_decomposition_refit") or {}
-            ).get("accepted")
-            is True
-        )
+        source_resolved_selection = residual_scope.is_selection_basis
         ranker_detail_applicable = not source_resolved_selection
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         supplied_discordant = (
@@ -7614,7 +7603,7 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 f"signature ranker favors {_cancer_label(best_code)}, retained "
                 "as host/background differential context; candidate-independent "
                 "background subtraction recovered a complete marker and ontology "
-                f"program for {_cancer_label(cancer_code)} across every usable "
+                f"program for {_cancer_label(residual_scope.residual_code)} across every usable "
                 "model, and the final-scope decomposition refit reproduced that "
                 "identity"
             )
@@ -7624,6 +7613,24 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 "does not independently set the report label; integrated evidence selected "
                 f"{_cancer_label(cancer_code)} as the active report label"
             )
+            if (
+                residual_scope.is_confirmed_context
+                and residual_scope.relationship != "same"
+            ):
+                sentence += "; candidate-independent background decomposition resolved "
+                sentence += (
+                    f"{_cancer_label(residual_scope.residual_code)} residual identity"
+                )
+                if residual_scope.relationship == "ancestor":
+                    sentence += (
+                        ", which establishes the broader branch but not the more "
+                        f"specific {_cancer_label(cancer_code)} label"
+                    )
+                else:
+                    sentence += (
+                        "; that result is context rather than the selection basis "
+                        f"for {_cancer_label(cancer_code)}"
+                    )
         elif distinct_reference_used and best_code == str(reference_cancer_code).strip():
             sentence = (
                 f"- **RNA reference line**: {_cancer_label(best['code'])} is the "

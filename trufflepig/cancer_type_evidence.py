@@ -5436,10 +5436,10 @@ def _entity_consensus_candidate_beam(
 
     The hierarchy and quantifier-robust flat views may have different leaders.
     An invariant post-background identity may add one parent-level entity to
-    that small union, but is still only one consensus axis. A stronger
-    source-resolved identity can select without asking confounded bulk axes to
-    restate the same conclusion. Lower-ranked learned tails remain audit-only,
-    and every candidate retains the same hard-blocker requirements.
+    that small union, but is still only one exact-entity consensus axis. A
+    stronger source-resolved identity can select without asking confounded bulk
+    axes to restate the same conclusion. Lower-ranked learned tails remain
+    audit-only, and every candidate retains the same hard-blocker requirements.
     """
 
     predictions = _learned_entity_prediction_codes(hierarchy_details)
@@ -5497,11 +5497,10 @@ def _entity_consensus_candidate_beam(
 
         candidate = _hypothesis(hypotheses, entity_code)
         candidate_lineage = _code_lineage_token(entity_code)
-        # A parent-level residual result may corroborate a learned child as one
-        # branch-level axis, but it did not originate that child hypothesis.
         # Only the exact residual entity receives the residual-origin audit
         # label and corresponding cross-lineage admission path, whether it was
-        # already in the learned beam or appended here.
+        # already in the learned beam or appended here. Parent compatibility is
+        # retained as hierarchy context, never repackaged as child evidence.
         residual_origin = bool(
             residual_code
             and raw_code == residual_code
@@ -5838,14 +5837,16 @@ def _residual_identity_support(
     residual_identity_evidence: Mapping[str, Any] | None,
     cancer_code: str,
 ) -> float:
-    """Return one structural residual-identity vote for a compatible branch.
+    """Return one structural residual-identity vote for the exact entity.
 
     Ordinary invariant residual identity is one consensus vote. A
     source-resolved result is stronger: it is a compound selector whose
     positive/negative tumor program and ontology identity agree after
     candidate-independent background subtraction. The consensus layer still
     represents that compound result as one axis rather than duplicating its
-    internal evidence.
+    internal evidence. Parent/child compatibility remains explicit context,
+    not an entity-level vote: subtype resolution must come from subtype-level
+    evidence.
     """
 
     if not isinstance(residual_identity_evidence, Mapping):
@@ -5879,7 +5880,7 @@ def _residual_identity_support(
             )
         ):
             return 0.0
-    return 1.0 if _same_registry_branch(residual_code, cancer_code) else 0.0
+    return 1.0 if residual_code == _clean(cancer_code) else 0.0
 
 
 def _residual_identity_is_structurally_invariant(
@@ -5906,7 +5907,11 @@ def _residual_identity_is_source_resolved(
     residual_identity_evidence: Mapping[str, Any] | None,
     cancer_code: str,
 ) -> bool:
-    """Whether decomposition resolved a complete tumor program from host RNA."""
+    """Whether decomposition resolved this exact tumor entity from host RNA.
+
+    Branch compatibility remains hierarchy context, but it is not an entity
+    vote and a parent program cannot establish a child label.
+    """
 
     if not isinstance(residual_identity_evidence, Mapping):
         return False
@@ -5914,7 +5919,7 @@ def _residual_identity_is_source_resolved(
     return bool(
         residual_identity_evidence.get("source_resolved_identity")
         and residual_identity_evidence.get("adjudication_eligible") is not False
-        and _same_registry_branch(residual_code, cancer_code)
+        and residual_code == _clean(cancer_code)
         and _residual_identity_is_structurally_invariant(
             residual_identity_evidence
         )
@@ -6210,24 +6215,6 @@ def _entity_evidence_consensus(
     }
 
 
-def _entity_consensus_has_candidate_identity_vote(
-    consensus: Mapping[str, Any],
-) -> bool:
-    """Return whether a tumor-identity axis supports the candidate."""
-
-    identity_axes = {
-        _ENTITY_CONSENSUS_MARKER_AXIS,
-        _ENTITY_CONSENSUS_REFERENCE_AXIS,
-        _ENTITY_CONSENSUS_RESIDUAL_AXIS,
-    }
-    return any(
-        _clean(axis.get("axis")) in identity_axes
-        and _clean(axis.get("preference")) == "candidate"
-        for axis in consensus.get("axes") or ()
-        if isinstance(axis, Mapping)
-    )
-
-
 def _entity_consensus_origin_features(
     candidate: CancerTypeEvidence,
     selected: CancerTypeEvidence,
@@ -6241,7 +6228,9 @@ def _entity_consensus_origin_features(
     Family-level context can establish a different lineage, but it cannot
     distinguish siblings inside one lineage. Same-lineage refinement therefore
     needs the broad top, a credible learned entity, or an identity-specific
-    marker/reference/residual vote.
+    marker/reference vote. A residual can originate and support only the exact
+    entity it resolved; an ancestor residual remains hierarchy context rather
+    than evidence for a learned child.
     """
 
     candidate_lineage = _code_lineage_token(candidate.cancer_type)
@@ -6251,19 +6240,24 @@ def _entity_consensus_origin_features(
         and selected_lineage
         and candidate_lineage == selected_lineage
     )
-    candidate_has_identity_vote = _entity_consensus_has_candidate_identity_vote(
-        consensus
+    candidate_has_identity_vote = any(
+        _clean(axis.get("axis"))
+        in {
+            _ENTITY_CONSENSUS_MARKER_AXIS,
+            _ENTITY_CONSENSUS_REFERENCE_AXIS,
+        }
+        and _clean(axis.get("preference")) == "candidate"
+        for axis in consensus.get("axes") or ()
+        if isinstance(axis, Mapping)
     )
     candidate_has_family_origin = _entity_consensus_has_family_anchored_origin(
         candidate
     )
-    candidate_has_residual_vote = bool(
-        residual_origin or consensus.get("candidate_has_residual_vote")
-    )
+    candidate_has_residual_origin = bool(residual_origin)
     candidate_is_broad_top = candidate.broad_rna_rank == 1
     candidate_origin_credible = bool(
         credible_learned_candidate
-        or candidate_has_residual_vote
+        or candidate_has_residual_origin
         or candidate_has_identity_vote
         or candidate_is_broad_top
         or (
@@ -6275,7 +6269,7 @@ def _entity_consensus_origin_features(
         "credible_learned_candidate": bool(credible_learned_candidate),
         "candidate_has_identity_vote": candidate_has_identity_vote,
         "candidate_has_family_anchored_origin": candidate_has_family_origin,
-        "candidate_has_residual_origin": candidate_has_residual_vote,
+        "candidate_has_residual_origin": candidate_has_residual_origin,
         "candidate_is_broad_top": candidate_is_broad_top,
         "same_lineage_as_selected": same_lineage_as_selected,
         "candidate_origin_credible": candidate_origin_credible,
