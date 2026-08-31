@@ -5564,14 +5564,19 @@ def _fit_report_scope_decompositions(
 
 
 def _residual_identity_confirms_report_scope(evidence, report_code):
-    """Require a final-scope refit to corroborate the proposed report branch."""
+    """Require a final refit to establish at least the proposed scope.
+
+    An exact residual or a more specific descendant can corroborate a broad
+    report scope.  A parent-only residual cannot confirm a child diagnosis.
+    """
 
     candidate_code = str((evidence or {}).get("candidate_code") or "").strip()
+    relationship = cancer_type_tree_relationship(report_code, candidate_code)
     return bool(
         (evidence or {}).get("status") == "corroborated"
         and (evidence or {}).get("adjudication_eligible", True)
         and candidate_code
-        and cancer_codes_entity_compatible(candidate_code, report_code)
+        and relationship in {"same", "descendant"}
     )
 
 

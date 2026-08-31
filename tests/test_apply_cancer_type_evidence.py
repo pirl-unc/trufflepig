@@ -588,16 +588,24 @@ def test_residual_identity_stays_within_the_decomposition_regime():
     assert "requires heme decomposition" in incompatible["adjudication_blocker"]
 
 
-def test_final_scope_refit_must_reproduce_compatible_residual_identity():
+def test_final_scope_refit_must_reproduce_report_scope_or_a_descendant():
     from trufflepig.main import _residual_identity_confirms_report_scope
 
-    assert _residual_identity_confirms_report_scope(
+    assert not _residual_identity_confirms_report_scope(
         {
             "status": "corroborated",
             "candidate_code": "CRC",
             "adjudication_eligible": True,
         },
         "READ",
+    )
+    assert _residual_identity_confirms_report_scope(
+        {
+            "status": "corroborated",
+            "candidate_code": "READ",
+            "adjudication_eligible": True,
+        },
+        "CRC",
     )
     assert not _residual_identity_confirms_report_scope(
         {"status": "ambiguous", "candidate_code": "CRC"},

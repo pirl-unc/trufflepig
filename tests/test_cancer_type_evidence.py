@@ -1976,6 +1976,118 @@ def test_source_resolved_parent_broadens_an_existing_child_call():
     assert residual_axis["selected_support"] == 0.0
 
 
+def test_source_resolved_identity_precedes_unrelated_learned_arbitration():
+    """Separated tumor identity is evaluated before a third bulk label.
+
+    The selected bulk call, learned hierarchy leader, and residual result are
+    intentionally three different entities.  A strong learned label must not
+    return before the complete source-resolved tumor program is adjudicated.
+    """
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    details = _add_entity_prediction_vector(
+        _top_hierarchy_details(
+            "ESCA",
+            entity_support=0.98,
+            entity_margin=0.90,
+            family="carcinoma-gi",
+            family_support=0.98,
+            compartment="epithelial",
+            compartment_support=0.99,
+        ),
+        ("ESCA", 0.98),
+        ("SARC", 0.01),
+    )
+    selected = _selectable("SARC", "fused_evidence", (3, 2.0, 4))
+    selected.details.update(details)
+    esca = CancerTypeEvidence(cancer_type="ESCA")
+    crc = CancerTypeEvidence(cancer_type="CRC")
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC": selected, "ESCA": esca, "CRC": crc},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "CRC",
+            "panel_candidate_code": "CRC",
+            "ontology_candidate_code": "CRC",
+            "source_resolved_identity": True,
+            "current_code": "SARC",
+            "background_models": [
+                {
+                    "candidate_code": "CRC",
+                    "realizations": 2,
+                    "template": "identity_background",
+                }
+            ],
+        },
+    )
+
+    assert result is crc
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["candidate_code"] == "CRC"
+
+
+def test_residual_origin_survives_a_learned_subtype_alias():
+    """A learned child cannot consume an exact residual parent beam entry."""
+
+    from trufflepig.cancer_type_evidence import (
+        CancerTypeEvidence,
+        _adjudicate_selection_with_learned_hierarchy,
+    )
+
+    selected = _selectable("SARC", "fused_evidence", (3, 2.0, 4))
+    selected.details.update(
+        _top_hierarchy_details(
+            "RB",
+            entity_support=0.40,
+            entity_margin=0.10,
+            family="RB",
+            family_support=0.50,
+            compartment="embryonal",
+            compartment_support=0.50,
+        )
+    )
+    # This audit mapping deliberately contains the learned leaf.  The
+    # adjudicator must normalize it to BRCA without losing the fact that the
+    # exact BRCA beam candidate originated from residual identity evidence.
+    selected.details["learned_expression_flat_entity_supports"] = {
+        "BRCA_Basal": 0.40,
+    }
+    brca = CancerTypeEvidence(cancer_type="BRCA")
+
+    result = _adjudicate_selection_with_learned_hierarchy(
+        {"SARC": selected, "BRCA": brca},
+        selected,
+        residual_identity_evidence={
+            "status": "candidate",
+            "candidate_code": "BRCA",
+            "panel_candidate_code": "BRCA",
+            "ontology_candidate_code": "BRCA",
+            "source_resolved_identity": True,
+            "current_code": "SARC",
+            "background_models": [
+                {
+                    "candidate_code": "BRCA",
+                    "realizations": 2,
+                    "template": "identity_background",
+                }
+            ],
+        },
+    )
+
+    assert result is brca
+    consensus = result.details["entity_evidence_consensus"]
+    assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
+    assert consensus["learned_entity_prediction_raw_code"] == "BRCA"
+    assert consensus["source_resolved_identity_decisive"] is True
+
+
 def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
     """A background-derived bulk compartment cannot veto resolved tumor RNA.
 

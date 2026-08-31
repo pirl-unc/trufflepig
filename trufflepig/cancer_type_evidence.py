@@ -5442,19 +5442,17 @@ def _entity_consensus_candidate_beam(
     audit-only, and every candidate retains the same hard-blocker requirements.
     """
 
-    predictions = _learned_entity_prediction_codes(hierarchy_details)
+    learned_predictions = _learned_entity_prediction_codes(hierarchy_details)
     residual_code = _qualified_residual_identity_candidate(
         residual_identity_evidence
     )
-    residual_prediction_appended = bool(
-        residual_code
-        and not any(
-            _learned_prediction_entity_code(code) == residual_code
-            for code, _support in predictions
-        )
-    )
-    if residual_prediction_appended:
-        predictions.append(
+    if residual_code:
+        # Give the residual result one canonical beam entry even when a
+        # learned subtype normalizes to the same report entity.  Putting that
+        # entry first preserves its independent origin and prevents an earlier
+        # learned alias from consuming the entity before residual evidence is
+        # evaluated.
+        predictions = [
             (
                 residual_code,
                 _learned_entity_support_for_code(
@@ -5462,7 +5460,14 @@ def _entity_consensus_candidate_beam(
                     residual_code,
                 ),
             )
+        ]
+        predictions.extend(
+            (code, support)
+            for code, support in learned_predictions
+            if _learned_prediction_entity_code(code) != residual_code
         )
+    else:
+        predictions = learned_predictions
     if not predictions:
         return None
     hierarchy_votes = (
@@ -5477,7 +5482,11 @@ def _entity_consensus_candidate_beam(
     )
     selected_lineage = _code_lineage_token(selected.cancer_type)
     decisive: list[
-        tuple[tuple[float, float, float, float], CancerTypeEvidence, dict[str, Any]]
+        tuple[
+            tuple[float, float, float, float, float],
+            CancerTypeEvidence,
+            dict[str, Any],
+        ]
     ] = []
     evaluated_entities: set[str] = set()
     for prediction_rank, (raw_code, predicted_support) in enumerate(
@@ -5501,11 +5510,7 @@ def _entity_consensus_candidate_beam(
         # label and corresponding cross-lineage admission path, whether it was
         # already in the learned beam or appended here. Parent compatibility is
         # retained as hierarchy context, never repackaged as child evidence.
-        residual_origin = bool(
-            residual_code
-            and raw_code == residual_code
-            and entity_code == residual_code
-        )
+        residual_origin = bool(residual_code and entity_code == residual_code)
         if (
             not residual_origin
             and _fused_parent_abstention_blocks_entity_consensus(candidate)
@@ -5622,6 +5627,9 @@ def _entity_consensus_candidate_beam(
             and axis.get("preference") == "candidate"
         )
         score = (
+            float(
+                bool(consensus.get("source_resolved_identity_decisive"))
+            ),
             float(
                 _safe_int(consensus.get("candidate_votes"))
                 - _safe_int(consensus.get("selected_votes"))
@@ -6445,6 +6453,25 @@ def _adjudicate_selection_with_learned_hierarchy(
             centroid_confident=centroid_confident,
             residual_identity_evidence=residual_identity_evidence,
         )
+
+    # A complete tumor-identity program recovered across candidate-independent
+    # background models is already separated from the bulk signal that drives
+    # the learned hierarchy.  Adjudicate that exact entity before an unrelated
+    # learned label can return early.  The beam still applies every persistent
+    # blocker and may fall through to learned arbitration when the residual
+    # candidate is inadmissible.
+    residual_code = _qualified_residual_identity_candidate(
+        residual_identity_evidence
+    )
+    if _residual_identity_is_source_resolved(
+        residual_identity_evidence,
+        residual_code,
+    ):
+        if residual_code == selected.cancer_type:
+            return selected
+        beam_candidate = consensus_beam()
+        if beam_candidate is not None:
+            return beam_candidate
 
     learned_entity_code = _clean(
         details.get("learned_expression_top_entity_label")
