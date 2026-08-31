@@ -16,7 +16,7 @@ from __future__ import annotations
 import pandas as pd
 
 from trufflepig.decomposition import (
-    scope_residual_identity_to_decomposition_mode,
+    CancerTypeDecision,
 )
 from trufflepig.main import (
     _apply_cancer_type_evidence,
@@ -379,9 +379,7 @@ def test_helper_forwards_post_decomposition_identity_evidence(monkeypatch):
         return {
             "selected": fake_selected,
             "primary_expression_context": {"cancer_type": "SARC_DDLPS"},
-            "residual_identity_evidence": kwargs.get(
-                "residual_identity_evidence"
-            ),
+            "cancer_type_decision": kwargs.get("cancer_type_decision"),
         }
 
     monkeypatch.setattr(
@@ -389,12 +387,14 @@ def test_helper_forwards_post_decomposition_identity_evidence(monkeypatch):
         "select_report_scope_from_evidence",
         fake_select,
     )
-    residual = {
-        "status": "candidate",
-        "candidate_code": "ACC",
-        "panel_candidate_code": "ACC",
-        "current_code": "SARC_DDLPS",
-    }
+    decision = CancerTypeDecision.from_dict(
+        {
+            "status": "resolved",
+            "supported_code": "ACC",
+            "panel_code": "ACC",
+            "current_code": "SARC_DDLPS",
+        }
+    )
     analysis = _analysis(("SARC_DDLPS", 1.0), ("ACC", 0.8))
 
     evidence, selected, report_code, *_ = _apply_cancer_type_evidence(
@@ -405,16 +405,16 @@ def test_helper_forwards_post_decomposition_identity_evidence(monkeypatch):
         report_scope_cancer_type=None,
         rare_scope_inference=None,
         fine_scope_inference=None,
-        residual_identity_evidence=residual,
+        cancer_type_decision=decision,
     )
 
-    assert captured["residual_identity_evidence"] is residual
-    assert evidence["residual_identity_evidence"] is residual
+    assert captured["cancer_type_decision"] is decision
+    assert evidence["cancer_type_decision"] is decision
     assert selected is fake_selected
     assert report_code == "ACC"
 
 
-def test_residual_selection_clears_superseded_report_basis(monkeypatch):
+def test_decomposition_selection_clears_superseded_report_basis(monkeypatch):
     """A second-pass winner cannot inherit the old rare/fine narrative."""
 
     import trufflepig.cancer_type_evidence as cte_module
@@ -425,7 +425,10 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
         "reference_cancer_type": "BLCA",
         "expression_reference_cancer_type": "BLCA",
         "selected_by": "entity_evidence_consensus",
-        "evidence_sources": ["residual_identity", "lineage_panel"],
+        "evidence_sources": [
+            "decomposition_cancer_type_decision",
+            "lineage_panel",
+        ],
     }
     monkeypatch.setattr(
         cte_module,
@@ -468,7 +471,12 @@ def test_residual_selection_clears_superseded_report_basis(monkeypatch):
         report_scope_cancer_type="CHOL",
         rare_scope_inference=stale_rare,
         fine_scope_inference=stale_fine,
-        residual_identity_evidence={"status": "candidate", "candidate_code": "BLCA"},
+        cancer_type_decision=CancerTypeDecision.from_dict(
+            {
+                "status": "resolved",
+                "supported_code": "BLCA",
+            }
+        ),
     )
 
     assert rare_inference is None
@@ -561,65 +569,59 @@ def test_report_scope_decomposition_refit_uses_final_purity_and_site(monkeypatch
     }
 
 
-def test_residual_identity_stays_within_the_decomposition_regime():
+def test_cancer_type_decision_stays_within_the_decomposition_regime():
     solid_residual = {
-        "status": "candidate",
-        "candidate_code": "CRC",
+        "status": "resolved",
+        "supported_code": "CRC",
         "current_code": "SARC_PLEOLPS",
     }
-    compatible = scope_residual_identity_to_decomposition_mode(
-        solid_residual,
-        sample_mode="solid",
+    compatible = CancerTypeDecision.from_dict(solid_residual).for_sample_mode(
+        "solid"
     )
-    assert compatible["adjudication_eligible"] is True
-    assert compatible["candidate_sample_mode"] == "solid"
+    assert compatible.selection_allowed is True
+    assert compatible.supported_code_mode == "solid"
 
     heme_residual_from_solid_fit = {
-        "status": "candidate",
-        "candidate_code": "DLBC",
+        "status": "resolved",
+        "supported_code": "DLBC",
         "current_code": "SARC_PLEOLPS",
     }
-    incompatible = scope_residual_identity_to_decomposition_mode(
-        heme_residual_from_solid_fit,
-        sample_mode="solid",
-    )
-    assert incompatible["adjudication_eligible"] is False
-    assert incompatible["candidate_sample_mode"] == "heme"
-    assert "requires heme decomposition" in incompatible["adjudication_blocker"]
+    incompatible = CancerTypeDecision.from_dict(
+        heme_residual_from_solid_fit
+    ).for_sample_mode("solid")
+    assert incompatible.selection_allowed is False
+    assert incompatible.supported_code_mode == "heme"
+    assert "requires heme decomposition" in incompatible.block_reason
 
 
 def test_final_scope_refit_must_reproduce_report_scope_or_a_descendant():
-    from trufflepig.main import _residual_identity_confirms_report_scope
+    parent_only = CancerTypeDecision.from_dict(
+        {
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+        },
+        current_code="READ",
+    )
+    descendant = CancerTypeDecision.from_dict(
+        {
+            "status": "resolved",
+            "supported_code": "READ",
+            "panel_code": "READ",
+        },
+        current_code="CRC",
+    )
+    blocked = CancerTypeDecision.from_dict(
+        {
+            "status": "resolved",
+            "supported_code": "READ",
+            "panel_code": "READ",
+            "selection_allowed": False,
+        },
+        current_code="CRC",
+    )
 
-    assert not _residual_identity_confirms_report_scope(
-        {
-            "status": "corroborated",
-            "candidate_code": "CRC",
-            "adjudication_eligible": True,
-        },
-        "READ",
-    )
-    assert _residual_identity_confirms_report_scope(
-        {
-            "status": "corroborated",
-            "candidate_code": "READ",
-            "adjudication_eligible": True,
-        },
-        "CRC",
-    )
-    assert not _residual_identity_confirms_report_scope(
-        {"status": "ambiguous", "candidate_code": "CRC"},
-        "READ",
-    )
-    assert not _residual_identity_confirms_report_scope(
-        {
-            "status": "corroborated",
-            "candidate_code": "CRC",
-            "adjudication_eligible": False,
-        },
-        "READ",
-    )
-    assert not _residual_identity_confirms_report_scope(
-        {"status": "corroborated", "candidate_code": "CRC"},
-        "SARC_DDLPS",
-    )
+    assert parent_only.confirms("READ") is False
+    assert descendant.confirms("CRC") is True
+    assert blocked.confirms("CRC") is False
+    assert parent_only.confirms("SARC_DDLPS") is False

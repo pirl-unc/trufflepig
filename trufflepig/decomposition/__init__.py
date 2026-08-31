@@ -22,9 +22,9 @@ from .panels import (
     estimate_lineage_tumor_fraction,
     summarize_panels,
 )
-from .residual_identity import (
-    evaluate_residual_identity,
-    scope_residual_identity_to_decomposition_mode,
+from .cancer_type_decision import (
+    CancerTypeDecision,
+    decide_cancer_type_from_decomposition,
 )
 from .plot import (
     plot_decomposition_candidates,
@@ -46,8 +46,8 @@ __all__ = [
     "build_tumor_biased_panel",
     "build_matched_normal_biased_panel",
     "build_shared_lineage_panel",
-    "evaluate_residual_identity",
-    "scope_residual_identity_to_decomposition_mode",
+    "CancerTypeDecision",
+    "decide_cancer_type_from_decomposition",
     "estimate_lineage_tumor_fraction",
     "summarize_panels",
     "get_decomposition_parameters",

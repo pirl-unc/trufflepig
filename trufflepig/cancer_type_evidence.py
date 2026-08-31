@@ -19,6 +19,8 @@ from typing import Any, Mapping
 import numpy as np
 import pandas as pd
 
+from .decomposition.cancer_type_decision import CancerTypeDecision
+
 _LOGGER = logging.getLogger(__name__)
 
 # Source-class rank used as the tie-breaker when two evidence kinds compute
@@ -335,7 +337,7 @@ _CONTRAST_DISCRIMINATOR_LOW_TPM = 1.0
 _ENTITY_CONSENSUS_MARKER_AXIS = "curated_marker_program"
 _ENTITY_CONSENSUS_REFERENCE_AXIS = "exact_expression_reference"
 _ENTITY_CONSENSUS_COMPOSITION_AXIS = "composition_reference"
-_ENTITY_CONSENSUS_RESIDUAL_AXIS = "decomposition_residual_identity"
+_ENTITY_CONSENSUS_DECOMPOSITION_AXIS = "decomposition_cancer_type_decision"
 _ADCC_PROMOTING_MIN_MYB_TPM = 20.0
 _ADCC_STRONG_MYB_AXIS_TPM = 75.0
 _ADCC_LOW_MYB_BASAL_BREAST_MIN_SCORE = 0.75
@@ -5430,41 +5432,39 @@ def _entity_consensus_candidate_beam(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
-    residual_identity_evidence: Mapping[str, Any] | None = None,
+    cancer_type_decision: CancerTypeDecision,
 ) -> CancerTypeEvidence | None:
-    """Adjudicate each learned-view or invariant-residual leader.
+    """Adjudicate each learned-view or decomposition-supported leader.
 
     The hierarchy and quantifier-robust flat views may have different leaders.
     An invariant post-background identity may add one parent-level entity to
     that small union, but is still only one exact-entity consensus axis. A
-    stronger source-resolved identity can select without asking confounded bulk
-    axes to restate the same conclusion. Lower-ranked learned tails remain
+    stronger background-separated decision can select without asking
+    confounded bulk axes to restate the same conclusion. Lower-ranked learned tails remain
     audit-only, and every candidate retains the same hard-blocker requirements.
     """
 
     learned_predictions = _learned_entity_prediction_codes(hierarchy_details)
-    residual_code = _qualified_residual_identity_candidate(
-        residual_identity_evidence
-    )
-    if residual_code:
-        # Give the residual result one canonical beam entry even when a
+    decomposition_code = cancer_type_decision.proposed_code
+    if decomposition_code:
+        # Give the decomposition result one canonical beam entry even when a
         # learned subtype normalizes to the same report entity.  Putting that
         # entry first preserves its independent origin and prevents an earlier
-        # learned alias from consuming the entity before residual evidence is
+        # learned alias from consuming the entity before this evidence is
         # evaluated.
         predictions = [
             (
-                residual_code,
+                decomposition_code,
                 _learned_entity_support_for_code(
                     hierarchy_details,
-                    residual_code,
+                    decomposition_code,
                 ),
             )
         ]
         predictions.extend(
             (code, support)
             for code, support in learned_predictions
-            if _learned_prediction_entity_code(code) != residual_code
+            if _learned_prediction_entity_code(code) != decomposition_code
         )
     else:
         predictions = learned_predictions
@@ -5506,13 +5506,15 @@ def _entity_consensus_candidate_beam(
 
         candidate = _hypothesis(hypotheses, entity_code)
         candidate_lineage = _code_lineage_token(entity_code)
-        # Only the exact residual entity receives the residual-origin audit
+        # Only the exact decomposition-supported entity receives this origin
         # label and corresponding cross-lineage admission path, whether it was
-        # already in the learned beam or appended here. Parent compatibility is
-        # retained as hierarchy context, never repackaged as child evidence.
-        residual_origin = bool(residual_code and entity_code == residual_code)
+        # already in the learned beam or added here. Parent compatibility is
+        # hierarchy context, never child-level evidence.
+        decomposition_origin = bool(
+            decomposition_code and entity_code == decomposition_code
+        )
         if (
-            not residual_origin
+            not decomposition_origin
             and _fused_parent_abstention_blocks_entity_consensus(candidate)
         ):
             candidate.details["entity_consensus_preserved_fused_abstention"] = (
@@ -5525,7 +5527,7 @@ def _entity_consensus_candidate_beam(
             )
             continue
         if (
-            not residual_origin
+            not decomposition_origin
             and candidate_lineage
             and selected_lineage
             and candidate_lineage != selected_lineage
@@ -5545,8 +5547,8 @@ def _entity_consensus_candidate_beam(
                     continue
 
         candidate.add_source(
-            "decomposition_residual_identity"
-            if residual_origin
+            "decomposition_cancer_type_decision"
+            if decomposition_origin
             else "learned_expression_classifier"
         )
         entity_support = max(
@@ -5579,7 +5581,7 @@ def _entity_consensus_candidate_beam(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
-            residual_identity_evidence=residual_identity_evidence,
+            cancer_type_decision=cancer_type_decision,
         )
         consensus["learned_entity_prediction_rank"] = prediction_rank
         consensus["learned_entity_prediction_support"] = round(
@@ -5589,8 +5591,8 @@ def _entity_consensus_candidate_beam(
         consensus["learned_entity_prediction_raw_code"] = raw_code
         consensus["learned_entity_prediction_entity_code"] = entity_code
         consensus["entity_prediction_origin"] = (
-            "invariant_residual_identity"
-            if residual_origin
+            "decomposition_cancer_type_decision"
+            if decomposition_origin
             else "learned_expression_view"
         )
         credible_learned_candidate = bool(
@@ -5601,7 +5603,7 @@ def _entity_consensus_candidate_beam(
             selected,
             consensus,
             credible_learned_candidate=credible_learned_candidate,
-            residual_origin=residual_origin,
+            decomposition_origin=decomposition_origin,
         )
         consensus.update(origin_features)
         candidate_origin_credible = origin_features[
@@ -5628,7 +5630,7 @@ def _entity_consensus_candidate_beam(
         )
         score = (
             float(
-                bool(consensus.get("source_resolved_identity_decisive"))
+                bool(consensus.get("decomposition_decision_was_decisive"))
             ),
             float(
                 _safe_int(consensus.get("candidate_votes"))
@@ -5841,128 +5843,6 @@ def _same_registry_branch(left: str, right: str) -> bool:
     )
 
 
-def _residual_identity_support(
-    residual_identity_evidence: Mapping[str, Any] | None,
-    cancer_code: str,
-) -> float:
-    """Return one structural residual-identity vote for the exact entity.
-
-    Ordinary invariant residual identity is one consensus vote. A
-    source-resolved result is stronger: it is a compound selector whose
-    positive/negative tumor program and ontology identity agree after
-    candidate-independent background subtraction. The consensus layer still
-    represents that compound result as one axis rather than duplicating its
-    internal evidence. Parent/child compatibility remains explicit context,
-    not an entity-level vote: subtype resolution must come from subtype-level
-    evidence.
-    """
-
-    if not isinstance(residual_identity_evidence, Mapping):
-        return 0.0
-    if residual_identity_evidence.get("adjudication_eligible") is False:
-        return 0.0
-    if _clean(residual_identity_evidence.get("status")) not in {
-        "candidate",
-        "corroborated",
-    }:
-        return 0.0
-    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
-    current_code = _clean(residual_identity_evidence.get("current_code"))
-    if not residual_code:
-        return 0.0
-    if current_code and not _same_registry_branch(residual_code, current_code):
-        panel_code = _clean(
-            residual_identity_evidence.get("panel_candidate_code")
-        )
-        ontology_code = _clean(
-            residual_identity_evidence.get("ontology_candidate_code")
-        )
-        if not (
-            panel_code
-            and _same_registry_branch(residual_code, panel_code)
-        ) and not (
-            ontology_code
-            and _same_registry_branch(residual_code, ontology_code)
-            and _residual_identity_is_structurally_invariant(
-                residual_identity_evidence
-            )
-        ):
-            return 0.0
-    return 1.0 if residual_code == _clean(cancer_code) else 0.0
-
-
-def _residual_identity_is_structurally_invariant(
-    residual_identity_evidence: Mapping[str, Any] | None,
-) -> bool:
-    if not isinstance(residual_identity_evidence, Mapping):
-        return False
-    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
-    models = residual_identity_evidence.get("background_models") or ()
-    if not residual_code or not models:
-        return False
-    return all(
-        isinstance(model, Mapping)
-        and _same_registry_branch(
-            _clean(model.get("candidate_code")),
-            residual_code,
-        )
-        and _safe_int(model.get("realizations"), 0) > 0
-        for model in models
-    )
-
-
-def _residual_identity_is_source_resolved(
-    residual_identity_evidence: Mapping[str, Any] | None,
-    cancer_code: str,
-) -> bool:
-    """Whether decomposition resolved this exact tumor entity from host RNA.
-
-    Branch compatibility remains hierarchy context, but it is not an entity
-    vote and a parent program cannot establish a child label.
-    """
-
-    if not isinstance(residual_identity_evidence, Mapping):
-        return False
-    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
-    return bool(
-        residual_identity_evidence.get("source_resolved_identity")
-        and residual_identity_evidence.get("adjudication_eligible") is not False
-        and residual_code == _clean(cancer_code)
-        and _residual_identity_is_structurally_invariant(
-            residual_identity_evidence
-        )
-    )
-
-
-def _qualified_residual_identity_candidate(
-    residual_identity_evidence: Mapping[str, Any] | None,
-) -> str:
-    """Return a consensus-eligible residual entity, never a direct call."""
-
-    if not isinstance(residual_identity_evidence, Mapping):
-        return ""
-    if residual_identity_evidence.get("adjudication_eligible") is False:
-        return ""
-    if _clean(residual_identity_evidence.get("status")) != "candidate":
-        return ""
-    residual_code = _clean(residual_identity_evidence.get("candidate_code"))
-    panel_code = _clean(residual_identity_evidence.get("panel_candidate_code"))
-    ontology_code = _clean(
-        residual_identity_evidence.get("ontology_candidate_code")
-    )
-    panel_supported = bool(
-        panel_code and _same_registry_branch(residual_code, panel_code)
-    )
-    ontology_supported = bool(
-        ontology_code
-        and _same_registry_branch(residual_code, ontology_code)
-        and _residual_identity_is_structurally_invariant(
-            residual_identity_evidence
-        )
-    )
-    return residual_code if residual_code and (panel_supported or ontology_supported) else ""
-
-
 def _raw_signature_support(hypothesis: CancerTypeEvidence) -> float:
     """Signature-only support, falling back for legacy/test callers."""
 
@@ -5998,7 +5878,7 @@ def _entity_evidence_consensus(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
-    residual_identity_evidence: Mapping[str, Any] | None = None,
+    cancer_type_decision: CancerTypeDecision | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compare two entity hypotheses across independent evidence groups.
 
@@ -6007,6 +5887,12 @@ def _entity_evidence_consensus(
     better supported by the same axis in this sample.  No cancer-code-specific
     constants or sample exceptions are involved.
     """
+
+    if not isinstance(cancer_type_decision, CancerTypeDecision):
+        cancer_type_decision = CancerTypeDecision.from_dict(
+            cancer_type_decision,
+            current_code=selected.cancer_type,
+        )
 
     centroid_supports = _centroid_supports_for_hypotheses(
         {
@@ -6032,15 +5918,13 @@ def _entity_evidence_consensus(
             selected_coherence
         )
 
-    candidate_residual_support = _residual_identity_support(
-        residual_identity_evidence,
-        candidate.cancer_type,
+    candidate_residual_support = float(
+        cancer_type_decision.supports(candidate.cancer_type)
     )
-    selected_residual_support = _residual_identity_support(
-        residual_identity_evidence,
-        selected.cancer_type,
+    selected_residual_support = float(
+        cancer_type_decision.supports(selected.cancer_type)
     )
-    # The residual identity programs reuse the curated high/low marker
+    # The decomposition decision reuses the curated high/low marker
     # vocabulary. When that axis is available, omit the bulk marker axis so the
     # same program is not counted twice.
     if candidate_residual_support > 0 or selected_residual_support > 0:
@@ -6101,7 +5985,7 @@ def _entity_evidence_consensus(
                 _ENTITY_CONSENSUS_COMPOSITION_AXIS
             ),
         ),
-        _ENTITY_CONSENSUS_RESIDUAL_AXIS: (
+        _ENTITY_CONSENSUS_DECOMPOSITION_AXIS: (
             candidate_residual_support,
             selected_residual_support,
         ),
@@ -6155,14 +6039,14 @@ def _entity_evidence_consensus(
         and axis["preference"] == "candidate"
         for axis in axes
     )
-    candidate_has_residual_vote = any(
-        axis["axis"] == _ENTITY_CONSENSUS_RESIDUAL_AXIS
+    candidate_has_decomposition_vote = any(
+        axis["axis"] == _ENTITY_CONSENSUS_DECOMPOSITION_AXIS
         and axis["preference"] == "candidate"
         for axis in axes
     )
     available_axis_count = sum(axis["available"] for axis in axes)
     candidate_has_originating_axis = (
-        candidate_has_learned_vote or candidate_has_residual_vote
+        candidate_has_learned_vote or candidate_has_decomposition_vote
     )
     required_nonlearned_votes = (
         _ENTITY_CONSENSUS_MIN_NONLEARNED_AXES
@@ -6176,23 +6060,23 @@ def _entity_evidence_consensus(
         and candidate_votes * 2 > available_axis_count
         and candidate_advantage > 0
     )
-    source_resolved_identity = _residual_identity_is_source_resolved(
-        residual_identity_evidence,
-        candidate.cancer_type,
+    background_separation_confirmed = (
+        cancer_type_decision.background_separation_supports(
+            candidate.cancer_type
+        )
     )
-    # This is not a plurality exception. A source-resolved residual is one
-    # compound tumor-identity selector: the complete positive/negative marker
-    # program and ontology identity agree across a candidate-independent
-    # background beam. Requiring a second bulk vote would reintroduce the host
-    # RNA that the decomposition explicitly separated. The selector remains
-    # subject to persistent molecular/ontology blockers here and must reproduce
-    # after the final-scope decomposition refit in the production pipeline.
-    source_resolved_decisive_candidate = bool(
-        source_resolved_identity
-        and candidate_has_residual_vote
+    # This is not a plurality exception. The complete positive/negative marker
+    # program and ontology identity agree after candidate-independent
+    # background subtraction. Requiring a second bulk vote would reintroduce
+    # the host RNA that decomposition separated. Persistent molecular and
+    # ontology blockers still apply, and the decision must reproduce after the
+    # final-scope refit.
+    decomposition_decisive_candidate = bool(
+        background_separation_confirmed
+        and candidate_has_decomposition_vote
     )
     decisive_candidate = bool(
-        majority_decisive_candidate or source_resolved_decisive_candidate
+        majority_decisive_candidate or decomposition_decisive_candidate
     )
     return {
         "schema_version": 1,
@@ -6205,19 +6089,19 @@ def _entity_evidence_consensus(
         "available_axis_count": available_axis_count,
         "candidate_advantage": round(float(candidate_advantage), 4),
         "candidate_has_learned_vote": candidate_has_learned_vote,
-        "candidate_has_residual_vote": candidate_has_residual_vote,
+        "candidate_has_decomposition_vote": candidate_has_decomposition_vote,
         "majority_decisive_candidate": majority_decisive_candidate,
-        "source_resolved_identity": source_resolved_identity,
-        "source_resolved_identity_decisive": (
-            source_resolved_decisive_candidate
+        "background_separation_confirmed": background_separation_confirmed,
+        "decomposition_decision_was_decisive": (
+            decomposition_decisive_candidate
         ),
         "decisive_candidate": decisive_candidate,
         "conflicted": bool(candidate_votes > 0 and selected_votes > 0),
         "decision_rule": (
-            "a learned-view or invariant-residual entity plus independent "
+            "a learned-view or decomposition-supported entity plus independent "
             "evidence groups must win the available-axis majority; a complete "
-            "source-resolved residual may instead select as one compound "
-            "tumor-identity result, subject to hard blockers and final-scope "
+            "background-separated tumor program may instead select as one "
+            "compound cancer-type result, subject to hard blockers and final-scope "
             "refit confirmation"
         ),
     }
@@ -6229,16 +6113,16 @@ def _entity_consensus_origin_features(
     consensus: Mapping[str, Any],
     *,
     credible_learned_candidate: bool,
-    residual_origin: bool = False,
+    decomposition_origin: bool = False,
 ) -> dict[str, bool]:
     """Describe whether the candidate has a valid entity origin.
 
     Family-level context can establish a different lineage, but it cannot
     distinguish siblings inside one lineage. Same-lineage refinement therefore
     needs the broad top, a credible learned entity, or an identity-specific
-    marker/reference vote. A residual can originate and support only the exact
-    entity it resolved; an ancestor residual remains hierarchy context rather
-    than evidence for a learned child.
+    marker/reference vote. A decomposition decision can originate and support
+    only the exact entity it resolved; parent-level support remains hierarchy
+    context rather than evidence for a learned child.
     """
 
     candidate_lineage = _code_lineage_token(candidate.cancer_type)
@@ -6261,11 +6145,11 @@ def _entity_consensus_origin_features(
     candidate_has_family_origin = _entity_consensus_has_family_anchored_origin(
         candidate
     )
-    candidate_has_residual_origin = bool(residual_origin)
+    candidate_has_decomposition_origin = bool(decomposition_origin)
     candidate_is_broad_top = candidate.broad_rna_rank == 1
     candidate_origin_credible = bool(
         credible_learned_candidate
-        or candidate_has_residual_origin
+        or candidate_has_decomposition_origin
         or candidate_has_identity_vote
         or candidate_is_broad_top
         or (
@@ -6277,7 +6161,7 @@ def _entity_consensus_origin_features(
         "credible_learned_candidate": bool(credible_learned_candidate),
         "candidate_has_identity_vote": candidate_has_identity_vote,
         "candidate_has_family_anchored_origin": candidate_has_family_origin,
-        "candidate_has_residual_origin": candidate_has_residual_origin,
+        "candidate_has_decomposition_origin": candidate_has_decomposition_origin,
         "candidate_is_broad_top": candidate_is_broad_top,
         "same_lineage_as_selected": same_lineage_as_selected,
         "candidate_origin_credible": candidate_origin_credible,
@@ -6409,7 +6293,7 @@ def _adjudicate_selection_with_learned_hierarchy(
     sample_tpm_by_symbol: Mapping[str, float] | None = None,
     cen=None,
     centroid_confident: bool = False,
-    residual_identity_evidence: Mapping[str, Any] | None = None,
+    cancer_type_decision: CancerTypeDecision | Mapping[str, Any] | None = None,
 ) -> CancerTypeEvidence | None:
     """Apply calibrated hierarchy arbitration after ordinary fused selection.
 
@@ -6441,6 +6325,11 @@ def _adjudicate_selection_with_learned_hierarchy(
         )
     ):
         return selected
+    if not isinstance(cancer_type_decision, CancerTypeDecision):
+        cancer_type_decision = CancerTypeDecision.from_dict(
+            cancer_type_decision,
+            current_code=selected.cancer_type,
+        )
     details = _learned_hierarchy_details(hypotheses, selected)
 
     def consensus_beam() -> CancerTypeEvidence | None:
@@ -6451,23 +6340,20 @@ def _adjudicate_selection_with_learned_hierarchy(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
-            residual_identity_evidence=residual_identity_evidence,
+            cancer_type_decision=cancer_type_decision,
         )
 
-    # A complete tumor-identity program recovered across candidate-independent
+    # A complete tumor program recovered across candidate-independent
     # background models is already separated from the bulk signal that drives
     # the learned hierarchy.  Adjudicate that exact entity before an unrelated
     # learned label can return early.  The beam still applies every persistent
-    # blocker and may fall through to learned arbitration when the residual
-    # candidate is inadmissible.
-    residual_code = _qualified_residual_identity_candidate(
-        residual_identity_evidence
-    )
-    if _residual_identity_is_source_resolved(
-        residual_identity_evidence,
-        residual_code,
+    # blocker and may fall through to learned arbitration when the proposed
+    # code is inadmissible.
+    decomposition_code = cancer_type_decision.proposed_code
+    if cancer_type_decision.background_separation_supports(
+        decomposition_code
     ):
-        if residual_code == selected.cancer_type:
+        if decomposition_code == selected.cancer_type:
             return selected
         beam_candidate = consensus_beam()
         if beam_candidate is not None:
@@ -6586,7 +6472,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=cen,
         centroid_confident=centroid_confident,
-        residual_identity_evidence=residual_identity_evidence,
+        cancer_type_decision=cancer_type_decision,
     )
     credible_learned_candidate = bool(
         entity_support >= _LEARNED_EXPRESSION_MIN_PROBABILITY
@@ -6634,7 +6520,7 @@ def _adjudicate_selection_with_learned_hierarchy(
         and (
             not lineage_disagreement
             or any(
-                axis.get("axis") == _ENTITY_CONSENSUS_RESIDUAL_AXIS
+                axis.get("axis") == _ENTITY_CONSENSUS_DECOMPOSITION_AXIS
                 and axis.get("preference") == "candidate"
                 for axis in consensus.get("axes") or ()
             )
@@ -6742,7 +6628,7 @@ def _adjudicate_selection_with_learned_hierarchy(
             sample_tpm_by_symbol=sample_tpm_by_symbol,
             cen=cen,
             centroid_confident=centroid_confident,
-            residual_identity_evidence=residual_identity_evidence,
+            cancer_type_decision=cancer_type_decision,
         )
         if beam_candidate is not None:
             return beam_candidate
@@ -11007,9 +10893,16 @@ def select_report_scope_from_evidence(
     *,
     rare_marker_hypotheses: list[Mapping[str, Any]] | None = None,
     fusion_scope_inference: Mapping[str, Any] | None = None,
-    residual_identity_evidence: Mapping[str, Any] | None = None,
+    cancer_type_decision: CancerTypeDecision | None = None,
 ) -> dict[str, Any]:
     """Build cancer-type hypotheses and return the selected report label."""
+    if cancer_type_decision is None:
+        cancer_type_decision = CancerTypeDecision(
+            status="not_evaluable",
+            current_code=_top_code(analysis),
+        )
+    elif not isinstance(cancer_type_decision, CancerTypeDecision):
+        raise TypeError("cancer_type_decision must be a CancerTypeDecision")
     try:
         from .common import build_sample_tpm_by_gene_id, build_sample_tpm_by_symbol
     except ImportError:
@@ -11116,7 +11009,7 @@ def select_report_scope_from_evidence(
         sample_tpm_by_symbol=sample_tpm_by_symbol,
         cen=_cen,
         centroid_confident=_cen_confident,
-        residual_identity_evidence=residual_identity_evidence,
+        cancer_type_decision=cancer_type_decision,
     )
     rows = list(hypotheses.values())
 
@@ -11149,11 +11042,7 @@ def select_report_scope_from_evidence(
         # panel verdict so analysis-parameters.json and report
         # rendering can surface it without re-running the evaluator.
         "lineage_panel_evidence": lineage_panel_evidence,
-        "residual_identity_evidence": (
-            dict(residual_identity_evidence)
-            if isinstance(residual_identity_evidence, Mapping)
-            else None
-        ),
+        "cancer_type_decision": cancer_type_decision.to_dict(),
     }
 
 

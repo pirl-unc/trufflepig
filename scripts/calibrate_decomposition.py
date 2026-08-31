@@ -782,7 +782,7 @@ def _sample_to_expression_frame(
 def _classify_one(
     df_expr: pd.DataFrame,
     *,
-    include_residual_identity: bool = False,
+    include_cancer_type_decision: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return ``(candidate_trace, summary)`` for one sample.
 
@@ -798,7 +798,7 @@ def _classify_one(
     from trufflepig.healthy_vs_tumor import assess_healthy_vs_tumor
     from trufflepig.tumor_purity import analyze_sample
 
-    # Always evaluate the production evidence path. The residual-identity flag
+    # Always evaluate the production evidence path. The decomposition-decision flag
     # controls only the later decomposition experiment; it must not silently
     # remove the healthy/tumor composition screen, shorten the candidate trace,
     # or otherwise change the cancer-type inputs being calibrated.
@@ -848,24 +848,22 @@ def _classify_one(
     except (KeyError, ValueError, TypeError):
         evidence = {}
     selected = (evidence or {}).get("selected") or {}
-    pre_residual_cancer_type = (
+    pre_decision_cancer_type = (
         str(selected.get("cancer_type") or "") or broad_top_code
     )
-    consolidated_cancer_type = pre_residual_cancer_type
+    consolidated_cancer_type = pre_decision_cancer_type
     consolidated_selected_by = str(selected.get("selected_by") or "")
-    residual_identity: dict[str, Any] = {}
-    residual_refit_performed = False
-    residual_refit_accepted: bool | None = None
-    if include_residual_identity:
+    cancer_type_decision = None
+    cancer_type_decision_refit_performed = False
+    cancer_type_decision_refit_accepted: bool | None = None
+    if include_cancer_type_decision:
         from trufflepig.decomposition import (
-            evaluate_residual_identity,
+            decide_cancer_type_from_decomposition,
             infer_sample_mode,
-            scope_residual_identity_to_decomposition_mode,
         )
         from trufflepig.main import (
             _fit_report_scope_decompositions,
             _propagate_report_scope_selection,
-            _residual_identity_confirms_report_scope,
             _restore_report_scope_metadata,
             _synchronize_cancer_type_context,
         )
@@ -875,11 +873,11 @@ def _classify_one(
         # purity estimate.  Leaving ``analysis`` on the broad ranker winner
         # makes calibration exercise a decomposition state that users never
         # see in reports.
-        if selected and pre_residual_cancer_type != broad_top_code:
+        if selected and pre_decision_cancer_type != broad_top_code:
             _propagate_report_scope_selection(
                 analysis,
                 df_expr,
-                report_scope_cancer_type=pre_residual_cancer_type,
+                report_scope_cancer_type=pre_decision_cancer_type,
                 selected_scope=selected,
                 rna_inferred_cancer_type=broad_top_code,
             )
@@ -892,7 +890,7 @@ def _classify_one(
             # Match production: the adjudicated report entity chooses the
             # biological decomposition regime. The raw ranker trace remains
             # the candidate differential, not a routing override.
-            cancer_types=[pre_residual_cancer_type],
+            cancer_types=[pre_decision_cancer_type],
             sample_mode="auto",
         )
         analysis["sample_mode"] = sample_mode
@@ -917,35 +915,31 @@ def _classify_one(
             )
 
         decompositions, candidate_codes, _initial_fit_context = fit_active_scope(
-            pre_residual_cancer_type
+            pre_decision_cancer_type
         )
-        residual_identity = evaluate_residual_identity(
+        cancer_type_decision = decide_cancer_type_from_decomposition(
             decompositions,
             candidate_codes=candidate_codes,
-            current_code=pre_residual_cancer_type,
-        )
-        residual_identity = scope_residual_identity_to_decomposition_mode(
-            residual_identity,
-            sample_mode=sample_mode,
-        )
+            current_code=pre_decision_cancer_type,
+        ).for_sample_mode(sample_mode)
         post_evidence = select_report_scope_from_evidence(
             df_expr,
             analysis,
             rare_marker_hypotheses=rare,
             fusion_scope_inference=None,
-            residual_identity_evidence=residual_identity,
+            cancer_type_decision=cancer_type_decision,
         )
         post_selected = (post_evidence or {}).get("selected") or {}
         proposed_cancer_type = (
             str(post_selected.get("cancer_type") or "")
-            or pre_residual_cancer_type
+            or pre_decision_cancer_type
         )
         proposed_selected_by = (
             str(post_selected.get("selected_by") or "")
             or consolidated_selected_by
         )
-        if post_selected and proposed_cancer_type != pre_residual_cancer_type:
-            residual_refit_performed = True
+        if post_selected and proposed_cancer_type != pre_decision_cancer_type:
+            cancer_type_decision_refit_performed = True
             previous_report_scope = analysis.get("report_scope_cancer_type")
             previous_report_parent = analysis.get(
                 "report_scope_parent_cancer_type"
@@ -960,40 +954,35 @@ def _classify_one(
             refit_decompositions, refit_codes, _refit_context = fit_active_scope(
                 proposed_cancer_type
             )
-            refit_identity = evaluate_residual_identity(
+            refit_decision = decide_cancer_type_from_decomposition(
                 refit_decompositions,
                 candidate_codes=refit_codes,
                 current_code=proposed_cancer_type,
-            )
-            refit_identity = scope_residual_identity_to_decomposition_mode(
-                refit_identity,
-                sample_mode=sample_mode,
-            )
-            residual_refit_accepted = _residual_identity_confirms_report_scope(
-                refit_identity,
+            ).for_sample_mode(sample_mode)
+            consensus = post_selected.get("entity_evidence_consensus") or {}
+            cancer_type_decision_refit_accepted = refit_decision.confirms(
                 proposed_cancer_type,
+                require_background_separation=bool(
+                    consensus.get("decomposition_decision_was_decisive")
+                ),
             )
-            residual_identity = refit_identity
-            if residual_refit_accepted:
+            cancer_type_decision = refit_decision
+            if cancer_type_decision_refit_accepted:
                 consolidated_cancer_type = proposed_cancer_type
                 consolidated_selected_by = proposed_selected_by
             else:
-                residual_identity = {
-                    **refit_identity,
-                    "adjudication_eligible": False,
-                    "adjudication_blocker": (
-                        "residual identity did not reproduce after the final "
-                        "report-scope decomposition refit"
-                    ),
-                }
-                consolidated_cancer_type = pre_residual_cancer_type
+                cancer_type_decision = refit_decision.block_selection(
+                    "the cancer-type decision did not reproduce after the "
+                    "final report-scope decomposition refit"
+                )
+                consolidated_cancer_type = pre_decision_cancer_type
                 consolidated_selected_by = str(
                     selected.get("selected_by") or ""
                 )
                 _propagate_report_scope_selection(
                     analysis,
                     df_expr,
-                    report_scope_cancer_type=pre_residual_cancer_type,
+                    report_scope_cancer_type=pre_decision_cancer_type,
                     selected_scope=selected,
                     rna_inferred_cancer_type=broad_top_code,
                 )
@@ -1004,7 +993,7 @@ def _classify_one(
                 )
                 # Production rebuilds the retained scope after rollback so its
                 # purity and decomposition state are internally consistent.
-                fit_active_scope(pre_residual_cancer_type)
+                fit_active_scope(pre_decision_cancer_type)
         else:
             consolidated_cancer_type = proposed_cancer_type
             consolidated_selected_by = proposed_selected_by
@@ -1013,17 +1002,21 @@ def _classify_one(
         "broad_top_support": float(top.get("support_fraction_of_top") or 0.0),
         "broad_top3": broad_top3,
         "n": len(trace),
-        "pre_residual_cancer_type": pre_residual_cancer_type,
-        "pre_residual_selected_by": str(selected.get("selected_by") or ""),
-        "residual_identity_status": str(residual_identity.get("status") or ""),
-        "residual_identity_code": str(
-            residual_identity.get("candidate_code") or ""
+        "pre_decision_cancer_type": pre_decision_cancer_type,
+        "pre_decision_selected_by": str(selected.get("selected_by") or ""),
+        "cancer_type_decision_status": (
+            cancer_type_decision.status if cancer_type_decision else ""
         ),
-        "residual_identity_realizations": int(
-            residual_identity.get("realizations_evaluated") or 0
+        "cancer_type_decision_code": (
+            cancer_type_decision.supported_code if cancer_type_decision else ""
         ),
-        "residual_identity_refit_performed": residual_refit_performed,
-        "residual_identity_refit_accepted": residual_refit_accepted,
+        "cancer_type_decision_realizations": int(
+            cancer_type_decision.realizations_evaluated
+            if cancer_type_decision
+            else 0
+        ),
+        "cancer_type_decision_refit_performed": cancer_type_decision_refit_performed,
+        "cancer_type_decision_refit_accepted": cancer_type_decision_refit_accepted,
         "consolidated_cancer_type": consolidated_cancer_type,
         "consolidated_selected_by": consolidated_selected_by,
     }
@@ -1059,7 +1052,7 @@ def _tcga_per_sample_track(
     sample_limit_per_cohort: int | None,
     cohorts: set[str] | None,
     *,
-    include_residual_identity: bool = False,
+    include_cancer_type_decision: bool = False,
 ) -> dict[str, Any]:
     print(f"[tcga] loading {eval_tpm_path}", file=sys.stderr, flush=True)
     tpm = _load_eval_tpm(eval_tpm_path)
@@ -1078,7 +1071,7 @@ def _tcga_per_sample_track(
             "n": 0,
             "first_pass_top1": 0,
             "first_pass_top3": 0,
-            "pre_residual_top1": 0,
+            "pre_decision_top1": 0,
             "final_call_top1": 0,
         }
     )
@@ -1096,7 +1089,7 @@ def _tcga_per_sample_track(
         "both_correct": 0,
         "both_wrong": 0,
     }
-    residual_flip_counts = {
+    decision_change_counts = {
         "unchanged_correct": 0,
         "unchanged_wrong": 0,
         "corrected": 0,
@@ -1123,21 +1116,21 @@ def _tcga_per_sample_track(
                 continue
             _trace, summary = _classify_one(
                 df_expr,
-                include_residual_identity=include_residual_identity,
+                include_cancer_type_decision=include_cancer_type_decision,
             )
             elapsed = time.time() - t0
             broad_code = summary["broad_top_code"] or ""
             broad_top3 = summary.get("broad_top3") or []
             consolidated_code = summary["consolidated_cancer_type"] or broad_code
             selected_by = summary.get("consolidated_selected_by") or ""
-            pre_residual_code = (
-                str(summary.get("pre_residual_cancer_type") or "")
+            pre_decision_code = (
+                str(summary.get("pre_decision_cancer_type") or "")
                 or consolidated_code
             )
             broad_top1, broad_top1_kind = _codes_match(broad_code, expected_code)
             broad_top3_hit, broad_top3_kind = _any_in_kin(broad_top3, expected_code)
-            pre_residual_top1, pre_residual_top1_kind = _codes_match(
-                pre_residual_code,
+            pre_decision_top1, pre_decision_top1_kind = _codes_match(
+                pre_decision_code,
                 expected_code,
             )
             consolidated_top1, consolidated_top1_kind = _codes_match(
@@ -1146,8 +1139,8 @@ def _tcga_per_sample_track(
             per_cohort[expected_code]["n"] += 1
             per_cohort[expected_code]["first_pass_top1"] += int(broad_top1)
             per_cohort[expected_code]["first_pass_top3"] += int(broad_top3_hit)
-            per_cohort[expected_code]["pre_residual_top1"] += int(
-                pre_residual_top1
+            per_cohort[expected_code]["pre_decision_top1"] += int(
+                pre_decision_top1
             )
             per_cohort[expected_code]["final_call_top1"] += int(consolidated_top1)
             per_selector_counts[selected_by or "no_selection"]["n"] += 1
@@ -1162,14 +1155,14 @@ def _tcga_per_sample_track(
                 flip_counts["first_pass_right_final_call_wrong"] += 1
             else:
                 flip_counts["first_pass_wrong_final_call_right"] += 1
-            if pre_residual_top1 and consolidated_top1:
-                residual_flip_counts["unchanged_correct"] += 1
-            elif not pre_residual_top1 and not consolidated_top1:
-                residual_flip_counts["unchanged_wrong"] += 1
-            elif not pre_residual_top1 and consolidated_top1:
-                residual_flip_counts["corrected"] += 1
+            if pre_decision_top1 and consolidated_top1:
+                decision_change_counts["unchanged_correct"] += 1
+            elif not pre_decision_top1 and not consolidated_top1:
+                decision_change_counts["unchanged_wrong"] += 1
+            elif not pre_decision_top1 and consolidated_top1:
+                decision_change_counts["corrected"] += 1
             else:
-                residual_flip_counts["regressed"] += 1
+                decision_change_counts["regressed"] += 1
             row = {
                 "sample_id": sample_id,
                 "expected_code": expected_code,
@@ -1182,20 +1175,20 @@ def _tcga_per_sample_track(
                 "first_pass_top3_match_kind": broad_top3_kind,
                 "final_call_cancer_type": consolidated_code,
                 "final_call_selected_by": selected_by,
-                "pre_residual_cancer_type": pre_residual_code,
-                "pre_residual_selected_by": summary.get(
-                    "pre_residual_selected_by"
+                "pre_decision_cancer_type": pre_decision_code,
+                "pre_decision_selected_by": summary.get(
+                    "pre_decision_selected_by"
                 ),
-                "pre_residual_top1_match": bool(pre_residual_top1),
-                "pre_residual_top1_match_kind": pre_residual_top1_kind,
-                "residual_identity_status": summary.get(
-                    "residual_identity_status"
+                "pre_decision_top1_match": bool(pre_decision_top1),
+                "pre_decision_top1_match_kind": pre_decision_top1_kind,
+                "cancer_type_decision_status": summary.get(
+                    "cancer_type_decision_status"
                 ),
-                "residual_identity_code": summary.get(
-                    "residual_identity_code"
+                "cancer_type_decision_code": summary.get(
+                    "cancer_type_decision_code"
                 ),
-                "residual_identity_realizations": summary.get(
-                    "residual_identity_realizations"
+                "cancer_type_decision_realizations": summary.get(
+                    "cancer_type_decision_realizations"
                 ),
                 "final_call_top1_match": bool(consolidated_top1),
                 "final_call_top1_match_kind": consolidated_top1_kind,
@@ -1206,7 +1199,7 @@ def _tcga_per_sample_track(
             print(
                 f"[tcga] {expected_code}/{sample_id}: "
                 f"first_pass={broad_code} top3={broad_top3} "
-                f"pre_residual={pre_residual_code} "
+                f"pre_decision={pre_decision_code} "
                 f"final_call={consolidated_code} ({selected_by or '-'}) "
                 f"first_pass_match={broad_top1} final_call_match={consolidated_top1} "
                 f"({elapsed:.1f}s)",
@@ -1217,8 +1210,8 @@ def _tcga_per_sample_track(
     total_n = sum(c["n"] for c in per_cohort.values())
     total_first_pass_top1 = sum(c["first_pass_top1"] for c in per_cohort.values())
     total_first_pass_top3 = sum(c["first_pass_top3"] for c in per_cohort.values())
-    total_pre_residual_top1 = sum(
-        c["pre_residual_top1"] for c in per_cohort.values()
+    total_pre_decision_top1 = sum(
+        c["pre_decision_top1"] for c in per_cohort.values()
     )
     total_final_call_top1 = sum(c["final_call_top1"] for c in per_cohort.values())
     first_pass_top1_ci = _bootstrap_ci(
@@ -1230,8 +1223,8 @@ def _tcga_per_sample_track(
     final_call_top1_ci = _bootstrap_ci(
         [row["final_call_top1_match"] for row in per_sample]
     )
-    pre_residual_top1_ci = _bootstrap_ci(
-        [row["pre_residual_top1_match"] for row in per_sample]
+    pre_decision_top1_ci = _bootstrap_ci(
+        [row["pre_decision_top1_match"] for row in per_sample]
     )
 
     def _per_cohort_row(stats: dict[str, int]) -> dict[str, Any]:
@@ -1244,8 +1237,8 @@ def _tcga_per_sample_track(
             "first_pass_top3_accuracy": (
                 round(stats["first_pass_top3"] / n, 4) if n else 0.0
             ),
-            "pre_residual_top1_accuracy": (
-                round(stats["pre_residual_top1"] / n, 4) if n else 0.0
+            "pre_decision_top1_accuracy": (
+                round(stats["pre_decision_top1"] / n, 4) if n else 0.0
             ),
             "final_call_top1_accuracy": (
                 round(stats["final_call_top1"] / n, 4) if n else 0.0
@@ -1276,18 +1269,18 @@ def _tcga_per_sample_track(
             round(total_first_pass_top3 / total_n, 4) if total_n else 0.0
         ),
         "first_pass_top3_ci_95": first_pass_top3_ci,
-        "pre_residual_top1_accuracy": (
-            round(total_pre_residual_top1 / total_n, 4) if total_n else 0.0
+        "pre_decision_top1_accuracy": (
+            round(total_pre_decision_top1 / total_n, 4) if total_n else 0.0
         ),
-        "pre_residual_top1_ci_95": pre_residual_top1_ci,
+        "pre_decision_top1_ci_95": pre_decision_top1_ci,
         "final_call_top1_accuracy": (
             round(total_final_call_top1 / total_n, 4) if total_n else 0.0
         ),
         "final_call_top1_ci_95": final_call_top1_ci,
         "flip_counts": dict(flip_counts),
-        "residual_flip_counts": dict(residual_flip_counts),
-        "delta_final_call_vs_pre_residual_top1": (
-            round((total_final_call_top1 - total_pre_residual_top1) / total_n, 4)
+        "decision_change_counts": dict(decision_change_counts),
+        "delta_final_call_vs_pre_decision_top1": (
+            round((total_final_call_top1 - total_pre_decision_top1) / total_n, 4)
             if total_n
             else 0.0
         ),
@@ -1615,13 +1608,13 @@ def _prepare_local_df_expr(
 def _classify_local_with_evidence(
     df_expr: pd.DataFrame,
     *,
-    include_residual_identity: bool = False,
+    include_cancer_type_decision: bool = False,
 ) -> dict[str, Any]:
     """Run broad RNA + cancer_type_evidence selection on a local sample."""
-    if include_residual_identity:
+    if include_cancer_type_decision:
         trace, summary = _classify_one(
             df_expr,
-            include_residual_identity=True,
+            include_cancer_type_decision=True,
         )
         return {
             "top_code": summary.get("broad_top_code") or "",
@@ -1631,20 +1624,20 @@ def _classify_local_with_evidence(
             ),
             "selected_by": summary.get("consolidated_selected_by") or "",
             "evidence_sources": [],
-            "pre_residual_cancer_type": (
-                summary.get("pre_residual_cancer_type") or ""
+            "pre_decision_cancer_type": (
+                summary.get("pre_decision_cancer_type") or ""
             ),
-            "pre_residual_selected_by": (
-                summary.get("pre_residual_selected_by") or ""
+            "pre_decision_selected_by": (
+                summary.get("pre_decision_selected_by") or ""
             ),
-            "residual_identity_status": (
-                summary.get("residual_identity_status") or ""
+            "cancer_type_decision_status": (
+                summary.get("cancer_type_decision_status") or ""
             ),
-            "residual_identity_code": (
-                summary.get("residual_identity_code") or ""
+            "cancer_type_decision_code": (
+                summary.get("cancer_type_decision_code") or ""
             ),
-            "residual_identity_realizations": (
-                summary.get("residual_identity_realizations") or 0
+            "cancer_type_decision_realizations": (
+                summary.get("cancer_type_decision_realizations") or 0
             ),
             "candidate_count": len(trace),
         }
@@ -1709,7 +1702,7 @@ def _local_no_override_track(
     manifest_path: Path,
     expected_overrides: dict[str, dict[str, Any]] | None = None,
     *,
-    include_residual_identity: bool = False,
+    include_cancer_type_decision: bool = False,
 ) -> dict[str, Any]:
     print(f"[local] reading manifest {manifest_path}", file=sys.stderr, flush=True)
     manifest = json.loads(manifest_path.read_text())
@@ -1763,7 +1756,7 @@ def _local_no_override_track(
             continue
         outcome = _classify_local_with_evidence(
             df_expr,
-            include_residual_identity=include_residual_identity,
+            include_cancer_type_decision=include_cancer_type_decision,
         )
         elapsed = time.time() - t0
         expected_code = str(expected.get("expected_cancer_type") or "")
@@ -1789,20 +1782,20 @@ def _local_no_override_track(
                 "top3": outcome["top3"],
                 "selected_by": outcome["selected_by"],
                 "evidence_sources": outcome["evidence_sources"],
-                "pre_residual_cancer_type": outcome.get(
-                    "pre_residual_cancer_type"
+                "pre_decision_cancer_type": outcome.get(
+                    "pre_decision_cancer_type"
                 ),
-                "pre_residual_selected_by": outcome.get(
-                    "pre_residual_selected_by"
+                "pre_decision_selected_by": outcome.get(
+                    "pre_decision_selected_by"
                 ),
-                "residual_identity_status": outcome.get(
-                    "residual_identity_status"
+                "cancer_type_decision_status": outcome.get(
+                    "cancer_type_decision_status"
                 ),
-                "residual_identity_code": outcome.get(
-                    "residual_identity_code"
+                "cancer_type_decision_code": outcome.get(
+                    "cancer_type_decision_code"
                 ),
-                "residual_identity_realizations": outcome.get(
-                    "residual_identity_realizations"
+                "cancer_type_decision_realizations": outcome.get(
+                    "cancer_type_decision_realizations"
                 ),
                 "code_match": code_match,
                 "selector_match": selector_match,
@@ -1995,12 +1988,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Comma-separated TCGA codes to include (default: all).",
     )
     p.add_argument(
-        "--include-residual-identity",
+        "--include-cancer-type-decision",
         action="store_true",
         help=(
             "For the bounded eval cohort track, run the production-shaped "
-            "decomposition residual-identity pass and re-adjudicate the "
-            "cancer entity. This is intentionally serial and more expensive."
+            "background-separated cancer-type decision and rerun the "
+            "report label. This is intentionally serial and more expensive."
         ),
     )
     p.add_argument(
@@ -2135,7 +2128,7 @@ def main(argv: list[str] | None = None) -> int:
         "trufflepig_version": _trufflepig_version(),
         "pirlygenes_version": _pirlygenes_version(),
         "decomposition_parameters": _decomposition_parameters(),
-        "residual_identity_enabled": bool(args.include_residual_identity),
+        "cancer_type_decision_enabled": bool(args.include_cancer_type_decision),
     }
     if not args.skip_tcga:
         sample_limit = (
@@ -2147,9 +2140,9 @@ def main(argv: list[str] | None = None) -> int:
             else None
         )
         if args.use_full_tcga_matrix:
-            if args.include_residual_identity:
+            if args.include_cancer_type_decision:
                 raise SystemExit(
-                    "--include-residual-identity currently targets the bounded "
+                    "--include-cancer-type-decision currently targets the bounded "
                     "eval cohort track; do not combine it with "
                     "--use-full-tcga-matrix"
                 )
@@ -2168,7 +2161,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.eval_samples,
                 sample_limit_per_cohort=sample_limit,
                 cohorts=cohorts,
-                include_residual_identity=args.include_residual_identity,
+                include_cancer_type_decision=args.include_cancer_type_decision,
             )
     if not args.skip_hpa:
         tissues = [t.strip() for t in args.hpa_tissues.split(",") if t.strip()]
@@ -2182,7 +2175,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         report["local_no_override"] = _local_no_override_track(
             manifest_path,
-            include_residual_identity=args.include_residual_identity,
+            include_cancer_type_decision=args.include_cancer_type_decision,
         )
     if args.local_data_root is not None:
         report["local_replay"] = _local_replay_track(

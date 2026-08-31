@@ -46,7 +46,6 @@ from .models import (
 from .cancer_type_context import (
     CancerTypeContext,
     ExpressionReferenceRecord,
-    ResidualIdentityScope,
     cancer_type_context_code,
     cancer_type_context_from_analysis,
     cancer_type_context_label,
@@ -68,7 +67,6 @@ __all__ = [
     "AnalyzeSummaryRecord",
     "CancerTypeContext",
     "ExpressionReferenceRecord",
-    "ResidualIdentityScope",
     "InputResolution",
     "LongitudinalDelta",
     "LongitudinalDeltaSet",

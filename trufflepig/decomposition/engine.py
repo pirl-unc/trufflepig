@@ -669,7 +669,7 @@ def decompose_identity_backgrounds(
             # no gene identity cannot support it, so abstain just as we do for
             # empty input instead of aborting an otherwise valid report path.
             _LOGGER.warning(
-                "Residual-identity decomposition skipped: gene identity "
+                "Background-separated cancer-type analysis skipped: gene identity "
                 "columns are unavailable (%s)",
                 exc,
             )

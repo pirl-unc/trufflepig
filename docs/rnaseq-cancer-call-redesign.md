@@ -510,26 +510,26 @@ it is validated.
 - Fusion and direct molecular evidence: authoritative for entities where the
   variant is defining.
 
-### Implemented incremental residual-identity path
+### Implemented decomposition cancer-type decision
 
-`decomposition.evaluate_residual_identity` now evaluates the plausible
+`decomposition.decide_cancer_type_from_decomposition` evaluates the plausible
 candidate/background beam without using decomposition rank, purity, or the
-upstream cancer-support score as identity evidence.
+upstream cancer-support score as cancer-type evidence.
 
 For every usable tumor residual it evaluates curated expected-high and
 expected-low lineage panels plus ontology sanity programs. Candidate-specific
 fits are first grouped by structural background model. Identity evaluation
 uses the complete candidate-by-template beam; the 24-row report limit is
-applied only afterward for presentation. A residual identity is eligible only
+applied only afterward for presentation. `CancerTypeDecision` is resolved only
 when every realization within each model agrees and every model agrees with
 the others. Discordant models remain explicitly `ambiguous`; same-branch
 sibling ambiguity resolves only to the deepest shared registry parent.
 
-Residual evidence is selectable only inside the biological regime that
-generated it: a solid residual cannot establish a heme diagnosis, and a heme
-residual cannot establish a solid diagnosis. Production and calibration call
-the same ontology-backed mode guard, so evaluation cannot credit a transition
-that the report pipeline would reject.
+The decision is selectable only inside the biological regime that generated
+it: a solid decomposition cannot establish a heme diagnosis, and a heme
+decomposition cannot establish a solid diagnosis. Production and calibration
+use the same `CancerTypeDecision.for_sample_mode` rule, so evaluation cannot
+credit a transition that the report pipeline would reject.
 
 The initial decomposition regime follows the adjudicated report entity rather
 than the raw ranker leader. This matters for concentrated or otherwise
@@ -547,20 +547,19 @@ attribution, and therapy curation stay on the resolved branch. Ancestor or
 descendant decomposition rows are named explicitly as such and do not silently
 refine the report label.
 
-An ordinary invariant residual contributes one independent entity-consensus
-axis. A stricter source-resolved result can select the entity as one compound
-tumor-identity result when candidate-independent background subtraction makes
-a complete expected-high/expected-low panel agree with ontology identity and
-every usable background model agrees. Its internal panel and ontology views
-are not recounted as separate votes, and conflicting bulk axes are treated as
-possible host context rather than required corroboration. Persistent molecular
-or ontology vetoes still apply, and production accepts a changed scope only
-when a fresh decomposition fitted for that final scope reproduces the result.
-An invariant residual may add one parent-level entity to the small consensus
-beam. Cross-branch eligibility requires either a matching lineage panel or an
-ontology result whose identity is invariant across every usable background
+An ordinary decomposition decision contributes one independent consensus axis.
+It may select the supported code without a second bulk vote when a complete
+expected-high/expected-low panel agrees with the ontology program after
+candidate-independent background subtraction and every usable model agrees.
+The panel and ontology checks are not recounted as separate votes, and
+conflicting bulk signals may represent host context. Molecular and ontology
+vetoes still apply. A changed report code is retained only when a fresh
+decomposition fitted for that final scope reaches a compatible decision. A
+parent-level decision may broaden an unsupported child, but it cannot create a
+more specific child. Cross-branch eligibility requires either a matching
+lineage panel or an ontology result that agrees across every usable background
 model and candidate realization. It must then win a true majority of the
-available independent axes; a residual-led candidate needs three non-learned
+available independent axes; a decomposition-led candidate needs three non-learned
 groups. Blocked contrast/reference evidence and persistent molecular/registry
 vetoes remain unavailable. Because residual ontology programs reuse curated
 marker genes, the bulk marker-program axis abstains whenever the residual axis
@@ -628,7 +627,7 @@ The feature frame should include, at minimum:
 - likely host/background decompositions for dominant normal tissues such as
   liver, brain, lung, lymph node, smooth muscle, adipose, and bone when those
   dominate the bulk profile;
-- residual identity-panel scores for plausible candidate families/entities;
+- background-separated cancer-type program scores for plausible families/entities;
 - `lineage_fit`, residual fraction, subtraction fractions, and consistency
   flags for each attempted mode/background.
 

@@ -1,24 +1,25 @@
-"""Tumor-identity evidence from decomposition residuals.
+"""Cancer-type decisions from background-separated tumor expression.
 
 The decomposition engine fits background components and leaves tumor as the
 non-negative residual.  Its aggregate ``score`` deliberately includes the
 upstream cancer rank, so that score is useful for choosing a subtraction model
 but is not independent cancer-identity evidence.
 
-This module keeps those roles separate.  It evaluates curated positive and
-negative tumor programs on every usable residual, groups candidate-specific
-fits that represent the same structural background model, and only nominates
-an identity when the conclusion is invariant across every realization.  No
-decomposition score, ranker support, or candidate purity is used in the
-identity decision.
+This module keeps those roles separate. It evaluates curated positive and
+negative tumor programs after background subtraction, groups fits that
+represent the same background model, and returns one :class:`CancerTypeDecision`.
+No decomposition score, ranker support, or candidate purity is reused in that
+decision.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, replace
 from typing import Any
 
+from ..analyze.cancer_type_context import cancer_type_tree_relationship
 from ..cancer_ontology import cancer_codes_entity_compatible, registry_parent_code
 from ..tumor_type_ontology import tumor_type_ontology, tumor_type_sanity_check
 
@@ -38,52 +39,347 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
-def scope_residual_identity_to_decomposition_mode(
-    evidence: Mapping[str, Any] | None,
-    *,
-    sample_mode: str,
-) -> dict[str, Any]:
-    """Make residual evidence selectable only in the regime that produced it.
+@dataclass(frozen=True)
+class CancerTypeDecision:
+    """What the tumor expression supports after modeled background is removed.
 
-    Heme and solid decompositions subtract different biological populations,
-    so their residuals are not interchangeable. Pure-population mode describes
-    sample preparation rather than lineage and therefore remains unrestricted.
+    This is the public contract between decomposition, cancer-type selection,
+    and reporting. Callers do not interpret evaluator status strings or inspect
+    background-model rows to decide whether a label may change.
     """
 
-    scoped = dict(evidence or {})
-    candidate_code = _clean(scoped.get("candidate_code"))
-    mode = _clean(sample_mode)
-    if not candidate_code or mode not in {"solid", "heme"}:
-        scoped["adjudication_eligible"] = True
-        scoped.pop("adjudication_blocker", None)
-        return scoped
+    status: str
+    supported_code: str = ""
+    current_code: str = ""
+    panel_code: str = ""
+    ontology_code: str = ""
+    decision_basis: str = ""
+    background_separation_confirmed: bool = False
+    selection_allowed: bool = True
+    block_reason: str = ""
+    models_evaluated: int = 0
+    realizations_evaluated: int = 0
+    background_models: tuple[Mapping[str, Any], ...] = ()
+    background_attributed_genes: tuple[str, ...] = ()
+    separated_background_models: int = 0
+    sample_mode: str = ""
+    supported_code_mode: str = ""
+    reason: str = ""
+    refit_accepted: bool = False
+    selected_by_consensus: bool = False
+    consensus_required_background_separation: bool = False
 
-    try:
-        from ..expression_decomposition import resolve_mode
-
-        candidate_mode, _routing, _type_code = resolve_mode(candidate_code)
-    except (ImportError, KeyError, TypeError, ValueError):
-        candidate_mode = None
-
-    candidate_regime = (
-        "heme"
-        if candidate_mode == "heme"
-        else "solid"
-        if candidate_mode
-        else "unknown"
-    )
-    compatible = candidate_regime == mode
-    scoped["adjudication_eligible"] = compatible
-    scoped["decomposition_sample_mode"] = mode
-    scoped["candidate_sample_mode"] = candidate_regime
-    if compatible:
-        scoped.pop("adjudication_blocker", None)
-    else:
-        scoped["adjudication_blocker"] = (
-            f"{candidate_code} requires {candidate_regime} decomposition, "
-            f"but the residual was generated in {mode} mode"
+    @classmethod
+    def from_dict(
+        cls,
+        evidence: Mapping[str, Any] | None,
+        *,
+        current_code: str | None = None,
+    ) -> "CancerTypeDecision":
+        data = dict(evidence or {})
+        status = _clean(data.get("status")) or "not_evaluable"
+        return cls(
+            status=status,
+            supported_code=_clean(data.get("supported_code")),
+            current_code=_clean(current_code or data.get("current_code")),
+            panel_code=_clean(data.get("panel_code")),
+            ontology_code=_clean(data.get("ontology_code")),
+            decision_basis=_clean(data.get("decision_basis")),
+            background_separation_confirmed=bool(
+                data.get("background_separation_confirmed")
+            ),
+            selection_allowed=bool(data.get("selection_allowed", True)),
+            block_reason=_clean(data.get("block_reason")),
+            models_evaluated=int(data.get("models_evaluated") or 0),
+            realizations_evaluated=int(
+                data.get("realizations_evaluated") or 0
+            ),
+            background_models=tuple(
+                dict(row)
+                for row in (data.get("background_models") or ())
+                if isinstance(row, Mapping)
+            ),
+            background_attributed_genes=tuple(
+                str(gene)
+                for gene in (
+                    data.get("background_attributed_genes") or ()
+                )
+                if str(gene).strip()
+            ),
+            separated_background_models=int(
+                data.get("separated_background_models") or 0
+            ),
+            sample_mode=_clean(data.get("sample_mode")),
+            supported_code_mode=_clean(data.get("supported_code_mode")),
+            reason=_clean(data.get("reason")),
         )
-    return scoped
+
+    @classmethod
+    def from_analysis(
+        cls,
+        analysis: Mapping[str, Any],
+        report_code: str | None = None,
+    ) -> "CancerTypeDecision":
+        report = _clean(
+            report_code
+            or analysis.get("report_scope_cancer_type")
+            or analysis.get("cancer_type")
+        )
+        decision = cls.from_dict(
+            analysis.get("cancer_type_decision"),
+            current_code=report,
+        )
+        selected = (
+            (analysis.get("cancer_type_evidence") or {}).get("selected")
+            or {}
+        )
+        consensus = selected.get("entity_evidence_consensus") or {}
+        return replace(
+            decision,
+            refit_accepted=bool(
+                (analysis.get("cancer_type_decision_refit") or {}).get(
+                    "accepted"
+                )
+                is True
+            ),
+            selected_by_consensus=(
+                selected.get("selected_by") == "entity_evidence_consensus"
+            ),
+            consensus_required_background_separation=bool(
+                consensus.get("decomposition_decision_was_decisive")
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the stable JSON representation used in analysis artifacts."""
+
+        return {
+            "status": self.status,
+            "supported_code": self.supported_code or None,
+            "current_code": self.current_code or None,
+            "relationship": self.relationship,
+            "panel_code": self.panel_code or None,
+            "ontology_code": self.ontology_code or None,
+            "decision_basis": self.decision_basis or None,
+            "background_separation_confirmed": (
+                self.background_separation_confirmed
+            ),
+            "selection_allowed": self.selection_allowed,
+            "block_reason": self.block_reason or None,
+            "models_evaluated": self.models_evaluated,
+            "realizations_evaluated": self.realizations_evaluated,
+            "background_models": [dict(row) for row in self.background_models],
+            "background_attributed_genes": list(
+                self.background_attributed_genes
+            ),
+            "separated_background_models": self.separated_background_models,
+            "sample_mode": self.sample_mode or None,
+            "supported_code_mode": self.supported_code_mode or None,
+            "reason": self.reason or None,
+        }
+
+    @property
+    def is_resolved(self) -> bool:
+        return bool(self.status == "resolved" and self.supported_code)
+
+    @property
+    def relationship(self) -> str:
+        """How the supported code relates to the current report code."""
+
+        return cancer_type_tree_relationship(
+            self.current_code,
+            self.supported_code,
+        )
+
+    @property
+    def structurally_consistent(self) -> bool:
+        """Whether every evaluated background model supports one branch."""
+
+        return bool(
+            self.supported_code
+            and self.background_models
+            and all(
+                int(model.get("realizations") or 0) > 0
+                and cancer_type_tree_relationship(
+                    self.supported_code,
+                    model.get("candidate_code"),
+                )
+                in {"same", "ancestor", "descendant"}
+                for model in self.background_models
+            )
+        )
+
+    @property
+    def has_cancer_type_support(self) -> bool:
+        """Whether a marker or ontology program supports the resolved code."""
+
+        # The evaluator sets this only after complete marker and ontology
+        # programs agree across candidate-independent background models.
+        if self.background_separation_confirmed:
+            return True
+        panel_supports = bool(
+            self.panel_code
+            and cancer_type_tree_relationship(
+                self.supported_code,
+                self.panel_code,
+            )
+            in {"same", "ancestor", "descendant"}
+        )
+        ontology_supports = bool(
+            self.ontology_code
+            and self.structurally_consistent
+            and cancer_type_tree_relationship(
+                self.supported_code,
+                self.ontology_code,
+            )
+            in {"same", "ancestor", "descendant"}
+        )
+        return panel_supports or ontology_supports
+
+    @property
+    def proposed_code(self) -> str:
+        """Cancer code this decision is allowed to propose, if any.
+
+        A broader parent may replace an unjustified child only when explicit
+        background separation established that parent. A narrower child is not
+        inferred from parent-compatible evidence.
+        """
+
+        if (
+            not self.is_resolved
+            or not self.selection_allowed
+            or not self.has_cancer_type_support
+        ):
+            return ""
+        if self.relationship in {"independent", "sibling", "unknown"}:
+            return self.supported_code
+        if (
+            self.relationship == "ancestor"
+            and self.background_separation_confirmed
+        ):
+            return self.supported_code
+        return ""
+
+    def supports(self, cancer_code: str) -> bool:
+        """Whether this decision directly supports ``cancer_code``."""
+
+        return bool(
+            self.is_resolved
+            and self.selection_allowed
+            and self.has_cancer_type_support
+            and self.supported_code == _clean(cancer_code)
+        )
+
+    def background_separation_supports(self, cancer_code: str) -> bool:
+        """Whether independent background models support ``cancer_code``."""
+
+        return bool(
+            self.background_separation_confirmed
+            and self.is_resolved
+            and self.selection_allowed
+            and self.supported_code == _clean(cancer_code)
+        )
+
+    def confirms(
+        self,
+        report_code: str,
+        *,
+        require_background_separation: bool = False,
+    ) -> bool:
+        """Whether a final refit establishes at least ``report_code``."""
+
+        relationship = cancer_type_tree_relationship(
+            report_code,
+            self.supported_code,
+        )
+        return bool(
+            self.is_resolved
+            and self.selection_allowed
+            and self.has_cancer_type_support
+            and relationship in {"same", "descendant"}
+            and (
+                not require_background_separation
+                or self.background_separation_confirmed
+            )
+        )
+
+    def block_selection(self, reason: str) -> "CancerTypeDecision":
+        """Return the same audit result with report-label selection disabled."""
+
+        return replace(
+            self,
+            selection_allowed=False,
+            block_reason=_clean(reason),
+        )
+
+    @property
+    def is_selection_basis(self) -> bool:
+        """Whether this decision established the final report scope."""
+
+        return bool(
+            self.relationship in {"same", "descendant"}
+            and self.background_separation_supports(self.supported_code)
+            and self.refit_accepted
+            and self.selected_by_consensus
+            and self.consensus_required_background_separation
+        )
+
+    @property
+    def refit_confirmed(self) -> bool:
+        """Whether the final decomposition retained this decision."""
+
+        return bool(
+            self.supported_code
+            and self.background_separation_supports(self.supported_code)
+            and self.refit_accepted
+        )
+
+    def for_sample_mode(self, sample_mode: str) -> "CancerTypeDecision":
+        """Allow selection only in the decomposition regime that produced it."""
+
+        mode = _clean(sample_mode)
+        if not self.supported_code:
+            return replace(
+                self,
+                sample_mode=mode,
+            )
+        if mode not in {"solid", "heme"}:
+            return replace(
+                self,
+                selection_allowed=False,
+                block_reason=f"unsupported decomposition mode: {mode or 'missing'}",
+                sample_mode=mode,
+            )
+
+        try:
+            from ..expression_decomposition import resolve_mode
+
+            candidate_mode, _routing, _type_code = resolve_mode(
+                self.supported_code
+            )
+        except (ImportError, KeyError, TypeError, ValueError):
+            candidate_mode = None
+
+        supported_mode = (
+            "heme"
+            if candidate_mode == "heme"
+            else "solid"
+            if candidate_mode
+            else "unknown"
+        )
+        compatible = supported_mode == mode
+        return replace(
+            self,
+            selection_allowed=compatible,
+            block_reason=(
+                ""
+                if compatible
+                else f"{self.supported_code} requires {supported_mode} "
+                f"decomposition, but this decision used {mode} mode"
+            ),
+            sample_mode=mode,
+            supported_code_mode=supported_mode,
+        )
 
 
 def _residual_views(gene_attribution) -> tuple[dict[str, float], dict[str, float]]:
@@ -513,13 +809,13 @@ def _conflicting_candidates(values: Iterable[str | None]) -> tuple[str, ...]:
     return candidates if len(candidates) > 1 else ()
 
 
-def evaluate_residual_identity(
+def decide_cancer_type_from_decomposition(
     decomposition_results: Iterable[Any],
     *,
     candidate_codes: Iterable[str],
     current_code: str | None = None,
-) -> dict[str, Any]:
-    """Evaluate tumor identity independently across decomposition residuals.
+) -> CancerTypeDecision:
+    """Decide which cancer type the background-separated tumor supports.
 
     A candidate is nominated only when every candidate-specific realization of
     each structural background model agrees, and every usable background model
@@ -532,8 +828,7 @@ def evaluate_residual_identity(
     )
     empty = {
         "status": "not_evaluable",
-        "role": "independent_residual_identity",
-        "candidate_code": None,
+        "supported_code": None,
         "current_code": _clean(current_code) or None,
         "models_evaluated": 0,
         "realizations_evaluated": 0,
@@ -541,7 +836,7 @@ def evaluate_residual_identity(
         "reason": "no usable decomposition residuals or candidate programs",
     }
     if not candidates:
-        return empty
+        return CancerTypeDecision.from_dict(empty)
 
     try:
         from ..lineage_panels import (
@@ -693,7 +988,7 @@ def evaluate_residual_identity(
         )
 
     if not grouped:
-        return empty
+        return CancerTypeDecision.from_dict(empty)
 
     background_models: list[dict[str, Any]] = []
     for (template, components), rows in sorted(grouped.items()):
@@ -842,62 +1137,57 @@ def evaluate_residual_identity(
         for row in background_models
         if row.get("model_role") == "identity_background"
     ]
-    source_resolved_panel_candidate = _unanimous(
+    separated_panel_code = _unanimous(
         row.get("complete_panel_or_background_candidate")
         for row in identity_background_models
     )
-    source_resolved_ontology_candidate = _unanimous(
+    separated_ontology_code = _unanimous(
         row.get("ontology_candidate") for row in identity_background_models
     )
-    source_resolved_candidate = _unanimous(
+    separated_code = _unanimous(
         row.get("candidate_code") for row in identity_background_models
     )
-    source_resolved_identity = bool(
-        source_resolved_candidate
-        and source_resolved_panel_candidate
-        and source_resolved_ontology_candidate
+    background_separation_confirmed = bool(
+        separated_code
+        and separated_panel_code
+        and separated_ontology_code
         and cancer_codes_entity_compatible(
-            source_resolved_candidate,
-            source_resolved_panel_candidate,
+            separated_code,
+            separated_panel_code,
         )
         and cancer_codes_entity_compatible(
-            source_resolved_candidate,
-            source_resolved_ontology_candidate,
+            separated_code,
+            separated_ontology_code,
         )
         and background_attributed_genes
     )
-    if not invariant_panel_candidate and source_resolved_identity:
-        invariant_panel_candidate = source_resolved_panel_candidate
+    if not invariant_panel_candidate and background_separation_confirmed:
+        invariant_panel_candidate = separated_panel_code
     candidate = _unanimous(
         row.get("candidate_code") for row in background_models
     )
     realizations = sum(int(row["realizations"]) for row in background_models)
     if not candidate:
-        return {
+        return CancerTypeDecision.from_dict({
             **empty,
             "status": "ambiguous",
             "models_evaluated": len(background_models),
             "realizations_evaluated": realizations,
             "background_models": background_models,
-            "panel_candidate_code": invariant_panel_candidate or None,
-            "ontology_candidate_code": invariant_ontology_candidate or None,
+            "panel_code": invariant_panel_candidate or None,
+            "ontology_code": invariant_ontology_candidate or None,
             "reason": (
-                "residual identity was not invariant across every usable "
+                "the supported cancer type differed across usable "
                 "background model and candidate-specific realization"
             ),
-        }
+        })
 
     current = _clean(current_code)
-    return {
-        "status": (
-            "corroborated"
-            if current and cancer_codes_entity_compatible(candidate, current)
-            else "candidate"
-        ),
-        "role": "independent_residual_identity",
-        "candidate_code": candidate,
-        "panel_candidate_code": invariant_panel_candidate or None,
-        "ontology_candidate_code": invariant_ontology_candidate or None,
+    return CancerTypeDecision.from_dict({
+        "status": "resolved",
+        "supported_code": candidate,
+        "panel_code": invariant_panel_candidate or None,
+        "ontology_code": invariant_ontology_candidate or None,
         "decision_basis": (
             "panel_and_ontology"
             if invariant_panel_candidate and invariant_ontology_candidate
@@ -905,15 +1195,15 @@ def evaluate_residual_identity(
             if invariant_panel_candidate
             else "ontology_program"
         ),
-        "source_resolved_identity": source_resolved_identity,
-        "source_resolved_background_models": len(identity_background_models),
-        "background_attributed_expected_low_genes": background_attributed_genes,
+        "background_separation_confirmed": background_separation_confirmed,
+        "separated_background_models": len(identity_background_models),
+        "background_attributed_genes": background_attributed_genes,
         "current_code": current or None,
         "models_evaluated": len(background_models),
         "realizations_evaluated": realizations,
         "background_models": background_models,
         "reason": (
-            f"{candidate} remained the unique residual identity "
-            "across every usable background model and realization"
+            f"{candidate} remained the only supported cancer type across "
+            "every usable background model and realization"
         ),
-    }
+    })

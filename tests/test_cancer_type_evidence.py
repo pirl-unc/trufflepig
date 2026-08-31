@@ -1508,7 +1508,7 @@ def test_flat_learned_entity_leader_aggregates_child_labels():
     assert predictions[0][1] == pytest.approx(0.65)
 
 
-def test_residual_identity_completes_an_integrated_entity_consensus():
+def test_decomposition_decision_completes_an_integrated_entity_consensus():
     """Post-background identity is one vote, not a standalone selector."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1552,12 +1552,12 @@ def test_residual_identity_completes_an_integrated_entity_consensus():
     with_incompatible_residual = _adjudicate_selection_with_learned_hierarchy(
         hypotheses,
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "ACC",
-            "panel_candidate_code": "ACC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "ACC",
+            "panel_code": "ACC",
             "current_code": "SARC_DDLPS",
-            "adjudication_eligible": False,
+            "selection_allowed": False,
         },
     )
     assert with_incompatible_residual is selected
@@ -1571,10 +1571,10 @@ def test_residual_identity_completes_an_integrated_entity_consensus():
     with_residual = _adjudicate_selection_with_learned_hierarchy(
         hypotheses,
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "ACC",
-            "panel_candidate_code": "ACC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "ACC",
+            "panel_code": "ACC",
             "current_code": "SARC_DDLPS",
         },
     )
@@ -1586,12 +1586,12 @@ def test_residual_identity_completes_an_integrated_entity_consensus():
     residual_axis = next(
         axis
         for axis in consensus["axes"]
-        if axis["axis"] == "decomposition_residual_identity"
+        if axis["axis"] == "decomposition_cancer_type_decision"
     )
     assert residual_axis["preference"] == "candidate"
 
 
-def test_residual_identity_cannot_originate_an_unrelated_entity():
+def test_decomposition_decision_cannot_originate_an_unrelated_entity():
     """An ontology-only residual program cannot manufacture a third vote."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1628,11 +1628,11 @@ def test_residual_identity_cannot_originate_an_unrelated_entity():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"CESC": selected, "ESCA": candidate},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "ESCA",
-            "panel_candidate_code": None,
-            "ontology_candidate_code": "ESCA",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "ESCA",
+            "panel_code": None,
+            "ontology_code": "ESCA",
             "current_code": "CESC",
         },
     )
@@ -1642,14 +1642,14 @@ def test_residual_identity_cannot_originate_an_unrelated_entity():
     residual_axis = next(
         axis
         for axis in consensus["axes"]
-        if axis["axis"] == "decomposition_residual_identity"
+        if axis["axis"] == "decomposition_cancer_type_decision"
     )
     assert residual_axis["available"] is False
     assert consensus["decisive_candidate"] is False
 
 
-def test_invariant_residual_parent_can_enter_but_not_bypass_entity_consensus():
-    """A residual parent needs separate signature and centroid corroboration."""
+def test_decomposition_parent_can_enter_but_not_bypass_entity_consensus():
+    """A decomposition-supported parent needs separate signature and centroid corroboration."""
 
     from trufflepig.cancer_type_evidence import (
         CancerTypeEvidence,
@@ -1682,11 +1682,11 @@ def test_invariant_residual_parent_can_enter_but_not_bypass_entity_consensus():
         selected,
         cen=pd.Series({"ESCA": 0.30, "COAD": 0.90, "READ": 0.88}),
         centroid_confident=True,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": None,
-            "ontology_candidate_code": "CRC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": None,
+            "ontology_code": "CRC",
             "current_code": "ESCA",
             "background_models": [
                 {
@@ -1704,8 +1704,8 @@ def test_invariant_residual_parent_can_enter_but_not_bypass_entity_consensus():
     assert consensus["candidate_votes"] == 3
     assert consensus["selected_votes"] == 1
     assert consensus["candidate_has_learned_vote"] is False
-    assert consensus["candidate_has_residual_vote"] is True
-    assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
+    assert consensus["candidate_has_decomposition_vote"] is True
+    assert consensus["entity_prediction_origin"] == "decomposition_cancer_type_decision"
     marker_axis = next(
         axis
         for axis in consensus["axes"]
@@ -1714,7 +1714,7 @@ def test_invariant_residual_parent_can_enter_but_not_bypass_entity_consensus():
     assert marker_axis["available"] is False
 
 
-def test_invariant_residual_consensus_does_not_require_a_learned_entity():
+def test_decomposition_consensus_does_not_require_a_learned_entity():
     """Independent residual evidence remains usable when the model abstains."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1739,11 +1739,11 @@ def test_invariant_residual_consensus_does_not_require_a_learned_entity():
         selected,
         cen=pd.Series({"ESCA": 0.30, "COAD": 0.90, "READ": 0.88}),
         centroid_confident=True,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": None,
-            "ontology_candidate_code": "CRC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": None,
+            "ontology_code": "CRC",
             "current_code": "ESCA",
             "background_models": [
                 {
@@ -1759,11 +1759,11 @@ def test_invariant_residual_consensus_does_not_require_a_learned_entity():
     assert result.selected_by == "entity_evidence_consensus"
     consensus = result.details["entity_evidence_consensus"]
     assert consensus["candidate_has_learned_vote"] is False
-    assert consensus["candidate_has_residual_vote"] is True
-    assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
+    assert consensus["candidate_has_decomposition_vote"] is True
+    assert consensus["entity_prediction_origin"] == "decomposition_cancer_type_decision"
 
 
-def test_source_resolved_residual_is_one_compound_identity_selector():
+def test_background_separated_decision_is_one_compound_selector():
     """Host-resolved identity is decisive without duplicating marker votes."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1790,13 +1790,13 @@ def test_source_resolved_residual_is_one_compound_identity_selector():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"SARC_DDLPS": selected, "CRC": candidate},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": "CRC",
-            "ontology_candidate_code": "CRC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+            "ontology_code": "CRC",
             "decision_basis": "panel_and_ontology",
-            "source_resolved_identity": True,
+            "background_separation_confirmed": True,
             "current_code": "SARC_DDLPS",
             "background_models": [
                 {
@@ -1816,8 +1816,8 @@ def test_source_resolved_residual_is_one_compound_identity_selector():
     assert result is candidate
     assert result.selected_by == "entity_evidence_consensus"
     consensus = result.details["entity_evidence_consensus"]
-    assert consensus["source_resolved_identity_decisive"] is True
-    # The CRC panel is already part of residual identity and must not appear as
+    assert consensus["decomposition_decision_was_decisive"] is True
+    # The CRC panel is already part of decomposition cancer-type evidence and must not appear as
     # a second independent marker vote.
     marker_axis = next(
         axis
@@ -1827,7 +1827,7 @@ def test_source_resolved_residual_is_one_compound_identity_selector():
     assert marker_axis["available"] is False
 
 
-def test_source_resolved_parent_selects_parent_not_learned_child():
+def test_background_separated_parent_selects_parent_not_learned_child():
     """A CRC residual cannot manufacture READ precision from a weak tail."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1891,12 +1891,12 @@ def test_source_resolved_parent_selects_parent_not_learned_child():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"SARC_DDLPS": selected, "READ": read, "CRC": crc},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": "CRC",
-            "ontology_candidate_code": "CRC",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+            "ontology_code": "CRC",
+            "background_separation_confirmed": True,
             "current_code": "SARC_DDLPS",
             "background_models": [
                 {
@@ -1911,14 +1911,14 @@ def test_source_resolved_parent_selects_parent_not_learned_child():
     assert result is crc
     assert result.selected_by == "entity_evidence_consensus"
     assert result.details["entity_evidence_consensus"][
-        "source_resolved_identity_decisive"
+        "decomposition_decision_was_decisive"
     ] is True
     assert result.details["entity_evidence_consensus"][
         "entity_prediction_origin"
-    ] == "invariant_residual_identity"
+    ] == "decomposition_cancer_type_decision"
 
 
-def test_source_resolved_parent_broadens_an_existing_child_call():
+def test_background_separated_parent_broadens_an_existing_child_call():
     """Exact parent identity outranks compatibility with the current child."""
 
     from trufflepig.cancer_type_evidence import (
@@ -1947,12 +1947,12 @@ def test_source_resolved_parent_broadens_an_existing_child_call():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"READ": selected, "CRC": crc},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": "CRC",
-            "ontology_candidate_code": "CRC",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+            "ontology_code": "CRC",
+            "background_separation_confirmed": True,
             "current_code": "READ",
             "background_models": [
                 {
@@ -1966,22 +1966,22 @@ def test_source_resolved_parent_broadens_an_existing_child_call():
 
     assert result is crc
     consensus = result.details["entity_evidence_consensus"]
-    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["decomposition_decision_was_decisive"] is True
     residual_axis = next(
         axis
         for axis in consensus["axes"]
-        if axis["axis"] == "decomposition_residual_identity"
+        if axis["axis"] == "decomposition_cancer_type_decision"
     )
     assert residual_axis["candidate_support"] == 1.0
     assert residual_axis["selected_support"] == 0.0
 
 
-def test_source_resolved_identity_precedes_unrelated_learned_arbitration():
+def test_background_separation_precedes_unrelated_learned_arbitration():
     """Separated tumor identity is evaluated before a third bulk label.
 
     The selected bulk call, learned hierarchy leader, and residual result are
     intentionally three different entities.  A strong learned label must not
-    return before the complete source-resolved tumor program is adjudicated.
+    return before the complete background-separated tumor program is considered.
     """
 
     from trufflepig.cancer_type_evidence import (
@@ -2010,12 +2010,12 @@ def test_source_resolved_identity_precedes_unrelated_learned_arbitration():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"SARC": selected, "ESCA": esca, "CRC": crc},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": "CRC",
-            "ontology_candidate_code": "CRC",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+            "ontology_code": "CRC",
+            "background_separation_confirmed": True,
             "current_code": "SARC",
             "background_models": [
                 {
@@ -2029,12 +2029,12 @@ def test_source_resolved_identity_precedes_unrelated_learned_arbitration():
 
     assert result is crc
     consensus = result.details["entity_evidence_consensus"]
-    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["decomposition_decision_was_decisive"] is True
     assert consensus["candidate_code"] == "CRC"
 
 
-def test_residual_origin_survives_a_learned_subtype_alias():
-    """A learned child cannot consume an exact residual parent beam entry."""
+def test_decomposition_decision_survives_a_learned_subtype_alias():
+    """A learned child cannot consume an exact decomposition-supported parent beam entry."""
 
     from trufflepig.cancer_type_evidence import (
         CancerTypeEvidence,
@@ -2055,7 +2055,7 @@ def test_residual_origin_survives_a_learned_subtype_alias():
     )
     # This audit mapping deliberately contains the learned leaf.  The
     # adjudicator must normalize it to BRCA without losing the fact that the
-    # exact BRCA beam candidate originated from residual identity evidence.
+    # exact BRCA beam candidate originated from decomposition cancer-type evidence evidence.
     selected.details["learned_expression_flat_entity_supports"] = {
         "BRCA_Basal": 0.40,
     }
@@ -2064,12 +2064,12 @@ def test_residual_origin_survives_a_learned_subtype_alias():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"SARC": selected, "BRCA": brca},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "BRCA",
-            "panel_candidate_code": "BRCA",
-            "ontology_candidate_code": "BRCA",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "BRCA",
+            "panel_code": "BRCA",
+            "ontology_code": "BRCA",
+            "background_separation_confirmed": True,
             "current_code": "SARC",
             "background_models": [
                 {
@@ -2083,12 +2083,12 @@ def test_residual_origin_survives_a_learned_subtype_alias():
 
     assert result is brca
     consensus = result.details["entity_evidence_consensus"]
-    assert consensus["entity_prediction_origin"] == "invariant_residual_identity"
+    assert consensus["entity_prediction_origin"] == "decomposition_cancer_type_decision"
     assert consensus["learned_entity_prediction_raw_code"] == "BRCA"
-    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["decomposition_decision_was_decisive"] is True
 
 
-def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
+def test_background_separation_distinguishes_tumor_from_bulk_compartment():
     """A background-derived bulk compartment cannot veto resolved tumor RNA.
 
     This exercises the ASY decision seam without a sample-specific rule: a
@@ -2122,13 +2122,13 @@ def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"SARC_DDLPS": selected, "CRC": candidate},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "CRC",
-            "panel_candidate_code": "CRC",
-            "ontology_candidate_code": "CRC",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "panel_code": "CRC",
+            "ontology_code": "CRC",
             "decision_basis": "panel_and_ontology",
-            "source_resolved_identity": True,
+            "background_separation_confirmed": True,
             "current_code": "SARC_DDLPS",
             "background_models": [
                 {
@@ -2147,15 +2147,15 @@ def test_source_resolved_residual_separates_tumor_from_bulk_compartment():
 
     assert result is candidate
     assert result.selected_by == "entity_evidence_consensus"
-    assert "decomposition_residual_identity" in candidate.evidence_sources
+    assert "decomposition_cancer_type_decision" in candidate.evidence_sources
     assert candidate.can_select_report_label is True
     consensus = result.details["entity_evidence_consensus"]
-    assert consensus["source_resolved_identity_decisive"] is True
+    assert consensus["decomposition_decision_was_decisive"] is True
     assert consensus["selected_votes"] >= consensus["candidate_votes"]
     assert consensus["majority_decisive_candidate"] is False
 
 
-def test_residual_identity_preserves_explicit_entity_blockers():
+def test_decomposition_decision_preserves_explicit_entity_blockers():
     """Even a full RNA majority cannot erase a persistent safety veto."""
 
     from trufflepig.cancer_type_evidence import (
@@ -2209,10 +2209,10 @@ def test_residual_identity_preserves_explicit_entity_blockers():
     result = _adjudicate_selection_with_learned_hierarchy(
         {"LUSC": selected, "NUTM": candidate},
         selected,
-        residual_identity_evidence={
-            "status": "candidate",
-            "candidate_code": "NUTM",
-            "panel_candidate_code": "NUTM",
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "NUTM",
+            "panel_code": "NUTM",
             "current_code": "LUSC",
         },
     )

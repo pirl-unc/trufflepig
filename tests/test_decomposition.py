@@ -5,7 +5,7 @@ import pytest
 from trufflepig.decomposition import (
     decompose_identity_backgrounds,
     decompose_sample,
-    evaluate_residual_identity,
+    decide_cancer_type_from_decomposition,
     infer_sample_mode,
 )
 from trufflepig.decomposition.signature import _load_hpa_cell_types
@@ -392,7 +392,7 @@ def test_synthetic_coad_liver_mix_uses_liver_background():
 
 def test_synthetic_coad_liver_residual_retains_colorectal_identity():
     """Residual programs distinguish metastatic tumor from liver host."""
-    from trufflepig.decomposition import evaluate_residual_identity
+    from trufflepig.decomposition import decide_cancer_type_from_decomposition
 
     df = _mix_samples(
         [
@@ -409,13 +409,13 @@ def test_synthetic_coad_liver_residual_retains_colorectal_identity():
         top_k=len(candidate_codes),
     )
 
-    evidence = evaluate_residual_identity(
+    evidence = decide_cancer_type_from_decomposition(
         results,
         candidate_codes=candidate_codes,
         current_code="COAD",
     )
 
-    assert evidence["status"] == "corroborated", [
+    assert evidence.status == "resolved", [
         {
             "candidate": model["candidate_code"],
             "panel": model["panel_candidate"],
@@ -431,11 +431,11 @@ def test_synthetic_coad_liver_residual_retains_colorectal_identity():
                 for row in model["rows"]
             ],
         }
-        for model in evidence["background_models"]
+        for model in evidence.background_models
     ]
-    assert evidence["candidate_code"] == "CRC"
-    assert evidence["models_evaluated"] == 1
-    assert evidence["realizations_evaluated"] == len(candidate_codes)
+    assert evidence.supported_code == "CRC"
+    assert evidence.models_evaluated == 1
+    assert evidence.realizations_evaluated == len(candidate_codes)
 
 
 def test_met_bone_requires_hard_bone_evidence_not_generic_ecm():
@@ -643,13 +643,13 @@ def test_soft_tissue_decomposition_separates_crc_from_smooth_muscle_host():
             marker, "smooth_muscle"
         ]
 
-    identity = evaluate_residual_identity(
+    identity = decide_cancer_type_from_decomposition(
         [result],
         candidate_codes=["COAD", "SARC_PLEOLPS"],
         current_code="SARC_PLEOLPS",
     )
-    assert identity["status"] == "candidate"
-    assert identity["candidate_code"] == "CRC"
+    assert identity.status == "resolved"
+    assert identity.supported_code == "CRC"
 
 
 def test_candidate_independent_model_resolves_crc_from_muscularis():
@@ -677,18 +677,18 @@ def test_candidate_independent_model_resolves_crc_from_muscularis():
     )
     assert "smooth_muscle_identity" in structural.fractions
 
-    evidence = evaluate_residual_identity(
+    evidence = decide_cancer_type_from_decomposition(
         identity_models,
         candidate_codes=["COAD", "READ", "SARC_DDLPS"],
         current_code="SARC_DDLPS",
     )
 
-    assert evidence["status"] == "candidate"
-    assert evidence["candidate_code"] == "CRC"
-    assert evidence["panel_candidate_code"] == "CRC"
-    assert evidence["ontology_candidate_code"] == "CRC"
-    assert evidence["source_resolved_identity"] is True
-    assert "DES" in evidence["background_attributed_expected_low_genes"]
+    assert evidence.status == "resolved"
+    assert evidence.supported_code == "CRC"
+    assert evidence.panel_code == "CRC"
+    assert evidence.ontology_code == "CRC"
+    assert evidence.background_separation_confirmed is True
+    assert "DES" in evidence.background_attributed_genes
 
 
 def test_hollow_organ_identity_model_includes_mucosa_and_muscularis():
@@ -722,14 +722,14 @@ def test_identity_background_cannot_manufacture_crc_without_crc_program():
         _normal_tissue_sample("smooth_muscle"),
         sample_mode="solid",
     )
-    evidence = evaluate_residual_identity(
+    evidence = decide_cancer_type_from_decomposition(
         identity_models,
         candidate_codes=["COAD", "READ", "SARC_LMS"],
         current_code="SARC_LMS",
     )
 
-    assert evidence.get("candidate_code") != "CRC"
-    assert evidence.get("source_resolved_identity") is not True
+    assert evidence.supported_code != "CRC"
+    assert evidence.background_separation_confirmed is not True
 
 
 def test_identity_background_abstains_without_gene_identity_columns(caplog):
@@ -739,7 +739,7 @@ def test_identity_background_abstains_without_gene_identity_columns(caplog):
         result = decompose_identity_backgrounds(incomplete, sample_mode="solid")
 
     assert result == []
-    assert "Residual-identity decomposition skipped" in caplog.text
+    assert "Background-separated cancer-type analysis skipped" in caplog.text
     assert "gene identity columns are unavailable" in caplog.text
 
 

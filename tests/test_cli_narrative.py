@@ -264,7 +264,7 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     assert "SARC (Sarcoma) is the leading label" not in text
 
 
-def test_source_resolved_call_names_bulk_signal_as_host_context():
+def test_background_separated_call_names_bulk_signal_as_host_context():
     analysis = _base_analysis(
         cancer_type="CRC",
         cancer_type_source="auto-detected",
@@ -274,16 +274,16 @@ def test_source_resolved_call_names_bulk_signal_as_host_context():
                 "cancer_type": "CRC",
                 "selected_by": "entity_evidence_consensus",
                 "entity_evidence_consensus": {
-                    "source_resolved_identity_decisive": True,
+                    "decomposition_decision_was_decisive": True,
                 },
             }
         },
-        residual_identity_evidence={
-            "status": "corroborated",
-            "candidate_code": "CRC",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "background_separation_confirmed": True,
         },
-        post_residual_decomposition_refit={"accepted": True},
+        cancer_type_decision_refit={"accepted": True},
         candidate_trace=[
             {
                 "code": "SARC_DDLPS",
@@ -300,7 +300,7 @@ def test_source_resolved_call_names_bulk_signal_as_host_context():
 
     text = "\n".join(_integrated_evidence_bullets(analysis))
 
-    assert "**Tumor-versus-host identity line**" in text
+    assert "**Tumor-versus-host evidence**" in text
     assert "bulk pan-cancer signature ranker favors SARC_DDLPS" in text
     assert "retained as host/background differential context" in text
     assert "final-scope decomposition refit reproduced" in text
@@ -308,7 +308,7 @@ def test_source_resolved_call_names_bulk_signal_as_host_context():
     assert "; signature 0.74" not in text
 
 
-def test_parent_residual_is_context_not_child_selection_basis():
+def test_parent_decision_is_context_not_child_selection_basis():
     analysis = _base_analysis(
         cancer_type="READ",
         cancer_type_source="auto-detected",
@@ -318,16 +318,16 @@ def test_parent_residual_is_context_not_child_selection_basis():
                 "cancer_type": "READ",
                 "selected_by": "entity_evidence_consensus",
                 "entity_evidence_consensus": {
-                    "source_resolved_identity_decisive": False,
+                    "decomposition_decision_was_decisive": False,
                 },
             }
         },
-        residual_identity_evidence={
-            "status": "corroborated",
-            "candidate_code": "CRC",
-            "source_resolved_identity": True,
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "background_separation_confirmed": True,
         },
-        post_residual_decomposition_refit={"accepted": True},
+        cancer_type_decision_refit={"accepted": True},
         candidate_trace=[
             {
                 "code": "SARC_DDLPS",
@@ -346,7 +346,7 @@ def test_parent_residual_is_context_not_child_selection_basis():
     text = "\n".join(_integrated_evidence_bullets(analysis))
 
     assert "**RNA classifier line**" in text
-    assert "CRC (Colorectal Adenocarcinoma) residual identity" in text
+    assert "background decomposition supported CRC (Colorectal Adenocarcinoma)" in text
     assert "establishes the broader branch but not the more specific READ" in text
     assert "active report label is RNA rank 2" in text
     assert "complete marker and ontology program for READ" not in text

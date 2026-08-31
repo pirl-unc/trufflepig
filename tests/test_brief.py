@@ -142,11 +142,11 @@ def test_lineage_panel_explains_background_resolved_low_marker_violation():
             },
         }
     )
-    analysis["residual_identity_evidence"] = {
-        "status": "corroborated",
-        "candidate_code": "CRC",
-        "source_resolved_identity": True,
-        "background_attributed_expected_low_genes": ["DES"],
+    analysis["cancer_type_decision"] = {
+        "status": "resolved",
+        "supported_code": "CRC",
+        "background_separation_confirmed": True,
+        "background_attributed_genes": ["DES"],
     }
 
     line = _lineage_panel_evidence_line(analysis, "CRC") or ""
@@ -538,7 +538,7 @@ def test_summary_marks_supplied_cancer_type_basis():
     assert "RNA-inferred — treat it as a hypothesis" not in md
 
 
-def test_summary_names_source_resolved_tumor_identity_basis():
+def test_summary_names_background_separated_cancer_type_basis():
     analysis = _make_analysis()
     analysis.update(
         {
@@ -550,16 +550,16 @@ def test_summary_names_source_resolved_tumor_identity_basis():
                     "cancer_type": "CRC",
                     "selected_by": "entity_evidence_consensus",
                     "entity_evidence_consensus": {
-                        "source_resolved_identity_decisive": True,
+                        "decomposition_decision_was_decisive": True,
                     },
                 }
             },
-            "residual_identity_evidence": {
-                "status": "corroborated",
-                "candidate_code": "CRC",
-                "source_resolved_identity": True,
+            "cancer_type_decision": {
+                "status": "resolved",
+                "supported_code": "CRC",
+                "background_separation_confirmed": True,
             },
-            "post_residual_decomposition_refit": {"accepted": True},
+            "cancer_type_decision_refit": {"accepted": True},
         }
     )
 
@@ -577,7 +577,7 @@ def test_summary_names_source_resolved_tumor_identity_basis():
     assert "host/background differential context" in md
 
 
-def test_summary_keeps_parent_residual_at_parent_scope():
+def test_summary_keeps_parent_decision_at_parent_scope():
     analysis = _make_analysis()
     analysis.update(
         {
@@ -589,16 +589,16 @@ def test_summary_keeps_parent_residual_at_parent_scope():
                     "cancer_type": "READ",
                     "selected_by": "entity_evidence_consensus",
                     "entity_evidence_consensus": {
-                        "source_resolved_identity_decisive": False,
+                        "decomposition_decision_was_decisive": False,
                     },
                 }
             },
-            "residual_identity_evidence": {
-                "status": "corroborated",
-                "candidate_code": "CRC",
-                "source_resolved_identity": True,
+            "cancer_type_decision": {
+                "status": "resolved",
+                "supported_code": "CRC",
+                "background_separation_confirmed": True,
             },
-            "post_residual_decomposition_refit": {"accepted": True},
+            "cancer_type_decision_refit": {"accepted": True},
         }
     )
 
@@ -609,7 +609,7 @@ def test_summary_keeps_parent_residual_at_parent_scope():
         disease_state="",
     )
 
-    assert "CRC (Colorectal Adenocarcinoma) residual identity" in md
+    assert "CRC (Colorectal Adenocarcinoma) as the supported tumor type" in md
     assert "establishes the broader branch but does not by itself establish" in md
     assert "READ" in md
     assert "complete and invariant READ" not in md

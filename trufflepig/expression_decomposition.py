@@ -451,7 +451,7 @@ def decompose_mode(mode, sample, templates, signatures, space, type_code, met_si
     # mass even though the clipped residual is well behaved. Preserve the
     # fitted relative allocation, but report it over the mass actually removed
     # from the sample. This makes background + residual mass-conserving while
-    # leaving the reconstructed expression and residual identity unchanged.
+    # leaving the reconstructed expression and cancer-type decision unchanged.
     raw_component_mass = np.array(
         [
             max(0.0, float(f[i]))

@@ -77,10 +77,10 @@ from .reporting import (
 )
 from .confidence import concise_confidence_reasons
 from .analyze import (
-    ResidualIdentityScope,
     cancer_type_context_from_analysis,
     cancer_type_context_label,
 )
+from .decomposition import CancerTypeDecision
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
 from .report_view import ReportView
@@ -1421,16 +1421,19 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     call_rescue = analysis.get("cancer_call_rescue") or {}
     if call_rescue and not constrained_code and source != "user-specified":
         return _cancer_call_rescue_basis_line(analysis, cancer_code)
-    residual_scope = ResidualIdentityScope.from_analysis(analysis, cancer_code)
+    decomposition_decision = CancerTypeDecision.from_analysis(
+        analysis,
+        cancer_code,
+    )
     if (
         not constrained_code
         and source != "user-specified"
-        and residual_scope.is_selection_basis
+        and decomposition_decision.is_selection_basis
     ):
         return (
             "**Cancer-type basis:** candidate-independent background "
-            f"decomposition recovered a complete and invariant {_cancer_type_context_label(residual_scope.residual_code)} "
-            "tumor-identity program, and a decomposition refitted for that final "
+            f"decomposition recovered a complete and invariant {_cancer_type_context_label(decomposition_decision.supported_code)} "
+            "tumor program, and a decomposition refitted for that final "
             "scope reproduced it. Conflicting bulk whole-profile signals remain "
             "host/background differential context; confirm the RNA-inferred "
             "label with pathology or clinical diagnosis before using the "
@@ -1439,25 +1442,25 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
     if (
         not constrained_code
         and source != "user-specified"
-        and residual_scope.is_confirmed_context
-        and residual_scope.relationship != "same"
+        and decomposition_decision.refit_confirmed
+        and decomposition_decision.relationship != "same"
     ):
-        if residual_scope.relationship == "ancestor":
+        if decomposition_decision.relationship == "ancestor":
             relationship_clause = (
                 "That establishes the broader branch but does not by itself "
                 f"establish {_cancer_type_context_label(cancer_code)}."
             )
         else:
             relationship_clause = (
-                "That result is residual context, not the recorded selection "
+                "That result is supporting context, not the recorded selection "
                 f"basis for {_cancer_type_context_label(cancer_code)}."
             )
         return (
             "**Cancer-type basis:** integrated RNA evidence sets "
             f"{_cancer_type_context_label(cancer_code)} as a provisional report "
             "label. Candidate-independent background decomposition resolved "
-            f"{_cancer_type_context_label(residual_scope.residual_code)} residual "
-            f"identity. {relationship_clause} Confirm "
+            f"{_cancer_type_context_label(decomposition_decision.supported_code)} as the "
+            f"supported tumor type. {relationship_clause} Confirm "
             "the finer label with pathology or clinical diagnosis before using "
             "the therapy shortlist."
         )
@@ -1533,24 +1536,16 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     promoted = bool(promotion.get("promoted"))
     promoted_code = str(promotion.get("code") or "").strip()
     blockers = [str(b) for b in (promotion.get("blockers") or []) if b]
-    residual_identity = analysis.get("residual_identity_evidence") or {}
-    residual_candidate = str(
-        residual_identity.get("candidate_code") or ""
-    ).strip()
-    background_attributed_low = [
-        str(gene)
-        for gene in (
-            residual_identity.get(
-                "background_attributed_expected_low_genes"
-            )
-            or []
-        )
-        if gene
-    ]
-    residual_matches_panel = residual_candidate == top_panel
-    source_resolved = bool(
-        residual_identity.get("source_resolved_identity")
-        and residual_matches_panel
+    decomposition_decision = CancerTypeDecision.from_analysis(analysis)
+    background_attributed_low = list(
+        decomposition_decision.background_attributed_genes
+    )
+    decision_matches_panel = (
+        decomposition_decision.supported_code == top_panel
+    )
+    background_separation_explains_panel = bool(
+        decomposition_decision.background_separation_confirmed
+        and decision_matches_panel
         and background_attributed_low
     )
     decomposition_attribution = summary.get("decomposition_attribution") or {}
@@ -1563,7 +1558,7 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
     attribution_tumor = int(
         decomposition_attribution.get("tumor_dominant_count") or 0
     )
-    if source_resolved:
+    if background_separation_explains_panel:
         attributed = ", ".join(background_attributed_low)
         promoted_clause = (
             " — the bulk panel remains incomplete because of "
@@ -1571,7 +1566,7 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
             "decomposition shows that normal structural tissue can explain "
             "the expected-low violation without removing the CRC identity "
             "program; the complete panel and ontology programs agree in the "
-            "identity residual (this is not a claim that every measured "
+            "background-separated tumor expression (this is not a claim that every measured "
             f"{attributed} transcript is non-tumor)"
         )
     elif promoted and promoted_code:
