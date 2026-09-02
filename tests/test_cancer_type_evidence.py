@@ -2153,6 +2153,8 @@ def test_background_separation_distinguishes_tumor_from_bulk_compartment():
     assert consensus["decomposition_decision_was_decisive"] is True
     assert consensus["selected_votes"] >= consensus["candidate_votes"]
     assert consensus["majority_decisive_candidate"] is False
+    assert "majority" not in result.basis.lower()
+    assert "background decomposition" in result.basis.lower()
 
 
 def test_decomposition_decision_preserves_explicit_entity_blockers():
@@ -9026,8 +9028,8 @@ def test_fallback_context_selection_resets_stale_selectable_selector():
     assert result.public_dict()["selected_by"] == "pan_cancer_signature_ranker"
 
 
-def test_fallback_context_collapses_unresolved_tied_liposarcoma_children():
-    """A blocked ordinal tie supports the parent, not arbitrary leaf precision."""
+def test_fallback_context_records_unresolved_tied_liposarcoma_parent():
+    """A blocked ordinal tie records its parent without selecting it."""
 
     from trufflepig.cancer_type_evidence import (
         CancerTypeEvidence,
@@ -9064,10 +9066,16 @@ def test_fallback_context_collapses_unresolved_tied_liposarcoma_children():
         {"candidate_trace": trace},
     )
 
-    assert result.cancer_type == "SARC_LPS"
-    assert result.selected_by == "entity_evidence_consensus"
+    assert result.cancer_type == "SARC_DDLPS"
+    assert result.selected_by == "pan_cancer_signature_ranker"
+    assert result.can_select_report_label is False
+    assert result.label_status == "blocked"
+    assert "context only" in result.basis
     assert result.details["fallback_context_adjudication"]["mode"] == (
         "tied_sibling_parent_abstention"
+    )
+    assert result.details["fallback_context_adjudication"]["abstention_code"] == (
+        "SARC_LPS"
     )
     assert set(
         result.details["fallback_context_adjudication"]["tied_sibling_codes"]

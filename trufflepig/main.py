@@ -1722,6 +1722,7 @@ def analyze(
     hla_types: Optional[str] = None,
     fusions: Optional[str] = None,
     variants: Optional[str] = None,
+    variant_genome_build: Optional[str] = None,
     # Deprecated Python compatibility; use ``variants``.
     alterations: Optional[str] = None,
     alignment_qc: Optional[str] = None,
@@ -1769,6 +1770,7 @@ def analyze(
         hla_types=hla_types,
         fusions=fusions,
         variants=variants,
+        variant_genome_build=variant_genome_build,
         alterations=alterations,
         alignment_qc=alignment_qc,
         expression_qc_rescue=expression_qc_rescue,
@@ -1840,7 +1842,7 @@ def compare_analyze(
             "Provide at least two analyze output directories, separated by commas"
         )
     markdown = build_analyze_comparison_markdown(dirs, title=title)
-    Path(output_path).write_text(markdown)
+    Path(output_path).write_text(markdown.rstrip() + "\n")
     print(f"[report] Wrote {output_path}")
 
 
@@ -1879,6 +1881,63 @@ def _render_therapy_pathway_state(
         output_path.unlink(missing_ok=True)
         return None
     return str(output_path)
+
+
+def _entity_consensus_refit_message(
+    previous_cancer_code,
+    cancer_code,
+    consensus,
+):
+    """Describe the decision rule that survived final-scope refitting."""
+
+    consensus = consensus or {}
+    if consensus.get("majority_decisive_candidate"):
+        rule = "Entity evidence majority reproduced after final-scope refit"
+    elif consensus.get("decomposition_decision_was_decisive"):
+        rule = (
+            "Background-separated tumor program reproduced after "
+            "final-scope refit"
+        )
+    else:
+        rule = "Entity consensus reproduced after final-scope refit"
+    return f"[analysis] {rule}: {previous_cancer_code} → {cancer_code}"
+
+
+def _final_cancer_call_outputs(
+    analysis,
+    *,
+    cancer_code,
+    reference_cancer_code,
+    inferred_site_context,
+    initial_cancer_type="",
+):
+    """Build the canonical final cancer-call manifest payload."""
+
+    outputs = {
+        "cancer_type": cancer_code,
+        "reference_cancer_type": reference_cancer_code,
+        "cancer_type_context": analysis.get("cancer_type_context"),
+        "cancer_call_rescue": (analysis.get("cancer_call_rescue") or {}).get(
+            "kind"
+        ),
+        "sample_mode": analysis.get("sample_mode"),
+        "purity": {
+            "overall_estimate": (analysis.get("purity") or {}).get(
+                "overall_estimate"
+            ),
+            "overall_lower": (analysis.get("purity") or {}).get(
+                "overall_lower"
+            ),
+            "overall_upper": (analysis.get("purity") or {}).get(
+                "overall_upper"
+            ),
+        },
+        "inferred_site_context": inferred_site_context,
+    }
+    if initial_cancer_type and initial_cancer_type != cancer_code:
+        outputs["initial_cancer_type"] = initial_cancer_type
+        outputs["finalized_after_decomposition"] = True
+    return outputs
 
 
 def _analyze_body(run: AnalyzeRun):
@@ -2004,7 +2063,10 @@ def _analyze_body(run: AnalyzeRun):
     if variant_inputs:
         from .variants import parse_variant_inputs
 
-        variant_records = parse_variant_inputs(variant_inputs)
+        variant_records = parse_variant_inputs(
+            variant_inputs,
+            genome_build=config.variant_genome_build or "",
+        )
         print(
             f"[variant] Parsed {len(variant_records)} variant calls from "
             f"{len(variant_inputs)} input(s)"
@@ -2018,6 +2080,7 @@ def _analyze_body(run: AnalyzeRun):
             "fusion_records": len(fusion_records),
             "variant_inputs": len(variant_inputs),
             "variant_records": len(variant_records),
+            "variant_genome_build": config.variant_genome_build,
         },
     )
     forced_labels = _parse_always_label_genes(label_genes)
@@ -3050,9 +3113,11 @@ def _analyze_body(run: AnalyzeRun):
                 )
             if refit_confirms_scope:
                 print(
-                    "[analysis] Background-separated tumor evidence completed "
-                    "an independent "
-                    f"evidence majority: {previous_cancer_code} → {cancer_code}"
+                    _entity_consensus_refit_message(
+                        previous_cancer_code,
+                        cancer_code,
+                        consensus,
+                    )
                 )
                 run.note_step(
                     "decomposition_cancer_type_decision",
@@ -3075,27 +3140,13 @@ def _analyze_body(run: AnalyzeRun):
         if cancer_call_step is not None
         else ""
     )
-    final_call_outputs = {
-        "cancer_type": cancer_code,
-        "reference_cancer_type": reference_cancer_code,
-        "cancer_type_context": analysis.get("cancer_type_context"),
-        "sample_mode": analysis.get("sample_mode"),
-        "purity": {
-            "overall_estimate": (analysis.get("purity") or {}).get(
-                "overall_estimate"
-            ),
-            "overall_lower": (analysis.get("purity") or {}).get(
-                "overall_lower"
-            ),
-            "overall_upper": (analysis.get("purity") or {}).get(
-                "overall_upper"
-            ),
-        },
-        "inferred_site_context": inferred_site_context,
-    }
-    if initial_call and initial_call != cancer_code:
-        final_call_outputs["initial_cancer_type"] = initial_call
-        final_call_outputs["finalized_after_decomposition"] = True
+    final_call_outputs = _final_cancer_call_outputs(
+        analysis,
+        cancer_code=cancer_code,
+        reference_cancer_code=reference_cancer_code,
+        inferred_site_context=inferred_site_context,
+        initial_cancer_type=initial_call,
+    )
     run.note_step("cancer_call", outputs=final_call_outputs)
     decomp_results = _prioritize_report_compatible_decomposition(
         complete_decomp_results,
@@ -3836,6 +3887,7 @@ def _analyze_body(run: AnalyzeRun):
                     ranges_df,
                     purity_result=purity_dict,
                     cancer_type=effective_cancer_type,
+                    report_cancer_type=report_cancer_type,
                     top_n=15,
                     categories=[cat_key],
                     save_to_filename=cat_png,
@@ -4051,6 +4103,7 @@ def _analyze_body(run: AnalyzeRun):
                     ranges_df,
                     purity_result=purity_dict,
                     cancer_type=effective_cancer_type,
+                    report_cancer_type=report_cancer_type,
                     top_n=15,
                     categories=["therapy_target"],
                     save_to_filename=str(deprecated_purity_targets_png),
@@ -4127,9 +4180,9 @@ def _analyze_body(run: AnalyzeRun):
             summary_path = "%s-summary.md" % prefix if prefix else "summary.md"
             evidence_path = "%s-evidence.md" % prefix if prefix else "evidence.md"
             with open(summary_path, "w") as f:
-                f.write(summary_md)
+                f.write(summary_md.rstrip() + "\n")
             with open(evidence_path, "w") as f:
-                f.write(evidence_md)
+                f.write(evidence_md.rstrip() + "\n")
             print(f"[report] Saved {summary_path}")
             print(f"[report] Saved {evidence_path}")
             if plot_ctx.enabled:
@@ -4166,71 +4219,66 @@ def _analyze_body(run: AnalyzeRun):
 
     all_pdf = "%s-all-figures.pdf" % prefix if prefix else "all-figures.pdf"
     print("[output] Collecting figures into PDF...")
-    # Report-flow order (user direction 2026-04-14): QC first
-    # (context_png + degradation_png), then the headline cancer call
-    # (summary_png), then deeper detail (decomposition / purity /
-    # strip plots / embeddings). Plots missing from this list didn't
-    # make it into all-figures.pdf and got left out of the moved-to-
-    # figures/ step.
-    png_files = [
+    # Patient-reader flow: compact QC, final-call composition, selected biology,
+    # then recommendations.  Preliminary cancer labels, competing decomposition
+    # models, redundant technical diagnostics, and raw expression surveys are
+    # preserved in figure-audit.pdf but must not look like patient conclusions.
+    from .report_document import is_patient_figure
+
+    # Every standard plot passes through the same suffix policy used by the
+    # interpretive PDF manifest. This prevents the two patient PDFs from drifting.
+    standard_pngs = [
         context_png,
         concentration_top_png,
         concentration_curve_png,
         reference_mtdna_qc_png,
         burden_qc_png,
         degradation_png,
-        # sample-summary.png (the legacy 4-panel composite) is audit-only (§2.5):
-        # its four panels are already emitted as standalone reader figures below
-        # (hypotheses_png, purity_png, tissues_png, mhc_png), so in the reader packet
-        # the composite only duplicates them. Routed to audit_only_pngs (below).
+        summary_png,
+        hypotheses_png,
+        signal_png,
+        tissues_png,
         decomp_png,
-        # Standalone decomposition PNGs — composition / component breakdown
-        # / candidate bars. Historically missed the move-to-figures/ step
-        # because they weren't listed here.
         composition_png,
         components_png,
         candidates_png,
         purity_png,
-        # Standalone analysis panels (cancer hypotheses, background
-        # tissues, MHC) — new outputs added while splitting the legacy
-        # 4-panel composite. Without being listed here they never made
-        # it into the PDF or the figures/ move step.
-        hypotheses_png,
-        signal_png,
-        tissues_png,
-        mhc_png,
-        # Purity-method comparison (#124) and sample-provenance (#106)
-        # — added later and initially missed the figures/ move list.
         methods_png,
-        # Provenance PNG may not exist when decomposition / range
-        # computation was skipped; resolve by path rather than a
-        # possibly-undefined variable.
+        mhc_png,
         "%s-provenance.png" % prefix if prefix else "provenance.png",
-        # #136: therapy-pathway-state dumbbell figure.
         pathway_state_png,
         "%s-treatments.png" % prefix if prefix else "treatments.png",
+        *embedding_pngs,
     ]
-    audit_only_pngs.extend(embedding_pngs)
-    # The 4-panel composite (see note in png_files) ships in the audit packet only;
-    # the reader packet keeps the four standalone panels it duplicates.
-    audit_only_pngs.append(summary_png)
+    png_files = []
+    for figure_path in standard_pngs:
+        if is_patient_figure(figure_path):
+            png_files.append(figure_path)
+        elif figure_path:
+            audit_only_pngs.append(figure_path)
     if ct_png:
-        png_files.append(ct_png)
+        if is_patient_figure(ct_png):
+            png_files.append(ct_png)
+        else:
+            audit_only_pngs.append(ct_png)
     # actionable-targets.png is audit-only (§2.5): it is a near-duplicate target
     # dumbbell of priority-targets.png (the single reader target figure, which now
     # carries the tumor-source/safety cue), so route it to audit while the reader
     # keeps one target figure.
     if targets_deep_png and Path(targets_deep_png).exists():
         audit_only_pngs.append(targets_deep_png)
-    # Deep-dive plots
-    for _ddp in [
-        cta_deep_png,
-        attrib_targets_png,
-        attrib_cta_png,
-        subtype_png,
-    ]:
-        if _ddp and Path(_ddp).exists():
+    # The CTA deep dive overlaps the tumor-adjusted CTA range plot; keep it as
+    # audit detail. A final-call subtype plot, when one exists, remains useful in
+    # the reader packet.
+    if cta_deep_png and Path(cta_deep_png).exists():
+        audit_only_pngs.append(cta_deep_png)
+    for _ddp in [attrib_targets_png, attrib_cta_png, subtype_png]:
+        if not (_ddp and Path(_ddp).exists()):
+            continue
+        if is_patient_figure(_ddp):
             png_files.append(_ddp)
+        else:
+            audit_only_pngs.append(_ddp)
 
     # Per-category curated-panel scatter PNGs (DNA_repair, Oncogenes, CTAs, …) are
     # audit-only (§2.5): ~10 near-overlapping panel scatters bury the ~decision
@@ -4240,10 +4288,15 @@ def _analyze_body(run: AnalyzeRun):
     scatter_dir = Path(scatter_pdf).parent / Path(scatter_pdf).stem
     if scatter_dir.is_dir():
         audit_only_pngs.extend(sorted(str(p) for p in scatter_dir.glob("*.png")))
-    # Purity-adjusted plots go last (different RNA measure)
+    # Purity-adjusted plots go last (different RNA measure), partitioned through
+    # the same patient/audit policy.
     for adj_p in adj_pngs:
-        if Path(adj_p).exists():
+        if not Path(adj_p).exists():
+            continue
+        if is_patient_figure(adj_p):
             png_files.append(adj_p)
+        else:
+            audit_only_pngs.append(adj_p)
 
     def _pdf_font(size: int, *, bold: bool = False):
         """Return a scalable PDF text font; fall back gracefully."""
@@ -4401,156 +4454,93 @@ def _analyze_body(run: AnalyzeRun):
 
     audit_sections = [
         (
-            "Figure Themes",
+            "Patient Reader Set",
             [
                 {
-                    "title": "QC / Provenance",
-                    "note": "Technical context for whether the expression matrix and sample handling look usable.",
+                    "title": "QC",
+                    "note": "Compact checks retained in the patient PDF because they directly qualify interpretation.",
                     "files": _existing_figure_paths(
                         "sample-context.png",
-                        "expression-top-features-qc.png",
-                        "expression-concentration-curve-qc.png",
-                        "qc-reference-mtdna.png",
                         "degradation-index.png",
-                        "sample-summary.png",
-                        "provenance.png",
                     ),
                 },
                 {
-                    "title": "Cancer-Type / Reference Context",
-                    "note": "Decision-aligned cancer-call plots first; raw reference-space maps are context-only audit views.",
+                    "title": "Final-Call Composition and Purity",
+                    "note": "Figures tied to the finalized cancer scope and selected background-separated model.",
                     "files": _existing_figure_paths(
-                        "cancer-hypotheses.png",
-                        "cancer-type-signal-matrix.png",
-                        "reference-mds.png",
-                        "reference-neighborhood.png",
-                        "background-tissues.png",
-                        "subtype-signature.png",
-                        "vs-cancer.pdf",
-                    ),
-                },
-                {
-                    "title": "Purity / Decomposition",
-                    "note": "Tumor fraction, non-tumor components, and how purity estimates affect expression interpretation.",
-                    "files": _existing_figure_paths(
-                        "decomposition.png",
-                        "composition.png",
-                        "component-breakdown.png",
-                        "candidate-comparison.png",
-                        "purity.png",
+                        "decomposition-composition.png",
+                        "decomposition-components.png",
                         "purity-methods.png",
                     ),
                 },
                 {
-                    "title": "Active Pathways / Signatures",
-                    "note": "Pathway and state plots, including the MAPK/ERK activity score and other response/signature axes.",
+                    "title": "Biology and Recommendations",
+                    "note": "Selected immune, pathway, and final-call subtype analyses. Drug eligibility remains in the clinically gated text report.",
                     "files": _existing_figure_paths(
                         "therapy-pathway-state.png",
                         "subtype-signature.png",
-                        "MHC.png",
-                        "TLR.png",
-                        "DNA_repair.png",
+                    ),
+                },
+            ],
+        ),
+        (
+            "Audit-Only Figures",
+            [
+                {
+                    "title": "Preliminary Labels and Alternative Models",
+                    "note": "These preserve how candidates were generated and rejected. They are excluded from the patient PDF so a preliminary label cannot be mistaken for the final call.",
+                    "files": _existing_figure_paths(
+                        "cancer-hypotheses.png",
+                        "cancer-type-signal-matrix.png",
+                        "decomposition-candidates.png",
+                        "reference-mds.png",
+                        "reference-neighborhood.png",
+                        "vs-cancer.pdf",
                     ),
                 },
                 {
-                    "title": "Targets / Actionability",
-                    "note": "Canonical target figures: broad actionable screen, ranked priority shortlist, and the matching evidence context.",
+                    "title": "Detailed or Redundant QC",
+                    "note": "Useful for technical review when a QC warning needs investigation; redundant with the compact reader QC pages otherwise.",
                     "files": _existing_figure_paths(
+                        "expression-top-features-qc.png",
+                        "expression-concentration-curve-qc.png",
+                        "qc-reference-mtdna.png",
+                        "qc-reference-technical-rna-burden.png",
+                        "sample-summary.png",
+                    ),
+                },
+                {
+                    "title": "Detailed or Redundant Analysis",
+                    "note": "Provenance and broad discovery screens retained for technical review. They are not patient-facing recommendations or eligibility determinations.",
+                    "files": _existing_figure_paths(
+                        "decomposition.png",
+                        "purity.png",
+                        "provenance.png",
+                        "background-tissues.png",
+                        "mhc-expression.png",
                         "treatments.png",
+                        "cta-deep-dive.png",
+                        "purity-ctas.png",
+                        "purity-surface.png",
                         "actionable-targets.png",
                         "priority-targets.png",
                         "priority-target-context.png",
                         "target-tissues.pdf",
                     ),
                 },
-            ],
-        ),
-        (
-            "Potentially Redundant Groups",
-            [
                 {
-                    "title": "Sample Snapshot Cluster",
-                    "note": "These all answer variants of 'what kind of sample is this and is it technically trustworthy?'",
-                    "files": _existing_figure_paths(
-                        "sample-summary.png",
-                        "sample-context.png",
-                        "degradation-index.png",
-                        "background-tissues.png",
-                    ),
-                },
-                {
-                    "title": "Cancer-Call Cluster",
-                    "note": "The signal matrix and hypotheses plot are decision-aligned. MDS/neighborhood plots are raw reference context and should not be read as selectors.",
-                    "files": _existing_figure_paths(
-                        "cancer-hypotheses.png",
-                        "cancer-type-signal-matrix.png",
-                        "reference-mds.png",
-                        "reference-neighborhood.png",
-                        "subtype-signature.png",
-                        "vs-cancer.pdf",
-                    ),
-                },
-                {
-                    "title": "Purity + Expression Range Cluster",
-                    "note": "These explain purity and then apply that estimate to non-target expression categories; targets use the canonical actionable-targets figure.",
-                    "files": _existing_figure_paths(
-                        "purity.png",
-                        "purity-methods.png",
-                        "purity-ctas.png",
-                        "purity-surface.png",
-                    ),
-                },
-                {
-                    "title": "Attribution / Matched-Normal Cluster",
-                    "note": "Provenance/audit views for why tumor-source calls differ from observed TPM; useful for debugging, not primary decision figures.",
+                    "title": "Attribution and Reference Detail",
+                    "note": "Per-target source attribution and matched-normal/subtype corrections for reproducibility and debugging.",
                     "files": _existing_figure_paths(
                         "target-attribution-targets.png",
+                        "target-attribution-ctas.png",
                         "target-attribution-surface.png",
                         "matched-normal-targets.png",
+                        "matched-normal-ctas.png",
                         "matched-normal-surface.png",
-                        "subtype-attribution-targets.png",
-                        "subtype-attribution-surface.png",
-                        "priority-targets.png",
-                        "priority-target-context.png",
-                    ),
-                },
-            ],
-        ),
-        (
-            "Low-Value Figures",
-            [
-                {
-                    "title": "Low-Value in the Default Packet",
-                    "note": "These add the least unique decision support relative to the rest of the packet, or are mainly provenance/debug/context views.",
-                    "files": _existing_figure_paths(
-                        "reference-mds.png",
-                        "reference-neighborhood.png",
-                        "background-tissues.png",
                         "subtype-attribution-targets.png",
                         "subtype-attribution-ctas.png",
                         "subtype-attribution-surface.png",
-                        "TLR.png",
-                        "DNA_repair.png",
-                    ),
-                },
-            ],
-        ),
-        (
-            "Unique Figures I Like",
-            [
-                {
-                    "title": "Distinctive / Keep",
-                    "note": "These each answer a question that the rest of the packet does not cover cleanly.",
-                    "files": _existing_figure_paths(
-                        "sample-summary.png",
-                        "cancer-hypotheses.png",
-                        "cancer-type-signal-matrix.png",
-                        "purity-methods.png",
-                        "actionable-targets.png",
-                        "priority-targets.png",
-                        "priority-target-context.png",
-                        "provenance.png",
-                        "therapy-pathway-state.png",
                     ),
                 },
             ],
@@ -4563,8 +4553,8 @@ def _analyze_body(run: AnalyzeRun):
             _make_audit_text_page(
                 "Figure Audit",
                 [
-                    "This PDF groups emitted figures by report theme, decision support, and audit/context role.",
-                    "It also groups the same artifacts by report theme so pathway/state plots are easier to find.",
+                    "This PDF groups every emitted figure by patient-reader or audit-only role.",
+                    "Each artifact appears once unless it is added to the coverage appendix.",
                     "PNG pages are reproduced directly after each group cover page; PDF-only figures are listed on the cover page but not rasterized here.",
                     f"Source directory: {figures_dir}",
                 ],
@@ -4660,8 +4650,8 @@ context.
 | `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
 | `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
 | `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
-| `*-all-figures.pdf` | Main report figures combined into a single PDF; context-only plots are kept in the audit packet |
-| `*-figure-audit.pdf` | Figure packet grouped into decision-support, context-only, redundant, and distinctive sections |
+| `*-all-figures.pdf` | Curated patient figures: compact QC, final-call analyses, and recommendations |
+| `*-figure-audit.pdf` | Complete figure packet with preliminary, alternative-model, technical, and redundant plots explicitly separated from the patient set |
 
 Read `*-summary.md` first, use `*-analysis.md` for the reasoning, and open
 `*-evidence.md` or the audit packet only when validating a specific claim.
@@ -4689,25 +4679,33 @@ available for QC and provenance.
 
 ## Figures (in `figures/`)
 
-Prefer the standalone decomposition figures for review and sharing. They replace the crowded legacy composite by splitting composition, component breakdown, and candidate comparison into separate PNGs.
+Use `*-all-figures.pdf` for review and sharing. It includes only figures that qualify QC, support the finalized analysis, or explain recommendations. Preliminary cancer labels and alternative decomposition models remain available in `*-figure-audit.pdf`.
 
-| Figure | Description |
-|--------|-------------|
-| `*-sample-summary.png` | Quick overview: cancer type, purity, background signatures |
-| `*-decomposition-composition.png` | Standalone composition bar (tumor + TME) for the best hypothesis |
-| `*-decomposition-components.png` | Standalone TME cell-type breakdown for the best hypothesis |
-| `*-decomposition-candidates.png` | Standalone per-candidate composition bars (tumor / template-specific / shared host) across top decomposition candidates |
-| `*-cancer-type-signal-matrix.png` | Decision-aligned cancer-type evidence trace; shows the final call, learned votes, MMR context where relevant, ranker/reference/decomposition signals, blockers, and confidence |
-| `*-purity.png` | Tumor purity estimation detail |
-| `*-treatments.png` | Therapy target expression by modality |
-| `*-actionable-targets.png` | Canonical actionable-target screen: observed expression, tumor-source estimate, normal-tissue context, and readiness caveats |
-| `*-priority-targets.png` | Actionable target priority ranking, split by approval/readiness tier |
-| `*-priority-target-context.png` | Matching actionable-target evidence page: tumor-expression range plus tumor-source and healthy-tissue context |
-| `*-target-tissues.pdf` | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
-| `*-purity-ctas.png` | Tumor-expression ranges for CTAs |
-| `*-purity-surface.png` | Tumor-expression ranges for surface proteins |
-| `*-reference-mds.png` | Reference comparison map: sample among TCGA cancer medians, subtype references, and normal tissues; does not represent the final fused selection |
-| `*-reference-neighborhood.png` | Reference-distance comparison: nearest cancer, subtype, and normal profiles; preserves feature distance but does not represent the final fused selection |
+| Figure | Reader role | Description |
+|--------|-------------|-------------|
+| `*-sample-context.png` | Patient | Compact library and expression QC |
+| `*-degradation-index.png` | Patient | RNA degradation check used to qualify uncertainty |
+| `*-background-tissues.png` | Audit only | Raw healthy-tissue correlation context; can be nonspecific and is not a final label |
+| `*-decomposition-composition.png` | Patient | Tumor plus TME composition for the selected final-call model |
+| `*-decomposition-components.png` | Patient | TME cell-type breakdown for the selected final-call model |
+| `*-purity-methods.png` | Patient | Purity estimate and estimator agreement |
+| `*-mhc-expression.png` | Audit only | Antigen-presentation RNA context; not HLA typing or therapy eligibility |
+| `*-therapy-pathway-state.png` | Patient | Therapy-relevant pathway context, when supported |
+| `*-subtype-signature.png` | Patient | Final-call subtype analysis, when supported |
+| `*-purity-ctas.png` | Audit only | Tumor-adjusted cancer-testis antigen discovery screen; not a clinical recommendation |
+| `*-purity-surface.png` | Audit only | Tumor-adjusted surface-protein discovery screen; not a clinical recommendation |
+| `*-priority-targets.png` | Audit only | Broad target scoring retained for technical review; not a clinical recommendation or eligibility result |
+| `*-sample-summary.png` | Audit only | Legacy composite that duplicates selected reader figures |
+| `*-decomposition-candidates.png` | Audit only | Competing decomposition fits, including rejected preliminary labels |
+| `*-cancer-hypotheses.png` | Audit only | Pre-adjudication bulk-RNA candidate ranking |
+| `*-cancer-type-signal-matrix.png` | Audit only | Full evidence trace, including preliminary and conflicting signals |
+| `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the patient PDF |
+| `*-treatments.png` | Audit only | Raw target-expression survey retained for technical review |
+| `*-actionable-targets.png` | Audit only | Broad actionable-target screen retained for provenance |
+| `*-priority-target-context.png` | Audit only | Detailed tumor-source and healthy-tissue target context |
+| `*-target-tissues.pdf` | Audit only | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
+| `*-reference-mds.png` | Audit only | Raw reference comparison; not the final fused selection |
+| `*-reference-neighborhood.png` | Audit only | Raw reference distances; not the final fused selection |
 
 Optional deprecated comparison figures are only emitted with
 `--deprecated-figures` and are written under `figures/deprecated/`. They are
@@ -9791,7 +9789,7 @@ def _generate_text_reports(
 
     analysis_path = "%s-analysis.md" % prefix if prefix else "analysis.md"
     with open(analysis_path, "w") as f:
-        f.write("\n".join(lines))
+        f.write("\n".join(lines).rstrip() + "\n")
     print(f"[report] Saved {analysis_path}")
 
 
@@ -11262,6 +11260,7 @@ def plot_expression(
     decomposition_templates: Optional[str] = None,
     hla_types: Optional[str] = None,
     variants: Optional[str] = None,
+    variant_genome_build: Optional[str] = None,
     alterations: Optional[str] = None,
     therapy_target_top_k: int = 10,
     therapy_target_tpm_threshold: float = 30.0,
@@ -11294,6 +11293,7 @@ def plot_expression(
         decomposition_templates=decomposition_templates,
         hla_types=hla_types,
         variants=variants,
+        variant_genome_build=variant_genome_build,
         alterations=alterations,
         therapy_target_top_k=therapy_target_top_k,
         therapy_target_tpm_threshold=therapy_target_tpm_threshold,

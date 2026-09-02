@@ -539,6 +539,8 @@ def test_summary_marks_supplied_cancer_type_basis():
 
 
 def test_summary_names_background_separated_cancer_type_basis():
+    from trufflepig.healthy_vs_tumor import TissueCompositionSignal
+
     analysis = _make_analysis()
     analysis.update(
         {
@@ -559,7 +561,20 @@ def test_summary_names_background_separated_cancer_type_basis():
                 "supported_code": "CRC",
                 "background_separation_confirmed": True,
             },
-            "cancer_type_decision_refit": {"accepted": True},
+            "cancer_type_decision_refit": {
+                "accepted": True,
+                "previous_cancer_type": "SARC_DDLPS",
+            },
+            "candidate_trace": [
+                {"code": "SARC_DDLPS", "support_geomean": 0.55},
+                {"code": "CRC", "support_geomean": 0.44},
+            ],
+            "healthy_vs_tumor": TissueCompositionSignal(
+                top_normal_tissues=[("smooth_muscle_nTPM", 0.86)],
+                top_tcga_cohorts=[("SARC_TPM", 0.81)],
+                cancer_hint="possibly-tumor",
+                structural_ambiguity=True,
+            ),
         }
     )
 
@@ -571,10 +586,14 @@ def test_summary_names_background_separated_cancer_type_basis():
     )
 
     assert "Cancer-type basis" in md
-    assert "candidate-independent background decomposition recovered" in md
+    assert "bulk profile initially favored SARC_DDLPS" in md
+    assert "tissue-composition screen was dominated by smooth muscle" in md
+    assert "candidate-independent decomposition recovered" in md
     assert "complete and invariant CRC (Colorectal Adenocarcinoma)" in md
     assert "refitted for that final scope reproduced it" in md
-    assert "host/background differential context" in md
+    assert "remains only in the audit differential" in md
+    assert "does not drive downstream interpretation" in md
+    assert "**Retained RNA differential:**" not in md
 
 
 def test_summary_keeps_parent_decision_at_parent_scope():
@@ -1342,13 +1361,13 @@ def test_brief_prioritizes_ar_path_and_flags_possible_current_therapy():
         cancer_code="PRAD",
         disease_state="**AR axis suppressed** — consistent with ADT exposure.",
     )
-    assert md.index("**AR**") < md.index("**FOLH1**")
+    assert "- **FOLH1**" not in md
     ar_line = next(line for line in md.splitlines() if line.startswith("- **AR**"))
     assert "guideline-standard approved pathway" in ar_line
     assert "current/prior ADT or ARPI" in ar_line
 
 
-def test_brief_uses_path_maturity_across_cancer_types_not_prad_special_case():
+def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
     analysis = _make_analysis()
     analysis["cancer_type"] = "BRCA"
     analysis["cancer_name"] = "Breast invasive carcinoma"
@@ -1382,18 +1401,12 @@ def test_brief_uses_path_maturity_across_cancer_types_not_prad_special_case():
         cancer_code="BRCA",
         disease_state="",
     )
-    assert md.index("**ERBB2**") < md.index("**TACSTD2**")
-    erbb2_line = next(
-        line for line in md.splitlines() if line.startswith("- **ERBB2**")
-    )
-    assert "guideline-standard approved pathway" in erbb2_line
-    tacstd2_line = next(
-        line for line in md.splitlines() if line.startswith("- **TACSTD2**")
-    )
-    assert "approved later-line pathway" in tacstd2_line
+    assert "- **ERBB2**" not in md
+    assert "- **TACSTD2**" not in md
+    assert "## Top candidate therapies" in md
 
 
-def test_expression_independent_therapy_summary_keeps_rna_contextual():
+def test_expression_independent_therapy_without_eligibility_stays_out_of_shortlist():
     analysis = _make_analysis()
     analysis["cancer_type"] = "COAD"
     analysis["cancer_name"] = "Colon adenocarcinoma"
@@ -1417,14 +1430,10 @@ def test_expression_independent_therapy_summary_keeps_rna_contextual():
         cancer_code="COAD",
         disease_state="",
     )
-    pdcd1_line = next(
-        line for line in md.splitlines() if line.startswith("- **CD274**")
+    assert not any(
+        line.startswith("- **CD274**") for line in md.splitlines()
     )
-    assert "target expression is not the eligibility criterion" in pdcd1_line
-    assert "target RNA is context only" in pdcd1_line
-    assert "Clinical maturity: approved antibody" in pdcd1_line
-    assert "; Clinical maturity" not in pdcd1_line
-    assert "model interval" not in pdcd1_line
+    assert "## Top candidate therapies" in md
 
 
 def test_expression_independent_therapy_surfaces_missing_required_evidence():
@@ -1801,7 +1810,7 @@ def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
         disease_state="**ER-axis suppressed / ER-low pattern**.",
     )
     top_lines = [line for line in md.splitlines() if line.startswith("- **")]
-    assert any(line.startswith("- **TACSTD2**") for line in top_lines)
+    assert all(not line.startswith("- **TACSTD2**") for line in top_lines)
     assert all(not line.startswith("- **ESR1**") for line in top_lines)
 
     actionable = build_actionable(
@@ -1848,7 +1857,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
                         "tme_explainable": True,
                     },
                     {
-                        "symbol": "KLK2",
+                            "symbol": "PSCA",
                         "observed_tpm": 247.0,
                         "attribution": {"matched_normal_prostate": 155.0},
                         "attr_tumor_tpm": 57.0,
@@ -1874,9 +1883,10 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
     assert "Tumor-source bulk TPM" in md
     assert "Top non-tumor attribution" in md
     assert "STEAP2" in md
-    assert "KLK2" in md
+    assert "PSCA" in md
     assert "matched-normal prostate" in md
     assert "phase 1 exploratory" in md
+    assert len(md.splitlines()) <= 40
 
 
 def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
@@ -2141,7 +2151,7 @@ def test_brief_normalizes_path_like_sample_id():
     assert md.splitlines()[0] == "# Summary: rs"
 
 
-def test_brief_uses_tumor_band_without_attribution_dict():
+def test_brief_does_not_promote_psma_rna_without_required_imaging():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
     idx = ranges_df.index[ranges_df["symbol"] == "FOLH1"][0]
@@ -2153,7 +2163,7 @@ def test_brief_uses_tumor_band_without_attribution_dict():
         disease_state="",
     )
     assert "tumor-specific decomposition was unavailable" not in md
-    assert "128 tumor-source bulk TPM (model interval 128-128" in md
+    assert "- **FOLH1**" not in md
 
 
 def test_actionable_renders_tumor_band_without_attribution_dict():
@@ -2173,11 +2183,9 @@ def test_actionable_renders_tumor_band_without_attribution_dict():
     )
 
 
-def test_actionable_background_dominant_therapy_row_is_audit_only():
-    # Issue #105: on a liver-met BLCA sample, an FGFR3/erdafitinib row whose RNA is
-    # attributed to hepatocyte/background (tumor-source TPM 0) must land in the
-    # audit-only therapy section, not the active-opportunity table — matching the
-    # *-targets.md split so the summary, the analysis markdown, and the PDF agree.
+def test_actionable_background_dominant_molecular_therapy_is_eligibility_dependent():
+    # FGFR3 RNA can be hepatocyte/background-attributed without ruling erdafitinib
+    # in or out: the clinical gate is a susceptible FGFR3 genetic alteration.
     analysis = _make_analysis()
     analysis["cancer_type"] = "BLCA"
     analysis["cancer_name"] = "Bladder Urothelial Carcinoma"
@@ -2211,16 +2219,14 @@ def test_actionable_background_dominant_therapy_row_is_audit_only():
         sample_id="pfo017-liver",
     )
     assert "## Therapy Prioritization" in md
-    assert "### Other curated rows — not supported by this sample" in md
     therapy_section = md.split("## Therapy Prioritization", 1)[1]
-    active_block, audit_block = therapy_section.split(
-        "### Other curated rows — not supported by this sample", 1
+    row = next(
+        line for line in therapy_section.splitlines()
+        if "| **FGFR3** | erdafitinib |" in line
     )
-    # The host-attributed FGFR3 row is not presented as an active opportunity.
-    assert "erdafitinib" not in active_block
-    assert "FGFR3" in audit_block
-    assert "erdafitinib" in audit_block
-    assert "not sample-supported; negative/background evidence" in audit_block
+    assert "target expression is not the eligibility criterion" in row
+    assert "required eligibility evidence not supplied" in row
+    assert "not sample-supported; negative/background evidence" not in row
 
 
 def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
@@ -2347,6 +2353,7 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     assert "## Notable biomarker outliers" in md
     assert "TP53" in md
     assert "expression is not the eligibility criterion" in md
+    assert len(md.splitlines()) <= 40
 
 
 def test_summary_low_purity_caveat_rides_on_tumor_source_tpm():

@@ -258,7 +258,9 @@ def _ontology_layer(stage: str, role: str, code: str) -> str:
         return "lineage"
     if role.startswith("hierarchical_family") or stage == "family":
         return "family"
-    if role.startswith("hierarchical_entity"):
+    if role.startswith("hierarchical_entity") or role == (
+        "background_separated_cancer_type"
+    ):
         return "entity"
     # exact_subtype / orthogonal_state is the SELECTOR's decision stage, not a claim about the code:
     # fused_evidence / learned_* / fine_reference all report "exact_subtype" even when they win a
@@ -489,6 +491,8 @@ def build_cancer_type_signal_matrix(
     if isinstance(cancer_type_decision, Mapping) and cancer_type_decision:
         predicted_code = _clean(cancer_type_decision.get("supported_code"))
         status = _clean(cancer_type_decision.get("status")) or "not_evaluable"
+        if cancer_type_decision.get("selection_allowed") is False:
+            status = f"{status}_blocked"
         details = {
             "reason": cancer_type_decision.get("reason"),
             "current_code": cancer_type_decision.get("current_code"),
@@ -541,7 +545,7 @@ def build_cancer_type_signal_matrix(
                 selected_by=selected_by,
                 signal_source="decomposition_cancer_type_decision",
                 signal_label="Decomposition cancer-type decision",
-                stage="post_label_context",
+                stage="coarse_type",
                 role="background_separated_cancer_type",
                 status=status,
                 predicted_code=predicted_code,

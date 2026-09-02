@@ -310,7 +310,7 @@ def test_plot_priority_targets_saves_png(tmp_path):
     assert ax.spines["left"].get_visible()
     assert ax.spines["bottom"].get_visible()
     texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
-    assert "Approved / disease-matched" in texts
+    assert "Approved pathway / eligibility pending" in texts
     assert any(
         text.get_text() == "Eligibility / state fit"
         for legend in fig.legends + [ax.get_legend() for ax in fig.axes]
@@ -481,12 +481,13 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     assert not ax_range.spines["right"].get_visible()
     assert fig.legends
     texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
-    assert "Approved / disease-matched" in texts
+    assert "Approved pathway / eligibility pending" in texts
     assert "Exploratory / expression-linked" in texts
     header_texts = [
         text
         for text in fig.axes[0].texts
-        if text.get_text() in {"Approved / disease-matched", "Exploratory / expression-linked"}
+        if text.get_text()
+        in {"Approved pathway / eligibility pending", "Exploratory / expression-linked"}
     ]
     assert header_texts
     assert all(text.get_ha() == "right" for text in header_texts)

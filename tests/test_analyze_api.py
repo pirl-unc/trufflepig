@@ -175,7 +175,11 @@ def test_build_analysis_parameters_records_variant_inputs():
         "culture": {"level": "unknown", "stress_score": None},
         "has_issues": False,
     }
-    config = AnalyzeConfig(input_path="gene.tsv", variants="EGFR KDD;variants.tsv")
+    config = AnalyzeConfig(
+        input_path="gene.tsv",
+        variants="EGFR KDD;variants.tsv",
+        variant_genome_build="GRCh37",
+    )
     resolution = resolve_analyze_inputs(config, sniff_input_level=lambda _path: "gene")
 
     params = build_analysis_parameters(
@@ -190,6 +194,7 @@ def test_build_analysis_parameters_records_variant_inputs():
 
     assert config.variant_input_list() == ["EGFR KDD", "variants.tsv"]
     assert params["input"]["variants"] == ["EGFR KDD", "variants.tsv"]
+    assert params["input"]["variant_genome_build"] == "GRCh37"
 
 
 def test_legacy_alterations_config_serializes_as_variants():

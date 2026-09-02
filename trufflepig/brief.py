@@ -811,10 +811,23 @@ def _top_therapies(
             disease_state=disease_state,
         ):
             continue
-        supplied_variant_rank = (
-            0 if supplied_variant_supports_target_row(t, analysis) else 1
+        supplied_variant_match = bool(
+            supplied_variant_supports_target_row(t, analysis)
         )
-        if therapy_row_requires_confirmed_eligibility(t) and supplied_variant_rank != 0:
+        direct_eligibility_match = bool(
+            expr_independent
+            and _has_direct_eligibility_input(
+                analysis,
+                indication_biomarker(t),
+            )
+        )
+        supplied_variant_rank = (
+            0 if supplied_variant_match or direct_eligibility_match else 1
+        )
+        if (
+            therapy_row_requires_confirmed_eligibility(t)
+            and supplied_variant_rank != 0
+        ):
             continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):
@@ -1163,7 +1176,9 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
     if not rows:
         return ""
     lines = [
-        "**Where target RNA signal appears to come from**",
+        "**Where target RNA signal appears to come from** — *source attribution "
+        "is a caveat, not an automatic exclusion; clinical maturity and "
+        "eligibility still set the shortlist order.*",
         "",
         "| Gene | Bulk TPM | Tumor-source bulk TPM | Tumor fraction | Top non-tumor attribution | Component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
@@ -1176,11 +1191,78 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
             f"{component} | {_format_trace_tpm(row['component_tpm'])} | "
             f"{row['reason']} |"
         )
-    lines.append(
-        "*Source attribution is a caveat, not an automatic exclusion; "
-        "clinical maturity and eligibility still set the shortlist order.*"
-    )
     return "\n".join(lines)
+
+
+def _compact_summary_markdown(lines: List[str], *, max_lines: int = 40) -> str:
+    """Render summary chunks within the documented physical-line budget.
+
+    Several summary chunks intentionally contain embedded newlines for the
+    longer report. Joining those chunks verbatim accumulated a blank line
+    around nearly every heading, paragraph, and list, so real summaries grew
+    to 50+ physical lines even though they contained fewer than 40 content
+    lines. Preserve the most useful structural gaps first and remove only
+    redundant blank lines; never discard a finding to satisfy formatting.
+    """
+
+    raw_lines: List[str] = []
+    for chunk in lines:
+        raw_lines.extend(str(chunk).splitlines())
+
+    while raw_lines and not raw_lines[0].strip():
+        raw_lines.pop(0)
+    while raw_lines and not raw_lines[-1].strip():
+        raw_lines.pop()
+
+    content = [line for line in raw_lines if line.strip()]
+    blank_budget = max(0, max_lines - len(content))
+    if not blank_budget:
+        if len(content) > max_lines:
+            logger.warning(
+                "summary contains %d content lines; exceeds %d-line budget",
+                len(content),
+                max_lines,
+            )
+        return "\n".join(content)
+
+    # Record boundaries that had one or more intentional blank lines. A
+    # boundary index is the number of content lines that precede the gap.
+    boundaries = set()
+    content_seen = 0
+    blank_pending = False
+    for line in raw_lines:
+        if line.strip():
+            if blank_pending and content_seen:
+                boundaries.add(content_seen)
+            content_seen += 1
+            blank_pending = False
+        else:
+            blank_pending = True
+
+    def _boundary_priority(boundary: int):
+        previous = content[boundary - 1] if boundary else ""
+        following = content[boundary] if boundary < len(content) else ""
+        if following.startswith("| "):
+            return (0, boundary)
+        if following.startswith("## "):
+            return (1, boundary)
+        if previous.startswith("# "):
+            return (2, boundary)
+        if following.startswith("### "):
+            return (3, boundary)
+        if following.startswith("*Full detail:"):
+            return (4, boundary)
+        return (5, boundary)
+
+    kept_boundaries = set(
+        sorted(boundaries, key=_boundary_priority)[:blank_budget]
+    )
+    rendered: List[str] = []
+    for index, line in enumerate(content):
+        if index in kept_boundaries:
+            rendered.append("")
+        rendered.append(line)
+    return "\n".join(rendered)
 
 
 def _disease_state_summary_lines(disease_state_display):
@@ -1430,6 +1512,52 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
         and source != "user-specified"
         and decomposition_decision.is_selection_basis
     ):
+        refit = analysis.get("cancer_type_decision_refit") or {}
+        initial_code = str(
+            refit.get("previous_cancer_type")
+            or analysis.get("inferred_cancer_type")
+            or ""
+        ).strip()
+        if not initial_code:
+            candidate_trace = analysis.get("candidate_trace") or []
+            if candidate_trace:
+                initial_code = str(candidate_trace[0].get("code") or "").strip()
+
+        tissue_name = ""
+        tissue_signal = analysis.get("healthy_vs_tumor")
+        top_normal_tissues = getattr(
+            tissue_signal,
+            "top_normal_tissues",
+            None,
+        )
+        if top_normal_tissues:
+            tissue_name = (
+                str(top_normal_tissues[0][0])
+                .removesuffix("_nTPM")
+                .replace("_", " ")
+            )
+
+        if initial_code and initial_code != decomposition_decision.supported_code:
+            tissue_clause = (
+                f" while the tissue-composition screen was dominated by "
+                f"{tissue_name}"
+                if tissue_name
+                else " before background separation"
+            )
+            return (
+                "**Cancer-type basis:** the bulk profile initially favored "
+                f"{_cancer_type_context_label(initial_code)}{tissue_clause}. "
+                "After background subtraction separated that structural signal "
+                "from the tumor residual, candidate-independent decomposition "
+                "recovered a complete and invariant "
+                f"{_cancer_type_context_label(decomposition_decision.supported_code)} "
+                "tumor program across the usable background models; a decomposition "
+                "refitted for that final scope reproduced it. The preliminary "
+                f"{_cancer_type_context_label(initial_code)} result remains only in "
+                "the audit differential and does not drive downstream interpretation. "
+                "Confirm the RNA-inferred label with pathology or clinical diagnosis "
+                "before using the therapy shortlist."
+            )
         return (
             "**Cancer-type basis:** candidate-independent background "
             f"decomposition recovered a complete and invariant {_cancer_type_context_label(decomposition_decision.supported_code)} "
@@ -1972,6 +2100,17 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     if analysis.get("rare_report_scope_inference") or analysis.get(
         "fusion_report_scope_inference"
     ):
+        return ""
+    # When background-separated evidence replaced a preliminary bulk call, the
+    # summary's cancer-type basis already explains that call evolution. Repeating
+    # the losing ranker rows as a named "retained differential" gives an
+    # audit-only intermediate result patient-facing prominence. The complete
+    # ordering remains available in analysis.md, evidence.md, and the TSV trace.
+    decomposition_decision = CancerTypeDecision.from_analysis(
+        analysis,
+        cancer_code,
+    )
+    if decomposition_decision.is_selection_basis:
         return ""
     candidate_trace = analysis.get("candidate_trace") or []
     if not candidate_trace:
@@ -2927,7 +3066,10 @@ def build_summary(
         lines.append(
             "*Static curation, not a live NCCN or trial-matching engine; ranked by "
             "treatment-path maturity first, then tumor-source support. Verify current "
-            "NCCN/trial status and current therapy before acting on any row.*\n"
+            "NCCN/trial status and current therapy before acting on any row. This "
+            "molecular/targeted shortlist is not a complete treatment plan and does "
+            "not comprehensively enumerate surgery, radiation, cytotoxic, endocrine, "
+            "or supportive-care options.*\n"
         )
         if panel_code != cancer_code or panel_subtype:
             lines.append(
@@ -3017,13 +3159,6 @@ def build_summary(
         )
         if outliers:
             lines.append("## Notable biomarker outliers\n")
-            lines.append(
-                "*Curated biomarker-panel genes outside the therapy "
-                "shortlist that are amplified vs peak healthy tissue or "
-                "in the top 5% of TCGA cohort expression. Driver / "
-                "lineage / amplicon signals — see the analysis report "
-                "for full biomarker-panel context.*\n"
-            )
             for row in outliers:
                 lines.append(_format_biomarker_outlier_bullet(row))
             lines.append("")
@@ -3037,12 +3172,6 @@ def build_summary(
     cta_outliers = _notable_cta_outliers(ranges_df)
     if cta_outliers:
         lines.append("## Notable CTAs\n")
-        lines.append(
-            "*Cancer-testis antigens expressed above the vaccine / TCR-T "
-            "consideration threshold (≥ 10 TPM). Independent of the "
-            "approved-therapy registry — see the CTA table in the "
-            "analysis report for HLA / immunogenicity context.*\n"
-        )
         for row in cta_outliers:
             lines.append(_format_cta_outlier_bullet(row))
         lines.append("")
@@ -3063,7 +3192,7 @@ def build_summary(
         "*Full detail: see the accompanying `*-analysis.md` and `*-evidence.md`.*"
     )
 
-    return "\n".join(lines)
+    return _compact_summary_markdown(lines)
 
 
 # Back-compat alias — ``build_brief`` was the public name through 4.40;
@@ -3253,7 +3382,10 @@ def build_actionable(
                 "lineage markers are not confused with tumor-exclusive "
                 "targets. Treatment-path context flags standard options, "
                 "later-line requirements, trial follow-ups, and possible "
-                "current/prior therapy exposure."
+                "current/prior therapy exposure. This is a molecular/targeted "
+                "review, not a complete disease-management plan; standard surgery, "
+                "radiation, cytotoxic, endocrine, and supportive-care options are "
+                "not comprehensively enumerated."
             )
             lines.append(tpm_semantics_note())
             lines.append("")
@@ -3471,13 +3603,15 @@ def build_actionable(
                 lines.append("")
 
             if audit_records:
-                lines.append("### Sample-supported / clinically reviewable rows\n")
+                lines.append(
+                    "### Clinically reviewable or eligibility-dependent rows\n"
+                )
                 if active_records:
                     _render_therapy_records(active_records)
                 else:
                     lines.append(
-                        "*No curated therapy row had tumor-supported or clinically "
-                        "reviewable RNA evidence in this sample.*\n"
+                        "*No curated therapy row had tumor-supported or otherwise "
+                        "clinically reviewable evidence in this sample.*\n"
                     )
                 lines.append(
                     "### Other curated rows — not supported by this sample\n"

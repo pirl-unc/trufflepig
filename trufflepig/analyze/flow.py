@@ -572,6 +572,7 @@ def build_analysis_parameters(
             "hla_types": config.hla_type_list(),
             "fusions": config.fusion_path_list(),
             "variants": config.variant_input_list(),
+            "variant_genome_build": config.variant_genome_build,
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,

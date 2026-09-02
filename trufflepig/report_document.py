@@ -55,28 +55,25 @@ SCHEMA_VERSION = 1
 # The interpretation is what the figure *means* for the decision — it replaces
 # captioning a figure with its PNG filename. Figures are gated on existence at
 # emit time (a belief that never fired never wrote its plot), so a manifest entry's
-# ``present`` flag is belief-gated. Ordering is decision-first: the call and its
-# evidence, then composition/purity, then what to do (therapy), then sample context.
+# ``present`` flag is belief-gated. Ordering mirrors the patient PDF: compact QC,
+# final-call composition/purity, selected biological analyses, then recommendations.
 #
-# Therapy figures are emitted under whichever name the run produced (``treatments``
-# for the ranked-therapy view, ``priority-targets`` for the score-decomposition
-# view); both are listed and the missing one is skipped. The near-duplicate log-TPM
-# dumbbell plots (``priority-target-context``, ``actionable-targets``) are
-# intentionally NOT in the reader manifest — they live in the audit PDF and restate
-# the same genes the therapy figures already cover.
+# Preliminary ranker leaders, alternative decomposition candidates, raw reference
+# maps, and redundant technical plots are intentionally absent. They remain in the
+# figure-audit PDF, where their audit role is explicit and they cannot be mistaken
+# for the finalized cancer label.
 FIGURE_REGISTRY = [
     (
-        "sample-summary.png",
-        "Integrated sample summary",
-        "One-page synthesis: the cancer-type call, tumor-vs-background composition, "
-        "and purity for this sample.",
+        "sample-context.png",
+        "Sample quality context",
+        "Compact library, preservation, and expression-concentration checks used "
+        "to judge whether the sample is suitable for interpretation.",
     ),
     (
-        "cancer-type-signal-matrix.png",
-        "Cancer-type evidence",
-        "Which independent signals (expression signature, cohort centroid, "
-        "decomposition, mismatch-repair) supported the reported cancer type, and how "
-        "strongly each voted.",
+        "degradation-index.png",
+        "RNA degradation check",
+        "Long-to-short transcript ratios show the sample-specific degradation signal "
+        "that informs uncertainty in downstream estimates.",
     ),
     (
         "decomposition-composition.png",
@@ -85,47 +82,41 @@ FIGURE_REGISTRY = [
         "and stromal background component.",
     ),
     (
-        "decomposition-candidates.png",
-        "Decomposition hypotheses",
-        "Competing tumor/background decomposition fits; the selected model is "
-        "listed first and the remaining rows are comparisons.",
+        "decomposition-components.png",
+        "Tumor microenvironment components",
+        "The selected final-call decomposition resolves the non-tumor fraction into "
+        "its major stromal and immune components.",
     ),
     (
         "purity-methods.png",
         "Purity method agreement",
         "Independent purity estimates (signature, lineage, ESTIMATE, decomposition "
-        "residual) and their agreement — the reported purity is their fused consensus, "
+        "residual) and their agreement - the reported purity is their fused consensus, "
         "widened when the methods disagree.",
-    ),
-    (
-        "purity.png",
-        "Purity estimate",
-        "Reported tumor-purity point estimate with its uncertainty interval.",
-    ),
-    (
-        "treatments.png",
-        "Candidate therapies",
-        "Therapies ranked for this call, each shown with the eligibility gate (the "
-        "assay that actually confirms it) — RNA expression alone is not the criterion.",
-    ),
-    (
-        "priority-targets.png",
-        "Prioritized targets",
-        "Why each actionable target ranks where it does: the score decomposition "
-        "behind the therapy shortlist.",
     ),
     (
         "therapy-pathway-state.png",
         "Therapy pathway state",
-        "Expression state of therapy-relevant pathways (antigen presentation, "
-        "interferon, and others) that modulate the candidate treatments above.",
+        "Expression state of therapy-relevant pathways provides biological context "
+        "for the candidate recommendations.",
     ),
     (
-        "sample-context.png",
-        "Sample in cohort context",
-        "Where this sample sits relative to the reference cohort in expression space.",
+        "subtype-signature.png",
+        "Final-call subtype evidence",
+        "Subtype-program expression refines the finalized cancer call when the sample "
+        "contains enough evidence for a specific subtype analysis.",
     ),
 ]
+PATIENT_FIGURE_SUFFIXES = tuple(suffix for suffix, _, _ in FIGURE_REGISTRY)
+
+
+def is_patient_figure(path: str | Path | None) -> bool:
+    """Whether *path* belongs in the curated patient-facing figure set."""
+
+    if not path:
+        return False
+    name = Path(path).name
+    return any(name.endswith(suffix) for suffix in PATIENT_FIGURE_SUFFIXES)
 
 
 # --------------------------------------------------------------------------- #
@@ -597,21 +588,17 @@ def build_figure_manifest(
     only does when the underlying belief passed threshold) and its resolved path."""
     manifest: List[dict] = []
     unresolved_captions = {
-        "sample-summary.png": (
-            "One-page synthesis of the cancer-type call and the incompatible "
-            "purity scenarios; no consensus tumor/non-tumor fraction is assigned."
-        ),
         "decomposition-composition.png": (
             "Selected operational tumor/background model used for attribution; "
             "not a resolved sample-composition measurement."
         ),
+        "decomposition-components.png": (
+            "Components from the selected operational model; not a resolved "
+            "sample-composition measurement."
+        ),
         "purity-methods.png": (
             "Independent purity estimators support incompatible scenarios; the "
             "operational value is not a fused consensus estimate."
-        ),
-        "purity.png": (
-            "Operational purity scenario and its within-estimator interval; "
-            "quantitative consensus is unresolved."
         ),
     }
     for suffix, title, caption in FIGURE_REGISTRY:

@@ -170,6 +170,9 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     ].iloc[0]
     assert decision["predicted_code"] == "BLCA"
     assert decision["support_metric"] == "structural_unanimity"
+    assert decision["stage"] == "coarse_type"
+    assert decision["ontology_layer"] == "entity"
+    assert bool(decision["is_context_only"]) is False
     assert bool(decision["selects_report_label"]) is False
     decision_details = json.loads(decision["details"])
     assert decision_details["background_separation_confirmed"] is True
@@ -202,6 +205,31 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     assert row["entity_consensus_selected_votes"] == 1
     assert row["background_site"] == "liver"
     assert row["decomposition_top"] == "BLCA"
+
+
+def test_selection_disallowed_decomposition_decision_is_blocked():
+    analysis = {
+        "sample_id": "case-blocked-decision",
+        "cancer_type": "BRCA",
+        "reference_cancer_type": "BRCA",
+        "cancer_type_decision": {
+            "status": "resolved",
+            "supported_code": "BRCA",
+            "current_code": "BRCA",
+            "selection_allowed": False,
+            "block_reason": "selection is disabled for this sample mode",
+        },
+    }
+
+    matrix = build_cancer_type_signal_matrix(analysis)
+    decision = matrix[
+        matrix["signal_source"] == "decomposition_cancer_type_decision"
+    ].iloc[0]
+
+    assert decision["status"] == "resolved_blocked"
+    assert bool(decision["is_blocked"]) is True
+    assert decision["ontology_layer"] == "entity"
+    assert json.loads(decision["details"])["selection_allowed"] is False
 
 
 def test_ranker_candidate_trace_does_not_infer_report_selection():

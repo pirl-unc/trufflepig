@@ -59,12 +59,12 @@ def _render_composition_bar(ax, best, title="Sample composition (tumor + TME)"):
 
 
 def _render_component_breakdown(ax, best, title="TME cell-type breakdown"):
-    """Horizontal bar per TME component — fraction (%) + marker-support annotation.
+    """Horizontal bar per TME component with a sample-fraction label.
 
-    Marker-support number (median observed/expected ratio across each
-    component's marker genes) is shown unlabelled next to each bar;
-    readers get a sense of how well each component's signal matches its
-    reference without the chart being cluttered with 'marker=' prefixes.
+    Marker-fit scores remain available in the component TSV.  They are not
+    printed beside percentage bars because an unlabelled fit coefficient can
+    be mistaken for the component's sample fraction (and those coefficients
+    are not constrained to 0--1).
     """
     comp_df = best.component_trace.copy()
     if comp_df.empty:
@@ -88,16 +88,13 @@ def _render_component_breakdown(ax, best, title="TME cell-type breakdown"):
     for idx, row in comp_df.iterrows():
         if row["fraction"] < 0.005:
             continue  # skip labels for sub-0.5% components (#96)
-        # A marker_score of 0.00 with n_markers=0 means the compartment
-        # had no markers to evaluate (typical for matched-normal
-        # compartments in mixture-cohort templates). Showing "0.00"
-        # reads as a bad fit; "n/a" is more honest.
-        n_markers = int(row.get("n_markers") or 0)
-        if n_markers == 0 or row["marker_score"] is None:
-            txt = "n/a"
-        else:
-            txt = f"{row['marker_score']:.2f}"
-        ax.text(row["fraction"] * 100 + 0.8, idx, txt, va="center", fontsize=8)
+        ax.text(
+            row["fraction"] * 100 + 0.8,
+            idx,
+            f"{row['fraction']:.0%}",
+            va="center",
+            fontsize=8,
+        )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
@@ -136,8 +133,7 @@ def plot_decomposition_component_breakdown(
     """Standalone horizontal-bar plot of per-component TME fractions.
 
     Same content as panel 3 of plot_decomposition_summary, rendered
-    larger with a cleaner title and numeric marker-support annotations
-    (no 'marker=' prefix).
+    larger with a cleaner title and direct percentage annotations.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     _render_component_breakdown(

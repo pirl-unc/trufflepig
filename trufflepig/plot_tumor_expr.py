@@ -2331,6 +2331,7 @@ def plot_tumor_expression_ranges(
     df_ranges,
     purity_result,
     cancer_type,
+    report_cancer_type=None,
     top_n=15,
     categories=None,
     save_to_filename=None,
@@ -2346,7 +2347,10 @@ def plot_tumor_expression_ranges(
     purity_result : dict
         Output of ``estimate_tumor_purity()``.
     cancer_type : str
-        Cancer type code for title.
+        Cancer type code for the expression reference.
+    report_cancer_type : str, optional
+        Final report call to show first in the title. When it differs from
+        ``cancer_type``, the reference is named explicitly in parentheses.
     top_n : int
         Max genes per category panel.
     categories : list of str, optional
@@ -2359,6 +2363,12 @@ def plot_tumor_expression_ranges(
         categories = ["therapy_target", "CTA", "surface"]
 
     cancer_code = resolve_cancer_type(cancer_type)
+    report_code = str(report_cancer_type or cancer_code).strip().upper()
+    title_code = (
+        report_code
+        if report_code == cancer_code
+        else f"{report_code} ({cancer_code} reference)"
+    )
     p_lo = max(purity_result.get("overall_lower") or 0.01, 0.01)
     p_med = max(purity_result.get("overall_estimate") or 0.05, 0.01)
     p_hi = max(purity_result.get("overall_upper") or p_med, 0.01)
@@ -2564,7 +2574,7 @@ def plot_tumor_expression_ranges(
 
     # Suptitle with purity info and caveat
     fig.suptitle(
-        f"Tumor-cell-equivalent expression \u2014 {cancer_code}\n"
+        f"Tumor-cell-equivalent expression \u2014 {title_code}\n"
         f"Purity: {p_lo:.0%} / {p_med:.0%} / {p_hi:.0%} (low / est / high)\n"
         "Context-adjusted per-cell range; source-attributed bulk TPM is in tables.",
         fontsize=10,

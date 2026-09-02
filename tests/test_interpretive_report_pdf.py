@@ -2,9 +2,9 @@
 
 The reader PDF captions each figure with an *interpretation sentence* (what the
 figure means for the decision), not its PNG filename, and its figure manifest must
-stay in sync with the figures the pipeline actually emits — a stale manifest
-silently omitted the therapy figure (``treatments.png``) and shipped names that no
-longer exist. The parsing/manifest logic now lives in
+stay in sync with the curated patient packet. Preliminary labels, alternative
+decomposition fits, and raw target surveys remain audit-only. The parsing/manifest
+logic now lives in
 :mod:`trufflepig.report_document` (shared with the pipeline so the PDF renders from
 one serialized decision); these are cheap structural checks, and the rendering
 itself is validated by eye against a real report.
@@ -38,14 +38,32 @@ def test_figure_registry_entries_are_suffix_title_interpretation_triples():
         assert interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
 
 
-def test_reader_manifest_includes_therapy_and_excludes_near_duplicates():
+def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
     suffixes = {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
-    # The ranked-therapy figure must be present (was silently dropped by the old
-    # manifest, which looked only for priority-targets/actionable-targets).
-    assert "treatments.png" in suffixes
-    # The near-duplicate log-TPM dumbbell plots belong to the audit PDF only.
-    assert "priority-target-context.png" not in suffixes
-    assert "actionable-targets.png" not in suffixes
+    assert {
+        "sample-context.png",
+        "decomposition-composition.png",
+        "decomposition-components.png",
+        "purity-methods.png",
+    }.issubset(suffixes)
+    assert {
+        "sample-summary.png",
+        "cancer-hypotheses.png",
+        "cancer-type-signal-matrix.png",
+        "decomposition-candidates.png",
+        "background-tissues.png",
+        "mhc-expression.png",
+        "treatments.png",
+        "purity-ctas.png",
+        "purity-surface.png",
+        "priority-targets.png",
+        "priority-target-context.png",
+        "actionable-targets.png",
+    }.isdisjoint(suffixes)
+    assert rd.is_patient_figure("sample-decomposition-composition.png")
+    assert not rd.is_patient_figure("sample-decomposition-candidates.png")
+    assert not rd.is_patient_figure("sample-cancer-type-signal-matrix.png")
+    assert not rd.is_patient_figure("sample-prad-genes.png")
 
 
 def test_figure_page_captions_with_interpretation_not_filename():
@@ -113,7 +131,7 @@ _SUMMARY_WITH_THERAPIES_MD = """\
 
 ## Top candidate therapies
 
-### Approved / disease-matched
+### Approved pathway / eligibility pending
 
 - **CD274** — pembrolizumab (Approved, MSI-H / dMMR mCRC). target expression is not the eligibility criterion — confirm MSI-H / dMMR status; target RNA is context only (bulk 2.5 TPM; it does not establish eligibility).
 - **CEACAM5** — labetuzumab govitecan (Phase 2, CEACAM5+ mCRC). tumor-supported; 847 tumor-source bulk TPM (model interval 353-895); mid-clinical ADC.

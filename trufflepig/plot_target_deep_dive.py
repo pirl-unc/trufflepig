@@ -89,8 +89,8 @@ _PRIORITY_STATUS_ORDER = {
     "exploratory_or_expression_linked": 3,
 }
 _PRIORITY_STATUS_LABELS = {
-    "approved_disease_matched": "Approved / disease-matched",
-    "clinical_disease_matched": "Clinical trial / curated context",
+    "approved_disease_matched": "Approved pathway / eligibility pending",
+    "clinical_disease_matched": "Clinical trial / eligibility pending",
     "approved_other_context": "Approved elsewhere / generic target",
     "exploratory_or_expression_linked": "Exploratory / expression-linked",
 }

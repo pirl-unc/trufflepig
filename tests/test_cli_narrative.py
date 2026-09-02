@@ -14,6 +14,8 @@ from trufflepig.main import (
     annotate_surface_targets_with_cross_signals,
     _candidate_label_options,
     _effective_met_site_for_background,
+    _entity_consensus_refit_message,
+    _final_cancer_call_outputs,
     _format_purity_interval,
     _hypothesis_display_label,
     _infer_likely_met_site_context,
@@ -22,6 +24,54 @@ from trufflepig.main import (
     _prioritize_report_compatible_decomposition,
     _summarize_sample_call,
 )
+
+
+def test_entity_consensus_refit_message_names_the_rule_that_fired():
+    decomposition_only = _entity_consensus_refit_message(
+        "SARC_DDLPS",
+        "CRC",
+        {
+            "majority_decisive_candidate": False,
+            "decomposition_decision_was_decisive": True,
+        },
+    )
+    majority = _entity_consensus_refit_message(
+        "SARC_DDLPS",
+        "CRC",
+        {
+            "majority_decisive_candidate": True,
+            "decomposition_decision_was_decisive": False,
+        },
+    )
+
+    assert "Background-separated tumor program" in decomposition_only
+    assert "majority" not in decomposition_only.lower()
+    assert "majority" in majority.lower()
+
+
+def test_final_cancer_call_outputs_clear_superseded_rescue_metadata():
+    analysis = {
+        "sample_mode": "tumor",
+        "cancer_type_context": {"report": "NUTM"},
+        "purity": {"overall_estimate": 0.7},
+        "retained_cancer_call_rescue": {
+            "kind": "basal_breast_rescue",
+            "recommended_code": "BRCA",
+        },
+    }
+
+    outputs = _final_cancer_call_outputs(
+        analysis,
+        cancer_code="NUTM",
+        reference_cancer_code="HNSC",
+        inferred_site_context=None,
+        initial_cancer_type="BRCA",
+    )
+
+    assert "cancer_call_rescue" in outputs
+    assert outputs["cancer_call_rescue"] is None
+    assert outputs["initial_cancer_type"] == "BRCA"
+    assert outputs["finalized_after_decomposition"] is True
 
 
 def _mock_therapy_scores(**axis_states):

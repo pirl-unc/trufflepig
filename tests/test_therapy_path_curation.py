@@ -21,6 +21,7 @@ from trufflepig.reporting import (
     therapy_path_rank,
     therapy_path_tier,
     therapy_rna_context_conflict,
+    therapy_row_requires_confirmed_eligibility,
     therapy_row_rna_context_inactive,
 )
 
@@ -175,11 +176,124 @@ def test_withdrawn_disease_specific_rows_are_filtered_from_reports():
     filtered = filter_current_therapy_targets(targets)
 
     assert "withdrawn urothelial" in note
-    assert list(filtered["agent"]) == ["enfortumab vedotin", "sacituzumab govitecan"]
+    assert list(filtered["agent"]) == [
+        "enfortumab vedotin + pembrolizumab",
+        "sacituzumab govitecan",
+    ]
     assert list(filtered["cancer_code"]) == ["BLCA", "BRCA"]
 
 
-def test_miscited_osteosarcoma_ganitumab_row_is_filtered_from_reports():
+def test_stale_urothelial_atezolizumab_and_historical_nutm_rows_are_filtered():
+    targets = pd.DataFrame(
+        [
+            {
+                "cancer_code": "BLCA",
+                "symbol": "CD274",
+                "agent": "atezolizumab",
+                "indication": "advanced urothelial",
+            },
+            {
+                "cancer_code": "NUTM",
+                "symbol": "",
+                "agent": "molibresib (GSK525762)",
+                "indication": "NUT carcinoma",
+            },
+            {
+                "cancer_code": "NUTM",
+                "symbol": "",
+                "agent": "EP31670 (NEO2734)",
+                "indication": "NUT carcinoma",
+            },
+        ]
+    )
+
+    filtered = filter_current_therapy_targets(targets)
+
+    assert list(filtered["agent"]) == ["EP31670 (NEO2734)"]
+
+
+def test_noncurrent_breast_and_prostate_trial_rows_are_filtered():
+    targets = pd.DataFrame(
+        [
+            {
+                "cancer_code": "BRCA",
+                "symbol": "FOLR1",
+                "agent": "mirvetuximab soravtansine",
+                "indication": "TNBC subsets",
+            },
+            {
+                "cancer_code": "PRAD",
+                "symbol": "CD276",
+                "agent": "vobramitamab duocarmazine (MGC018)",
+                "indication": "mCRPC",
+            },
+            {
+                "cancer_code": "PRAD",
+                "symbol": "CEACAM5",
+                "agent": "tusamitamab ravtansine",
+                "indication": "CEACAM5+ mCRPC",
+            },
+            {
+                "cancer_code": "PRAD",
+                "symbol": "CD276",
+                "agent": "enoblituzumab",
+                "indication": "mCRPC",
+            },
+        ]
+    )
+
+    current = filter_current_therapy_targets(targets)
+
+    assert list(current["agent"]) == ["enoblituzumab"]
+
+
+def test_current_status_overrides_restore_required_combinations_and_phases():
+    targets = pd.DataFrame(
+        [
+            {
+                "cancer_code": "COAD",
+                "symbol": "KRAS",
+                "agent": "sotorasib",
+                "phase": "approved",
+                "indication": "KRAS G12C mCRC",
+            },
+            {
+                "cancer_code": "BLCA",
+                "symbol": "ERBB2",
+                "agent": "trastuzumab deruxtecan",
+                "phase": "phase_2",
+                "indication": "HER2+ urothelial",
+            },
+            {
+                "cancer_code": "PRAD",
+                "symbol": "STEAP1",
+                "agent": "AMG-509 (xaluritamig)",
+                "phase": "phase_2",
+                "indication": "mCRPC",
+            },
+            {
+                "cancer_code": "COAD",
+                "symbol": "BRAF",
+                "agent": "encorafenib + cetuximab",
+                "phase": "approved",
+                "indication": "BRAF V600E mCRC",
+            },
+        ]
+    )
+
+    current = filter_current_therapy_targets(targets)
+
+    assert current.loc[0, "agent"] == "sotorasib + panitumumab"
+    assert "KRAS G12C" in current.loc[0, "eligibility_note"]
+    assert current.loc[1, "phase"] == "approved"
+    assert "IHC 3+" in current.loc[1, "indication"]
+    assert current.loc[2, "phase"] == "phase_3"
+    assert current.loc[2, "treatment_path_tier"] == "late_clinical"
+    assert "fluorouracil-based chemotherapy" in current.loc[3, "agent"]
+    assert current.loc[3, "line_of_therapy"] == "first_line"
+
+
+def test_noncurrent_osteosarcoma_rows_are_filtered_from_reports():
     targets = pd.DataFrame(
         [
             {
@@ -194,12 +308,20 @@ def test_miscited_osteosarcoma_ganitumab_row_is_filtered_from_reports():
                 "agent": "cabozantinib",
                 "indication": "R/R OS",
             },
+            {
+                "cancer_code": "SARC_OS",
+                "symbol": "ERBB2",
+                "agent": "trastuzumab deruxtecan",
+                "indication": "HER2-expressing OS",
+            },
         ]
     )
 
     assert "osteosarcoma" in therapy_filter_note(targets.iloc[0])
     filtered = filter_current_therapy_targets(targets)
-    assert list(filtered["symbol"]) == ["VEGFA"]
+    assert list(filtered["symbol"]) == ["ERBB2"]
+    assert filtered.iloc[0]["requires_verified_alteration"]
+    assert "clinical tissue HER2" in filtered.iloc[0]["eligibility_note"]
 
 
 def test_adcc_lenvatinib_is_not_fgf2_expression_gated():
@@ -226,8 +348,8 @@ def test_agent_only_rows_preserve_biomarker_gates():
         "indication": "pMMR colorectal cancer with PD-L1 expression",
         "rationale": "",
     }
-    assert indication_biomarker(pdl1_row) == "target_expression"
-    assert expression_independent_indication(pdl1_row) is False
+    assert indication_biomarker(pdl1_row) == "clinical_target_assay"
+    assert expression_independent_indication(pdl1_row) is True
 
     msi_row = {
         "cancer_code": "COAD",
@@ -260,6 +382,52 @@ def test_agent_only_rows_preserve_biomarker_gates():
         "rationale": "",
     }
     assert indication_biomarker(histology_row) == "histology_only"
+
+
+def test_clinical_assay_and_imaging_gates_do_not_use_target_rna_as_eligibility():
+    her2 = {
+        "cancer_code": "BLCA",
+        "symbol": "ERBB2",
+        "agent": "trastuzumab deruxtecan",
+        "phase": "approved",
+        "indication": "HER2-positive (IHC 3+) solid tumor",
+        "requires_verified_alteration": True,
+    }
+    psma = {
+        "cancer_code": "PRAD",
+        "symbol": "FOLH1",
+        "agent": "177Lu-PSMA-617",
+        "phase": "approved",
+        "indication": "mCRPC",
+        "requires_verified_alteration": True,
+    }
+    enfortumab = {
+        "cancer_code": "BLCA",
+        "symbol": "NECTIN4",
+        "agent": "enfortumab vedotin",
+        "phase": "approved",
+        "indication": "advanced urothelial",
+    }
+
+    assert indication_biomarker(her2) == "clinical_target_assay"
+    assert indication_biomarker(psma) == "imaging"
+    assert indication_biomarker(enfortumab) == "histology_only"
+    assert therapy_row_requires_confirmed_eligibility(her2) is True
+    assert therapy_row_requires_confirmed_eligibility(psma) is True
+    assert therapy_row_requires_confirmed_eligibility(enfortumab) is False
+
+
+def test_ras_wildtype_is_named_as_negative_molecular_eligibility():
+    row = {
+        "cancer_code": "COAD",
+        "symbol": "EGFR",
+        "agent": "cetuximab",
+        "phase": "approved",
+        "indication": "RAS-WT mCRC",
+        "requires_verified_alteration": True,
+    }
+
+    assert indication_biomarker(row) == "wildtype"
 
 
 def test_reports_prefer_explicit_treatment_path_tier_over_rationale_text():
@@ -499,3 +667,118 @@ def test_subtype_call_falls_back_to_parent_therapy_panel():
         )
         assert panel_code == parent, f"{code} did not fall back to {parent}"
         assert len(targets_df) > 0, f"{code} parent panel still empty"
+
+
+def test_crc_grouping_uses_colorectal_child_therapy_union():
+    """A decomposition-supported CRC parent call still needs the mCRC panel."""
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+        "CRC",
+        {
+            "cancer_type": "CRC",
+            "report_scope_cancer_type": "CRC",
+        },
+    )
+
+    assert panel_code == "CRC"
+    assert panel_subtype is None
+    assert len(targets) > 0
+    assert {"pembrolizumab", "trastuzumab + tucatinib"}.issubset(
+        set(targets["agent"])
+    )
+    assert "labetuzumab govitecan" not in set(targets["agent"])
+
+
+def test_crc_wildtype_eligibility_language_is_grammatical():
+    from trufflepig.reporting import expression_independent_interpretation
+
+    note = expression_independent_interpretation(
+        {
+            "symbol": "EGFR",
+            "agent": "cetuximab",
+            "indication": "RAS-WT mCRC",
+        }
+    )
+
+    assert "confirm required wild-type molecular status" in note
+    assert "status status" not in note
+    assert "confirm required wild-type molecular before" not in note
+
+
+def test_current_nutm_panel_adds_recruiting_bet_cdk46_trial():
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+        "NUTM",
+        {"cancer_type": "NUTM"},
+    )
+
+    assert panel_code == "NUTM"
+    assert panel_subtype is None
+    zen = targets.loc[targets["agent"] == "ZEN003694 + abemaciclib"]
+    assert len(zen) == 1
+    assert zen.iloc[0]["phase"] == "phase_1"
+    assert "NCT05372640" in zen.iloc[0]["rationale"]
+
+
+def test_current_blca_panel_names_approved_ev_pembrolizumab_combination():
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    _, _, targets = _curated_target_panel_for_sample(
+        "BLCA",
+        {"cancer_type": "BLCA"},
+    )
+
+    ev = targets.loc[
+        targets["agent"] == "enfortumab vedotin + pembrolizumab"
+    ]
+    assert len(ev) == 1
+    assert ev.iloc[0]["line_of_therapy"] == "first_line"
+    assert "not an eligibility test" in ev.iloc[0]["rationale"]
+
+
+def test_current_brca_panel_includes_parp_and_tnbc_immunotherapy_gates():
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    _, _, targets = _curated_target_panel_for_sample(
+        "BRCA",
+        {"cancer_type": "BRCA"},
+    )
+
+    parp = targets.loc[targets["agent"] == "olaparib / talazoparib"]
+    assert set(parp["symbol"]) == {"BRCA1", "BRCA2"}
+    assert parp["requires_verified_alteration"].all()
+    assert all("germline BRCA" in note for note in parp["eligibility_note"])
+
+    tnbc = targets.loc[
+        targets["agent"] == "pembrolizumab + chemotherapy"
+    ].iloc[0]
+    assert "PD-L1 CPS >=10" in tnbc["indication"]
+    assert tnbc["requires_verified_alteration"]
+
+
+def test_current_prad_panel_includes_2025_2026_biomarker_approvals():
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    _, _, targets = _curated_target_panel_for_sample(
+        "PRAD",
+        {"cancer_type": "PRAD"},
+    )
+
+    pten = targets.loc[
+        targets["agent"] == "capivasertib + abiraterone + prednisone"
+    ].iloc[0]
+    assert pten["symbol"] == "PTEN"
+    assert "VENTANA PTEN" in pten["eligibility_note"]
+
+    mcspc = targets.loc[
+        targets["agent"] == "niraparib + abiraterone + prednisone"
+    ].iloc[0]
+    assert mcspc["symbol"] == "BRCA2"
+    assert mcspc["requires_verified_alteration"]
+
+    mcrpc = targets.loc[
+        targets["agent"] == "olaparib + abiraterone + prednisone"
+    ]
+    assert set(mcrpc["symbol"]) == {"BRCA1", "BRCA2"}

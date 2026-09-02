@@ -13,6 +13,7 @@ import trufflepig.main as cli_mod
 import trufflepig.tumor_purity as purity_mod
 from trufflepig.decomposition.plot import (
     plot_decomposition_candidates,
+    plot_decomposition_component_breakdown,
     plot_decomposition_composition,
 )
 from trufflepig.tumor_purity import _summarize_candidate_family
@@ -208,10 +209,15 @@ def test_tumor_expr_plot_suppresses_near_zero_median_fold():
     )
     purity = {"overall_lower": 0.3, "overall_estimate": 0.5, "overall_upper": 0.7}
     fig = pte_mod.plot_tumor_expression_ranges(
-        df_ranges, purity, "BRCA", categories=["surface"]
+        df_ranges,
+        purity,
+        "SARC",
+        report_cancer_type="SARC_OS",
+        categories=["surface"],
     )
     try:
         texts = [t.get_text() for ax in fig.axes for t in ax.texts]
+        title = fig._suptitle.get_text()
     finally:
         plt.close(fig)
     # Near-zero-median gene shows the reference TPM, not the noise fold.
@@ -219,6 +225,7 @@ def test_tumor_expr_plot_suppresses_near_zero_median_fold():
     assert not any(t in ("137.4×", "137×") for t in texts)
     # A real fold off a detectable cohort median is preserved.
     assert "3.2×" in texts
+    assert "Tumor-cell-equivalent expression — SARC_OS (SARC reference)" in title
 
 
 def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
@@ -468,8 +475,9 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     readme = (tmp_path / "test-output" / "README.md").read_text()
     assert readme.startswith("# Trufflepig Analysis Output")
     assert readme.index("## Start here") < readme.index("## Data and normalization")
-    assert "Prefer the standalone decomposition figures" in readme
+    assert "Use `*-all-figures.pdf` for review and sharing" in readme
     assert "*-decomposition-composition.png" in readme
+    assert "*-decomposition-candidates.png` | Audit only" in readme
     assert "*-decomposition.png" not in readme
 
     # PR-4 (§2.5): the ~10 curated per-category panel scatters are audit-only. The
@@ -500,6 +508,15 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert any(
         "figures/out-sample-summary.png" in op for op in opened_paths
     )  # composite present in the audit packet
+
+    # The raw cancer-hypotheses bar chart is also audit-only. Its preliminary
+    # bulk-ranker leader seeds candidate generation, but a losing label should
+    # not appear as a patient-facing conclusion in all-figures.pdf.
+    assert (figures_dir / "out-cancer-hypotheses.png").exists()
+    assert f"{expected_prefix}-cancer-hypotheses.png" not in opened_paths
+    assert any(
+        "figures/out-cancer-hypotheses.png" in op for op in opened_paths
+    )
 
     # After the migration, `python -m trufflepig.main` no longer ships
     # a CLI — it's a redirect-only entry point that prints a
@@ -1304,6 +1321,13 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
         fig.axes[0].get_title()
         == "Sample composition — SARC (Sarcoma) (host context indeterminate)"
     )
+    component_fig = plot_decomposition_component_breakdown(
+        best,
+        title="TME cell-type breakdown — SARC (Sarcoma)",
+    )
+    component_text = {text.get_text() for text in component_fig.axes[0].texts}
+    assert component_text == {"9%"}
+    assert "1.20" not in component_text
 
     row = SimpleNamespace(
         purity=0.80,
@@ -1852,6 +1876,27 @@ def test_plot_sample_summary_distinguishes_final_call_from_ranker_leader():
     assert "Final report call: BRCA" in panel_text
     assert "Pre-adjudication ranker leader: HL" in panel_text
     assert "Lead label: HL" not in panel_text
+
+
+def test_plot_cancer_type_hypotheses_distinguishes_final_call_from_ranker_leader():
+    mock_analysis = {
+        "cancer_type": "CRC",
+        "top_cancers": [("SARC_DDLPS", 1.0), ("CRC", 0.65)],
+        "fit_quality": {"label": "ambiguous"},
+        "candidate_trace": [
+            {"code": "SARC_DDLPS", "support_fraction_of_top": 1.0},
+            {"code": "CRC", "support_fraction_of_top": 0.65},
+        ],
+    }
+
+    fig = purity_mod.plot_cancer_type_hypotheses(mock_analysis)
+
+    assert fig.axes[0].get_title() == (
+        "Cancer-type differential\n"
+        "Final report call: CRC\n"
+        "Pre-adjudication bulk-RNA ranker leader: SARC_DDLPS (ambiguous fit)"
+    )
+    assert "top RNA-support" not in fig.axes[0].get_title()
 
 
 def test_plot_sample_summary_allows_missing_reference_purity(monkeypatch):

@@ -5658,10 +5658,18 @@ def _entity_consensus_candidate_beam(
             "entity_consensus_previous_code": selected.cancer_type,
         }
     )
-    candidate.basis = (
-        f"the entity consensus beam and a majority of independent evidence "
-        f"groups support {candidate.cancer_type} over {selected.cancer_type}"
-    )
+    if consensus.get("majority_decisive_candidate"):
+        candidate.basis = (
+            "the entity consensus beam and a majority of independent evidence "
+            f"groups support {candidate.cancer_type} over "
+            f"{selected.cancer_type}"
+        )
+    else:
+        candidate.basis = (
+            "candidate-independent background decomposition recovered a "
+            "complete cancer-type program supporting "
+            f"{candidate.cancer_type} over {selected.cancer_type}"
+        )
     candidate.consider_for_report_label(
         selected_by="entity_evidence_consensus",
         can_select=True,
@@ -9705,10 +9713,10 @@ def _fallback_context_selected(
                 return abstention
     # The ranker already exposes calibrated ordinal tiers.  If several sibling
     # leaves occupy the same leading tier and no selector could admit one of
-    # them, the evidence supports their parent, not the alphabetically or
-    # numerically first leaf.  This is an ontology abstention, not a new score
-    # threshold, and prevents false leaf precision such as a three-way tied
-    # liposarcoma result becoming DDLPS by fallback alone.
+    # them, record their shared parent as the unresolved differential context.
+    # Do not manufacture a standalone parent hypothesis: an ordinal tie does
+    # not create independent tumor-identity evidence for the parent, and the
+    # synthetic row could otherwise become the baseline for later consensus.
     top_tier = hypothesis.details.get("support_rank_tier")
     parent_chain = _registry_parent_chain(top_code)
     parent_code = parent_chain[0] if parent_chain else ""
@@ -9727,38 +9735,23 @@ def _fallback_context_selected(
             parent_row.get("is_classification_target"),
             default=True,
         ):
-            abstention = _hypothesis(hypotheses, parent_code)
-            abstention.add_source("entity_evidence_consensus")
-            abstention.expression_reference_cancer_type = parent_code
-            abstention.reference_cancer_type = parent_code
-            abstention.broad_rna_support = max(
-                [hypothesis.broad_rna_support]
-                + [row.broad_rna_support for row in tied_siblings]
-            )
-            abstention.broad_rna_rank = hypothesis.broad_rna_rank
             tied_codes = [top_code, *(row.cancer_type for row in tied_siblings)]
-            abstention.details["fallback_context_adjudication"] = {
+            hypothesis.details["fallback_context_adjudication"] = {
                 "mode": "tied_sibling_parent_abstention",
                 "abstention_code": parent_code,
                 "support_rank_tier": top_tier,
                 "tied_sibling_codes": tied_codes,
             }
-            abstention.details["entity_consensus_adjudication_mode"] = (
-                "tied_sibling_parent_abstention"
+            hypothesis.related_context_code = parent_code
+            hypothesis.related_context_support = max(
+                [hypothesis.broad_rna_support]
+                + [row.broad_rna_support for row in tied_siblings]
             )
-            abstention.basis = (
+            hypothesis.basis = (
                 f"no tumor-identity selector resolved the leading tied siblings "
-                f"{', '.join(tied_codes)}; report scope abstained to their "
-                f"shared parent {parent_code}"
+                f"{', '.join(tied_codes)}; their shared parent {parent_code} "
+                "is retained as differential context only"
             )
-            abstention.consider_for_report_label(
-                selected_by="entity_evidence_consensus",
-                can_select=True,
-                blocking_reasons=(),
-                priority=(4, 1.0 + abstention.broad_rna_support),
-            )
-            if abstention.can_select_report_label:
-                return abstention
     hypothesis.report_label_candidate = True
     # This is a BLOCKED fallback context row (no label was selectable) admitted via the
     # pan-cancer signature ranker. Force the selector to the ranker rather than
@@ -9770,7 +9763,8 @@ def _fallback_context_selected(
     # drive the final report label.
     hypothesis.selected_by = "pan_cancer_signature_ranker"
     hypothesis.label_basis = "pan_cancer_signature_ranker"
-    hypothesis.label_status = hypothesis.label_status or "blocked"
+    if hypothesis.label_status in {"", "not_considered"}:
+        hypothesis.label_status = "blocked"
     if not hypothesis.blocking_reasons:
         hypothesis.blocking_reasons = (
             "pan-cancer signature-ranker evidence is candidate/context only; "

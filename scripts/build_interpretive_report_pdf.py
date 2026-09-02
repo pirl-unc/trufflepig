@@ -446,14 +446,17 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
                     max_width=PAGE_W - 2 * MARGIN - 40,
                 )
         else:
-            for line in (document.get("highlights") or [])[:3]:
-                y = _draw_labeled_bullet(
-                    draw,
-                    label="Therapy",
-                    body=line,
-                    y=y,
-                    max_width=PAGE_W - 2 * MARGIN - 40,
-                )
+            y = _draw_labeled_bullet(
+                draw,
+                label="Status",
+                body=(
+                    "No therapy eligibility is established by this RNA report. "
+                    "Use the molecular findings to prioritize confirmatory testing "
+                    "and clinical review."
+                ),
+                y=y,
+                max_width=PAGE_W - 2 * MARGIN - 40,
+            )
 
     # Top priority targets with tumor-source TPM and a normal-tissue safety band.
     targets = document.get("targets") or {}
