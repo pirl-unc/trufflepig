@@ -8,6 +8,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.26.1 — 2026-09-04 — report-language and therapy-shortlist corrections
+
+- Patient-facing cancer-type narratives now describe preliminary bulk patterns,
+  RNA background models, and inferred background context in plain, explicitly
+  model-estimated language without presenting a discarded subtype or an inferred
+  biopsy/metastatic site as a result.
+- Target-dependent trial rows with no estimated tumor support no longer bypass
+  the concise therapy shortlist because of hyphenated or co-expression wording.
+- Current-status report overrides identify the planned BPX-601 study as not yet
+  recruiting and the osteosarcoma trastuzumab deruxtecan study as suspended at
+  last curation; both continue to require live registry and site verification.
+- Interpretive PDF therapy tables label mixed gene/agent entries as
+  `Target / agent` rather than implying that an agent-only proposal is a target.
+
 ## 1.26.0 — 2026-09-04 — patient-facing RNA interpretation and decision provenance
 
 ### Cancer identity and composition

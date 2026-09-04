@@ -250,9 +250,10 @@ def _inferred_site_context_line(analysis) -> Optional[str]:
     if primary and isinstance(primary_score, (int, float)):
         primary_clause = f", above {primary} {float(primary_score):.2f}"
     return (
-        f"**Inferred site context:** likely {site} metastatic host/background "
-        f"signal ({tissue} score {score:.2f}{primary_clause}); inferred from "
-        "expression, not supplied as a user constraint."
+        f"**RNA background context:** the external reference comparison most "
+        f"closely matched {tissue} ({score:.2f}{primary_clause}). The RNA model "
+        f"uses a {site} background for decomposition and target attribution; "
+        "this does not establish the biopsy site or a metastatic site."
     )
 
 
@@ -851,7 +852,7 @@ def _top_therapies(
             # The full landscape in targets.md has the absence noted.
             continue
         attr_tumor = float(expr.get("attr_tumor_tpm") or 0.0)
-        attr_fraction = float(expr.get("attr_tumor_fraction") or 1.0)
+        attr_fraction = _brief_float(expr.get("attr_tumor_fraction"), 0.0)
         lineage_material = same_lineage_material_target_candidate(
             expr,
             target_row=t,
@@ -1532,31 +1533,32 @@ def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
             )
 
         if initial_code and initial_code != decomposition_decision.supported_code:
+            initial_description = (
+                "a sarcoma-like pattern"
+                if initial_code.startswith("SARC")
+                else f"a {_cancer_type_context_label(initial_code)}-like pattern"
+            )
             tissue_clause = (
-                f" while the tissue-composition screen was dominated by "
-                f"{tissue_name}"
+                f", alongside a strong {tissue_name} signal"
                 if tissue_name
                 else " before background separation"
             )
             return (
-                "**Cancer-type basis:** the bulk profile initially favored "
-                f"{_cancer_type_context_label(initial_code)}{tissue_clause}. "
-                "After background subtraction separated that structural signal "
-                "from the tumor residual, candidate-independent decomposition "
-                "recovered a complete and invariant "
+                "**Cancer-type basis:** the bulk profile initially showed "
+                f"{initial_description}{tissue_clause}. After the RNA model "
+                "separated estimated background from the remaining tumor-like "
+                "signal, decomposition consistently nominated "
                 f"{_cancer_type_context_label(decomposition_decision.supported_code)} "
-                "tumor program across the usable background models; a decomposition "
-                "refitted for that final scope reproduced it. The preliminary "
-                f"{_cancer_type_context_label(initial_code)} result remains only in "
-                "the audit differential and does not drive downstream interpretation. "
+                "across the usable background models; the final refit agreed. "
+                "The preliminary pattern remains in the audit detail but does not "
+                "drive downstream interpretation. "
                 "Confirm the RNA-inferred label with pathology or clinical diagnosis "
                 "before using the therapy shortlist."
             )
         return (
-            "**Cancer-type basis:** candidate-independent background "
-            f"decomposition recovered a complete and invariant {_cancer_type_context_label(decomposition_decision.supported_code)} "
-            "tumor program, and a decomposition refitted for that final "
-            "scope reproduced it. Conflicting bulk whole-profile signals remain "
+            "**Cancer-type basis:** the RNA background models consistently "
+            f"nominated {_cancer_type_context_label(decomposition_decision.supported_code)}, "
+            "and the final refit agreed. Conflicting bulk whole-profile signals remain "
             "host/background differential context; confirm the RNA-inferred "
             "label with pathology or clinical diagnosis before using the "
             "therapy shortlist."
@@ -1684,11 +1686,11 @@ def _lineage_panel_evidence_line(analysis, cancer_code: str) -> Optional[str]:
         attributed = ", ".join(background_attributed_low)
         promoted_clause = (
             " — the bulk panel remains incomplete because of "
-            f"{attributed}, but candidate-independent background "
-            "decomposition shows that a benign structural-tissue reference signal can explain "
+            f"{attributed}, but the RNA background model shows that a benign "
+            "structural-tissue reference signal can explain "
             "the expected-low violation without removing the CRC identity "
-            "program; the complete panel and ontology programs agree in the "
-            "background-separated tumor expression (this is not a claim that every measured "
+            "program; the marker and ontology programs support the same label "
+            "in the estimated tumor expression (this is not a claim that every measured "
             f"{attributed} transcript is non-tumor)"
         )
     elif promoted and promoted_code:

@@ -782,3 +782,50 @@ def test_current_prad_panel_includes_2025_2026_biomarker_approvals():
         targets["agent"] == "olaparib + abiraterone + prednisone"
     ]
     assert set(mcrpc["symbol"]) == {"BRCA1", "BRCA2"}
+
+    bpx = targets.loc[targets["agent"] == "BPX-601"].iloc[0]
+    assert "not yet recruiting" in bpx["rationale"]
+    assert "verify whether recruitment has opened" in bpx["eligibility_note"]
+    assert "recruiting phase 1" not in bpx["eligibility_note"]
+
+
+def test_directed_target_wording_is_not_misread_as_negative_assay_status():
+    from trufflepig.reporting import indication_biomarker
+
+    assert indication_biomarker(
+        {
+            "cancer_code": "PRAD",
+            "symbol": "PSCA",
+            "agent": "BPX-601",
+            "agent_class": "CAR-T",
+            "indication": "mCRPC",
+            "rationale": "PSCA-directed CAR-T study",
+        }
+    ) == "target_expression"
+
+    assert indication_biomarker(
+        {
+            "cancer_code": "PRAD",
+            "symbol": "PSCA",
+            "agent": "PSMA-PSCA bispecific",
+            "agent_class": "bispecific",
+            "indication": "mCRPC",
+            "rationale": "dual-targeting approach based on co-expression",
+        }
+    ) == "target_expression"
+
+
+def test_current_osteosarcoma_panel_does_not_describe_suspended_trial_as_open():
+    from trufflepig.brief import _curated_target_panel_for_sample
+
+    _, _, targets = _curated_target_panel_for_sample(
+        "SARC_OS",
+        {"cancer_type": "SARC_OS"},
+    )
+
+    row = targets.loc[
+        targets["agent"].str.contains("trastuzumab deruxtecan", case=False, na=False)
+    ].iloc[0]
+    assert "listed as suspended" in row["rationale"]
+    assert "do not treat it as an open osteosarcoma cohort" in row["rationale"]
+    assert "check for an open successor study" in row["eligibility_note"]
