@@ -68,6 +68,46 @@ def md_table_cell(value) -> str:
     )
 
 
+def component_display_label(value, *, include_model_role: bool = False) -> str:
+    """Reader label for a modeled attribution component.
+
+    In particular, internal ``matched_normal_*`` identifiers are external
+    normal reference templates, not a normal specimen collected from this
+    patient.
+    """
+
+    text = _clean_text(value).replace("_", " ")
+    if not text:
+        return "—"
+    lowered = text.lower()
+    if lowered == "tumor":
+        return (
+            "estimated tumor component (RNA model)"
+            if include_model_role
+            else "estimated tumor component"
+        )
+    if lowered.startswith("matched normal "):
+        tissue = text[len("matched normal ") :].strip()
+        suffix = (
+            " reference (external panel; RNA model; not patient matched)"
+            if include_model_role
+            else " reference (external panel)"
+        )
+        return f"{tissue} lineage{suffix}"
+    if lowered == "bone lineage stroma":
+        return (
+            "bone and marrow stroma proxy (external panel; RNA model)"
+            if include_model_role
+            else "bone and marrow stroma proxy (external panel)"
+        )
+    suffix = (
+        " reference component (RNA model)"
+        if include_model_role
+        else " reference component"
+    )
+    return f"{text}{suffix}"
+
+
 def _safe_float(value, default=0.0) -> float:
     try:
         result = float(value)
@@ -395,8 +435,8 @@ def _current_therapy_row_overrides(target_row) -> dict:
             ),
             "eligibility_note": (
                 "recruiting phase 1 trial; requires protocol-specific mCRPC, "
-                "prior-treatment, organ-function, and site eligibility; RNA is "
-                "context, not proof of eligibility"
+                "prior-treatment, organ-function, and site eligibility; RNA can "
+                "nominate follow-up but does not establish eligibility"
             ),
         }
     if cancer_code == "SARC_OS" and "trastuzumab deruxtecan" in agent:
@@ -800,12 +840,14 @@ def tumor_attribution_context(row):
 
     notes = []
     if _truthy(row.get("matched_normal_over_predicted")):
-        notes.append("matched-normal reference overshoots the sample")
+        notes.append(
+            "the external tissue reference predicts more RNA than was measured"
+        )
     if _truthy(row.get("low_purity_cap_applied")):
         notes.append("low-purity cap is active")
     if _truthy(row.get("sample_low_purity")):
         notes.append(
-            "low sample purity — tumor-source estimate is less certain "
+            "low estimated tumor fraction — the tumor expression estimate is less certain "
             "(small tumor fraction amplifies attribution noise)"
         )
     source_marker = _truthy(row.get("source_marker_non_tumor_prior"))
@@ -821,7 +863,7 @@ def tumor_attribution_context(row):
 
     if high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
         tier = "background_dominant"
-        label = "background-dominant"
+        label = "mostly background"
         summary = "non-tumor compartments remain the simpler explanation"
     elif (
         low_tpm >= 1.0
@@ -831,21 +873,21 @@ def tumor_attribution_context(row):
         and not source_marker
     ):
         tier = "tumor_supported"
-        label = "tumor-supported"
-        summary = "tumor-attributed signal stays material across the range"
+        label = "mostly tumor"
+        summary = "estimated tumor signal stays material across the range"
     else:
         tier = "mixed_source"
-        label = "mixed-source"
+        label = "mixed tumor and background"
         summary = "both tumor and benign/background sources remain plausible"
 
     if observed > 0:
         band = (
-            f"{mid_tpm:.0f} tumor-source bulk TPM "
-            f"(model interval {low_tpm:.0f}-{high_tpm:.0f}; "
+            f"{mid_tpm:.0f} estimated tumor TPM (RNA model; "
+            f"model interval {low_tpm:.0f}-{high_tpm:.0f}; "
             f"{mid_frac:.0%} tumor, {low_frac:.0%}-{high_frac:.0%} interval)"
         )
     else:
-        band = f"{mid_tpm:.0f} tumor-source bulk TPM"
+        band = f"{mid_tpm:.0f} estimated tumor TPM (RNA model)"
 
     return {
         "tier": tier,
@@ -869,8 +911,8 @@ def context_expression_context(row):
 
     This is intentionally separate from ``tumor_attribution_context``:
     ``tumor_cell_tpm`` / ``median_est`` can remain useful for cohort-context
-    and pathway reasoning, but it is not proof that the observed RNA came
-    from tumor cells when the source attribution says background-dominant.
+    and pathway reasoning, but it does not identify the expressing cells as
+    tumor when the source attribution says background-dominant.
     """
     mid_tpm = _safe_float(
         row.get("tumor_cell_tpm"),
@@ -907,17 +949,18 @@ def context_expression_band_cell(row):
 def tpm_semantics_note() -> str:
     """One reader-facing explanation of bulk vs modeled TPM columns."""
     return (
-        "**TPM semantics:** Bulk TPM is the measured RNA abundance in the mixed "
-        "specimen. Tumor-attributed bulk TPM is the share of that bulk signal "
-        "assigned to tumor rather than matched-normal/TME compartments. Context "
-        "TPM is a broader per-tumor-cell/cohort-context estimate used for cancer "
-        "context, pathway biology, and 'is this gene high in this specimen?' "
-        "reasoning; it can collapse to a single value when the range model has "
-        "no meaningful spread. Do not treat context TPM as tumor-source evidence "
-        "when the tumor-attribution row says background-dominant. For immune/stromal "
-        "markers, agent-only rows, and therapies whose eligibility does not depend "
-        "on target expression, bulk RNA is contextual and the clinical biomarker must come from the "
-        "indicated assay."
+        "**Expression provenance:** Patient bulk TPM is measured RNA abundance in "
+        "the mixed specimen. Estimated tumor TPM is the RNA model's estimate of the "
+        "tumor share of that measured bulk signal; it is not a purified tumor assay. "
+        "Healthy-tissue, stromal, and immune components are fitted from external "
+        "reference panels; no separate normal sample from this patient was analyzed. "
+        "Estimated tumor context TPM is a broader RNA model estimate used only for "
+        "pathway and relative-expression comparisons. Reference percentiles and "
+        "medians come from external cancer/healthy-tissue panels. Do not treat "
+        "context TPM as evidence of tumor origin when the RNA model assigns most of "
+        "the signal to background. For immune/stromal markers, agent-only rows, and "
+        "assay-gated therapies, RNA remains contextual and eligibility must come "
+        "from the indicated clinical assay."
     )
 
 
@@ -1085,7 +1128,7 @@ def expression_independent_rna_context(expression_row) -> str:
         return "target RNA not measured; eligibility is not inferred from expression"
     observed = _safe_float(expression_row.get("observed_tpm"), 0.0)
     return (
-        f"target RNA is context only (bulk {observed:.1f} TPM; "
+        f"target RNA is context only (patient bulk {observed:.1f} TPM, measured; "
         "it does not establish eligibility)"
     )
 
@@ -1244,6 +1287,46 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
+def direct_eligibility_input_supplied(analysis, biomarker: str) -> bool:
+    """Whether this run received an orthogonal input for a typed eligibility gate."""
+    if not isinstance(analysis, dict):
+        return False
+    constraints = analysis.get("analysis_constraints") or {}
+    if biomarker == "mutation":
+        return any(
+            bool(analysis.get(key))
+            for key in (
+                "fusion_inputs_supplied",
+                "variant_inputs_supplied",
+                "alteration_inputs_supplied",
+                "mutation_inputs_supplied",
+                "cnv_inputs_supplied",
+            )
+        ) or any(
+            bool(constraints.get(key))
+            for key in (
+                "fusions",
+                "fusion_file",
+                "variants",
+                "mutations",
+                "cnvs",
+                "alterations",
+            )
+        )
+    if biomarker == "msi_high":
+        return any(
+            bool(constraints.get(key))
+            for key in ("msi_status", "mmr_status", "msi", "mmr")
+        )
+    if biomarker == "tmb_high":
+        return any(bool(constraints.get(key)) for key in ("tmb", "tmb_status"))
+    if biomarker == "histology_only":
+        return bool(constraints.get("cancer_type")) or str(
+            analysis.get("cancer_type_source") or ""
+        ).strip() == "user-specified"
+    return False
+
+
 def supplied_variant_context_for_target_row(target_row, analysis) -> str:
     """Reader-facing summary of supplied variant evidence for a target row."""
     supported = supplied_variant_supports_target_row(target_row, analysis)
@@ -1382,15 +1465,15 @@ def target_reliability_reasons(row, *, category=None):
     source = tumor_attribution_context(row)
     reasons = []
     if source["tier"] == "background_dominant":
-        reasons.append("background-dominant")
+        reasons.append("mostly background")
     elif source["tier"] == "mixed_source":
-        reasons.append("mixed-source")
+        reasons.append("mixed tumor and background")
     if _truthy(row.get("matched_normal_over_predicted")):
-        reasons.append("matched-normal over-predicted")
+        reasons.append("external tissue reference predicts more RNA than measured")
     if _truthy(row.get("smooth_muscle_stromal_leakage")):
         reasons.append("possible smooth-muscle stromal leakage")
     if _truthy(row.get("tme_explainable")) and source["tier"] != "tumor_supported":
-        reasons.append("healthy-tissue-explainable")
+        reasons.append("could come from healthy tissue")
     if _truthy(row.get("source_marker_non_tumor_prior")):
         reasons.append("non-tumor lineage marker")
     if _truthy(row.get("low_purity_cap_applied")):
@@ -1412,7 +1495,7 @@ def same_lineage_material_target_candidate(
     Keep such rows provisional when there is a named clinical agent and a
     material tumor-inferred signal.
     """
-    if target_row is None or expression_independent_indication(target_row):
+    if target_row is None:
         return False
     phase = _clean_text(target_row.get("phase"))
     if phase not in {"approved", "phase_3", "phase_2", "phase_1"}:
@@ -1525,8 +1608,8 @@ def normal_expression_context(row):
     if _truthy(row.get("is_cta")) or category_label == "CTA":
         return {
             "tier": "cta_restricted",
-            "label": "CTA / immune-privileged",
-            "summary": "CTA-style restricted normal expression",
+            "label": "normally restricted mainly to testis or placenta references",
+            "summary": "restricted normal-reference expression pattern",
             "details": [],
         }
 
@@ -1565,7 +1648,7 @@ def normal_expression_context(row):
     if same_lineage:
         return {
             "tier": "same_lineage_expected",
-            "label": "same-lineage expected",
+            "label": "also expected in healthy tissue",
             "summary": f"benign {matched_tissue} lineage expression is expected",
             "details": details,
         }
@@ -1573,7 +1656,7 @@ def normal_expression_context(row):
     if vital_detail:
         return {
             "tier": "vital_tissue_concern",
-            "label": "vital-tissue concern",
+            "label": "important healthy tissue expression",
             "summary": vital_detail,
             "details": details[1:] if details else [],
         }
@@ -1581,7 +1664,7 @@ def normal_expression_context(row):
     if details:
         return {
             "tier": "broad_healthy_expression",
-            "label": "broad healthy expression",
+            "label": "broad healthy tissue expression",
             "summary": details[0],
             "details": details[1:],
         }
@@ -2564,7 +2647,7 @@ def interval_material_target_candidate(
     yet the clinical row should not disappear when the biology and indication
     otherwise fit.
     """
-    if target_row is None or expression_independent_indication(target_row):
+    if target_row is None:
         return False
     if not _clean_text(target_row.get("agent") if hasattr(target_row, "get") else ""):
         return False

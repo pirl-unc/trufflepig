@@ -226,7 +226,7 @@ DECOMPOSITION_PARAMETERS = {
                 "min_extra_fraction": 0.03,
                 "min_no_extra_host_tissue_score": 0.80,
             },
-            # Bone is stricter because the HPA "osteoblast" proxy is an
+            # Bone is stricter because the HPA bone-lineage/stroma proxy is an
             # undifferentiated/mesenchymal profile and otherwise absorbs
             # generic ECM genes such as COL1A1/SPP1. Require hard
             # osteogenic markers before treating met_bone as evidence for
@@ -1597,7 +1597,10 @@ def _fit_one_hypothesis(
         )
 
     if not gene_attr.empty and gene_attr["overexplained_tpm"].gt(0).mean() > 0.2:
-        warnings.append("Many genes are overexplained by the TME background")
+        warnings.append(
+            "Many genes are overexplained by the fitted stromal/immune "
+            "reference background"
+        )
 
     return DecompositionResult(
         template=template_name,

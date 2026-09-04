@@ -204,7 +204,12 @@ _TARGET_LINE_RE = re.compile(
     # scope group: allow one level of nested parens (e.g. "Approved (subset)")
     r"\(((?:[^()]|\([^()]*\))+)\)\s*\."
 )
-_TARGET_TPM_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s+tumor-source bulk TPM", re.I)
+_TARGET_TPM_RE = re.compile(
+    r"([0-9]+(?:\.[0-9]+)?)\s+(?:estimated\s+tumor\s+TPM|"
+    r"patient\s+tumor-attributed\s+TPM|"
+    r"tumor-source\s+bulk\s+TPM)",
+    re.I,
+)
 # Cancer-call prefixes: leading TCGA-style code (≥2 chars of upper-case
 # letters, digits, underscores, hyphens). The all-caps requirement
 # rejects "Cancer-type unclear" → "" (would otherwise greedy-match just

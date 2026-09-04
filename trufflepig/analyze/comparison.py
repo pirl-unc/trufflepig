@@ -436,7 +436,7 @@ def build_analyze_comparison_markdown(
         )
     lines.extend(
         [
-            "- Patient-facing LLM use requires diagnosis, stage, prior lines, current medications, MSI/MMR/TMB, mutations/fusions/CNVs, relevant imaging such as HER2/PSMA, and trial availability.",
+            "- Clinical interpretation still requires diagnosis, stage, prior lines, current medications, MSI/MMR/TMB, mutations/fusions/CNVs, relevant imaging such as HER2/PSMA, and current trial availability.",
         ]
     )
 
@@ -447,7 +447,9 @@ def build_analyze_comparison_markdown(
             key = re.sub(r"\s+", " ", caveat).strip().lower()
             if not key or key in seen:
                 continue
-            if key.startswith("patient-facing llm"):
+            if key.startswith("patient-facing llm") or key.startswith(
+                "clinical interpretation still requires"
+            ):
                 continue
             if key.startswith("technical-rna normalization"):
                 continue

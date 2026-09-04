@@ -358,7 +358,7 @@ def test_cancers_cli_counts_work_outside_repo_root(capsys, monkeypatch, tmp_path
     assert "B9 T7 L6 N9 R0" not in out
     assert "Coverage audit:" in out
     assert "Lineage" in out
-    assert "Matched normal" in out
+    assert "External normal reference" in out
     assert "Normal" in out
 
 

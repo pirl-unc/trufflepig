@@ -63,7 +63,7 @@ def test_amplification_cell_renders_amplified_not_broadly_expr():
     cell = _format_attribution_cell(row)
     assert "amplified" in cell
     assert "12.0" in cell
-    assert "broadly expr." not in cell
+    assert "broadly expressed" not in cell
 
 
 def test_amplification_does_not_trigger_confidence_downgrade():
@@ -278,14 +278,17 @@ def test_matched_normal_over_predicted_downgrades_and_tags():
         "tme_explainable": True,
     }
     cell = _format_attribution_cell(row)
-    assert "over-predicted" in cell, f"cell missing over-predicted tag: {cell!r}"
+    assert "external tissue reference predicts more RNA than measured" in cell
 
     purity_tier = ConfidenceTier(tier="high", reasons=[])
     tier = compute_target_confidence(row, purity_tier)
     assert tier.tier in ("moderate", "low"), (
         f"over-predicted row should trip the tier: {tier}"
     )
-    assert any("over-predicts" in r for r in tier.reasons), tier.reasons
+    assert any(
+        "external tissue reference predicts more RNA than measured" in r
+        for r in tier.reasons
+    ), tier.reasons
 
 
 def test_truly_broadly_expressed_still_downgrades():
@@ -703,8 +706,8 @@ def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
     assert symbols == ["FOLH1"]
 
     bullet = _format_therapy_bullet(top[0][0], top[0][1], target_panel=targets_df)
-    assert "same-lineage expected" in bullet
-    assert "tumor-supported" in bullet
+    assert "also expected in healthy tissue" in bullet
+    assert "mostly tumor" in bullet
     assert "Provisional:" not in bullet
 
 
@@ -829,7 +832,7 @@ def test_pmmr_text_does_not_get_classified_as_msi_high():
         "agent_class": "immune_checkpoint",
         "indication": "pMMR colorectal cancer with PD-L1 expression",
     }
-    assert indication_biomarker(row) == "target_expression"
+    assert indication_biomarker(row) == "clinical_target_assay"
 
 
 # ── attribution cell rendering ──────────────────────────────────────────
@@ -847,7 +850,7 @@ def test_attribution_cell_appends_broadly_expr_tag():
         "broadly_expressed": True,
     }
     cell = _format_attribution_cell(row)
-    assert "broadly expr." in cell
+    assert "broadly expressed" in cell
     assert "770" in cell
 
 
@@ -863,7 +866,7 @@ def test_attribution_cell_no_tag_on_tissue_restricted():
         "broadly_expressed": False,
     }
     cell = _format_attribution_cell(row)
-    assert "broadly expr." not in cell
+    assert "broadly expressed" not in cell
 
 
 def test_epithelial_context_caps_caf_marker_to_non_tumor_fraction():
@@ -908,6 +911,6 @@ def test_tumor_attribution_context_adds_low_sample_purity_note():
         "attr_support_fraction": 1.0,
     }
     with_flag = tumor_attribution_context({**base, "sample_low_purity": True})
-    assert any("low sample purity" in n for n in with_flag["notes"])
+    assert any("low estimated tumor fraction" in n for n in with_flag["notes"])
     without = tumor_attribution_context(base)
     assert not any("low sample purity" in n for n in without["notes"])

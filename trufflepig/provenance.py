@@ -21,6 +21,7 @@ import numpy as np
 
 from .report_view import ReportView
 from .reporting import (
+    component_display_label,
     partition_tumor_core_rows,
     summarize_reliability_reasons,
 )
@@ -32,7 +33,7 @@ from .sample_context import (
 
 
 def _compartment_label(comp: str) -> str:
-    return comp.replace("matched_normal_", "matched-normal ").replace("_", " ")
+    return component_display_label(comp, include_model_role=True)
 
 
 def _display_sample_id(sample_id: Optional[str]) -> Optional[str]:
@@ -152,7 +153,7 @@ def build_provenance_md(
     lines.append("")
 
     # Coarse composition.
-    lines.append("## Tumor Purity and Coarse Composition\n")
+    lines.append("## Estimated Tumor Fraction and Coarse Composition\n")
     best = decomp_results[0] if decomp_results else None
     if best is not None:
         fractions = dict(getattr(best, "fractions", {}) or {})
@@ -182,14 +183,22 @@ def build_provenance_md(
             non_tumor = [(c, f * rescale) for c, f in non_tumor]
         top = non_tumor[:5]
         if purity_is_unresolved:
-            lines.append(
-                "**Quantitative purity is unresolved.** Independent estimators "
-                "support incompatible scenarios, so this page does not assign a "
-                "consensus tumor/non-tumor percentage."
-            )
+            if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+                lines.append(
+                    "**Estimated tumor fraction is unresolved.** Tumor and benign "
+                    "same-lineage cells share the RNA programs used for subtraction, "
+                    "so this page does not assign a resolved malignant-versus-benign "
+                    "percentage."
+                )
+            else:
+                lines.append(
+                    "**Quantitative purity is unresolved.** Independent estimators "
+                    "support incompatible scenarios, so this page does not assign a "
+                    "consensus tumor/non-tumor percentage."
+                )
             source_labels = {
                 "background_residual": "background-residual decomposition",
-                "lineage_panel": "matched-normal lineage model",
+                "lineage_panel": "healthy-tissue lineage reference model",
                 "signature": "upstream expression model",
             }
             scenario_text = []
@@ -204,11 +213,13 @@ def build_provenance_md(
                 )
             if scenario_text:
                 lines.append("\nEstimator scenarios: " + "; ".join(scenario_text) + ".")
-            parts = [f"operational tumor model {tumor_frac:.0%}"]
+            parts = [f"operational estimated tumor fraction {tumor_frac:.0%}"]
             fraction_prefix = "Selected operational decomposition fractions"
         else:
-            parts = [f"**tumor {tumor_frac:.0%}**"]
-            fraction_prefix = "Fitted fractions"
+            parts = [
+                f"**estimated tumor fraction {tumor_frac:.0%} (RNA model)**"
+            ]
+            fraction_prefix = "Estimated fractions from the selected RNA model"
         for comp, frac in top:
             if frac >= 0.005:
                 parts.append(f"{_compartment_label(comp)} {frac:.0%}")
@@ -225,8 +236,9 @@ def build_provenance_md(
         lines.append(
             "\nEach non-tumor component is subtracted from the observed "
             "TPM per gene (#108). A target whose signal is mostly assigned "
-            "to a non-tumor compartment is flagged TME-dominant in the "
-            "target tables."
+            "to an external non-tumor reference component is flagged "
+            "as mostly background in the target tables. All fractions in this "
+            "section are estimates from the RNA model, not direct cell-count measurements."
         )
     else:
         lines.append("*No decomposition result available for this sample.*")
@@ -245,9 +257,10 @@ def build_provenance_md(
                     continue
                 if comp.startswith("matched_normal_"):
                     subtype_notes.append(
-                        f"Matched-normal {comp.replace('matched_normal_', '')} "
-                        f"compartment present at {frac:.0%} — subtracted "
-                        "before target-expression ranking."
+                        f"{_compartment_label(comp).capitalize()} present at "
+                        f"{frac:.0%} — this comes from an external healthy-tissue "
+                        "reference panel, not a separate normal sample from this patient, and is "
+                        "subtracted before target-expression ranking."
                     )
                 elif any(k in comp.lower() for k in ("caf", "tam", "mdsc", "treg")):
                     subtype_notes.append(
@@ -259,13 +272,13 @@ def build_provenance_md(
         else:
             lines.append(
                 "No activated-subtype refinements flagged above the 1% "
-                "threshold. Tumor-subtracted TPMs use the coarse compartment "
+                "threshold. Estimated tumor TPMs use the coarse compartment "
                 "fit only."
             )
     lines.append("")
 
     # Tumor-linked expression.
-    lines.append("## Tumor-Attributed Expression\n")
+    lines.append("## Estimated Tumor Expression (RNA Model)\n")
     if ranges_df is not None and len(ranges_df):
         if "attribution" in ranges_df.columns:
             supported_core, provisional_core, _ = partition_tumor_core_rows(
@@ -274,15 +287,15 @@ def build_provenance_md(
             )
             n_core = int(len(supported_core))
             lines.append(
-                f"After subtracting the fitted non-tumor compartments, "
-                f"**{n_core} genes** retain ≥1 TPM of tumor-supported "
-                "tumor-attributed expression."
+                f"After the RNA model subtracts fitted external-reference background, "
+                f"**{n_core} genes** retain ≥1 estimated tumor TPM."
             )
             if len(provisional_core):
                 reason_summary = summarize_reliability_reasons(provisional_core)
                 lines.append(
                     f"\nAn additional **{len(provisional_core)} genes** retain residual "
-                    "tumor-attributed TPM but remain mixed-source in the markdown layer"
+                    "estimated tumor TPM but remain mixed source "
+                    "in the markdown layer"
                     + (f" ({reason_summary})." if reason_summary else ".")
                 )
             # Top 5 supported tumor-linked genes.
@@ -292,11 +305,14 @@ def build_provenance_md(
                     f"{str(r['symbol'])} ({float(r['attr_tumor_tpm']):.0f})"
                     for _, r in top.iterrows()
                 )
-                lines.append(f"\nTop tumor-linked genes (symbol, tumor TPM): {names}.")
+                lines.append(
+                    f"\nTop genes by estimated tumor TPM "
+                    f"(symbol, estimated TPM): {names}."
+                )
             elif len(provisional_core):
                 lines.append(
-                    "\nNo gene cleared the current tumor-supported filter; "
-                    "use the mixed-source evidence tables and the TSV for manual review."
+                    "\nNo gene cleared the current tumor support filter; "
+                    "use the mixed tumor/background evidence tables and the TSV for manual review."
                 )
     else:
         lines.append("*No target-expression ranges available.*")
@@ -323,7 +339,7 @@ def build_provenance_md(
             f"**Chain summary:** observed expression → library-prep-aware "
             f"artifact expectations → preservation-adjusted quantification → "
             f"decomposition subtracts {1 - tumor_pct:.0%} as non-tumor "
-            "compartments → residual is the tumor-linked signal used for "
+            "reference components → the RNA model's estimated tumor signal is used for "
             "therapy-target ranking."
         )
     lines.append("")
@@ -368,12 +384,12 @@ def plot_provenance_funnel(
             color="#9e9e9e",
             edgecolor="white",
             hatch="//",
-            label="composition unresolved",
+            label="RNA model could not resolve composition",
         )
         ax.text(
             0.5,
             0,
-            "Tumor / non-tumor\ncomposition unresolved",
+            "Estimated patient tumor / non-tumor\ncomposition unresolved",
             ha="center",
             va="center",
             fontsize=10,
@@ -383,14 +399,18 @@ def plot_provenance_funnel(
         ax.set_xlim(0, 1.0)
         ax.set_yticks([])
         ax.set_xlabel("")
-        ax.set_title("Sample composition — unresolved", fontsize=11, fontweight="bold")
+        ax.set_title(
+            "Estimated RNA composition — unresolved",
+            fontsize=11,
+            fontweight="bold",
+        )
         ax.legend(
             loc="upper center",
             bbox_to_anchor=(0.5, -0.2),
             fontsize=8,
             frameon=False,
         )
-        plt.tight_layout()
+        fig.subplots_adjust(left=0.04, right=0.98, top=0.78, bottom=0.32)
         fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
         plt.close(fig)
         return save_to_filename
@@ -402,7 +422,9 @@ def plot_provenance_funnel(
     )
     rest_frac = sum(f for c, f in fractions.items() if f <= 0.005 and f > 0)
 
-    labels = ["tumor-linked"] + [_compartment_label(c) for c, _ in non_tumor]
+    labels = ["Patient tumor contribution (estimated by RNA model)"] + [
+        _compartment_label(c) for c, _ in non_tumor
+    ]
     values = [tumor_frac] + [f for _, f in non_tumor]
     if rest_frac > 0:
         labels.append("other")
@@ -422,7 +444,7 @@ def plot_provenance_funnel(
             ax.text(
                 left + val / 2,
                 0,
-                f"{label}\n{val:.0%}",
+                f"{val:.0%}",
                 ha="center",
                 va="center",
                 fontsize=9,
@@ -434,7 +456,7 @@ def plot_provenance_funnel(
     ax.set_xlim(0, max(1.0, left))
     ax.set_yticks([])
     ax.set_xlabel("")
-    ax.set_title("Sample composition", fontsize=11, fontweight="bold")
+    ax.set_title("Estimated RNA composition", fontsize=11, fontweight="bold")
     ax.legend(
         loc="upper center",
         bbox_to_anchor=(0.5, -0.2),
@@ -443,7 +465,7 @@ def plot_provenance_funnel(
         frameon=False,
     )
 
-    plt.tight_layout()
+    fig.subplots_adjust(left=0.04, right=0.98, top=0.78, bottom=0.34)
     fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
     plt.close(fig)
     return save_to_filename

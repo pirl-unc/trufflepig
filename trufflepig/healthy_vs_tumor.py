@@ -305,7 +305,7 @@ class TissueCompositionSignal:
                 f"hits (top: {top_of})."
             )
         return (
-            f"Top normal-tissue matches: {tissues}. "
+            f"Top external healthy-tissue reference matches: {tissues}. "
             f"Top cancer-reference matches: {cohorts}. "
             f"Proliferation panel {self.proliferation_log2_mean:.1f} log2-TPM "
             f"(of {self.proliferation_genes_observed}/{len(_PROLIFERATION_PANEL)} "
@@ -379,8 +379,9 @@ class TissueCompositionSignal:
         )
         if self.cancer_hint == "healthy-dominant":
             return (
-                f"**Tissue composition hint: healthy tissue dominant.** Sample profile "
-                f"correlates with normal **{tissue_name}** (ρ={rho:.2f}) more "
+                "**Tissue composition hint: bulk profile is closer to healthy-tissue "
+                "references.** Sample profile correlates with the external "
+                f"**{tissue_name}** reference (ρ={rho:.2f}) more "
                 f"than any cancer reference (best {cohort} ρ={cohort_rho:.2f}); "
                 f"proliferation panel quiet "
                 f"({self.proliferation_log2_mean:.1f} log2-TPM). Downstream "
@@ -407,31 +408,34 @@ class TissueCompositionSignal:
                 if not structural_controls_downstream:
                     return (
                         f"**Tissue composition hint: structural ambiguity (lymphoid).** Top "
-                        f"normal match is **{tissue_name}** (ρ={rho:.2f}); top "
-                        f"cancer-reference match is {cohort} (ρ={cohort_rho:.2f}). Normal "
-                        f"lymphoid tissue and lymphoid malignancy are indist-"
-                        f"inguishable by bulk-RNA correlation. The {cohort} "
+                        f"external healthy-tissue reference match is **{tissue_name}** "
+                        f"(ρ={rho:.2f}); top cancer-reference match is {cohort} "
+                        f"(ρ={cohort_rho:.2f}). Benign "
+                        f"lymphoid tissue and lymphoid malignancy are "
+                        f"indistinguishable by bulk-RNA correlation. The {cohort} "
                         f"structural signal is retained as background/differential "
                         f"context; downstream report sections use {active_label}."
                     )
                 return (
                     f"**Tissue composition hint: structural ambiguity (lymphoid).** Top "
-                    f"normal match is **{tissue_name}** (ρ={rho:.2f}); top "
-                    f"cancer-reference match is {cohort} (ρ={cohort_rho:.2f}). Normal "
-                    f"lymphoid tissue and lymphoid malignancy are indist-"
-                    f"inguishable by bulk-RNA correlation. Proceeding with "
+                    f"external healthy-tissue reference match is **{tissue_name}** "
+                    f"(ρ={rho:.2f}); top cancer-reference match is {cohort} "
+                    f"(ρ={cohort_rho:.2f}). Benign "
+                    f"lymphoid tissue and lymphoid malignancy are "
+                    f"indistinguishable by bulk-RNA correlation. Proceeding with "
                     f"the {cohort}-specific downstream analysis under the "
                     f"tumor-sample prior, but treat the cancer call and "
-                    f"purity as soft-confidence — the purity estimate itself "
+                    f"estimated tumor fraction as soft-confidence — the estimate itself "
                     f"is unreliable in this regime."
                 )
             if not structural_controls_downstream:
                 return (
                     f"**Tissue composition hint: structural ambiguity (mesenchymal).** Top "
-                    f"normal match is **{tissue_name}** (ρ={rho:.2f}); top cancer-"
+                    f"external healthy-tissue reference match is **{tissue_name}** "
+                    f"(ρ={rho:.2f}); top cancer-"
                     f"reference match is {cohort} (ρ={cohort_rho:.2f}). Well-differentiated "
                     f"sarcomas share a mesenchymal expression program with "
-                    f"normal smooth muscle / adipose / muscle / myometrium, so "
+                    f"benign smooth muscle / adipose / muscle / myometrium, so "
                     f"bulk-RNA correlation cannot cleanly distinguish tumor "
                     f"from tissue-of-origin. The {cohort} structural signal is "
                     f"retained as background/differential context; downstream "
@@ -439,10 +443,11 @@ class TissueCompositionSignal:
                 )
             return (
                 f"**Tissue composition hint: structural ambiguity (mesenchymal).** Top "
-                f"normal match is **{tissue_name}** (ρ={rho:.2f}); top cancer-"
+                f"external healthy-tissue reference match is **{tissue_name}** "
+                f"(ρ={rho:.2f}); top cancer-"
                 f"reference match is {cohort} (ρ={cohort_rho:.2f}). Well-differentiated "
                 f"sarcomas share a mesenchymal expression program with "
-                f"normal smooth muscle / adipose / muscle / myometrium, so "
+                f"benign smooth muscle / adipose / muscle / myometrium, so "
                 f"bulk-RNA correlation cannot cleanly distinguish tumor "
                 f"from tissue-of-origin. Proceeding with the {cohort}-"
                 f"specific downstream analysis under the tumor-sample prior "
@@ -450,10 +455,11 @@ class TissueCompositionSignal:
                 f"below as the primary tumor-evidence channels."
             )
         return (
-            f"**Tissue composition hint: composition ambiguous.** Top normal-tissue match "
-            f"is **{tissue_name}** (ρ={rho:.2f}); top cancer-reference match is {cohort} "
-            f"(ρ={cohort_rho:.2f}). Could be normal tissue or a low-purity "
-            f"tumor — the downstream cancer call is soft-confidence pending "
+            "**Tissue composition hint: composition ambiguous.** Top external "
+            f"healthy-tissue reference match is **{tissue_name}** (ρ={rho:.2f}); "
+            f"top cancer-reference match is {cohort} (ρ={cohort_rho:.2f}). The "
+            "specimen could be dominated by benign tissue or contain a low tumor "
+            "fraction; the downstream cancer call remains soft-confidence pending "
             f"lineage / purity / therapy-axis evidence."
         )
 

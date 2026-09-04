@@ -4175,7 +4175,7 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     context_basis = "normal_tissue_match" if tissue_matches else "raw_signal_dominance"
     if tissue_matches:
         rescue_message = (
-            f"Tissue composition screen and expected normal-tissue context support {coarse_code}; "
+            f"Tissue composition screen and external healthy-tissue reference context support {coarse_code}; "
             "suspending the orphan family penalty for the auto-detected call."
         )
     else:
@@ -5318,12 +5318,12 @@ def plot_sample_summary(
         comp_xlabel = "Estimated population / context (%)"
         detail_prefix = "Population consistency"
     else:
-        main_label = "Tumor"
-        stromal_label = "Stromal"
-        immune_label = "Immune"
-        comp_title = "Sample Composition"
-        comp_xlabel = "Estimated composition (%)"
-        detail_prefix = "Tumor purity"
+        main_label = "Estimated tumor fraction (RNA model)"
+        stromal_label = "Estimated stromal reference contribution"
+        immune_label = "Estimated immune reference contribution"
+        comp_title = "Estimated Sample Composition"
+        comp_xlabel = "Estimated share of the RNA composition model (%)"
+        detail_prefix = "Estimated tumor fraction"
 
     if purity_is_unresolved:
         # Do not turn an operational 5% scenario into a definitive 95%
@@ -5383,7 +5383,7 @@ def plot_sample_summary(
             operational += f" [{lo:.0%}–{hi:.0%}]"
         source_labels = {
             "background_residual": "background residual",
-            "lineage_panel": "matched-normal lineage",
+            "lineage_panel": "healthy-tissue lineage reference model",
             "signature": "upstream expression",
         }
         scenario_values = []

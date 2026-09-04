@@ -382,10 +382,11 @@ def _candidate_sources_from_rna(ranges_df, *, max_sources: int = 4) -> list[dict
                 "kind": "rna_high_source_gene",
                 "gene": row["symbol"],
                 "label": (
-                    f"RNA-high {row['symbol']} ({row['tpm']:.0f} tumor-source TPM"
+                    f"RNA-high {row['symbol']} ({row['tpm']:.0f} patient "
+                    "estimated tumor TPM (RNA model)"
                     f"{fold_clause}{percentile_clause})"
                 ),
-                "mechanism": "high receptor/kinase RNA can be compatible with RTK-driven MAPK signaling but is not variant proof",
+                "mechanism": "high receptor/kinase RNA can nominate RTK/MAPK follow-up but cannot establish a variant",
                 "confidence": "expression-only",
             }
         )
