@@ -1021,7 +1021,7 @@ def test_matched_normal_attribution_uses_decomposition_residual():
     tumor_widths = [patch.get_width() for patch in ax.patches[:2]]
     assert tumor_widths[0] == pytest.approx(5.0)
     labels = "\n".join(label.get_text() for label in ax.get_yticklabels())
-    assert "tissue-explainable" in labels
+    assert "could come from healthy tissue" in labels
     assert "\u26a0" not in labels
 
 
@@ -1093,7 +1093,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     pure_text = (tmp_path / "pure-targets.md").read_text()
     assert "Population-expression range" in pure_text
-    assert "Context TPM (model)" in pure_text
+    assert "Estimated tumor context TPM (RNA model)" in pure_text
 
     heme_prefix = str(tmp_path / "heme-targets")
     _write_target_report(
@@ -1108,7 +1108,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     heme_text = (tmp_path / "heme-targets-targets.md").read_text()
     assert "Malignant-lineage expression range" in heme_text
-    assert "Context TPM (model)" in heme_text
+    assert "Estimated tumor context TPM (RNA model)" in heme_text
 
 
 def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_path):
@@ -1212,11 +1212,12 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
 
     text = (tmp_path / "coad-targets.md").read_text()
     assert "## Tumor context for interpretation" in text
-    assert "## Therapy Prioritization at a Glance" in text
+    assert "## RNA Target and Therapy Priorities at a Glance" in text
     assert "**Working label**: **COAD (Colon Adenocarcinoma)**" in text
     assert "Retained alternatives" in text
     assert "downstream target and biomarker interpretation below uses the working label" in text
-    assert "colon-like matched-normal reference" in text
+    assert "colon healthy-tissue reference" in text
+    assert "no separate normal sample from this patient was analyzed" in text
     assert "CEACAM5" in text
     assert "MAGEA4" in text
     assert "WT1" in text
@@ -1488,9 +1489,9 @@ def test_generate_target_report_filters_unreliable_rows_from_headlines(tmp_path)
     )
 
     text = (tmp_path / "filtered-targets.md").read_text()
-    context_section = text.split("## Therapy Prioritization at a Glance", 1)[1].split(
-        "##", 1
-    )[0]
+    context_section = text.split(
+        "## RNA Target and Therapy Priorities at a Glance", 1
+    )[1].split("##", 1)[0]
     assert "GOOD1" in context_section
     assert "BAD_TME" not in context_section
     assert "BAD_BROAD" not in context_section
@@ -1823,12 +1824,15 @@ def test_plot_sample_summary_abstains_from_composition_when_purity_is_unresolved
     )
 
     panel = fig.axes[1]
-    assert panel.get_title() == "Sample Composition — Purity Unresolved"
+    assert (
+        panel.get_title()
+        == "Estimated Sample Composition — Purity Unresolved"
+    )
     assert [text.get_text() for text in panel.get_legend().get_texts()] == [
         "Composition unresolved"
     ]
     panel_text = "\n".join(text.get_text() for text in panel.texts)
-    assert "Tumor purity: quantitatively unresolved" in panel_text
+    assert "Estimated tumor fraction: quantitatively unresolved" in panel_text
     assert "Operational model: 5% [1%–12%] (not consensus)" in panel_text
     assert "upstream expression 43% [32%–55%]" in panel_text
     assert "95%" not in panel_text

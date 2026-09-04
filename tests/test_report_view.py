@@ -95,6 +95,24 @@ def test_report_view_freezes_discordant_purity_status_and_scenarios():
     )
 
 
+def test_report_view_freezes_same_lineage_unresolved_reason():
+    analysis = _read_analysis()
+    analysis["purity"].update(
+        {
+            "quantitative_status": "discordant_estimators",
+            "quantitative_unresolved_reason": "same_lineage_not_identifiable",
+        }
+    )
+
+    view = build_report_view(analysis)
+
+    assert view.purity.unresolved_reason == "same_lineage_not_identifiable"
+    assert (
+        view.public_dict()["purity_unresolved_reason"]
+        == "same_lineage_not_identifiable"
+    )
+
+
 def test_alternatives_are_ranker_candidates_minus_the_headline():
     view = build_report_view(_read_analysis())
     assert view.cancer_type == "READ"

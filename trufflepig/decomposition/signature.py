@@ -44,6 +44,13 @@ COMPONENT_TO_HPA = {
     "astrocyte": ["Astrocytes"],
     "neuron": ["Excitatory neurons", "Inhibitory neurons"],
     "pneumocyte": ["Alveolar cells type 1", "Alveolar cells type 2"],
+    # HPA does not contain distinct osteoblast and marrow-stromal profiles.
+    # Use one honest proxy in solid bone-site models instead of presenting two
+    # duplicate columns as separately resolved biology.
+    "bone_lineage_stroma": ["Undifferentiated cells"],
+    # Retained for backward-compatible callers and heme models. Do not place
+    # both of these aliases in the same template: their reference vectors are
+    # identical in the current HPA bundle.
     "osteoblast": ["Undifferentiated cells"],
     "marrow_stroma": ["Undifferentiated cells"],
     "mesothelial": ["Mesothelial cells"],
@@ -276,6 +283,15 @@ COMPONENT_MARKERS = {
     "astrocyte": ["GFAP", "AQP4", "ALDH1L1", "SLC1A3"],
     "neuron": ["RBFOX3", "SNAP25", "SYT1", "GAP43"],
     "pneumocyte": ["SFTPA1", "SFTPA2", "SFTPB", "SFTPC", "NAPSA"],
+    "bone_lineage_stroma": [
+        "BGLAP",
+        "ALPL",
+        "SPP1",
+        "COL1A1",
+        "CXCL12",
+        "VCAM1",
+        "KITLG",
+    ],
     "osteoblast": ["BGLAP", "ALPL", "SPP1", "COL1A1"],
     "marrow_stroma": ["CXCL12", "VCAM1", "KITLG", "COL1A1"],
     "mesothelial": ["MSLN", "ITLN1", "KRT19", "KRT8"],

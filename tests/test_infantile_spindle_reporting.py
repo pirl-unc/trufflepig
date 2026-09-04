@@ -360,4 +360,5 @@ def test_full_report_driver_spectrum_preserves_entity_and_frequency(monkeypatch)
     assert "SARC_IFS" not in exact
     assert "| SARC_IFS | ETV6-NTRK3 | 18/27 (67%) |" in differential
     assert "| CMN | EGFR kinase-domain ITD | 43/80 (54%) |" in differential
-    assert "not proof of diagnosis in this sample" in differential
+    assert "prioritize confirmatory testing" in differential
+    assert "do not establish this sample's diagnosis" in differential

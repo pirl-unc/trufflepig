@@ -34,6 +34,7 @@ class Purity:
     confidence: ConfidenceTier
     status: str
     scenarios: Tuple[PurityScenario, ...]
+    unresolved_reason: Optional[str] = None
 
     @classmethod
     def from_analysis(cls, analysis: Mapping[str, Any]) -> "Purity":
@@ -93,6 +94,11 @@ class Purity:
             confidence=purity_confidence_for_analysis(analysis),
             status=status,
             scenarios=tuple(scenarios),
+            unresolved_reason=(
+                str(purity.get("quantitative_unresolved_reason"))
+                if purity.get("quantitative_unresolved_reason")
+                else None
+            ),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -105,6 +111,7 @@ class Purity:
             "purity_confidence": self.confidence.tier,
             "purity_status": self.status,
             "purity_scenarios": self.scenarios,
+            "purity_unresolved_reason": self.unresolved_reason,
         }
 
 

@@ -896,15 +896,15 @@ def test_recommended_targets_skips_tme_dominant_rows():
     with open(f"{tmp_prefix}-targets.md", encoding="utf-8") as target_file:
         targets = target_file.read()
 
-    # The Recommended Targets section must not list CD74 as a best
+    # The RNA Target Nominations section must not list CD74 as a prioritized
     # surface target — it was low-confidence flagged.
-    recs_block = targets.split("## Recommended Targets Summary")[-1]
-    assert "**Best surface targets**" in recs_block
+    recs_block = targets.split("## RNA Target Nominations")[-1]
+    assert "**Surface-target RNA priorities:**" in recs_block
     # Clean ADAM9 should be there
     assert "ADAM9" in recs_block
     # CD74 is in the full targets table above but NOT in the
     # recommendations block
-    assert "CD74" not in recs_block.split("**Best CTA targets**")[0]
+    assert "CD74" not in recs_block.split("**CTA RNA follow-up priorities:**")[0]
 
 
 def test_target_report_explains_blocked_fn1_pyx201_call():
@@ -1072,12 +1072,12 @@ def test_target_report_falls_back_to_mixed_source_surface_targets(tmp_path):
         ranges_df, analysis, prefix, cancer_type="PRAD", purity_result=purity
     )
     targets = (tmp_path / "sample-targets.md").read_text()
-    recs_block = targets.split("## Recommended Targets Summary")[-1]
+    recs_block = targets.split("## RNA Target Nominations")[-1]
 
-    assert "no surface target stayed tumor-supported" in targets
-    assert "**Best surface targets**" in recs_block
+    assert "no surface target stayed mostly tumor" in targets
+    assert "**Surface-target RNA priorities:**" in recs_block
     assert "FOLH1" in recs_block
-    assert "mixed-source rather than tumor-supported" in recs_block
+    assert "mixed between tumor and background" in recs_block
 
 
 def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
@@ -1155,14 +1155,17 @@ def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
     )
     targets = (tmp_path / "pfo017-liver-targets.md").read_text()
 
-    unsupported_heading = "### Other curated rows — not supported by this sample"
+    unsupported_heading = (
+        "### Other curated rows — eligibility or sample support not established"
+    )
     assert unsupported_heading in targets
     active_block = targets.split(unsupported_heading, 1)[0]
     audit_block = targets.split(unsupported_heading, 1)[1]
     assert "erdafitinib" not in active_block
     assert "FGFR3" in audit_block
     assert "erdafitinib" in audit_block
-    assert "not sample-supported; negative/background evidence" in audit_block
+    assert "clinical eligibility not supplied" in audit_block
+    assert "RNA context is shown to prioritize confirmatory review" in audit_block
 
 
 def test_ci_confidence_tier_buckets():

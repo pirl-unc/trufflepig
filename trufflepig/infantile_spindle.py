@@ -237,8 +237,8 @@ def infantile_spindle_driver_spectrum_markdown(cancer_code, analysis=None) -> st
     lines = [
         "## Observed driver spectrum",
         "",
-        "These are cohort observations, not mutually exclusive treatment rates and "
-        "not proof of diagnosis in this sample.",
+        "These are cohort observations, not mutually exclusive treatment rates. "
+        "They can prioritize confirmatory testing but do not establish this sample's diagnosis.",
         "",
         "| Entity | Driver event | Observed frequency | Relationship | Source |",
         "|---|---|---:|---|---|",

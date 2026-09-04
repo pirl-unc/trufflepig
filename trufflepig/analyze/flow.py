@@ -237,7 +237,10 @@ def _is_descendant_code(code: str, parent_code: str) -> bool:
 # alternative biological scenarios, not replicates, and are never pooled into
 # this spread.
 _DECOMP_PURITY_FRAGILE_SPREAD = 0.35
-_TME_OVEREXPLAINED_MARKER = "overexplained by the tme background"
+_TME_OVEREXPLAINED_MARKERS = (
+    "overexplained by the fitted stromal/immune reference background",
+    "overexplained by the tme background",  # compatibility with stored runs
+)
 
 
 def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
@@ -246,7 +249,8 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
     A decomposition tumor fraction is only trustworthy when it is stable across the plausible
     template hypotheses AND the background did not over-absorb tumor signal. Across the local cohort,
     most samples fail one of those: the top hypotheses disagree on tumor fraction by tens of points,
-    and the low-purity calls carry a "many genes overexplained by the TME background" warning
+    and low-fraction calls carry a "many genes overexplained by the fitted
+    stromal/immune reference background" warning
     (over-subtraction → deflated purity — the READ 10%-vs-78% failure mode). This records the signals
     so reconciliation can distinguish template sensitivity from estimator disagreement.
 
@@ -299,7 +303,9 @@ def decomposition_purity_stability(decomp_results, adopted=None) -> dict:
     hyp_lo = round(min(purities), 4) if purities else None
     hyp_hi = round(max(purities), 4) if purities else None
     warns = " ".join(getattr(adopted, "warnings", None) or []).lower()
-    tme_overexplained = _TME_OVEREXPLAINED_MARKER in warns
+    tme_overexplained = any(
+        marker in warns for marker in _TME_OVEREXPLAINED_MARKERS
+    )
 
     # Preserve every estimator as its own scenario. Bounds come from the
     # estimator's own result where available; they are never expanded using a

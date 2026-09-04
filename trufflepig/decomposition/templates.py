@@ -55,7 +55,7 @@ TISSUE_CATEGORIES = {
 # selection) instead of HPA single-cell profiles.
 # Only components whose HPA single-cell reference has a distorted HK
 # median are routed through the composite approach.  Components with
-# normal HK medians (osteoblast=428, marrow_stroma=428, melanocyte=393)
+# normal HK medians (bone_lineage_stroma=428, marrow_stroma=428, melanocyte=393)
 # keep their HPA profiles — using the broad bulk tissue reference would
 # let them absorb unrelated signal (e.g. bone_marrow absorbs immune).
 COMPONENT_TO_CATEGORY = {
@@ -240,7 +240,11 @@ TEMPLATES = {
         "description": "Metastasis in lung",
     },
     "met_bone": {
-        "components": _SOLID_IMMUNE + ["endothelial", "osteoblast", "marrow_stroma"],
+        # HPA exposes one "Undifferentiated cells" proxy for both
+        # osteoblast-like and marrow-stromal biology. A single combined column
+        # prevents NNLS from splitting one signal arbitrarily across duplicate
+        # references. Distinct marker groups remain visible in the marker trace.
+        "components": _SOLID_IMMUNE + ["endothelial", "bone_lineage_stroma"],
         "host_tissue": "bone_marrow",
         "description": "Metastasis in bone",
     },

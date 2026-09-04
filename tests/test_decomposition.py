@@ -86,6 +86,14 @@ def test_lymph_node_template_uses_broad_t_cell_only():
     assert "LN_parenchyma" not in components
 
 
+def test_bone_template_uses_one_combined_proxy_not_duplicate_columns():
+    components = get_template_components("met_bone", "SARC")
+
+    assert "bone_lineage_stroma" in components
+    assert "osteoblast" not in components
+    assert "marrow_stroma" not in components
+
+
 def test_metastasis_template_ranking_uses_cancer_support():
     """Shared met-site matrices should still rank hypotheses by cancer support."""
     ref = pan_cancer_expression().drop_duplicates(subset="Ensembl_Gene_ID")

@@ -77,22 +77,24 @@ FIGURE_REGISTRY = [
     ),
     (
         "decomposition-composition.png",
-        "Tumor / background composition",
-        "Estimated fraction of the sample that is tumor versus each normal, immune, "
-        "and stromal background component.",
+        "Estimated RNA composition",
+        "Conditional RNA-mixture model weights for the estimated patient tumor "
+        "contribution and fitted external normal, immune, and stromal references. "
+        "These are not per-gene subtraction percentages.",
     ),
     (
         "decomposition-components.png",
         "Tumor microenvironment components",
-        "The selected final-call decomposition resolves the non-tumor fraction into "
-        "its major stromal and immune components.",
+        "The selected final-call model partitions its non-tumor RNA weight among "
+        "external stromal and immune references; each gene can have a different "
+        "source attribution.",
     ),
     (
         "purity-methods.png",
         "Purity method agreement",
-        "Independent purity estimates (signature, lineage, ESTIMATE, decomposition "
-        "residual) and their agreement - the reported purity is their fused consensus, "
-        "widened when the methods disagree.",
+        "Several RNA-derived tumor-fraction estimates and their agreement. Some methods "
+        "share inputs, so this is a consistency check rather than an independent "
+        "measurement; the reported interval widens when they disagree.",
     ),
     (
         "therapy-pathway-state.png",
@@ -318,22 +320,26 @@ def lead_clause(text: str, *, max_chars: int = 72) -> str:
 
 
 def tumor_from_attribution(text: str) -> str:
-    """Tumor-source TPM out of an attribution cell like
-    'tumor 847 / T cell 0 - broadly expr.' -> '847'."""
-    match = re.search(r"tumor\s+([0-9.]+)", text, re.IGNORECASE)
+    """Estimated tumor TPM from a source-attribution cell."""
+    match = re.search(
+        r"(?:estimated\s+tumor|patient\s+tumor-attributed|tumor)\s+([0-9.]+)",
+        text,
+        re.IGNORECASE,
+    )
     return match.group(1) if match else ""
 
 
 def safety_band(tme: str, attribution: str) -> str:
-    """Normal-tissue safety read for a surface target: the TME flag plus the
-    broad-normal-expression cue. An empty TME flag means no single healthy tissue
-    explains the signal, i.e. it is tumor-enriched."""
-    band = tme.strip() or "tumor-enriched"
+    """Healthy-reference context for a surface target."""
+    band = tme.strip() or "not explained by one healthy-tissue reference"
     lowered = attribution.lower()
     if "broadly expr" in lowered:
         band += " · broad normal expr."
-    elif "matched-normal over-pred" in lowered:
-        band += " · matched-normal overshoot"
+    elif (
+        "matched-normal over-pred" in lowered
+        or "lineage-normal reference over-pred" in lowered
+    ):
+        band += " · external tissue reference predicts more than measured"
     return short_text(band, max_chars=58)
 
 
@@ -385,13 +391,18 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
             interpretation = body
 
         tumor_match = re.search(
-            r"([0-9.]+)\s+tumor-source bulk TPM\s+"
-            r"\(model interval\s+([^)]+)\)",
+            r"([0-9.]+)\s+(?:estimated\s+tumor\s+TPM\s+"
+            r"\(RNA model;\s+model interval|"
+            r"patient\s+tumor-attributed\s+TPM\s+"
+            r"\((?:modeled|estimated by RNA model);\s+model interval|"
+            r"tumor-source\s+bulk\s+TPM\s+"
+            r"\(model interval)\s+([^)]+)\)",
             interpretation,
             re.IGNORECASE,
         )
         context_match = re.search(
-            r"target RNA is context only\s+\(bulk\s+([0-9.]+)\s+TPM",
+            r"target RNA is context only\s+\((?:patient\s+)?bulk\s+"
+            r"([0-9.]+)\s+TPM",
             interpretation,
             re.IGNORECASE,
         )
@@ -418,19 +429,18 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
         "columns": [
             ["Target", 15],
             ["Recommendation", 38],
-            ["Tumor-src TPM", 20],
-            ["Eligibility / RNA source", 44],
+            ["Estimated tumor TPM (RNA model)", 25],
+            ["Eligibility / RNA provenance", 39],
         ],
         "rows": rows,
     }
 
 
 def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
-    """``{"columns", "rows"}`` for the top priority targets with tumor-source TPM
-    and a normal-tissue safety band, or ``None``.
+    """Top priority targets with estimated patient attribution and references.
 
     Prefers the evidence report's ``### Surface Protein Targets`` table; falls back
-    to the summary's tumor-source attribution table when it is absent.
+    to the summary's source-attribution table when it is absent.
     """
     ev_tables = parse_markdown_tables(analyze_dir / f"{prefix}-evidence.md")
     table = find_table(
@@ -438,12 +448,18 @@ def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
         section_contains="surface protein targets",
         header_all=("gene", "tme"),
     )
+    if table is None:
+        table = find_table(
+            ev_tables,
+            section_contains="surface protein targets",
+            header_all=("gene", "estimated background"),
+        )
     if table is not None:
         headers = table["headers"]
         i_gene = col_index(headers, "gene", "target")
         i_bulk = col_index(headers, "bulk tpm")
         i_attr = col_index(headers, "attribution")
-        i_tme = col_index(headers, "tme")
+        i_tme = col_index(headers, "estimated background", "modeled background", "tme")
         i_pct = col_index(headers, "ref %ile", "%ile")
         rows: List[List[str]] = []
         for cells in table["rows"]:
@@ -465,19 +481,33 @@ def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
         if rows:
             columns = [
                 ["Target", 20],
-                ["Tumor-src TPM", 21],
-                ["Normal-tissue safety", 43],
-                ["Cohort %ile", 16],
+                ["Estimated tumor TPM (RNA model)", 25],
+                ["Healthy-tissue context (reference panel)", 39],
+                ["Pan-cancer ref %ile", 16],
             ]
             return {"columns": columns, "rows": rows}
 
     su_tables = parse_markdown_tables(analyze_dir / f"{prefix}-summary.md")
     table = find_table(su_tables, header_all=("gene", "tumor-source"))
+    if table is None:
+        table = find_table(su_tables, header_all=("gene", "tumor-attributed"))
+    if table is None:
+        table = find_table(su_tables, header_all=("gene", "estimated tumor"))
     if table is not None:
         headers = table["headers"]
         i_gene = col_index(headers, "gene")
-        i_tumor = col_index(headers, "tumor-source")
-        i_attr = col_index(headers, "non-tumor attribution")
+        i_tumor = col_index(
+            headers,
+            "estimated tumor tpm",
+            "tumor-attributed",
+            "tumor-source",
+        )
+        i_attr = col_index(
+            headers,
+            "background contribution",
+            "non-tumor contribution",
+            "non-tumor attribution",
+        )
         i_frac = col_index(headers, "tumor fraction")
         rows = []
         for cells in table["rows"]:
@@ -497,9 +527,9 @@ def _priority_target_table(analyze_dir: Path, prefix: str) -> Optional[dict]:
         if rows:
             columns = [
                 ["Target", 20],
-                ["Tumor-src TPM", 21],
-                ["Top non-tumor source", 43],
-                ["Tumor frac", 16],
+                ["Estimated tumor TPM (RNA model)", 25],
+                ["Top estimated background contribution", 39],
+                ["Estimated tumor fraction", 16],
             ]
             return {"columns": columns, "rows": rows}
     return None
@@ -582,6 +612,7 @@ def build_figure_manifest(
     prefix: str,
     *,
     purity_status: str = "resolved",
+    purity_unresolved_reason: Optional[str] = None,
 ) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
@@ -601,6 +632,21 @@ def build_figure_manifest(
             "operational value is not a fused consensus estimate."
         ),
     }
+    if purity_unresolved_reason == "same_lineage_not_identifiable":
+        unresolved_captions = {
+            "decomposition-composition.png": (
+                "Selected operating model for target attribution. Tumor and benign "
+                "same-lineage cells cannot be cleanly separated from this bulk RNA."
+            ),
+            "decomposition-components.png": (
+                "External reference weights from the selected operating model; not "
+                "a resolved malignant-versus-benign cell composition."
+            ),
+            "purity-methods.png": (
+                "RNA tumor-fraction methods are structurally limited because tumor "
+                "and benign same-lineage cells share the modeled programs."
+            ),
+        }
     for suffix, title, caption in FIGURE_REGISTRY:
         if purity_status == "discordant_estimators":
             caption = unresolved_captions.get(suffix, caption)
@@ -652,6 +698,7 @@ def build_report_document(
             analyze_dir,
             prefix,
             purity_status=report_view.purity.status,
+            purity_unresolved_reason=report_view.purity.unresolved_reason,
         ),
     }
 
