@@ -60,13 +60,14 @@ stroma/immune/normal templates → **residual** =
 `sample − reconstructed_background` (clipped ≥0). `residual_fraction` =
 PRIMARY purity.
 
-**Residual identity** (`decomposition.evaluate_residual_identity`): curated
-expected-high and expected-low tumor programs are evaluated on every usable
-residual. A result must be invariant across candidate-specific realizations
-and structural background models. It contributes one independent entity-
-consensus axis; it never uses decomposition rank/purity as identity support,
-never originates an unrelated hypothesis, and never clears molecular or
-registry blockers.
+**Decomposition cancer-type decision**
+(`decomposition.decide_cancer_type_from_decomposition`): curated expected-high
+and expected-low tumor programs are evaluated after background subtraction.
+The public `CancerTypeDecision` states the supported code, its relationship to
+the current report code, whether tumor/background separation was confirmed,
+and whether selection is allowed. It contributes one independent consensus
+axis; it never reuses decomposition rank/purity, invents child specificity
+from a parent program, or clears molecular or registry blockers.
 
 **Aneuploidy**: **bulk** (`bulk_aneuploidy_amplitude`, on BULK, ∝ purity) is a purity CORROBORATOR —
 `aneuploidy_purity = clip(A_obs / A_ref(type), 0, 1)`, `A_ref` from `purity_calibration` (subtype →

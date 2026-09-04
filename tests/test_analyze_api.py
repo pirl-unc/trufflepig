@@ -175,7 +175,11 @@ def test_build_analysis_parameters_records_variant_inputs():
         "culture": {"level": "unknown", "stress_score": None},
         "has_issues": False,
     }
-    config = AnalyzeConfig(input_path="gene.tsv", variants="EGFR KDD;variants.tsv")
+    config = AnalyzeConfig(
+        input_path="gene.tsv",
+        variants="EGFR KDD;variants.tsv",
+        variant_genome_build="GRCh37",
+    )
     resolution = resolve_analyze_inputs(config, sniff_input_level=lambda _path: "gene")
 
     params = build_analysis_parameters(
@@ -190,6 +194,7 @@ def test_build_analysis_parameters_records_variant_inputs():
 
     assert config.variant_input_list() == ["EGFR KDD", "variants.tsv"]
     assert params["input"]["variants"] == ["EGFR KDD", "variants.tsv"]
+    assert params["input"]["variant_genome_build"] == "GRCh37"
 
 
 def test_legacy_alterations_config_serializes_as_variants():
@@ -708,7 +713,7 @@ def test_build_analyze_comparison_markdown_from_summary_files(tmp_path: Path):
                 "- **ERBB2** -> trastuzumab deruxtecan.",
                 "",
                 "## Caveats",
-                "- Patient-facing LLM interpretation needs external clinical context.",
+                "- Clinical interpretation still requires external patient context.",
             ]
         )
     )
@@ -743,7 +748,7 @@ def test_build_analyze_comparison_markdown_from_summary_files(tmp_path: Path):
     assert "## Biology And Response State" in markdown
     assert "## Therapy Shortlists" in markdown
     assert "Treat RNA-inferred cancer labels as hypotheses" in markdown
-    assert "Patient-facing LLM use" in markdown
+    assert "Clinical interpretation still requires" in markdown
 
 
 def test_apply_sample_context_to_purity_widens_ci():
@@ -862,7 +867,7 @@ def test_decomposition_purity_stability_flags_fragile_and_stable():
     # templates span 5%–78% — the adopted point purity is one pick in a wide range.
     fragile = [
         _decomp_hyp("READ", 0.10, 16.75, "solid_primary",
-                    ["Many genes are overexplained by the TME background"]),
+                    ["Many genes are overexplained by the fitted stromal/immune reference background"]),
         _decomp_hyp("READ", 0.78, 2.68, "met_liver"),
         _decomp_hyp("READ", 0.40, 3.0, "met_bone"),
         _decomp_hyp("READ", 0.05, 4.0, "met_skin"),
@@ -903,7 +908,7 @@ def test_purity_stability_keeps_incompatible_estimators_as_scenarios():
             0.05,
             2.26,
             "solid_primary",
-            ["Many genes are overexplained by the TME background"],
+            ["Many genes are overexplained by the fitted stromal/immune reference background"],
             purity_source="lineage_panel",
             lower=0.01,
             upper=0.12,
@@ -988,7 +993,7 @@ def test_post_decomposition_reconciliation_preserves_the_true_prior_estimate():
         purity_source="lineage_panel",
         purity=0.05,
         fractions={"tumor": 0.05, "matched_normal_rectum": 0.95},
-        warnings=["Many genes are overexplained by the TME background"],
+        warnings=["Many genes are overexplained by the fitted stromal/immune reference background"],
     )
     analysis = {
         "cancer_type": "READ",

@@ -389,7 +389,7 @@ def _load_pan_cancer_from_pirlygenes(
     genes_tuple,
     remove_noncoding: bool,
 ) -> pd.DataFrame:
-    # Trufflepig pins pirlygenes>=5.2,<6 (see pyproject.toml), which provides
+    # Trufflepig pins pirlygenes>=6.0.1,<7 (see pyproject.toml), which provides
     # the entity-first ``normalize=["tpm", "tpm_clean"]`` preset and clean
     # TPM columns by default. Earlier pirlygenes APIs are not supported.
     if remove_noncoding:

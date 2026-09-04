@@ -185,10 +185,16 @@ def compute_purity_confidence(
 
     if quantitative_status == "discordant_estimators":
         tier = "low"
-        reasons.append(
-            "purity is quantitatively unresolved because independent estimators "
-            "support incompatible scenarios"
-        )
+        if purity.get("quantitative_unresolved_reason") == "same_lineage_not_identifiable":
+            reasons.append(
+                "tumor fraction is quantitatively unresolved because tumor and "
+                "benign same-lineage cells share the modeled RNA programs"
+            )
+        else:
+            reasons.append(
+                "purity is quantitatively unresolved because independent estimators "
+                "support incompatible scenarios"
+            )
 
     # Anti-saturation guard provenance: if the honest-fusion pass replaced a near-100% single-method
     # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method
@@ -519,7 +525,9 @@ def compute_target_confidence(
     elif _get("tme_explainable"):
         if tier == "high":
             tier = "moderate"
-        reasons.append("could be explained by a single healthy tissue's expression")
+        reasons.append(
+            "could be explained by one external healthy-tissue reference panel"
+        )
 
     # #131: matched-normal over-prediction. When the fitted
     # matched-normal (or any) compartment predicts more of the gene
@@ -533,9 +541,9 @@ def compute_target_confidence(
         if tier == "high":
             tier = "moderate"
         reasons.append(
-            "matched-normal reference over-predicts this gene — "
-            "tumor attribution hit the zero floor; the raw observed "
-            "TPM is the better read than the attributed fraction"
+            "the external tissue reference predicts more RNA than measured for this gene — "
+            "the RNA model's patient tumor attribution hit the zero floor; patient "
+            "bulk TPM (measured) is the better read than the attributed fraction"
         )
 
     # #128: broadly-expressed flag. A gene expressed across many

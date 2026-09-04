@@ -34,7 +34,7 @@ _SUMMARY = """# Summary
 
 ## Top candidate therapies
 
-### Approved / disease-matched
+### Approved pathway / eligibility pending
 
 - **FOLH1** — lutetium-177 PSMA (Approved, mCRPC). tumor-supported; 128 tumor-source bulk TPM (model interval 100-150); guideline-standard approved pathway.
 - **AR** — enzalutamide (Approved, mCRPC). mixed-source; 48 tumor-source bulk TPM (model interval 40-50); guideline-standard approved pathway.
@@ -70,7 +70,7 @@ _EVIDENCE = """# Evidence
 _PREFIX = "sampleX"
 
 
-def _write_reports(tmp_path: Path, *, emit_figures=("sample-summary", "purity-methods")) -> Path:
+def _write_reports(tmp_path: Path, *, emit_figures=("sample-context", "purity-methods")) -> Path:
     (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
     (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS)
     (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
@@ -127,19 +127,19 @@ def test_document_deduplicates_repeated_summary_highlights(tmp_path):
 
 def test_figure_manifest_is_belief_gated(tmp_path):
     # Only two figures emitted; the rest of the registry must be present=False.
-    _write_reports(tmp_path, emit_figures=("sample-summary", "purity-methods"))
+    _write_reports(tmp_path, emit_figures=("sample-context", "purity-methods"))
     doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
     figures = {f["suffix"]: f for f in doc["figures"]}
 
     # Every registry entry appears in the manifest.
     assert set(figures) == {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
     # The two emitted plots are present with a resolved path + a caption.
-    assert figures["sample-summary.png"]["present"] is True
-    assert figures["sample-summary.png"]["path"] == f"{_PREFIX}-sample-summary.png"
-    assert figures["sample-summary.png"]["caption"]
+    assert figures["sample-context.png"]["present"] is True
+    assert figures["sample-context.png"]["path"] == f"{_PREFIX}-sample-context.png"
+    assert figures["sample-context.png"]["caption"]
     # A plot the run never emitted (belief never fired) is gated out with no path.
-    assert figures["cancer-type-signal-matrix.png"]["present"] is False
-    assert figures["cancer-type-signal-matrix.png"]["path"] is None
+    assert figures["therapy-pathway-state.png"]["present"] is False
+    assert figures["therapy-pathway-state.png"]["path"] is None
 
 
 def test_headline_purity_agrees_with_parsed_purity_record(tmp_path):
@@ -192,8 +192,8 @@ def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_pa
         0.32,
         0.55,
     )
-    assert "no consensus tumor/non-tumor fraction" in figures[
-        "sample-summary.png"
+    assert "not a resolved sample-composition measurement" in figures[
+        "decomposition-composition.png"
     ]["caption"]
     assert "not a fused consensus estimate" in figures["purity-methods.png"][
         "caption"

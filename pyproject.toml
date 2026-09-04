@@ -14,18 +14,20 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    # >=5.23.55: direct VSCC expression reference plus fail-closed source
-    # rollups; pins the compact oncoref 1.8.184 reference API.
-    "pirlygenes>=5.23.55,<6",
+    # >=6.0.2: typed NUT-family therapy eligibility, the public cohort-expression
+    # matrix contract, direct VSCC and MENINGIOMA references, fail-closed source
+    # rollups, and owner-delegated driver evidence; pins oncoref 1.8.193.
+    "pirlygenes>=6.0.2,<7",
     # oncoref is the canonical cancer-type ontology + normalization source (imported
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    # >=1.8.184: compact all-source availability, direct VSCC reference,
-    # acquisition provenance, complete-union classification policy, and
-    # tumor-reference accessors are aligned with pirlygenes without
-    # materializing the 5M-row union.
-    "oncoref>=1.8.184,<2",
+    # >=1.8.193: compact all-source availability, direct VSCC and MENINGIOMA
+    # references, acquisition provenance, complete-union classification policy,
+    # tumor-reference accessors, and audited ICI/aPD1/TMB evidence resolution are
+    # aligned with pirlygenes 6 without materializing the 5M-row union.
+    # Pirlygenes pins the exact compatible oncoref wheel within this range.
+    "oncoref>=1.8.193,<2",
     "numpy>=2.0.0",
     # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
     # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype

@@ -7,10 +7,13 @@ from trufflepig.brief import (
     build_brief as _build_brief,
     build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
+    _expression_independent_evidence_gap,
     _format_therapy_bullet,
     _empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
+    _format_cta_outlier_bullet,
+    _notable_cta_outliers,
     _shortlist_omission_note,
     _top_therapies,
     mismatch_repair_summary_line,
@@ -75,6 +78,39 @@ def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
     assert "non-tumor-supported" not in message
 
 
+def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
+    ranges = pd.DataFrame(
+        [
+            {
+                "symbol": "BACKGROUND_CTA",
+                "is_cta": True,
+                "observed_tpm": 500.0,
+                "attr_tumor_tpm": 5.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm_high": 20.0,
+                "tcga_percentile": 0.99,
+            },
+            {
+                "symbol": "TUMOR_CTA",
+                "is_cta": True,
+                "observed_tpm": 100.0,
+                "attr_tumor_tpm": 60.0,
+                "attr_tumor_tpm_low": 30.0,
+                "attr_tumor_tpm_high": 100.0,
+                "tcga_percentile": 0.95,
+            },
+        ]
+    )
+
+    rows = _notable_cta_outliers(ranges)
+    assert [row["symbol"] for row in rows] == ["TUMOR_CTA", "BACKGROUND_CTA"]
+    bullet = _format_cta_outlier_bullet(rows[0])
+    assert "100 patient bulk TPM" in bullet
+    assert "60 estimated patient tumor TPM" in bullet
+    assert "RNA model interval 30-100" in bullet
+    assert "check HLA" in bullet
+
+
 def test_subtype_line_suppressed_when_panel_blocked_against_call():
     # A high-scoring CHOL panel that was held back under a PRAD call must not
     # render as the call's "subtype" — that contradicts the cancer call.
@@ -121,7 +157,10 @@ def test_lineage_panel_evidence_distinguishes_tumor_residual_from_host():
 
     assert "supports the BLCA call" in line
     assert "7/7 positive markers" in line
-    assert "tumor residual rather than modeled host/TME background" in line
+    assert (
+        "estimated tumor residual rather than external stromal, immune, "
+        "and tissue reference background" in line
+    )
 
 
 def test_lineage_panel_explains_background_resolved_low_marker_violation():
@@ -142,17 +181,20 @@ def test_lineage_panel_explains_background_resolved_low_marker_violation():
             },
         }
     )
-    analysis["residual_identity_evidence"] = {
-        "status": "corroborated",
-        "candidate_code": "CRC",
-        "source_resolved_identity": True,
-        "background_attributed_expected_low_genes": ["DES"],
+    analysis["cancer_type_decision"] = {
+        "status": "resolved",
+        "supported_code": "CRC",
+        "background_separation_confirmed": True,
+        "background_attributed_genes": ["DES"],
     }
 
     line = _lineage_panel_evidence_line(analysis, "CRC") or ""
 
     assert "bulk panel remains incomplete because of DES" in line
-    assert "normal structural tissue can explain the expected-low violation" in line
+    assert (
+        "benign structural-tissue reference signal can explain the expected-low violation"
+        in line
+    )
     assert "complete panel and ontology programs agree" in line
     assert "not a claim that every measured DES transcript is non-tumor" in line
     assert "noted, did not change the call" not in line
@@ -277,7 +319,7 @@ def test_summary_purity_reads_frozen_snapshot_not_stale_live_dict():
         sample_id="sample_X",
         report_view=report_view,
     )
-    assert "**Purity:** 10% (model interval 6%–16%" in md
+    assert "**Estimated tumor fraction (RNA model):** 10% (model interval 6%–16%" in md
     assert "78%" not in md  # the stale candidate purity never reaches the report
 
 
@@ -384,9 +426,9 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
         report_view=report_view,
     )
 
-    assert "**Purity:** quantitatively unresolved" in summary
+    assert "**Estimated tumor fraction (RNA model):** quantitatively unresolved" in summary
     assert "selected operational model uses 5% [1%–12%]" in summary
-    assert "matched-normal lineage model: 5% [1%–12%]" in summary
+    assert "healthy-tissue lineage reference model: 5% [1%–12%]" in summary
     assert "upstream expression model: 43% [32%–55%]" in summary
     assert "Purity is **quantitatively unresolved**" in actionable
     assert "not a consensus tumor-purity estimate" in actionable
@@ -411,7 +453,7 @@ def test_brief_is_compact():
     # File was renamed brief → summary in 4.41.0; header tracks the name.
     assert "# Summary" in md
     assert "**Cancer call:**" in md
-    assert "**Purity:**" in md
+    assert "**Estimated tumor fraction (RNA model):**" in md
     assert "model interval" in md
     assert "(CI " not in md
     assert "**Disease state:**" in md
@@ -461,8 +503,8 @@ def test_summary_explains_a_ceiling_purity_estimate():
         sample_id="sample_X",
     )
 
-    assert "**Purity:** 100%" in md
-    assert "not proof of literal 100% tumor cellularity" in md
+    assert "**Estimated tumor fraction (RNA model):** 100%" in md
+    assert "Do not interpret this as literal 100% tumor cellularity" in md
 
 
 def test_summary_uses_generic_text_for_orphan_context_rescue():
@@ -534,8 +576,104 @@ def test_summary_marks_supplied_cancer_type_basis():
     assert "Cancer-type basis" in md
     assert "externally supplied PRAD (Prostate Adenocarcinoma) sets the report label" in md
     assert "RNA evidence is used downstream for confidence" in md
-    assert "Patient-facing LLM interpretation needs external clinical context" in md
+    assert "Clinical interpretation still needs external patient context" in md
     assert "RNA-inferred — treat it as a hypothesis" not in md
+
+
+def test_summary_names_background_separated_cancer_type_basis():
+    from trufflepig.healthy_vs_tumor import TissueCompositionSignal
+
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "CRC",
+            "cancer_type_source": "auto-detected",
+            "report_scope_cancer_type": "CRC",
+            "cancer_type_evidence": {
+                "selected": {
+                    "cancer_type": "CRC",
+                    "selected_by": "entity_evidence_consensus",
+                    "entity_evidence_consensus": {
+                        "decomposition_decision_was_decisive": True,
+                    },
+                }
+            },
+            "cancer_type_decision": {
+                "status": "resolved",
+                "supported_code": "CRC",
+                "background_separation_confirmed": True,
+            },
+            "cancer_type_decision_refit": {
+                "accepted": True,
+                "previous_cancer_type": "SARC_DDLPS",
+            },
+            "candidate_trace": [
+                {"code": "SARC_DDLPS", "support_geomean": 0.55},
+                {"code": "CRC", "support_geomean": 0.44},
+            ],
+            "healthy_vs_tumor": TissueCompositionSignal(
+                top_normal_tissues=[("smooth_muscle_nTPM", 0.86)],
+                top_tcga_cohorts=[("SARC_TPM", 0.81)],
+                cancer_hint="possibly-tumor",
+                structural_ambiguity=True,
+            ),
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="CRC",
+        disease_state="",
+    )
+
+    assert "Cancer-type basis" in md
+    assert "bulk profile initially favored SARC_DDLPS" in md
+    assert "tissue-composition screen was dominated by smooth muscle" in md
+    assert "candidate-independent decomposition recovered" in md
+    assert "complete and invariant CRC (Colorectal Adenocarcinoma)" in md
+    assert "refitted for that final scope reproduced it" in md
+    assert "remains only in the audit differential" in md
+    assert "does not drive downstream interpretation" in md
+    assert "**Retained RNA differential:**" not in md
+
+
+def test_summary_keeps_parent_decision_at_parent_scope():
+    analysis = _make_analysis()
+    analysis.update(
+        {
+            "cancer_type": "READ",
+            "cancer_type_source": "auto-detected",
+            "report_scope_cancer_type": "READ",
+            "cancer_type_evidence": {
+                "selected": {
+                    "cancer_type": "READ",
+                    "selected_by": "entity_evidence_consensus",
+                    "entity_evidence_consensus": {
+                        "decomposition_decision_was_decisive": False,
+                    },
+                }
+            },
+            "cancer_type_decision": {
+                "status": "resolved",
+                "supported_code": "CRC",
+                "background_separation_confirmed": True,
+            },
+            "cancer_type_decision_refit": {"accepted": True},
+        }
+    )
+
+    md = build_summary(
+        analysis,
+        _make_ranges_df(),
+        cancer_code="READ",
+        disease_state="",
+    )
+
+    assert "CRC (Colorectal Adenocarcinoma) as the supported tumor type" in md
+    assert "establishes the broader branch but does not by itself establish" in md
+    assert "READ" in md
+    assert "complete and invariant READ" not in md
 
 
 def test_summary_marks_supplied_cancer_type_rna_concordance():
@@ -766,7 +904,7 @@ def test_summary_marks_rna_inferred_cancer_type_as_hypothesis():
     assert "Cancer-type basis" in md
     assert "RNA-inferred hypothesis" in md
     assert "Cancer type is RNA-inferred — treat it as a hypothesis" in md
-    assert "Patient-facing LLM interpretation needs external clinical context" in md
+    assert "Clinical interpretation still needs external patient context" in md
 
 
 def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
@@ -1265,13 +1403,13 @@ def test_brief_prioritizes_ar_path_and_flags_possible_current_therapy():
         cancer_code="PRAD",
         disease_state="**AR axis suppressed** — consistent with ADT exposure.",
     )
-    assert md.index("**AR**") < md.index("**FOLH1**")
+    assert "- **FOLH1**" not in md
     ar_line = next(line for line in md.splitlines() if line.startswith("- **AR**"))
     assert "guideline-standard approved pathway" in ar_line
     assert "current/prior ADT or ARPI" in ar_line
 
 
-def test_brief_uses_path_maturity_across_cancer_types_not_prad_special_case():
+def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
     analysis = _make_analysis()
     analysis["cancer_type"] = "BRCA"
     analysis["cancer_name"] = "Breast invasive carcinoma"
@@ -1305,18 +1443,12 @@ def test_brief_uses_path_maturity_across_cancer_types_not_prad_special_case():
         cancer_code="BRCA",
         disease_state="",
     )
-    assert md.index("**ERBB2**") < md.index("**TACSTD2**")
-    erbb2_line = next(
-        line for line in md.splitlines() if line.startswith("- **ERBB2**")
-    )
-    assert "guideline-standard approved pathway" in erbb2_line
-    tacstd2_line = next(
-        line for line in md.splitlines() if line.startswith("- **TACSTD2**")
-    )
-    assert "approved later-line pathway" in tacstd2_line
+    assert "- **ERBB2**" not in md
+    assert "- **TACSTD2**" not in md
+    assert "## Top candidate therapies" in md
 
 
-def test_expression_independent_therapy_summary_keeps_rna_contextual():
+def test_expression_independent_therapy_without_eligibility_stays_out_of_shortlist():
     analysis = _make_analysis()
     analysis["cancer_type"] = "COAD"
     analysis["cancer_name"] = "Colon adenocarcinoma"
@@ -1340,14 +1472,10 @@ def test_expression_independent_therapy_summary_keeps_rna_contextual():
         cancer_code="COAD",
         disease_state="",
     )
-    pdcd1_line = next(
-        line for line in md.splitlines() if line.startswith("- **CD274**")
+    assert not any(
+        line.startswith("- **CD274**") for line in md.splitlines()
     )
-    assert "target expression is not the eligibility criterion" in pdcd1_line
-    assert "target RNA is context only" in pdcd1_line
-    assert "Clinical maturity: approved antibody" in pdcd1_line
-    assert "; Clinical maturity" not in pdcd1_line
-    assert "model interval" not in pdcd1_line
+    assert "## Top candidate therapies" in md
 
 
 def test_expression_independent_therapy_surfaces_missing_required_evidence():
@@ -1724,7 +1852,7 @@ def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
         disease_state="**ER-axis suppressed / ER-low pattern**.",
     )
     top_lines = [line for line in md.splitlines() if line.startswith("- **")]
-    assert any(line.startswith("- **TACSTD2**") for line in top_lines)
+    assert all(not line.startswith("- **TACSTD2**") for line in top_lines)
     assert all(not line.startswith("- **ESR1**") for line in top_lines)
 
     actionable = build_actionable(
@@ -1771,7 +1899,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
                         "tme_explainable": True,
                     },
                     {
-                        "symbol": "KLK2",
+                            "symbol": "PSCA",
                         "observed_tpm": 247.0,
                         "attribution": {"matched_normal_prostate": 155.0},
                         "attr_tumor_tpm": 57.0,
@@ -1794,12 +1922,13 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
         disease_state="",
     )
     assert "Where target RNA signal appears to come from" in md
-    assert "Tumor-source bulk TPM" in md
-    assert "Top non-tumor attribution" in md
+    assert "Estimated tumor TPM (RNA model)" in md
+    assert "Top estimated background contribution" in md
     assert "STEAP2" in md
-    assert "KLK2" in md
-    assert "matched-normal prostate" in md
+    assert "PSCA" in md
+    assert "prostate lineage reference (external panel)" in md
     assert "phase 1 exploratory" in md
+    assert len(md.splitlines()) <= 40
 
 
 def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
@@ -1831,7 +1960,7 @@ def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
         [(target, expr)],
     )
     assert "Where target RNA signal appears to come from" in md
-    assert "none modeled" in md
+    assert "none estimated" in md
 
 
 def test_source_trace_starts_with_approved_shortlist_rows():
@@ -1940,7 +2069,7 @@ def test_source_trace_does_not_call_non_lineage_component_lineage_background():
         [(top, top_expr)],
     )
     erbb2_line = next(line for line in md.splitlines() if line.startswith("| ERBB2 "))
-    assert "osteoblast over-predicts / non-tumor background" in erbb2_line
+    assert "osteoblast reference component over-predicts / non-tumor background" in erbb2_line
     assert "osteoblast over-predicts / lineage background" not in erbb2_line
 
 
@@ -2064,7 +2193,7 @@ def test_brief_normalizes_path_like_sample_id():
     assert md.splitlines()[0] == "# Summary: rs"
 
 
-def test_brief_uses_tumor_band_without_attribution_dict():
+def test_brief_does_not_promote_psma_rna_without_required_imaging():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
     idx = ranges_df.index[ranges_df["symbol"] == "FOLH1"][0]
@@ -2076,7 +2205,7 @@ def test_brief_uses_tumor_band_without_attribution_dict():
         disease_state="",
     )
     assert "tumor-specific decomposition was unavailable" not in md
-    assert "128 tumor-source bulk TPM (model interval 128-128" in md
+    assert "- **FOLH1**" not in md
 
 
 def test_actionable_renders_tumor_band_without_attribution_dict():
@@ -2096,11 +2225,9 @@ def test_actionable_renders_tumor_band_without_attribution_dict():
     )
 
 
-def test_actionable_background_dominant_therapy_row_is_audit_only():
-    # Issue #105: on a liver-met BLCA sample, an FGFR3/erdafitinib row whose RNA is
-    # attributed to hepatocyte/background (tumor-source TPM 0) must land in the
-    # audit-only therapy section, not the active-opportunity table — matching the
-    # *-targets.md split so the summary, the analysis markdown, and the PDF agree.
+def test_actionable_background_dominant_molecular_therapy_is_eligibility_dependent():
+    # FGFR3 RNA can be hepatocyte/background-attributed without ruling erdafitinib
+    # in or out: the clinical gate is a susceptible FGFR3 genetic alteration.
     analysis = _make_analysis()
     analysis["cancer_type"] = "BLCA"
     analysis["cancer_name"] = "Bladder Urothelial Carcinoma"
@@ -2134,16 +2261,14 @@ def test_actionable_background_dominant_therapy_row_is_audit_only():
         sample_id="pfo017-liver",
     )
     assert "## Therapy Prioritization" in md
-    assert "### Other curated rows — not supported by this sample" in md
     therapy_section = md.split("## Therapy Prioritization", 1)[1]
-    active_block, audit_block = therapy_section.split(
-        "### Other curated rows — not supported by this sample", 1
+    row = next(
+        line for line in therapy_section.splitlines()
+        if "| **FGFR3** | erdafitinib |" in line
     )
-    # The host-attributed FGFR3 row is not presented as an active opportunity.
-    assert "erdafitinib" not in active_block
-    assert "FGFR3" in audit_block
-    assert "erdafitinib" in audit_block
-    assert "not sample-supported; negative/background evidence" in audit_block
+    assert "target expression is not the eligibility criterion" in row
+    assert "required eligibility evidence not supplied" in row
+    assert "not sample-supported; negative/background evidence" not in row
 
 
 def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
@@ -2232,6 +2357,30 @@ def test_biomarker_basis_does_not_flag_expression_readable_rationales():
         assert biomarker_expression_is_not_eligibility(rationale) is False, rationale
 
 
+def test_her2_rna_proxy_feeds_assay_gated_therapy_reasoning_without_eligibility():
+    target_row = {
+        "symbol": "ERBB2",
+        "agent": "trastuzumab deruxtecan",
+        "indication": "HER2-positive breast cancer",
+        "indication_biomarker": "clinical_target_assay",
+    }
+    analysis = {
+        "rna_biomarker_proxies": {
+            "her2": {
+                "status": "supported",
+                "clinical_claim": "context_only",
+                "eligibility_established": False,
+            }
+        }
+    }
+
+    gap = _expression_independent_evidence_gap(target_row, analysis)
+
+    assert "required eligibility evidence not supplied" in gap
+    assert "IHC/ISH confirmation" in gap
+    assert "does not establish eligibility" in gap
+
+
 def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     # End-to-end through build_summary (the public surface that renders "Notable
     # biomarker outliers"): a mutation-gated biomarker surfaced as a high-mRNA
@@ -2270,16 +2419,20 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     assert "## Notable biomarker outliers" in md
     assert "TP53" in md
     assert "expression is not the eligibility criterion" in md
+    assert len(md.splitlines()) <= 40
 
 
 def test_summary_low_purity_caveat_rides_on_tumor_source_tpm():
-    # Low-purity sample: the tumor-source caveat rides inline with the target TPMs,
+    # Low-purity sample: the attribution caveat rides inline with target TPMs,
     # sourced from the sample_low_purity flag that analyze_sample sets on ranges_df.
     analysis = _make_analysis(purity_tier_label="low")
     ranges_df = _make_ranges_df()
     ranges_df["sample_low_purity"] = True
     md = build_summary(analysis, ranges_df, cancer_code="PRAD", disease_state="")
-    assert "low sample purity — tumor-source estimate is less certain" in md
+    assert (
+        "low estimated tumor fraction — the tumor expression estimate is less certain"
+        in md
+    )
 
 
 def test_summary_omits_low_purity_caveat_when_not_flagged():
@@ -2287,7 +2440,7 @@ def test_summary_omits_low_purity_caveat_when_not_flagged():
     ranges_df = _make_ranges_df()
     ranges_df["sample_low_purity"] = False
     md = build_summary(analysis, ranges_df, cancer_code="PRAD", disease_state="")
-    assert "low sample purity — tumor-source estimate" not in md
+    assert "low estimated tumor fraction — the tumor expression estimate" not in md
 
 
 def test_summary_omits_support_pct_when_preservation_unknown():

@@ -7,6 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 from trufflepig.tumor_purity import plot_purity_method_comparison
+from trufflepig.report_view import build_report_view
 
 
 def _purity_result(**overrides):
@@ -141,3 +142,22 @@ def test_comparison_plot_labels_discordant_purity_as_non_consensus(tmp_path: Pat
     assert "Final estimate" not in labels
     assert "Operational scenario (not consensus)" in labels
     assert "Purity estimators disagree" in fig.axes[0].get_title(loc="left")
+
+
+def test_comparison_plot_names_final_call_and_marks_reference_cohort():
+    result = _purity_result(cancer_type="READ")
+    view = build_report_view(
+        {
+            "cancer_type": "CRC",
+            "cancer_name": "Colorectal Adenocarcinoma",
+            "sample_mode": "solid",
+            "top_cancers": [("CRC", 1.0)],
+            "purity": result,
+        }
+    )
+
+    fig = plot_purity_method_comparison(result, report_view=view)
+
+    title = fig.axes[0].get_title(loc="left")
+    assert "CRC (READ reference)" in title
+    assert "methods - READ" not in title

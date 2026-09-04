@@ -100,7 +100,7 @@ def hla_types_compatible(
 
     Broad required restrictions such as ``A*02`` are satisfied by concrete
     supplied alleles such as ``A*02:01``. The inverse is not true: a broad
-    supplied type does not prove eligibility for an exact required allele.
+    supplied type does not establish eligibility for an exact required allele.
     """
     status, matched_supplied, matched_required = hla_types_compatibility_status(
         supplied_hla_types,

@@ -258,7 +258,9 @@ def _ontology_layer(stage: str, role: str, code: str) -> str:
         return "lineage"
     if role.startswith("hierarchical_family") or stage == "family":
         return "family"
-    if role.startswith("hierarchical_entity"):
+    if role.startswith("hierarchical_entity") or role == (
+        "background_separated_cancer_type"
+    ):
         return "entity"
     # exact_subtype / orthogonal_state is the SELECTOR's decision stage, not a claim about the code:
     # fused_evidence / learned_* / fine_reference all report "exact_subtype" even when they win a
@@ -485,46 +487,53 @@ def build_cancer_type_signal_matrix(
             )
         )
 
-    residual_identity = analysis.get("residual_identity_evidence") or {}
-    if isinstance(residual_identity, Mapping) and residual_identity:
-        predicted_code = _clean(residual_identity.get("candidate_code"))
-        status = _clean(residual_identity.get("status")) or "not_evaluable"
+    cancer_type_decision = analysis.get("cancer_type_decision") or {}
+    if isinstance(cancer_type_decision, Mapping) and cancer_type_decision:
+        predicted_code = _clean(cancer_type_decision.get("supported_code"))
+        status = _clean(cancer_type_decision.get("status")) or "not_evaluable"
+        if cancer_type_decision.get("selection_allowed") is False:
+            status = f"{status}_blocked"
         details = {
-            "reason": residual_identity.get("reason"),
-            "current_code": residual_identity.get("current_code"),
-            "panel_candidate_code": residual_identity.get(
-                "panel_candidate_code"
+            "reason": cancer_type_decision.get("reason"),
+            "current_code": cancer_type_decision.get("current_code"),
+            "panel_code": cancer_type_decision.get("panel_code"),
+            "ontology_code": cancer_type_decision.get("ontology_code"),
+            "decision_basis": cancer_type_decision.get("decision_basis"),
+            "background_separation_confirmed": cancer_type_decision.get(
+                "background_separation_confirmed"
             ),
-            "ontology_candidate_code": residual_identity.get(
-                "ontology_candidate_code"
+            "background_attributed_genes": cancer_type_decision.get(
+                "background_attributed_genes"
             ),
-            "decision_basis": residual_identity.get("decision_basis"),
-            "adjudication_eligible": residual_identity.get(
-                "adjudication_eligible"
+            "selection_allowed": cancer_type_decision.get(
+                "selection_allowed"
             ),
-            "adjudication_blocker": residual_identity.get(
-                "adjudication_blocker"
+            "block_reason": cancer_type_decision.get("block_reason"),
+            "sample_mode": cancer_type_decision.get("sample_mode"),
+            "supported_code_mode": cancer_type_decision.get(
+                "supported_code_mode"
             ),
-            "decomposition_sample_mode": residual_identity.get(
-                "decomposition_sample_mode"
-            ),
-            "candidate_sample_mode": residual_identity.get(
-                "candidate_sample_mode"
-            ),
-            "models_evaluated": residual_identity.get("models_evaluated"),
-            "realizations_evaluated": residual_identity.get(
+            "models_evaluated": cancer_type_decision.get("models_evaluated"),
+            "realizations_evaluated": cancer_type_decision.get(
                 "realizations_evaluated"
             ),
             "background_models": [
                 {
                     "template": row.get("template"),
                     "components": row.get("components"),
+                    "model_role": row.get("model_role"),
                     "realizations": row.get("realizations"),
                     "candidate_code": row.get("candidate_code"),
                     "panel_candidate": row.get("panel_candidate"),
+                    "complete_panel_or_background_candidate": row.get(
+                        "complete_panel_or_background_candidate"
+                    ),
+                    "background_attributed_expected_low_genes": row.get(
+                        "background_attributed_expected_low_genes"
+                    ),
                     "ontology_candidate": row.get("ontology_candidate"),
                 }
-                for row in (residual_identity.get("background_models") or ())
+                for row in (cancer_type_decision.get("background_models") or ())
                 if isinstance(row, Mapping)
             ],
         }
@@ -534,16 +543,16 @@ def build_cancer_type_signal_matrix(
                 final_call=final_call,
                 reference_call=reference_call,
                 selected_by=selected_by,
-                signal_source="decomposition_residual_identity",
-                signal_label="Decomposition residual identity",
-                stage="post_label_context",
-                role="independent_tumor_identity",
+                signal_source="decomposition_cancer_type_decision",
+                signal_label="Decomposition cancer-type decision",
+                stage="coarse_type",
+                role="background_separated_cancer_type",
                 status=status,
                 predicted_code=predicted_code,
                 support=None,
                 confidence=None,
                 support_metric="structural_unanimity",
-                context_code=_clean(residual_identity.get("current_code")),
+                context_code=_clean(cancer_type_decision.get("current_code")),
                 selects_report_label=False,
                 details=details,
             )

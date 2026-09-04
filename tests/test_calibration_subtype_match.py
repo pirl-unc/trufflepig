@@ -97,7 +97,7 @@ def test_local_expectation_uses_canonical_registry_aliases():
     assert calib._accept_expected("SARC_OS", "OS") is True
 
 
-def test_residual_calibration_matches_production_beam_and_mode_scope(
+def test_cancer_type_decision_calibration_matches_production(
     monkeypatch,
 ):
     """Calibration must not count a residual call production would withhold."""
@@ -143,12 +143,14 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
 
     def fake_residual(results, **_kwargs):
         observed["realizations_seen"] = len(results)
-        return {
-            "status": "candidate",
-            "candidate_code": "DLBC",
-            "panel_candidate_code": "DLBC",
-            "current_code": "SARC",
-        }
+        return decomposition.CancerTypeDecision.from_dict(
+            {
+                "status": "resolved",
+                "supported_code": "DLBC",
+                "panel_code": "DLBC",
+                "current_code": "SARC",
+            }
+        )
 
     monkeypatch.setattr(decomposition, "decompose_sample", fake_decompose)
     monkeypatch.setattr(main, "decompose_sample", fake_decompose)
@@ -164,15 +166,15 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
     )
     monkeypatch.setattr(
         decomposition,
-        "evaluate_residual_identity",
+        "decide_cancer_type_from_decomposition",
         fake_residual,
     )
 
-    residual_calls = []
+    decision_calls = []
 
     def fake_select(_frame, _analysis, **kwargs):
-        if kwargs.get("residual_identity_evidence"):
-            residual_calls.append(kwargs["residual_identity_evidence"])
+        if kwargs.get("cancer_type_decision"):
+            decision_calls.append(kwargs["cancer_type_decision"])
         return {
             "selected": {
                 "cancer_type": "SARC",
@@ -188,7 +190,7 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
 
     _trace, summary = calib._classify_one(
         pd.DataFrame(),
-        include_residual_identity=True,
+        include_cancer_type_decision=True,
     )
 
     assert observed["top_k"] is None
@@ -200,16 +202,16 @@ def test_residual_calibration_matches_production_beam_and_mode_scope(
         "ACC",
     ]
     assert observed["realizations_seen"] == 40
-    assert residual_calls[0]["adjudication_eligible"] is False
-    assert residual_calls[0]["decomposition_sample_mode"] == "solid"
-    assert residual_calls[0]["candidate_sample_mode"] == "heme"
+    assert decision_calls[0].selection_allowed is False
+    assert decision_calls[0].sample_mode == "solid"
+    assert decision_calls[0].supported_code_mode == "heme"
     assert summary["consolidated_cancer_type"] == "SARC"
 
 
-def test_residual_calibration_refits_and_rolls_back_unconfirmed_scope(
+def test_cancer_type_decision_calibration_rolls_back_unconfirmed_scope(
     monkeypatch,
 ):
-    """Calibration counts only residual calls that survive the production refit."""
+    """Calibration counts only cancer-type decisions that survive the production refit."""
 
     import trufflepig.cancer_type_evidence as cancer_type_evidence
     import trufflepig.decomposition as decomposition
@@ -248,7 +250,7 @@ def test_residual_calibration_refits_and_rolls_back_unconfirmed_scope(
     def fake_select(_frame, _analysis, **kwargs):
         nonlocal selection_calls
         selection_calls += 1
-        if kwargs.get("residual_identity_evidence"):
+        if kwargs.get("cancer_type_decision"):
             return {
                 "selected": {
                     "cancer_type": "BLCA",
@@ -283,28 +285,24 @@ def test_residual_calibration_refits_and_rolls_back_unconfirmed_scope(
         nonlocal identity_calls
         identity_calls += 1
         if identity_calls == 1:
-            return {
-                "status": "candidate",
-                "candidate_code": "BLCA",
-                "adjudication_eligible": True,
-            }
-        return {
-            "status": "ambiguous",
-            "candidate_code": "",
-            "adjudication_eligible": False,
-        }
+            return decomposition.CancerTypeDecision.from_dict(
+                {
+                    "status": "resolved",
+                    "supported_code": "BLCA",
+                    "panel_code": "BLCA",
+                    "current_code": "CHOL",
+                }
+            )
+        return decomposition.CancerTypeDecision(
+            status="ambiguous",
+            selection_allowed=False,
+        )
 
     monkeypatch.setattr(
         decomposition,
-        "evaluate_residual_identity",
+        "decide_cancer_type_from_decomposition",
         fake_identity,
     )
-    monkeypatch.setattr(
-        decomposition,
-        "scope_residual_identity_to_decomposition_mode",
-        lambda evidence, **_kwargs: evidence,
-    )
-
     def fake_propagate(analysis, _frame, *, report_scope_cancer_type, **_kwargs):
         analysis["report_scope_cancer_type"] = report_scope_cancer_type
         analysis["cancer_type"] = report_scope_cancer_type
@@ -332,22 +330,22 @@ def test_residual_calibration_refits_and_rolls_back_unconfirmed_scope(
 
     _trace, summary = calib._classify_one(
         pd.DataFrame(),
-        include_residual_identity=True,
+        include_cancer_type_decision=True,
     )
 
     assert selection_calls == 2
     assert fit_scopes == ["CHOL", "BLCA", "CHOL"]
-    assert summary["pre_residual_cancer_type"] == "CHOL"
+    assert summary["pre_decision_cancer_type"] == "CHOL"
     assert summary["consolidated_cancer_type"] == "CHOL"
-    assert summary["residual_identity_refit_performed"] is True
-    assert summary["residual_identity_refit_accepted"] is False
-    assert summary["residual_identity_status"] == "ambiguous"
+    assert summary["cancer_type_decision_refit_performed"] is True
+    assert summary["cancer_type_decision_refit_accepted"] is False
+    assert summary["cancer_type_decision_status"] == "ambiguous"
 
 
-def test_nonresidual_calibration_keeps_production_composition_evidence(
+def test_non_decision_calibration_keeps_production_composition_evidence(
     monkeypatch,
 ):
-    """Disabling residual analysis must not change upstream cancer evidence."""
+    """Disabling cancer-type decision analysis must not change upstream cancer evidence."""
     import trufflepig.cancer_type_evidence as cancer_type_evidence
     import trufflepig.healthy_vs_tumor as healthy_vs_tumor
     import trufflepig.rare_inference as rare_inference
@@ -393,7 +391,7 @@ def test_nonresidual_calibration_keeps_production_composition_evidence(
 
     returned_trace, summary = calib._classify_one(
         pd.DataFrame(),
-        include_residual_identity=False,
+        include_cancer_type_decision=False,
     )
 
     assert returned_trace == trace

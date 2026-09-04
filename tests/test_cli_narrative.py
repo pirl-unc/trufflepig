@@ -14,6 +14,8 @@ from trufflepig.main import (
     annotate_surface_targets_with_cross_signals,
     _candidate_label_options,
     _effective_met_site_for_background,
+    _entity_consensus_refit_message,
+    _final_cancer_call_outputs,
     _format_purity_interval,
     _hypothesis_display_label,
     _infer_likely_met_site_context,
@@ -21,7 +23,56 @@ from trufflepig.main import (
     _primary_tissues_for_analysis,
     _prioritize_report_compatible_decomposition,
     _summarize_sample_call,
+    _same_lineage_purity_limit,
 )
+
+
+def test_entity_consensus_refit_message_names_the_rule_that_fired():
+    decomposition_only = _entity_consensus_refit_message(
+        "SARC_DDLPS",
+        "CRC",
+        {
+            "majority_decisive_candidate": False,
+            "decomposition_decision_was_decisive": True,
+        },
+    )
+    majority = _entity_consensus_refit_message(
+        "SARC_DDLPS",
+        "CRC",
+        {
+            "majority_decisive_candidate": True,
+            "decomposition_decision_was_decisive": False,
+        },
+    )
+
+    assert "Background-separated tumor program" in decomposition_only
+    assert "majority" not in decomposition_only.lower()
+    assert "majority" in majority.lower()
+
+
+def test_final_cancer_call_outputs_clear_superseded_rescue_metadata():
+    analysis = {
+        "sample_mode": "tumor",
+        "cancer_type_context": {"report": "NUTM"},
+        "purity": {"overall_estimate": 0.7},
+        "retained_cancer_call_rescue": {
+            "kind": "basal_breast_rescue",
+            "recommended_code": "BRCA",
+        },
+    }
+
+    outputs = _final_cancer_call_outputs(
+        analysis,
+        cancer_code="NUTM",
+        reference_cancer_code="HNSC",
+        inferred_site_context=None,
+        initial_cancer_type="BRCA",
+    )
+
+    assert "cancer_call_rescue" in outputs
+    assert outputs["cancer_call_rescue"] is None
+    assert outputs["initial_cancer_type"] == "BRCA"
+    assert outputs["finalized_after_decomposition"] is True
 
 
 def _mock_therapy_scores(**axis_states):
@@ -264,6 +315,94 @@ def test_integrated_evidence_calls_discordant_auto_top_rna_candidate():
     assert "SARC (Sarcoma) is the leading label" not in text
 
 
+def test_background_separated_call_names_bulk_signal_as_host_context():
+    analysis = _base_analysis(
+        cancer_type="CRC",
+        cancer_type_source="auto-detected",
+        report_scope_cancer_type="CRC",
+        cancer_type_evidence={
+            "selected": {
+                "cancer_type": "CRC",
+                "selected_by": "entity_evidence_consensus",
+                "entity_evidence_consensus": {
+                    "decomposition_decision_was_decisive": True,
+                },
+            }
+        },
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "background_separation_confirmed": True,
+        },
+        cancer_type_decision_refit={"accepted": True},
+        candidate_trace=[
+            {
+                "code": "SARC_DDLPS",
+                "signature_score": 0.74,
+                "support_fraction_of_top": 1.0,
+            },
+            {
+                "code": "SARC_PLEOLPS",
+                "support_fraction_of_top": 0.98,
+            },
+        ],
+        call_summary={"label_options": ["CRC"], "label_display": "CRC"},
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis))
+
+    assert "**RNA signal attribution**" in text
+    assert "bulk pan-cancer signature ranker favors SARC_DDLPS" in text
+    assert "retained as background/differential context" in text
+    assert "final-scope decomposition refit reproduced" in text
+    assert "ahead of SARC_PLEOLPS" not in text
+    assert "; signature 0.74" not in text
+
+
+def test_parent_decision_is_context_not_child_selection_basis():
+    analysis = _base_analysis(
+        cancer_type="READ",
+        cancer_type_source="auto-detected",
+        report_scope_cancer_type="READ",
+        cancer_type_evidence={
+            "selected": {
+                "cancer_type": "READ",
+                "selected_by": "entity_evidence_consensus",
+                "entity_evidence_consensus": {
+                    "decomposition_decision_was_decisive": False,
+                },
+            }
+        },
+        cancer_type_decision={
+            "status": "resolved",
+            "supported_code": "CRC",
+            "background_separation_confirmed": True,
+        },
+        cancer_type_decision_refit={"accepted": True},
+        candidate_trace=[
+            {
+                "code": "SARC_DDLPS",
+                "signature_score": 0.74,
+                "support_fraction_of_top": 1.0,
+            },
+            {
+                "code": "READ",
+                "signature_score": 0.70,
+                "support_fraction_of_top": 0.95,
+            },
+        ],
+        call_summary={"label_options": ["READ"], "label_display": "READ"},
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis))
+
+    assert "**RNA classifier line**" in text
+    assert "background decomposition supported CRC (Colorectal Adenocarcinoma)" in text
+    assert "establishes the broader branch but not the more specific READ" in text
+    assert "active report label is RNA rank 2" in text
+    assert "complete marker and ontology program for READ" not in text
+
+
 def test_integrated_evidence_separates_top_rna_candidate_from_fallback_reference():
     analysis = _base_analysis(
         cancer_type="BRCA_Basal",
@@ -326,6 +465,49 @@ def test_integrated_evidence_names_descendant_decomposition_without_branch_confl
     assert "descendant background model within the CRC" in text
     assert "does not refine the report label" in text
     assert "diverging from the report-label" not in text
+
+
+def test_osteosarcoma_report_names_shared_bone_lineage_attribution_limit():
+    analysis = _base_analysis(
+        cancer_type="SARC_OS",
+        reference_cancer_type="SARC",
+        report_scope_cancer_type="SARC_OS",
+        candidate_trace=[
+            {"code": "SARC", "signature_score": 0.8, "support_fraction_of_top": 1.0}
+        ],
+        call_summary={"label_options": ["SARC_OS"], "label_display": "SARC_OS"},
+    )
+    decomposition = SimpleNamespace(
+        cancer_type="SARC",
+        template="met_bone",
+        fractions={
+            "tumor": 0.12,
+            "osteoblast": 0.24,
+            "marrow_stroma": 0.24,
+            "endothelial": 0.34,
+        },
+        warnings=[],
+    )
+
+    text = "\n".join(_integrated_evidence_bullets(analysis, [decomposition]))
+
+    assert "**Mesenchymal-lineage attribution limit**" in text
+    assert "bone and marrow stroma proxy accounts for 48%" in text
+    assert "bulk RNA cannot cleanly divide" in text
+    assert "prioritize targets that remain material across its model interval" in text
+
+
+def test_osteosarcoma_fibroblast_dominance_blocks_resolved_purity_claim():
+    decomposition = SimpleNamespace(
+        fractions={"tumor": 0.12, "fibroblast": 0.88},
+    )
+
+    limit = _same_lineage_purity_limit("SARC_OS", [decomposition])
+
+    assert limit is not None
+    assert limit["kind"] == "osteosarcoma_mesenchymal_lineage_overlap"
+    assert limit["shared_reference_fraction"] == 0.88
+    assert _same_lineage_purity_limit("PRAD", [decomposition]) is None
 
 
 def test_integrated_evidence_mmr_skips_unrelated_retained_candidate():
@@ -531,7 +713,7 @@ def test_blind_report_call_prioritizes_compatible_background_decomposition():
         cancer_type="HNSC",
         template="met_brain",
         score=0.55,
-        warnings=["Many genes are overexplained by the TME background"],
+        warnings=["Many genes are overexplained by the fitted stromal/immune reference background"],
         site_evidence={"site_supported": False, "status": "fit_only"},
     )
     weak_report_met = SimpleNamespace(
@@ -540,7 +722,7 @@ def test_blind_report_call_prioritizes_compatible_background_decomposition():
         score=0.18,
         warnings=[
             "Primary tissue support exceeds metastatic-site support",
-            "Many genes are overexplained by the TME background",
+            "Many genes are overexplained by the fitted stromal/immune reference background",
         ],
         site_evidence={"site_supported": False, "status": "fit_only"},
         template_site_factor=0.57,
@@ -632,7 +814,7 @@ def test_summarize_call_divergent_overexplained_met_template_is_indeterminate():
         template_site_factor=0.9,
         template_tissue_score=0.8,
         site_evidence={"site_supported": True, "status": "site_supported"},
-        warnings=["Many genes are overexplained by the TME background"],
+        warnings=["Many genes are overexplained by the fitted stromal/immune reference background"],
     )
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
     assert result["site_indeterminate"] is True
@@ -657,7 +839,7 @@ def test_summarize_call_explicit_site_hint_survives_divergent_warning():
             "status": "site_supported",
             "basis": "site_hint",
         },
-        warnings=["Many genes are overexplained by the TME background"],
+        warnings=["Many genes are overexplained by the fitted stromal/immune reference background"],
     )
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
     assert result["site_indeterminate"] is False
@@ -676,7 +858,7 @@ def test_summarize_call_explicit_met_site_survives_fit_warning():
         template_site_factor=0.9,
         template_tissue_score=0.8,
         site_evidence={"site_supported": True, "status": "site_supported"},
-        warnings=["Many genes are overexplained by the TME background"],
+        warnings=["Many genes are overexplained by the fitted stromal/immune reference background"],
     )
 
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")

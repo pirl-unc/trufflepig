@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pandas as pd
@@ -41,21 +42,25 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
             "score": 0.91,
             "message": "liver-associated host context",
         },
-        "residual_identity_evidence": {
-            "status": "corroborated",
-            "role": "independent_residual_identity",
-            "candidate_code": "BLCA",
+        "cancer_type_decision": {
+            "status": "resolved",
+            "supported_code": "BLCA",
             "current_code": "BLCA",
             "models_evaluated": 1,
             "realizations_evaluated": 5,
-            "reason": "BLCA remained invariant across liver-host residuals",
+            "background_separation_confirmed": True,
+            "background_attributed_genes": ["ALB"],
+            "reason": "BLCA remained invariant across liver-host background models",
             "background_models": [
                 {
                     "template": "met_liver",
                     "components": ["hepatocyte", "endothelial"],
+                    "model_role": "identity_background",
                     "realizations": 5,
                     "candidate_code": "BLCA",
                     "panel_candidate": "BLCA",
+                    "complete_panel_or_background_candidate": "BLCA",
+                    "background_attributed_genes": ["ALB"],
                     "ontology_candidate": None,
                 }
             ],
@@ -148,7 +153,7 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
         "composition_reference",
         "learned_expression_classifier",
         "background_site_context",
-        "decomposition_residual_identity",
+        "decomposition_cancer_type_decision",
         "expression_decomposition",
     }
     selected = matrix[matrix["selects_report_label"] == True]  # noqa: E712
@@ -160,12 +165,23 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     epithelial = matrix[matrix["predicted_code"] == "epithelial"].iloc[0]
     assert epithelial["predicted_lineage"] == "solid"
     assert bool(epithelial["lineage_agrees_final"]) is True
-    residual = matrix[
-        matrix["signal_source"] == "decomposition_residual_identity"
+    decision = matrix[
+        matrix["signal_source"] == "decomposition_cancer_type_decision"
     ].iloc[0]
-    assert residual["predicted_code"] == "BLCA"
-    assert residual["support_metric"] == "structural_unanimity"
-    assert bool(residual["selects_report_label"]) is False
+    assert decision["predicted_code"] == "BLCA"
+    assert decision["support_metric"] == "structural_unanimity"
+    assert decision["stage"] == "coarse_type"
+    assert decision["ontology_layer"] == "entity"
+    assert bool(decision["is_context_only"]) is False
+    assert bool(decision["selects_report_label"]) is False
+    decision_details = json.loads(decision["details"])
+    assert decision_details["background_separation_confirmed"] is True
+    assert decision_details["background_attributed_genes"] == [
+        "ALB"
+    ]
+    assert decision_details["background_models"][0]["model_role"] == (
+        "identity_background"
+    )
 
     summary = build_signal_matrix_summary_markdown(matrix)
     assert "Final call" in summary
@@ -189,6 +205,31 @@ def test_signal_matrix_surfaces_selector_ranker_learned_and_met_context():
     assert row["entity_consensus_selected_votes"] == 1
     assert row["background_site"] == "liver"
     assert row["decomposition_top"] == "BLCA"
+
+
+def test_selection_disallowed_decomposition_decision_is_blocked():
+    analysis = {
+        "sample_id": "case-blocked-decision",
+        "cancer_type": "BRCA",
+        "reference_cancer_type": "BRCA",
+        "cancer_type_decision": {
+            "status": "resolved",
+            "supported_code": "BRCA",
+            "current_code": "BRCA",
+            "selection_allowed": False,
+            "block_reason": "selection is disabled for this sample mode",
+        },
+    }
+
+    matrix = build_cancer_type_signal_matrix(analysis)
+    decision = matrix[
+        matrix["signal_source"] == "decomposition_cancer_type_decision"
+    ].iloc[0]
+
+    assert decision["status"] == "resolved_blocked"
+    assert bool(decision["is_blocked"]) is True
+    assert decision["ontology_layer"] == "entity"
+    assert json.loads(decision["details"])["selection_allowed"] is False
 
 
 def test_ranker_candidate_trace_does_not_infer_report_selection():

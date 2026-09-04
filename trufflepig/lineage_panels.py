@@ -91,7 +91,7 @@ class LineagePanel:
     background_attribution_markers: tuple[tuple[str, str], ...] = ()
     """Expected-low markers that can originate in a named normal component.
 
-    These remain ordinary low-marker violations in bulk RNA.  Residual-identity
+    These remain ordinary low-marker violations in bulk RNA. Background-separated
     analysis may clear one only when a candidate-independent decomposition
     identifies the named component as the dominant fitted background.  This
     keeps a host-tissue transcript from masquerading as tumor-cell evidence

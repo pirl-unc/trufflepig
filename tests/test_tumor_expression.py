@@ -1033,10 +1033,8 @@ def test_lineage_narrative_generation():
 # ── #108 per-target compositional attribution ─────────────────────────────
 
 
-def test_format_attribution_cell_renders_tumor_and_top_compartment():
-    """`_format_attribution_cell` should produce a compact `tumor X /
-    compartment Y` rendering when the decomposition attribution is
-    present, and fall back to `—` otherwise."""
+def test_format_attribution_cell_renders_estimated_tumor_and_reference_component():
+    """Attribution cells identify both values as outputs of the RNA model."""
     from trufflepig.main import _format_attribution_cell
 
     row_with_attr = {
@@ -1046,7 +1044,9 @@ def test_format_attribution_cell_renders_tumor_and_top_compartment():
         "attr_top_compartment": "endothelial",
         "attr_top_compartment_tpm": 12.0,
     }
-    assert _format_attribution_cell(row_with_attr) == "tumor 136 / endothelial 12"
+    assert _format_attribution_cell(row_with_attr) == (
+        "estimated tumor 136 / endothelial reference component 12 (RNA model)"
+    )
 
     row_no_attr = {
         "observed_tpm": 150.0,
@@ -1073,7 +1073,7 @@ def test_format_attribution_cell_renders_tumor_and_top_compartment():
         "attr_top_compartment": "",
         "attr_top_compartment_tpm": 0.0,
     }
-    assert _format_attribution_cell(row_tumor_only) == "tumor 75"
+    assert _format_attribution_cell(row_tumor_only) == "estimated tumor 75 (RNA model)"
 
 
 def test_tme_dominant_flag_reads_attribution_when_available():

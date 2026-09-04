@@ -128,9 +128,9 @@ def _therapy_summary(line: str) -> tuple[str, str]:
         caveats.append("confirm MSI/MMR before immunotherapy use")
     elif "confirm mutation" in lowered or "confirm biomarker" in lowered:
         caveats.append("confirm molecular eligibility")
-    if "tumor-supported" in lowered:
-        caveats.append("RNA supports tumor-source expression")
-    elif "mixed-source" in lowered:
+    if "mostly tumor" in lowered or "tumor-supported" in lowered:
+        caveats.append("RNA supports estimated tumor expression")
+    elif "mixed tumor and background" in lowered or "mixed-source" in lowered:
         caveats.append("RNA is mixed tumor/background")
     elif "context only" in lowered:
         caveats.append("target RNA is context only")
@@ -374,7 +374,7 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     cards = [
         ("Cancer call", call, ACCENT, SOFT_BLUE),
         ("MMR RNA", mmr, (124, 58, 237), (245, 243, 255)),
-        ("Purity", purity, (22, 163, 74), SOFT_GREEN),
+        ("Estimated tumor fraction (RNA model)", purity, (22, 163, 74), SOFT_GREEN),
         ("Assay / QC", sample_card, (217, 119, 6), SOFT_AMBER),
     ]
     for idx, (label, value, accent, bg) in enumerate(cards):
@@ -446,16 +446,19 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
                     max_width=PAGE_W - 2 * MARGIN - 40,
                 )
         else:
-            for line in (document.get("highlights") or [])[:3]:
-                y = _draw_labeled_bullet(
-                    draw,
-                    label="Therapy",
-                    body=line,
-                    y=y,
-                    max_width=PAGE_W - 2 * MARGIN - 40,
-                )
+            y = _draw_labeled_bullet(
+                draw,
+                label="Status",
+                body=(
+                    "No therapy eligibility is established by this RNA report. "
+                    "Use the molecular findings to prioritize confirmatory testing "
+                    "and clinical review."
+                ),
+                y=y,
+                max_width=PAGE_W - 2 * MARGIN - 40,
+            )
 
-    # Top priority targets with tumor-source TPM and a normal-tissue safety band.
+    # Top priority targets with estimated patient attribution and healthy-reference context.
     targets = document.get("targets") or {}
     target_rows = targets.get("rows")
     if target_rows and y < PAGE_H - 950:

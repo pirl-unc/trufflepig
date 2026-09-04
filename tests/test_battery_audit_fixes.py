@@ -56,14 +56,14 @@ def test_render_vs_tcga_not_in_cohort_shows_ref_zero_when_absent():
     assert _render_vs_tcga_cell(row) == "ref 0"
 
 
-def test_render_vs_tcga_tme_explained_shows_tme_only_with_cohort_tpm():
+def test_render_vs_tcga_tme_explained_shows_external_background_with_cohort_tpm():
     # TME-deconvolution zeroed the tumor component.
     row = _row(
         tcga_ref_state="tme_explained",
         pct_cancer_median=float("inf"),
         tcga_cohort_median_tpm=12.3,
     )
-    assert _render_vs_tcga_cell(row) == "TME-only (12.3 TPM)"
+    assert _render_vs_tcga_cell(row) == "external background reference only (12.3 TPM)"
 
 
 def test_render_vs_tcga_both_absent_renders_dash():

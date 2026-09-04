@@ -2,9 +2,9 @@
 
 The reader PDF captions each figure with an *interpretation sentence* (what the
 figure means for the decision), not its PNG filename, and its figure manifest must
-stay in sync with the figures the pipeline actually emits — a stale manifest
-silently omitted the therapy figure (``treatments.png``) and shipped names that no
-longer exist. The parsing/manifest logic now lives in
+stay in sync with the curated patient packet. Preliminary labels, alternative
+decomposition fits, and raw target surveys remain audit-only. The parsing/manifest
+logic now lives in
 :mod:`trufflepig.report_document` (shared with the pipeline so the PDF renders from
 one serialized decision); these are cheap structural checks, and the rendering
 itself is validated by eye against a real report.
@@ -38,14 +38,32 @@ def test_figure_registry_entries_are_suffix_title_interpretation_triples():
         assert interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
 
 
-def test_reader_manifest_includes_therapy_and_excludes_near_duplicates():
+def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
     suffixes = {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
-    # The ranked-therapy figure must be present (was silently dropped by the old
-    # manifest, which looked only for priority-targets/actionable-targets).
-    assert "treatments.png" in suffixes
-    # The near-duplicate log-TPM dumbbell plots belong to the audit PDF only.
-    assert "priority-target-context.png" not in suffixes
-    assert "actionable-targets.png" not in suffixes
+    assert {
+        "sample-context.png",
+        "decomposition-composition.png",
+        "decomposition-components.png",
+        "purity-methods.png",
+    }.issubset(suffixes)
+    assert {
+        "sample-summary.png",
+        "cancer-hypotheses.png",
+        "cancer-type-signal-matrix.png",
+        "decomposition-candidates.png",
+        "background-tissues.png",
+        "mhc-expression.png",
+        "treatments.png",
+        "purity-ctas.png",
+        "purity-surface.png",
+        "priority-targets.png",
+        "priority-target-context.png",
+        "actionable-targets.png",
+    }.isdisjoint(suffixes)
+    assert rd.is_patient_figure("sample-decomposition-composition.png")
+    assert not rd.is_patient_figure("sample-decomposition-candidates.png")
+    assert not rd.is_patient_figure("sample-cancer-type-signal-matrix.png")
+    assert not rd.is_patient_figure("sample-prad-genes.png")
 
 
 def test_figure_page_captions_with_interpretation_not_filename():
@@ -57,7 +75,7 @@ def test_figure_page_captions_with_interpretation_not_filename():
 # --- §2.6b: the document parsers recover the therapy + priority-target tables ----
 # The old scrape dropped every markdown table row on the floor. These pin that the
 # shared document builder recovers the therapy shortlist and the top surface targets
-# (with their tumor-source TPM and normal-tissue safety band) straight from the
+# (with estimated patient attribution and healthy-reference context) straight from the
 # report markdown, as structured {columns, rows} tables.
 
 _ANALYSIS_MD = """\
@@ -67,7 +85,7 @@ _ANALYSIS_MD = """\
 
 Some preamble sentence.
 
-| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
+| Target | Agent | Class | Phase | Indication | Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Patient context TPM (RNA model estimate) | Interpretation |
 |--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
 | **CD274** | pembrolizumab | antibody | Approved | MSI-H / dMMR mCRC | 2.5 | 0 (0-0) | 0 | target expression is not the eligibility criterion — confirm MSI-H / dMMR status; approved antibody |
 | **CEACAM5** | labetuzumab govitecan | ADC | Phase 2 | CEACAM5+ mCRC | 990.8 | 847 (353-895) | 991 | tumor-supported; vital-tissue concern; mid-clinical ADC |
@@ -84,12 +102,12 @@ _EVIDENCE_MD = """\
 
 Surface proteins with high context expression and source-attribution caveats.
 
-| Gene | Context TPM (model) | Model interval | Bulk TPM (measured) | vs ref | Ref %ile | TME | Attribution | Therapies |
+| Gene | Patient context TPM (RNA model estimate) | Model interval | Patient bulk TPM (measured) | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Estimated attribution | Therapies |
 |------|-----------|----------------|---------------------|---------|-----------|-----|-------------|-----------|
-| **CEACAM5** | 991 | 991–991 | 991 | 0.10× | 94% | tissue-explainable | tumor 847 / T cell 0 | ADC, TCR-T |
-| EPCAM | 825 | 825–825 | 825 | 0.12× | 88% | tissue-explainable | tumor 595 / endothelial 3 · broadly expr. |  |
-| SLC2A1 | 784 | 654–1956 | 516 | 1.35× | 100% |  | tumor 493 / endothelial 9 · broadly expr. |  |
-| BSG | 525 | 525–525 | 525 | 0.18× | 9% | background-dominant | tumor 204 / endothelial 38 |  |
+| **CEACAM5** | 991 | 991–991 | 991 | 0.10× | 94% | tissue-explainable | patient tumor-attributed 847 / T cell 0 (estimated by RNA model) | ADC, TCR-T |
+| EPCAM | 825 | 825–825 | 825 | 0.12× | 88% | tissue-explainable | patient tumor-attributed 595 / endothelial 3 (estimated by RNA model) · broadly expr. |  |
+| SLC2A1 | 784 | 654–1956 | 516 | 1.35× | 100% |  | patient tumor-attributed 493 / endothelial 9 (estimated by RNA model) · broadly expr. |  |
+| BSG | 525 | 525–525 | 525 | 0.18× | 9% | background-dominant | patient tumor-attributed 204 / endothelial 38 (estimated by RNA model) |  |
 """
 
 _SUMMARY_WITH_ATTR_MD = """\
@@ -101,7 +119,7 @@ _SUMMARY_WITH_ATTR_MD = """\
 
 **Where target RNA signal appears to come from**
 
-| Gene | Bulk TPM | Tumor-source bulk TPM | Tumor fraction | Top non-tumor attribution | Component TPM | Main reason |
+| Gene | Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Estimated tumor fraction | Top estimated non-tumor contribution | Estimated component TPM | Main reason |
 |---|---:|---:|---:|---|---:|---|
 | CD274 | 2.49 | 0 | 0% | myeloid | 0.51 | RNA is context only |
 | ERBB2 | 54.2 | 13.3 | 25% | endothelial | 1.56 | interval includes material tumor signal |
@@ -113,12 +131,12 @@ _SUMMARY_WITH_THERAPIES_MD = """\
 
 ## Top candidate therapies
 
-### Approved / disease-matched
+### Approved pathway / eligibility pending
 
-- **CD274** — pembrolizumab (Approved, MSI-H / dMMR mCRC). target expression is not the eligibility criterion — confirm MSI-H / dMMR status; target RNA is context only (bulk 2.5 TPM; it does not establish eligibility).
-- **CEACAM5** — labetuzumab govitecan (Phase 2, CEACAM5+ mCRC). tumor-supported; 847 tumor-source bulk TPM (model interval 353-895); mid-clinical ADC.
-- **EGFR** — cetuximab (Approved, RAS-WT mCRC). background-dominant; 0 tumor-source bulk TPM (model interval 0-3); approved antibody.
-- **BRAF** — encorafenib (Approved, BRAF V600E mCRC). target expression is not the eligibility criterion; target RNA is context only (bulk 9.2 TPM; it does not establish eligibility).
+- **CD274** — pembrolizumab (Approved, MSI-H / dMMR mCRC). target expression is not the eligibility criterion — confirm MSI-H / dMMR status; target RNA is context only (patient bulk 2.5 TPM, measured; it does not establish eligibility).
+- **CEACAM5** — labetuzumab govitecan (Phase 2, CEACAM5+ mCRC). tumor-supported; 847 patient tumor-attributed TPM (estimated by RNA model; model interval 353-895); mid-clinical ADC.
+- **EGFR** — cetuximab (Approved, RAS-WT mCRC). background-dominant; 0 patient tumor-attributed TPM (estimated by RNA model; model interval 0-3); approved antibody.
+- **BRAF** — encorafenib (Approved, BRAF V600E mCRC). target expression is not the eligibility criterion; target RNA is context only (patient bulk 9.2 TPM, measured; it does not establish eligibility).
 """
 
 
@@ -143,8 +161,8 @@ def test_therapy_recommendations_follow_summary_and_limit_to_three(tmp_path):
     assert [c[0] for c in cols] == [
         "Target",
         "Recommendation",
-        "Tumor-src TPM",
-        "Eligibility / RNA source",
+        "Estimated tumor TPM (RNA model)",
+        "Eligibility / RNA provenance",
     ]
     assert [r[0] for r in rows] == ["CD274", "CEACAM5", "EGFR"]
     assert rows[0][1] == "pembrolizumab · Approved"
@@ -158,12 +176,19 @@ def test_priority_target_table_reads_tumor_source_and_safety_band(tmp_path):
     (tmp_path / "s-evidence.md").write_text(_EVIDENCE_MD)
     table = rd._priority_target_table(tmp_path, "s")
     cols, rows = table["columns"], table["rows"]
-    assert [c[0] for c in cols] == ["Target", "Tumor-src TPM", "Normal-tissue safety", "Cohort %ile"]
+    assert [c[0] for c in cols] == [
+        "Target",
+        "Estimated tumor TPM (RNA model)",
+        "Healthy-tissue context (reference panel)",
+        "Pan-cancer ref %ile",
+    ]
     assert [r[0] for r in rows] == ["CEACAM5", "EPCAM", "SLC2A1"]  # top 3 by rank
     assert rows[0][1] == "847"  # tumor-source TPM parsed out of the attribution cell
     assert rows[0][2] == "tissue-explainable"  # TME safety band
     assert "broad normal expr." in rows[1][2]  # broadly-expressed cue appended
-    assert rows[2][2].startswith("tumor-enriched")  # empty TME → tumor-enriched
+    assert rows[2][2].startswith(
+        "not explained by one healthy-tissue reference"
+    )
     assert rows[0][3] == "94%"
 
 
@@ -172,7 +197,10 @@ def test_priority_target_table_falls_back_to_summary_attribution(tmp_path):
     (tmp_path / "s-summary.md").write_text(_SUMMARY_WITH_ATTR_MD)
     table = rd._priority_target_table(tmp_path, "s")
     cols, rows = table["columns"], table["rows"]
-    assert [c[0] for c in cols][:2] == ["Target", "Tumor-src TPM"]
+    assert [c[0] for c in cols][:2] == [
+        "Target",
+        "Estimated tumor TPM (RNA model)",
+    ]
     assert [r[0] for r in rows] == ["CD274", "ERBB2", "BRAF"]
     assert rows[1][1] == "13.3"  # tumor-source bulk TPM column
 

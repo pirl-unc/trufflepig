@@ -44,6 +44,7 @@ class AnalyzeConfig:
     hla_types: str | None = None
     fusions: str | None = None
     variants: str | None = None
+    variant_genome_build: str | None = None
     # Deprecated constructor compatibility. It is omitted from public output.
     alterations: str | None = None
     alignment_qc: str | None = None

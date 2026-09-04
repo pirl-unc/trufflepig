@@ -38,7 +38,7 @@ from .plot_therapy import (
     _summarize_fn1_edb_transcript_support,
     _apply_therapy_support_gate,
 )
-from .reporting import tumor_attribution_context
+from .reporting import component_display_label, tumor_attribution_context
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -1952,14 +1952,28 @@ def plot_matched_normal_attribution(
     y = np.arange(n)
     fig, ax = plt.subplots(figsize=figsize)
 
-    ax.barh(y, tumor_attr, color="#e74c3c", label="tumor cells")
-    ax.barh(y, mn, left=tumor_attr, color="#3498db", label="matched-normal tissue")
+    ax.barh(
+        y,
+        tumor_attr,
+        color="#e74c3c",
+        label="Estimated tumor TPM (RNA model)",
+    )
+    ax.barh(
+        y,
+        mn,
+        left=tumor_attr,
+        color="#3498db",
+        label=(
+            "Expected lineage-normal component (external reference panel; "
+            "estimated by RNA model; not patient-matched)"
+        ),
+    )
     ax.barh(
         y,
         tme,
         left=tumor_attr + mn,
         color="#95a5a6",
-        label="other TME (stromal/immune)",
+        label="Other stromal/immune reference contributions (estimated)",
     )
 
     labels = []
@@ -1969,15 +1983,15 @@ def plot_matched_normal_attribution(
             sym = f"{sym}  [{row['therapies']}]"
         flags = []
         if row.get("tme_explainable"):
-            flags.append("tissue-explainable")
+            flags.append("could come from healthy tissue")
         if row.get("matched_normal_over_predicted"):
-            flags.append("MN>obs")
+            flags.append("external normal ref > measured bulk")
         elif str(row.get("estimation_path", "")) == "clamped":
             # Older ranges_df rows (before #131) won't have the
             # matched_normal_over_predicted column — fall back to
             # the estimation_path signal but with a human-readable
             # marker instead of the raw "clamp" jargon.
-            flags.append("MN>obs")
+            flags.append("external normal ref > measured bulk")
         if flags:
             sym = f"{sym}  {' '.join(flags)}"
         labels.append(sym)
@@ -2000,7 +2014,7 @@ def plot_matched_normal_attribution(
                 )
 
     ax.set_xlabel(
-        "Bulk TPM attribution (stacked: tumor + matched-normal + other background)",
+        "Estimated attribution of patient bulk TPM (stacked)",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)
@@ -2025,9 +2039,16 @@ def plot_matched_normal_attribution(
         nonempty = [v for v in nonempty.unique() if v]
         if nonempty:
             mn_tissue = nonempty[0]
-    title = f"Matched-normal attribution \u2014 {cancer_code} {category}"
+    title = (
+        f"Expected lineage-normal reference attribution \u2014 "
+        f"{cancer_code} {category}"
+    )
     if mn_tissue:
-        title += f"\n(benign {mn_tissue} and other decomposition background; black tick = TCGA cohort prior)"
+        tissue_label = component_display_label(f"matched_normal_{mn_tissue}")
+        title += (
+            f"\n({tissue_label}; not a patient-matched normal; "
+            "black tick = selected cancer reference prior)"
+        )
     ax.set_title(title, fontsize=11, fontweight="bold")
 
     plt.tight_layout()
@@ -2168,7 +2189,7 @@ def plot_target_attribution(
         if row.get("tme_dominant"):
             sym = f"{sym}  tumor-low"
         elif row.get("tme_explainable"):
-            sym = f"{sym}  tissue-explainable"
+            sym = f"{sym}  could come from healthy tissue"
         labels.append(sym)
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=9)
@@ -2331,6 +2352,7 @@ def plot_tumor_expression_ranges(
     df_ranges,
     purity_result,
     cancer_type,
+    report_cancer_type=None,
     top_n=15,
     categories=None,
     save_to_filename=None,
@@ -2346,7 +2368,10 @@ def plot_tumor_expression_ranges(
     purity_result : dict
         Output of ``estimate_tumor_purity()``.
     cancer_type : str
-        Cancer type code for title.
+        Cancer type code for the expression reference.
+    report_cancer_type : str, optional
+        Final report call to show first in the title. When it differs from
+        ``cancer_type``, the reference is named explicitly in parentheses.
     top_n : int
         Max genes per category panel.
     categories : list of str, optional
@@ -2359,6 +2384,12 @@ def plot_tumor_expression_ranges(
         categories = ["therapy_target", "CTA", "surface"]
 
     cancer_code = resolve_cancer_type(cancer_type)
+    report_code = str(report_cancer_type or cancer_code).strip().upper()
+    title_code = (
+        report_code
+        if report_code == cancer_code
+        else f"{report_code} ({cancer_code} reference)"
+    )
     p_lo = max(purity_result.get("overall_lower") or 0.01, 0.01)
     p_med = max(purity_result.get("overall_estimate") or 0.05, 0.01)
     p_hi = max(purity_result.get("overall_upper") or p_med, 0.01)
@@ -2564,7 +2595,7 @@ def plot_tumor_expression_ranges(
 
     # Suptitle with purity info and caveat
     fig.suptitle(
-        f"Tumor-cell-equivalent expression \u2014 {cancer_code}\n"
+        f"Tumor-cell-equivalent expression \u2014 {title_code}\n"
         f"Purity: {p_lo:.0%} / {p_med:.0%} / {p_hi:.0%} (low / est / high)\n"
         "Context-adjusted per-cell range; source-attributed bulk TPM is in tables.",
         fontsize=10,

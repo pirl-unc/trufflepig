@@ -112,9 +112,9 @@ def test_provenance_md_walks_the_five_steps():
     for heading in [
         "## RNA Prep and Preservation",
         "### Preservation and Degradation",
-        "## Tumor Purity and Coarse Composition",
+        "## Estimated Tumor Fraction and Coarse Composition",
         "## Subtype and Background Refinements",
-        "## Tumor-Attributed Expression",
+        "## Estimated Tumor Expression (RNA Model)",
     ]:
         assert heading in md, f"missing step heading: {heading}"
     assert "RNA hybrid-capture" in md
@@ -142,7 +142,7 @@ def test_provenance_composition_uses_finalized_headline_not_decomp_purity():
         sample_id="sample_X",
     )
     # tumor% equals the finalized headline (60%), not the frozen decomp (28%).
-    assert "**tumor 60%**" in md
+    assert "**estimated tumor fraction 60% (RNA model)**" in md
     assert "tumor 28%" not in md
     # The Chain summary's non-tumor figure must equal 1 - headline (40%), not
     # 1 - decomp (72%), so the two purity-bearing lines agree on one page.
@@ -160,7 +160,7 @@ def test_provenance_composition_falls_back_to_decomp_when_no_headline():
         [_Decomp(purity=0.28)],
         cancer_code="PRAD",
     )
-    assert "**tumor 28%**" in md
+    assert "**estimated tumor fraction 28% (RNA model)**" in md
 
 
 def test_provenance_abstains_from_consensus_composition_when_purity_is_unresolved(
@@ -205,9 +205,9 @@ def test_provenance_abstains_from_consensus_composition_when_purity_is_unresolve
     )
 
     assert "**Quantitative purity is unresolved.**" in md
-    assert "matched-normal lineage model: 5% [1%–12%]" in md
+    assert "healthy-tissue lineage reference model: 5% [1%–12%]" in md
     assert "upstream expression model: 43% [32%–55%]" in md
-    assert "operational tumor model 5%" in md
+    assert "operational estimated tumor fraction 5%" in md
     assert "not a resolved sample-composition measurement" in md
     assert "subtracts 95% as non-tumor" not in md
     assert "quantitative tumor/non-tumor split remains unresolved" in md
@@ -294,10 +294,13 @@ def test_provenance_distinguishes_tumor_supported_from_mixed_source_core():
         sample_id="sample_X",
     )
     assert (
-        "**1 genes** retain ≥1 TPM of tumor-supported tumor-attributed expression."
+        "**1 genes** retain ≥1 estimated tumor TPM."
         in md
     )
-    assert "additional **1 genes** retain residual tumor-attributed TPM" in md
+    assert (
+        "additional **1 genes** retain residual estimated tumor TPM but remain mixed source"
+        in md
+    )
     assert "SAFE (128)" in md
     assert "MIXED (26)" not in md
 

@@ -68,6 +68,46 @@ def md_table_cell(value) -> str:
     )
 
 
+def component_display_label(value, *, include_model_role: bool = False) -> str:
+    """Reader label for a modeled attribution component.
+
+    In particular, internal ``matched_normal_*`` identifiers are external
+    normal reference templates, not a normal specimen collected from this
+    patient.
+    """
+
+    text = _clean_text(value).replace("_", " ")
+    if not text:
+        return "—"
+    lowered = text.lower()
+    if lowered == "tumor":
+        return (
+            "estimated tumor component (RNA model)"
+            if include_model_role
+            else "estimated tumor component"
+        )
+    if lowered.startswith("matched normal "):
+        tissue = text[len("matched normal ") :].strip()
+        suffix = (
+            " reference (external panel; RNA model; not patient matched)"
+            if include_model_role
+            else " reference (external panel)"
+        )
+        return f"{tissue} lineage{suffix}"
+    if lowered == "bone lineage stroma":
+        return (
+            "bone and marrow stroma proxy (external panel; RNA model)"
+            if include_model_role
+            else "bone and marrow stroma proxy (external panel)"
+        )
+    suffix = (
+        " reference component (RNA model)"
+        if include_model_role
+        else " reference component"
+    )
+    return f"{text}{suffix}"
+
+
 def _safe_float(value, default=0.0) -> float:
     try:
         result = float(value)
@@ -97,6 +137,16 @@ _THERAPY_FILTER_RULES = (
         ),
     },
     {
+        "cancer_code": "BLCA",
+        "symbol": "CD274",
+        "agent_contains": "atezolizumab",
+        "indication_contains": ("urothelial", "bladder"),
+        "note": (
+            "withdrawn U.S. urothelial carcinoma indication (2022); do not "
+            "shortlist as a current BLCA option"
+        ),
+    },
+    {
         "cancer_code": "SARC_OS",
         "symbol": "IGF1R",
         "agent_contains": "ganitumab",
@@ -106,7 +156,448 @@ _THERAPY_FILTER_RULES = (
             "current osteosarcoma-specific recommendation"
         ),
     },
+    {
+        "cancer_code": "SARC_OS",
+        "symbol": "B4GALNT1",
+        "agent_contains": "dinutuximab",
+        "indication_contains": ("osteosarcoma", "advanced", "metastatic"),
+        "note": (
+            "completed negative historical study; a later combination study "
+            "was terminated and no current recruiting U.S. osteosarcoma "
+            "program was verified"
+        ),
+    },
+    {
+        "cancer_code": "SARC_OS",
+        "symbol": "VEGFA",
+        "agent_contains": "cabozantinib",
+        "indication_contains": ("osteosarcoma", "r/r os"),
+        "note": (
+            "osteosarcoma studies are active-not-recruiting, suspended, or "
+            "terminated as of the audit; do not present this as a current "
+            "recruiting RNA-selected option"
+        ),
+    },
+    {
+        "cancer_code": "COAD",
+        "symbol": "CEACAM5",
+        "agent_contains": "labetuzumab govitecan",
+        "indication_contains": ("mcrc", "colorectal"),
+        "note": (
+            "terminated historical colorectal study; no current recruiting "
+            "labetuzumab-govitecan program was verified"
+        ),
+    },
+    {
+        "cancer_code": "PRAD",
+        "symbol": "CEACAM5",
+        "agent_contains": "labetuzumab govitecan",
+        "indication_contains": ("mcrpc", "prostate", "nepc"),
+        "note": (
+            "historical transfer rationale without a current prostate "
+            "labetuzumab-govitecan study"
+        ),
+    },
+    {
+        "cancer_code": "BRCA",
+        "symbol": "FOLR1",
+        "agent_contains": "mirvetuximab soravtansine",
+        "indication_contains": ("tnbc", "breast"),
+        "note": (
+            "completed small breast study with no current recruiting breast "
+            "program verified; the phase 3/approved program is ovarian, not TNBC"
+        ),
+    },
+    {
+        "cancer_code": "PRAD",
+        "symbol": "CD276",
+        "agent_contains": "vobramitamab duocarmazine",
+        "indication_contains": ("mcrpc", "prostate"),
+        "note": "TAMARACK was terminated in 2026; not a current prostate option",
+    },
+    {
+        "cancer_code": "PRAD",
+        "symbol": "CEACAM5",
+        "agent_contains": "tusamitamab ravtansine",
+        "indication_contains": ("mcrpc", "prostate"),
+        "note": (
+            "development program was discontinued and relevant studies were "
+            "terminated; not a current prostate option"
+        ),
+    },
+    {
+        "cancer_code": "PRAD",
+        "symbol": "TACSTD2",
+        "agent_contains": "sacituzumab govitecan",
+        "indication_contains": ("mcrpc", "prostate"),
+        "note": (
+            "prostate studies are completed or active-not-recruiting; do not "
+            "present as a current recruiting prostate option"
+        ),
+    },
+    {
+        "cancer_code": "PRAD",
+        "symbol": "KLK2",
+        "agent_contains": "jnj-69086420",
+        "indication_contains": ("mcrpc", "prostate"),
+        "note": (
+            "phase 1 study is active-not-recruiting; not a current recruiting "
+            "option"
+        ),
+    },
+    {
+        "cancer_code": "NUTM",
+        "symbol": "",
+        "agent_contains": "molibresib",
+        "indication_contains": ("nut carcinoma",),
+        "note": "withdrawn NUT-carcinoma study; retain only as historical evidence",
+    },
+    {
+        "cancer_code": "NUTM",
+        "symbol": "",
+        "agent_contains": "birabresib",
+        "indication_contains": ("nut carcinoma",),
+        "note": "terminated NUT-carcinoma program; retain only as historical evidence",
+    },
+    {
+        "cancer_code": "NUTM",
+        "symbol": "",
+        "agent_contains": "bms-986158",
+        "indication_contains": ("nut carcinoma",),
+        "note": "completed early-phase study; not a current recruiting option",
+    },
+    {
+        "cancer_code": "NUTM",
+        "symbol": "",
+        "agent_contains": "nuv-868",
+        "indication_contains": ("nut carcinoma",),
+        "note": "terminated development study; not a current recruiting option",
+    },
 )
+
+
+def _current_therapy_row_overrides(target_row) -> dict:
+    """Return report-layer corrections for known fast-moving clinical rows.
+
+    Pirlygenes remains the upstream disease-curation source, but approval and
+    trial status changes faster than its release cadence.  Keep the small set
+    of verified corrections here beside the withdrawal filters so reports do
+    not preserve a stale phase, omit a required combination partner, or imply
+    that RNA expression is the label biomarker.
+    """
+    cancer_code = _clean_text(target_row.get("cancer_code")).upper()
+    agent = _clean_text(target_row.get("agent")).lower()
+
+    if cancer_code == "COAD" and agent == "sotorasib":
+        return {
+            "agent": "sotorasib + panitumumab",
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires FDA-authorized KRAS G12C testing and prior "
+                "fluoropyrimidine-, oxaliplatin-, and irinotecan-based therapy"
+            ),
+        }
+    if cancer_code == "COAD" and agent == "adagrasib":
+        return {
+            "agent": "adagrasib + cetuximab",
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires FDA-authorized KRAS G12C testing and prior "
+                "fluoropyrimidine-, oxaliplatin-, and irinotecan-based therapy"
+            ),
+        }
+    if cancer_code in {"COAD", "READ"} and "encorafenib" in agent:
+        return {
+            "agent": (
+                "encorafenib + cetuximab + fluorouracil-based chemotherapy"
+            ),
+            "phase": "approved",
+            "treatment_path_tier": "approved_standard",
+            "line_of_therapy": "first_line",
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires BRAF V600E by an FDA-authorized test; current label "
+                "combines encorafenib and cetuximab with mFOLFOX6 or FOLFIRI"
+            ),
+        }
+    if cancer_code in {"COAD", "READ"} and any(
+        name in agent for name in ("tucatinib", "trastuzumab")
+    ):
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires HER2-positive disease by the indication-specific "
+                "clinical assay, RAS wild-type status, and the approved "
+                "treatment-line setting"
+            ),
+        }
+    if cancer_code in {"COAD", "READ"} and any(
+        name in agent for name in ("cetuximab", "panitumumab")
+    ):
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires validated extended-RAS wild-type status and the "
+                "indication-specific BRAF, tumor-sidedness, and treatment-line "
+                "context; target RNA is not the assay"
+            ),
+        }
+    if cancer_code in {"COAD", "READ"} and any(
+        name in agent
+        for name in (
+            "encorafenib",
+            "tucatinib",
+            "trastuzumab",
+            "cetuximab",
+            "panitumumab",
+            "pembrolizumab",
+        )
+    ):
+        return {"requires_verified_alteration": True}
+    if cancer_code == "BLCA" and "erdafitinib" in agent:
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires a susceptible FGFR3 genetic alteration by an "
+                "FDA-approved companion diagnostic and the label-specific "
+                "prior-treatment setting"
+            ),
+        }
+    if cancer_code == "BLCA" and "enfortumab vedotin" in agent:
+        return {
+            "agent": "enfortumab vedotin + pembrolizumab",
+            "phase": "approved",
+            "treatment_path_tier": "approved_standard",
+            "line_of_therapy": "first_line",
+            "indication": "locally advanced or metastatic urothelial carcinoma",
+            "rationale": (
+                "FDA-approved combination for locally advanced or metastatic "
+                "urothelial carcinoma; NECTIN4 RNA is not an eligibility test"
+            ),
+            "eligibility_note": (
+                "histology- and disease-setting-based approval; confirm clinical "
+                "fitness and treatment context, not NECTIN4 RNA"
+            ),
+        }
+    if cancer_code == "BLCA" and "trastuzumab deruxtecan" in agent:
+        return {
+            "phase": "approved",
+            "treatment_path_tier": "approved_later_line",
+            "line_of_therapy": "later_line_approved",
+            "requires_verified_alteration": True,
+            "indication": (
+                "HER2-positive (IHC 3+) unresectable/metastatic solid tumor "
+                "after prior systemic therapy"
+            ),
+            "eligibility_note": (
+                "requires HER2 IHC 3+ by an authorized assay, prior systemic "
+                "therapy, and no satisfactory alternative options"
+            ),
+        }
+    if cancer_code == "BRCA" and any(
+        token in agent for token in ("olaparib", "talazoparib", "pembrolizumab")
+    ):
+        return {"requires_verified_alteration": True}
+    if cancer_code == "BRCA" and agent:
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires the indication-specific clinical ER/PR/HER2, genomic, "
+                "or companion-diagnostic result and treatment-line context; "
+                "tumor RNA alone is not the eligibility assay"
+            ),
+        }
+    if cancer_code == "PRAD" and "ifinatamab deruxtecan" in agent:
+        return {
+            "phase": "phase_3",
+            "treatment_path_tier": "late_clinical",
+            "eligibility_note": (
+                "active phase 3 mCRPC program; trial eligibility, prior therapy, "
+                "and current recruiting site must be verified"
+            ),
+        }
+    if cancer_code == "PRAD" and "xaluritamig" in agent:
+        return {
+            "phase": "phase_3",
+            "treatment_path_tier": "late_clinical",
+            "eligibility_note": (
+                "phase 3 mCRPC program; verify cohort status, prior therapy, "
+                "and recruiting availability"
+            ),
+        }
+    if cancer_code == "PRAD" and "bpx-601" in agent:
+        return {
+            "phase": "phase_1",
+            "treatment_path_tier": "trial_follow_up",
+            "rationale": (
+                "PSCA-directed CAR-T in the recruiting 2026 mCRPC study "
+                "NCT07543055; the earlier NCT02744287 study was terminated"
+            ),
+            "eligibility_note": (
+                "recruiting phase 1 trial; requires protocol-specific mCRPC, "
+                "prior-treatment, organ-function, and site eligibility; RNA can "
+                "nominate follow-up but does not establish eligibility"
+            ),
+        }
+    if cancer_code == "SARC_OS" and "trastuzumab deruxtecan" in agent:
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "osteosarcoma use remains investigational; verify that an "
+                "osteosarcoma cohort is currently open and use the protocol's "
+                "clinical tissue HER2 assessment rather than RNA"
+            ),
+        }
+    if cancer_code == "PRAD" and any(
+        token in agent for token in ("psma-617", "fapi-46")
+    ):
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires protocol/label-specific molecular imaging and the "
+                "appropriate disease and prior-treatment setting; RNA is not "
+                "the eligibility assay"
+            ),
+        }
+    return {}
+
+
+def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
+    """Small current-study additions missing from the upstream disease table."""
+    cancer_code = _clean_text(cancer_code).upper()
+    if cancer_code == "NUTM":
+        return [
+            {
+                "cancer_code": "NUTM",
+                "symbol": "",
+                "agent": "ZEN003694 + abemaciclib",
+                "phase": "phase_1",
+                "indication": "metastatic or unresectable NUT carcinoma",
+                "rationale": (
+                    "recruiting NUT-carcinoma cohort in NCT05372640; dual BET "
+                    "and CDK4/6 strategy"
+                ),
+                "treatment_path_tier": "trial_follow_up",
+                "requires_verified_alteration": False,
+                "eligibility_note": (
+                    "requires confirmed NUT carcinoma plus protocol-specific "
+                    "age, disease-setting, prior-treatment, organ-function, and "
+                    "site eligibility; verify live recruiting status"
+                ),
+            }
+        ]
+    if cancer_code == "BRCA":
+        parp_common = {
+            "phase": "approved",
+            "indication": (
+                "germline BRCA-mutated, HER2-negative breast cancer in the "
+                "label-specific disease setting"
+            ),
+            "rationale": (
+                "approved PARP-inhibitor pathway omitted from the upstream "
+                "expression-target panel"
+            ),
+            "treatment_path_tier": "approved_indication_matched",
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires a deleterious or suspected deleterious germline BRCA "
+                "result from an authorized clinical assay plus HER2 and "
+                "disease-setting eligibility; tumor RNA is not the assay"
+            ),
+        }
+        return [
+            {
+                "cancer_code": "BRCA",
+                "symbol": gene,
+                "agent": "olaparib / talazoparib",
+                **parp_common,
+            }
+            for gene in ("BRCA1", "BRCA2")
+        ] + [
+            {
+                "cancer_code": "BRCA",
+                "symbol": "CD274",
+                "agent": "pembrolizumab + chemotherapy",
+                "phase": "approved",
+                "indication": (
+                    "locally recurrent unresectable or metastatic TNBC with "
+                    "PD-L1 CPS >=10"
+                ),
+                "rationale": (
+                    "approved TNBC immunotherapy pathway; PD-L1 RNA does not "
+                    "replace the companion IHC assay"
+                ),
+                "treatment_path_tier": "approved_indication_matched",
+                "requires_verified_alteration": True,
+                "eligibility_note": (
+                    "requires clinically confirmed TNBC and PD-L1 CPS >=10 by "
+                    "an FDA-approved test in this metastatic setting; separate "
+                    "early-stage TNBC eligibility is treatment-context based"
+                ),
+            }
+        ]
+    if cancer_code == "PRAD":
+        return [
+            {
+                "cancer_code": "PRAD",
+                "symbol": "PTEN",
+                "agent": "capivasertib + abiraterone + prednisone",
+                "phase": "approved",
+                "indication": (
+                    "PTEN-deficient metastatic androgen-pathway-modulation-"
+                    "naive or -sensitive prostate cancer"
+                ),
+                "rationale": (
+                    "FDA-approved 2026 pathway for clinically PTEN-deficient "
+                    "metastatic hormone-sensitive disease"
+                ),
+                "treatment_path_tier": "approved_indication_matched",
+                "requires_verified_alteration": True,
+                "eligibility_note": (
+                    "requires PTEN deficiency by the authorized VENTANA PTEN "
+                    "SP218 tissue IHC assay plus the label-specific metastatic "
+                    "hormone-sensitive setting; PTEN RNA is not the assay"
+                ),
+            },
+            {
+                "cancer_code": "PRAD",
+                "symbol": "BRCA2",
+                "agent": "niraparib + abiraterone + prednisone",
+                "phase": "approved",
+                "indication": "BRCA2-mutated metastatic castration-sensitive prostate cancer",
+                "rationale": (
+                    "FDA-approved 2025 BRCA2-directed pathway in mCSPC"
+                ),
+                "treatment_path_tier": "approved_indication_matched",
+                "requires_verified_alteration": True,
+                "eligibility_note": (
+                    "requires deleterious or suspected deleterious BRCA2 by an "
+                    "FDA-approved test plus the label-specific mCSPC setting"
+                ),
+            },
+            *[
+                {
+                    "cancer_code": "PRAD",
+                    "symbol": gene,
+                    "agent": "olaparib + abiraterone + prednisone",
+                    "phase": "approved",
+                    "indication": "BRCA-mutated metastatic castration-resistant prostate cancer",
+                    "rationale": (
+                        "approved BRCA-directed PARP plus androgen-pathway "
+                        "combination in mCRPC"
+                    ),
+                    "treatment_path_tier": "approved_indication_matched",
+                    "requires_verified_alteration": True,
+                    "eligibility_note": (
+                        "requires deleterious or suspected deleterious BRCA by "
+                        "an FDA-approved companion diagnostic plus the "
+                        "label-specific mCRPC setting"
+                    ),
+                }
+                for gene in ("BRCA1", "BRCA2")
+            ],
+        ]
+    return []
 
 
 def therapy_filter_note(target_row) -> str:
@@ -143,7 +634,7 @@ def therapy_withdrawal_note(target_row) -> str:
 
 
 def filter_current_therapy_targets(targets_df):
-    """Drop therapy rows that should not be surfaced as current options."""
+    """Drop stale rows and apply verified current-status report corrections."""
     if targets_df is None:
         return None
     try:
@@ -153,7 +644,13 @@ def filter_current_therapy_targets(targets_df):
             not therapy_filter_note(row)
             for row in targets_df.to_dict("records")
         ]
-        return targets_df.loc[keep].reset_index(drop=True)
+        current = targets_df.loc[keep].copy().reset_index(drop=True)
+        for index, row in current.iterrows():
+            for column, value in _current_therapy_row_overrides(row).items():
+                if column not in current.columns:
+                    current[column] = ""
+                current.at[index, column] = value
+        return current
     except Exception:
         return targets_df
 
@@ -343,12 +840,14 @@ def tumor_attribution_context(row):
 
     notes = []
     if _truthy(row.get("matched_normal_over_predicted")):
-        notes.append("matched-normal reference overshoots the sample")
+        notes.append(
+            "the external tissue reference predicts more RNA than was measured"
+        )
     if _truthy(row.get("low_purity_cap_applied")):
         notes.append("low-purity cap is active")
     if _truthy(row.get("sample_low_purity")):
         notes.append(
-            "low sample purity — tumor-source estimate is less certain "
+            "low estimated tumor fraction — the tumor expression estimate is less certain "
             "(small tumor fraction amplifies attribution noise)"
         )
     source_marker = _truthy(row.get("source_marker_non_tumor_prior"))
@@ -364,7 +863,7 @@ def tumor_attribution_context(row):
 
     if high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
         tier = "background_dominant"
-        label = "background-dominant"
+        label = "mostly background"
         summary = "non-tumor compartments remain the simpler explanation"
     elif (
         low_tpm >= 1.0
@@ -374,21 +873,21 @@ def tumor_attribution_context(row):
         and not source_marker
     ):
         tier = "tumor_supported"
-        label = "tumor-supported"
-        summary = "tumor-attributed signal stays material across the range"
+        label = "mostly tumor"
+        summary = "estimated tumor signal stays material across the range"
     else:
         tier = "mixed_source"
-        label = "mixed-source"
+        label = "mixed tumor and background"
         summary = "both tumor and benign/background sources remain plausible"
 
     if observed > 0:
         band = (
-            f"{mid_tpm:.0f} tumor-source bulk TPM "
-            f"(model interval {low_tpm:.0f}-{high_tpm:.0f}; "
+            f"{mid_tpm:.0f} estimated tumor TPM (RNA model; "
+            f"model interval {low_tpm:.0f}-{high_tpm:.0f}; "
             f"{mid_frac:.0%} tumor, {low_frac:.0%}-{high_frac:.0%} interval)"
         )
     else:
-        band = f"{mid_tpm:.0f} tumor-source bulk TPM"
+        band = f"{mid_tpm:.0f} estimated tumor TPM (RNA model)"
 
     return {
         "tier": tier,
@@ -412,8 +911,8 @@ def context_expression_context(row):
 
     This is intentionally separate from ``tumor_attribution_context``:
     ``tumor_cell_tpm`` / ``median_est`` can remain useful for cohort-context
-    and pathway reasoning, but it is not proof that the observed RNA came
-    from tumor cells when the source attribution says background-dominant.
+    and pathway reasoning, but it does not identify the expressing cells as
+    tumor when the source attribution says background-dominant.
     """
     mid_tpm = _safe_float(
         row.get("tumor_cell_tpm"),
@@ -450,17 +949,18 @@ def context_expression_band_cell(row):
 def tpm_semantics_note() -> str:
     """One reader-facing explanation of bulk vs modeled TPM columns."""
     return (
-        "**TPM semantics:** Bulk TPM is the measured RNA abundance in the mixed "
-        "specimen. Tumor-attributed bulk TPM is the share of that bulk signal "
-        "assigned to tumor rather than matched-normal/TME compartments. Context "
-        "TPM is a broader per-tumor-cell/cohort-context estimate used for cancer "
-        "context, pathway biology, and 'is this gene high in this specimen?' "
-        "reasoning; it can collapse to a single value when the range model has "
-        "no meaningful spread. Do not treat context TPM as tumor-source evidence "
-        "when the tumor-attribution row says background-dominant. For immune/stromal "
-        "markers, agent-only rows, and therapies whose eligibility does not depend "
-        "on target expression, bulk RNA is contextual and the clinical biomarker must come from the "
-        "indicated assay."
+        "**Expression provenance:** Patient bulk TPM is measured RNA abundance in "
+        "the mixed specimen. Estimated tumor TPM is the RNA model's estimate of the "
+        "tumor share of that measured bulk signal; it is not a purified tumor assay. "
+        "Healthy-tissue, stromal, and immune components are fitted from external "
+        "reference panels; no separate normal sample from this patient was analyzed. "
+        "Estimated tumor context TPM is a broader RNA model estimate used only for "
+        "pathway and relative-expression comparisons. Reference percentiles and "
+        "medians come from external cancer/healthy-tissue panels. Do not treat "
+        "context TPM as evidence of tumor origin when the RNA model assigns most of "
+        "the signal to background. For immune/stromal markers, agent-only rows, and "
+        "assay-gated therapies, RNA remains contextual and eligibility must come "
+        "from the indicated clinical assay."
     )
 
 
@@ -475,12 +975,24 @@ _TARGET_EXPRESSION_INDICATION = re.compile(
     r"\b(pd[- ]?l1|pd[- ]?1|cps|tps|ihc|overexpress|expression|expressing)\b",
     re.IGNORECASE,
 )
+_CLINICAL_TARGET_ASSAY_INDICATION = re.compile(
+    r"(?:\b(?:ihc|fish|companion\s+diagnostic|protein\s+expression|"
+    r"expression|overexpress(?:ion|ing)?|expressing|positive|cps|tps)\b|"
+    r"\b(?:her2|er|hr|pd[- ]?l1|mage[- ]?a4|prame|psca|ceacam5|"
+    r"b7[- ]?h3)\s*[+-])",
+    re.IGNORECASE,
+)
 _MUTATION_INDICATION = re.compile(
-    r"\b("
-    r"mutation|mutant|v600|[a-z]\d{2,4}[a-z]|exon\s*\d+|fusion|rearrangement|"
-    r"amplification|amplified|amp\b|kdd|kinase\s+domain\s+duplication|"
-    r"internal\s+tandem\s+duplication|itd\b|her2\+|brca[- ]?(mut|mutation)"
-    r")\b",
+    r"(?:\b("
+    r"mutation|mutated|mutant|alteration|altered|v600|[a-z]\d{2,4}[a-z]|"
+    r"exon\s*\d+|fusion|rearrangement|amplification|amplified|amp|kdd|"
+    r"kinase\s+domain\s+duplication|internal\s+tandem\s+duplication|itd|"
+    r"brca[- ]?(?:mut|mutation)"
+    r")\b)",
+    re.IGNORECASE,
+)
+_WILDTYPE_INDICATION = re.compile(
+    r"\b(?:wild[- ]?type|ras[- ]?wt|ras\s+wt)\b",
     re.IGNORECASE,
 )
 _MSI_HIGH_INDICATION = re.compile(
@@ -497,6 +1009,18 @@ _HISTOLOGY_ONLY_THERAPY_CONTEXT = re.compile(
     r"standard[^.;,]*chemo|"
     r"risk[- ]?stratified\s+intensity"
     r")\b",
+    re.IGNORECASE,
+)
+_HISTOLOGY_ONLY_AGENTS = re.compile(
+    r"\b("
+    r"enfortumab\s+vedotin|sacituzumab\s+govitecan|enzalutamide|apalutamide|"
+    r"cabozantinib"
+    r")\b",
+    re.IGNORECASE,
+)
+_IMAGING_GATED_AGENTS = re.compile(
+    r"\b(?:177lu|225ac|lutetium|actinium)[- ]?(?:psma|fapi)|"
+    r"\[(?:177lu|225ac)\].*(?:psma|fapi)",
     re.IGNORECASE,
 )
 
@@ -538,12 +1062,20 @@ def indication_biomarker(target_row) -> str:
         return "histology_only"
     if cancer_code == "ADCC" and "lenvatinib" in agent_low:
         return "histology_only"
+    if _IMAGING_GATED_AGENTS.search(agent):
+        return "imaging"
     if _MSI_HIGH_INDICATION.search(low) and not _MMR_PROFICIENT.search(low):
         return "msi_high"
     if "tmb" in low or "tumor mutational burden" in low:
         return "tmb_high"
+    if _WILDTYPE_INDICATION.search(text):
+        return "wildtype"
     if _MUTATION_INDICATION.search(text):
         return "mutation"
+    if _CLINICAL_TARGET_ASSAY_INDICATION.search(text):
+        return "clinical_target_assay"
+    if _HISTOLOGY_ONLY_AGENTS.search(agent):
+        return "histology_only"
     if _TARGET_EXPRESSION_INDICATION.search(text):
         return "target_expression"
     if _HISTOLOGY_ONLY_THERAPY_CONTEXT.search(
@@ -568,6 +1100,9 @@ def indication_biomarker_label(target_row) -> str:
         "msi_high": "MSI-H / dMMR",
         "tmb_high": "TMB-high",
         "mutation": "mutation / fusion / amplification",
+        "wildtype": "required wild-type molecular status",
+        "clinical_target_assay": "validated protein / companion-assay",
+        "imaging": "required imaging",
         "histology_only": "histology indication",
     }.get(biomarker, biomarker.replace("_", " "))
 
@@ -580,7 +1115,11 @@ def expression_independent_interpretation(target_row) -> str:
     label = indication_biomarker_label(target_row)
     if indication_biomarker(target_row) == "histology_only":
         return "target expression is not the eligibility criterion — confirm clinical eligibility"
-    return f"target expression is not the eligibility criterion — confirm {label} status"
+    status_suffix = "" if label.endswith("status") else " status"
+    return (
+        "target expression is not the eligibility criterion — "
+        f"confirm {label}{status_suffix}"
+    )
 
 
 def expression_independent_rna_context(expression_row) -> str:
@@ -589,7 +1128,7 @@ def expression_independent_rna_context(expression_row) -> str:
         return "target RNA not measured; eligibility is not inferred from expression"
     observed = _safe_float(expression_row.get("observed_tpm"), 0.0)
     return (
-        f"target RNA is context only (bulk {observed:.1f} TPM; "
+        f"target RNA is context only (patient bulk {observed:.1f} TPM, measured; "
         "it does not establish eligibility)"
     )
 
@@ -748,6 +1287,46 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
+def direct_eligibility_input_supplied(analysis, biomarker: str) -> bool:
+    """Whether this run received an orthogonal input for a typed eligibility gate."""
+    if not isinstance(analysis, dict):
+        return False
+    constraints = analysis.get("analysis_constraints") or {}
+    if biomarker == "mutation":
+        return any(
+            bool(analysis.get(key))
+            for key in (
+                "fusion_inputs_supplied",
+                "variant_inputs_supplied",
+                "alteration_inputs_supplied",
+                "mutation_inputs_supplied",
+                "cnv_inputs_supplied",
+            )
+        ) or any(
+            bool(constraints.get(key))
+            for key in (
+                "fusions",
+                "fusion_file",
+                "variants",
+                "mutations",
+                "cnvs",
+                "alterations",
+            )
+        )
+    if biomarker == "msi_high":
+        return any(
+            bool(constraints.get(key))
+            for key in ("msi_status", "mmr_status", "msi", "mmr")
+        )
+    if biomarker == "tmb_high":
+        return any(bool(constraints.get(key)) for key in ("tmb", "tmb_status"))
+    if biomarker == "histology_only":
+        return bool(constraints.get("cancer_type")) or str(
+            analysis.get("cancer_type_source") or ""
+        ).strip() == "user-specified"
+    return False
+
+
 def supplied_variant_context_for_target_row(target_row, analysis) -> str:
     """Reader-facing summary of supplied variant evidence for a target row."""
     supported = supplied_variant_supports_target_row(target_row, analysis)
@@ -886,15 +1465,15 @@ def target_reliability_reasons(row, *, category=None):
     source = tumor_attribution_context(row)
     reasons = []
     if source["tier"] == "background_dominant":
-        reasons.append("background-dominant")
+        reasons.append("mostly background")
     elif source["tier"] == "mixed_source":
-        reasons.append("mixed-source")
+        reasons.append("mixed tumor and background")
     if _truthy(row.get("matched_normal_over_predicted")):
-        reasons.append("matched-normal over-predicted")
+        reasons.append("external tissue reference predicts more RNA than measured")
     if _truthy(row.get("smooth_muscle_stromal_leakage")):
         reasons.append("possible smooth-muscle stromal leakage")
     if _truthy(row.get("tme_explainable")) and source["tier"] != "tumor_supported":
-        reasons.append("healthy-tissue-explainable")
+        reasons.append("could come from healthy tissue")
     if _truthy(row.get("source_marker_non_tumor_prior")):
         reasons.append("non-tumor lineage marker")
     if _truthy(row.get("low_purity_cap_applied")):
@@ -916,7 +1495,7 @@ def same_lineage_material_target_candidate(
     Keep such rows provisional when there is a named clinical agent and a
     material tumor-inferred signal.
     """
-    if target_row is None or expression_independent_indication(target_row):
+    if target_row is None:
         return False
     phase = _clean_text(target_row.get("phase"))
     if phase not in {"approved", "phase_3", "phase_2", "phase_1"}:
@@ -1029,8 +1608,8 @@ def normal_expression_context(row):
     if _truthy(row.get("is_cta")) or category_label == "CTA":
         return {
             "tier": "cta_restricted",
-            "label": "CTA / immune-privileged",
-            "summary": "CTA-style restricted normal expression",
+            "label": "normally restricted mainly to testis or placenta references",
+            "summary": "restricted normal-reference expression pattern",
             "details": [],
         }
 
@@ -1069,7 +1648,7 @@ def normal_expression_context(row):
     if same_lineage:
         return {
             "tier": "same_lineage_expected",
-            "label": "same-lineage expected",
+            "label": "also expected in healthy tissue",
             "summary": f"benign {matched_tissue} lineage expression is expected",
             "details": details,
         }
@@ -1077,7 +1656,7 @@ def normal_expression_context(row):
     if vital_detail:
         return {
             "tier": "vital_tissue_concern",
-            "label": "vital-tissue concern",
+            "label": "important healthy tissue expression",
             "summary": vital_detail,
             "details": details[1:] if details else [],
         }
@@ -1085,7 +1664,7 @@ def normal_expression_context(row):
     if details:
         return {
             "tier": "broad_healthy_expression",
-            "label": "broad healthy expression",
+            "label": "broad healthy tissue expression",
             "summary": details[0],
             "details": details[1:],
         }
@@ -2068,7 +2647,7 @@ def interval_material_target_candidate(
     yet the clinical row should not disappear when the biology and indication
     otherwise fit.
     """
-    if target_row is None or expression_independent_indication(target_row):
+    if target_row is None:
         return False
     if not _clean_text(target_row.get("agent") if hasattr(target_row, "get") else ""):
         return False
@@ -2593,6 +3172,31 @@ def cancer_therapy_panel_for_analysis(
         if panel_subtype
         else therapy_targets_loader(panel_code)
     )
+    # CRC is a computed COAD+READ grouping in the cancer ontology.  The
+    # upstream therapy registry is intentionally stored on the anatomic child
+    # codes, so a decomposition-supported parent CRC call would otherwise lose
+    # the entire colorectal treatment/testing panel.  Use the union here while
+    # retaining CRC as the report scope; duplicated mCRC rows are collapsed
+    # below with the normal therapy-panel dedupe.
+    if (
+        is_grouping
+        and active_cancer_code == "CRC"
+        and (targets_df is None or targets_df.empty)
+    ):
+        child_panels = []
+        for child_code in ("COAD", "READ"):
+            child = therapy_targets_loader(child_code)
+            if child is not None and not child.empty:
+                child = filter_current_therapy_targets(child).copy()
+                if "cancer_code" in child.columns:
+                    child["cancer_code"] = active_cancer_code
+                child_panels.append(child)
+        if child_panels:
+            targets_df = pd.concat(child_panels, ignore_index=True, sort=False)
+            if "agent" in targets_df.columns:
+                targets_df = targets_df.drop_duplicates(
+                    subset=["agent"], keep="first"
+                ).reset_index(drop=True)
     if not is_grouping and (targets_df is None or targets_df.empty):
         mapped_code, mapped_subtype = cancer_key_genes_lookup_for_analysis(
             active_cancer_code,
@@ -2649,9 +3253,12 @@ def cancer_therapy_panel_for_analysis(
                         parent_targets,
                     )
 
+    supplement_df = pd.DataFrame(
+        _current_therapy_supplement_rows(active_cancer_code)
+    )
     parts = [
         frame
-        for frame in (targets_df, molecular_df)
+        for frame in (targets_df, molecular_df, supplement_df)
         if frame is not None and not frame.empty
     ]
     if not parts:

@@ -89,8 +89,8 @@ _PRIORITY_STATUS_ORDER = {
     "exploratory_or_expression_linked": 3,
 }
 _PRIORITY_STATUS_LABELS = {
-    "approved_disease_matched": "Approved / disease-matched",
-    "clinical_disease_matched": "Clinical trial / curated context",
+    "approved_disease_matched": "Approved pathway / eligibility pending",
+    "clinical_disease_matched": "Clinical trial / eligibility pending",
     "approved_other_context": "Approved elsewhere / generic target",
     "exploratory_or_expression_linked": "Exploratory / expression-linked",
 }
@@ -543,7 +543,7 @@ def plot_actionable_targets(
             marker="D",
             zorder=5,
             label=(
-                "Tumor-source normalized TPM (attribution / purity)"
+                "Estimated tumor TPM (RNA model)"
                 if any(r["central_model"] for r in rows)
                 else f"Fallback tumor-cell estimate (purity={purity_estimate:.0%})"
             ),
@@ -648,14 +648,20 @@ def plot_tumor_attribution(
     tumor_vals = [r["tumor_component"] for r in rows]
     tme_vals = [r["tme_component"] for r in rows]
 
-    ax.barh(y_pos, tumor_vals, color="#E74C3C", alpha=0.8, label="Tumor")
+    ax.barh(
+        y_pos,
+        tumor_vals,
+        color="#E74C3C",
+        alpha=0.8,
+        label="Estimated tumor component (RNA model)",
+    )
     ax.barh(
         y_pos,
         tme_vals,
         left=tumor_vals,
         color="#4A90D9",
         alpha=0.5,
-        label="TME background",
+        label="Estimated stromal/immune reference contribution",
     )
 
     # Annotate with percentage
@@ -665,7 +671,7 @@ def plot_tumor_attribution(
             ax.text(
                 r["observed"] + 0.5,
                 i,
-                f"{pct:.0%} tumor",
+                f"{pct:.0%} estimated tumor",
                 va="center",
                 fontsize=7,
                 color="#555555",
@@ -673,12 +679,13 @@ def plot_tumor_attribution(
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(symbols, fontsize=9)
-    ax.set_xlabel("TPM")
+    ax.set_xlabel("TPM (estimated attribution of measured patient bulk RNA)")
     ax.invert_yaxis()
     ax.legend(loc="lower right", fontsize=8)
     cat_label = "CTAs" if category == "CTA" else "Actionable Targets"
     ax.set_title(
-        f"Tumor vs TME Attribution — {cat_label} — {cancer_code} (purity={purity:.0%})"
+        f"Estimated Patient RNA Attribution — {cat_label} — "
+        f"{cancer_code} (purity={purity:.0%})"
     )
 
     try:
@@ -770,9 +777,9 @@ def plot_curated_target_evidence(
 
     def _short_source_label(source):
         return {
-            "tumor_supported": "tumor",
-            "mixed_source": "mixed",
-            "background_dominant": "background",
+            "tumor_supported": "mostly tumor (RNA model)",
+            "mixed_source": "mixed tumor/background (RNA model)",
+            "background_dominant": "mostly background (RNA model)",
         }.get(source.get("tier"), str(source.get("label") or "unknown"))
 
     def _short_normal_label(normal):
@@ -898,7 +905,9 @@ def plot_curated_target_evidence(
     ax_expr.set_yticklabels([row["symbol"] for row in rows], fontsize=9.5)
     ax_expr.invert_yaxis()
     ax_expr.set_xscale("symlog", linthresh=1.0)
-    ax_expr.set_xlabel("Purity-adjusted tumor TPM range; black tick = bulk TPM")
+    ax_expr.set_xlabel(
+        "Estimated tumor TPM range (RNA model); black tick = patient bulk TPM (measured)"
+    )
     ax_expr.set_title("Expression Evidence", fontsize=12, fontweight="bold")
     ax_expr.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
     ax_expr.spines["top"].set_visible(False)
@@ -909,8 +918,8 @@ def plot_curated_target_evidence(
     ax_ctx.invert_yaxis()
     ax_ctx.axis("off")
     for xpos, label in [
-        (0.02, "Source"),
-        (0.82, "Normal"),
+        (0.02, "Estimated source"),
+        (0.82, "Healthy ref."),
         (1.62, "Stage"),
     ]:
         ax_ctx.text(
@@ -925,7 +934,13 @@ def plot_curated_target_evidence(
     ax_ctx.set_title("Context", fontsize=12, fontweight="bold")
 
     range_handles = [
-        Line2D([0], [0], color="#555555", lw=5, label="purity-adjusted tumor range"),
+        Line2D(
+            [0],
+            [0],
+            color="#555555",
+            lw=5,
+            label="estimated tumor range (RNA model)",
+        ),
         Line2D(
             [0],
             [0],
@@ -934,7 +949,7 @@ def plot_curated_target_evidence(
             linestyle="none",
             markersize=12,
             markeredgewidth=1.5,
-            label="bulk TPM",
+            label="patient bulk TPM (measured)",
         ),
     ]
     fig.legend(
@@ -1573,11 +1588,11 @@ def plot_priority_target_context(
     ax_range.set_xlim(left=0.0, right=_log_tpm(max_raw) + 0.35)
     ax_range.set_ylim(max(y_pos) + 0.7, -1.15)
     ax_range.set_xlabel(
-        "Expression, log10(TPM+1): range/diamond = tumor-attributed TPM; "
-        "black tick = bulk sample TPM; right number = priority score"
+        "Expression, log10(TPM+1): range/diamond = estimated tumor TPM "
+        "(RNA model estimate); black tick = patient bulk TPM (measured); right number = priority score"
     )
     ax_range.set_title(
-        "Tumor-attributed range vs bulk expression",
+        "Estimated patient tumor attribution vs measured bulk expression",
         fontsize=12,
         fontweight="bold",
     )
@@ -1601,9 +1616,13 @@ def plot_priority_target_context(
 
     constant_notes = []
     if len(source_labels) == 1:
-        constant_notes.append(f"tumor source: {next(iter(source_labels))}")
+        constant_notes.append(
+            f"estimated patient tumor source: {next(iter(source_labels))}"
+        )
     if len(normal_labels) == 1:
-        constant_notes.append(f"healthy tissues: {next(iter(normal_labels))}")
+        constant_notes.append(
+            f"healthy-tissue reference context: {next(iter(normal_labels))}"
+        )
     if constant_notes:
         fig.text(
             0.50,
@@ -1618,7 +1637,7 @@ def plot_priority_target_context(
     normal_handles = [
         Patch(facecolor=color, edgecolor="black", label=label)
         for label, color in [
-            ("same-lineage expected", _PRIORITY_NORMAL_COLORS["same_lineage_expected"]),
+            ("also expected in healthy tissue", _PRIORITY_NORMAL_COLORS["same_lineage_expected"]),
             (
                 "restricted / CTA-like",
                 _PRIORITY_NORMAL_COLORS["restricted_outside_lineage"],
@@ -1627,7 +1646,7 @@ def plot_priority_target_context(
                 "broad healthy expression",
                 _PRIORITY_NORMAL_COLORS["broad_healthy_expression"],
             ),
-            ("vital-tissue concern", _PRIORITY_NORMAL_COLORS["vital_tissue_concern"]),
+            ("important healthy tissue expression", _PRIORITY_NORMAL_COLORS["vital_tissue_concern"]),
         ]
     ]
     source_handles = [
@@ -1684,7 +1703,7 @@ def plot_priority_target_context(
     fig.text(
         0.5,
         0.955,
-        "Rows are split by approval/readiness tier; colors show healthy-tissue context, marker shapes show tumor-source support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
+        "Rows are split by approval/readiness tier; colors show external healthy-tissue reference context, marker shapes show estimated patient tumor support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
         ha="center",
         va="top",
         fontsize=9,

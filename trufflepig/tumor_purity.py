@@ -2769,6 +2769,14 @@ def plot_purity_method_comparison(
     )
     purity_is_unresolved = purity_status == "discordant_estimators"
     cancer_code = purity_result.get("cancer_type") or ""
+    report_cancer_code = (
+        report_view.cancer_type if report_view is not None else cancer_code
+    )
+    reference_note = (
+        f" ({cancer_code} reference)"
+        if cancer_code and report_cancer_code != cancer_code
+        else ""
+    )
     tcga_median = purity_result.get("tcga_median_purity")
     reference_source = str(purity_result.get("reference_expression_source") or "")
     bulk_reference = reference_source in _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES
@@ -3051,7 +3059,7 @@ def plot_purity_method_comparison(
     if title is None:
         if purity_is_unresolved and overall is not None:
             title = (
-                f"Purity estimators disagree — {cancer_code} · "
+                f"Purity estimators disagree - {report_cancer_code}{reference_note} - "
                 f"operational scenario {overall * 100:.0f}%"
             )
             if overall_lower is not None and overall_upper is not None:
@@ -3065,14 +3073,14 @@ def plot_purity_method_comparison(
             and overall_upper is not None
         ):
             title = (
-                f"Purity estimation methods — {cancer_code} · "
+                f"Purity estimation methods - {report_cancer_code}{reference_note} - "
                 f"final {overall * 100:.0f}% "
-                f"(range {overall_lower * 100:.0f}–{overall_upper * 100:.0f}%)"
+                f"(range {overall_lower * 100:.0f}-{overall_upper * 100:.0f}%)"
             )
         else:
-            title = f"Purity estimation methods — {cancer_code}"
+            title = f"Purity estimation methods - {report_cancer_code}{reference_note}"
         if integration_source:
-            title += " · basis: " + str(integration_source).replace("_", " ")
+            title += " - basis: " + str(integration_source).replace("_", " ")
     ax.set_title(title, fontsize=11, fontweight="bold", loc="left")
     handles, _labels = ax.get_legend_handles_labels()
     if handles:
@@ -4167,7 +4175,7 @@ def _apply_coarse_tcga_orphan_rescue(rows, family_params, tissue_signal=None):
     context_basis = "normal_tissue_match" if tissue_matches else "raw_signal_dominance"
     if tissue_matches:
         rescue_message = (
-            f"Tissue composition screen and expected normal-tissue context support {coarse_code}; "
+            f"Tissue composition screen and external healthy-tissue reference context support {coarse_code}; "
             "suspending the orphan family penalty for the auto-detected call."
         )
     else:
@@ -5310,12 +5318,12 @@ def plot_sample_summary(
         comp_xlabel = "Estimated population / context (%)"
         detail_prefix = "Population consistency"
     else:
-        main_label = "Tumor"
-        stromal_label = "Stromal"
-        immune_label = "Immune"
-        comp_title = "Sample Composition"
-        comp_xlabel = "Estimated composition (%)"
-        detail_prefix = "Tumor purity"
+        main_label = "Estimated tumor fraction (RNA model)"
+        stromal_label = "Estimated stromal reference contribution"
+        immune_label = "Estimated immune reference contribution"
+        comp_title = "Estimated Sample Composition"
+        comp_xlabel = "Estimated share of the RNA composition model (%)"
+        detail_prefix = "Estimated tumor fraction"
 
     if purity_is_unresolved:
         # Do not turn an operational 5% scenario into a definitive 95%
@@ -5375,7 +5383,7 @@ def plot_sample_summary(
             operational += f" [{lo:.0%}–{hi:.0%}]"
         source_labels = {
             "background_residual": "background residual",
-            "lineage_panel": "matched-normal lineage",
+            "lineage_panel": "healthy-tissue lineage reference model",
             "signature": "upstream expression",
         }
         scenario_values = []
@@ -5683,9 +5691,12 @@ def plot_cancer_type_hypotheses(analysis, save_to_filename=None, save_dpi=300):
     ax.set_xlim(0, 1.1)
     ax.set_xlabel("Normalized support (top = 1.0)")
     fit_label = fit_quality.get("label")
-    title = "Cancer type hypotheses"
+    title = "Cancer-type differential"
     if top_code != cancer_code:
-        title += f" — report call {cancer_code}; top RNA-support {top_code}"
+        title += (
+            f"\nFinal report call: {cancer_code}"
+            f"\nPre-adjudication bulk-RNA ranker leader: {top_code}"
+        )
     if fit_label in {"weak", "ambiguous"}:
         title += f" ({fit_label} fit)"
     ax.set_title(title, fontweight="bold")
@@ -5777,7 +5788,7 @@ def plot_cancer_type_hypotheses(analysis, save_to_filename=None, save_dpi=300):
     fig.text(
         0.5,
         0.965,
-        "The report call can be externally supplied or QC-rescued; support factors show why a competing RNA context ranked highly.",
+        "The final report call may differ after evidence adjudication; support factors show why a pre-adjudication bulk-RNA context ranked highly.",
         ha="center",
         va="top",
         fontsize=8.5,

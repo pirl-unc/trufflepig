@@ -63,14 +63,14 @@ def _row(symbol, observed, attr_tumor, **kwargs):
 def test_sm_leakage_tag_fires_on_tagln_with_material_tumor_fraction():
     row = _row("TAGLN", observed=1500.0, attr_tumor=900.0)
     cell = _format_attribution_cell(row)
-    assert "smooth-muscle stromal leakage" in cell
+    assert "likely smooth muscle background" in cell
 
 
 def test_sm_leakage_tag_does_not_fire_below_observed_threshold():
     """Observed TPM below the floor — too faint to matter."""
     row = _row("TAGLN", observed=30.0, attr_tumor=20.0)
     cell = _format_attribution_cell(row)
-    assert "smooth-muscle stromal leakage" not in cell
+    assert "likely smooth muscle background" not in cell
 
 
 def test_sm_leakage_tag_does_not_fire_when_tumor_share_is_small():
@@ -79,13 +79,13 @@ def test_sm_leakage_tag_does_not_fire_when_tumor_share_is_small():
     material enough to mislead the reader."""
     row = _row("TAGLN", observed=1500.0, attr_tumor=100.0)  # 6.7% tumor
     cell = _format_attribution_cell(row)
-    assert "smooth-muscle stromal leakage" not in cell
+    assert "likely smooth muscle background" not in cell
 
 
 def test_sm_leakage_tag_does_not_fire_on_non_sm_gene():
     row = _row("TP53", observed=500.0, attr_tumor=400.0)
     cell = _format_attribution_cell(row)
-    assert "smooth-muscle stromal leakage" not in cell
+    assert "likely smooth muscle background" not in cell
 
 
 def test_matched_normal_over_predicted_wins_over_sm_leakage():
@@ -102,7 +102,7 @@ def test_matched_normal_over_predicted_wins_over_sm_leakage():
         smooth_muscle_stromal_leakage=False,  # 0% fraction → no SM tag
     )
     cell = _format_attribution_cell(row)
-    assert "matched-normal over-predicted" in cell
+    assert "external tissue reference predicts more RNA than measured" in cell
 
 
 # ── End-to-end: column lands in ranges_df ────────────────────────────

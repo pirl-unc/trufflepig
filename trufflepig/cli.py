@@ -65,6 +65,15 @@ def _add_run_parser(sub):
         dest="variants",
         help=argparse.SUPPRESS,
     )
+    p.add_argument(
+        "--variant-genome-build",
+        default=None,
+        choices=("GRCh37", "GRCh38"),
+        help=(
+            "Required assembly for coordinate-bearing generic variant tables; "
+            "symbolic calls such as 'EGFR KDD' do not need it."
+        ),
+    )
     p.add_argument("--alignment-qc", default=None)
     p.add_argument("--decomposition-templates", default=None)
     p.add_argument(
@@ -146,6 +155,7 @@ def cmd_run(args) -> int:
         "hla_types": args.hla_types,
         "fusions": args.fusions,
         "variants": args.variants,
+        "variant_genome_build": args.variant_genome_build,
         "alignment_qc": args.alignment_qc,
         "decomposition_templates": args.decomposition_templates,
         "output_image_prefix": args.output_image_prefix,

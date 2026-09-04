@@ -7,6 +7,8 @@ import textwrap
 import numpy as np
 import matplotlib.pyplot as plt
 
+from ..reporting import component_display_label
+
 
 _COMPOSITION_PALETTE = [
     "#1f77b4",
@@ -21,8 +23,12 @@ _COMPOSITION_PALETTE = [
 ]
 
 
-def _render_composition_bar(ax, best, title="Sample composition (tumor + TME)"):
-    """Horizontal stacked bar — tumor + TME components as fractions of sample."""
+def _render_composition_bar(
+    ax,
+    best,
+    title="Estimated patient RNA composition",
+):
+    """Horizontal stacked bar of conditional RNA-mixture model weights."""
     raw_items = sorted(best.fractions.items(), key=lambda item: item[1], reverse=True)
     frac_items = [(name, value) for name, value in raw_items if value >= 0.005]
     minor_total = sum(value for _, value in raw_items if value < 0.005)
@@ -30,7 +36,7 @@ def _render_composition_bar(ax, best, title="Sample composition (tumor + TME)"):
         frac_items.append(("other_minor", minor_total))
     left = 0.0
     for idx, (name, value) in enumerate(frac_items):
-        label_name = str(name).replace("_", " ")
+        label_name = component_display_label(name, include_model_role=True)
         ax.barh(
             [0],
             [value * 100],
@@ -43,7 +49,7 @@ def _render_composition_bar(ax, best, title="Sample composition (tumor + TME)"):
         left += value
     ax.set_xlim(0, 100)
     ax.set_yticks([])
-    ax.set_xlabel("Estimated composition (%)")
+    ax.set_xlabel("Estimated share of the RNA-mixture model (%)")
     ax.set_title(title, fontweight="bold")
     ax.legend(
         bbox_to_anchor=(0.0, -0.25),
@@ -58,13 +64,17 @@ def _render_composition_bar(ax, best, title="Sample composition (tumor + TME)"):
     ax.spines["left"].set_visible(False)
 
 
-def _render_component_breakdown(ax, best, title="TME cell-type breakdown"):
-    """Horizontal bar per TME component — fraction (%) + marker-support annotation.
+def _render_component_breakdown(
+    ax,
+    best,
+    title="Estimated stromal/immune reference contributions",
+):
+    """Horizontal bar per external component with an RNA-model weight.
 
-    Marker-support number (median observed/expected ratio across each
-    component's marker genes) is shown unlabelled next to each bar;
-    readers get a sense of how well each component's signal matches its
-    reference without the chart being cluttered with 'marker=' prefixes.
+    Marker-fit scores remain available in the component TSV.  They are not
+    printed beside percentage bars because an unlabelled fit coefficient can
+    be mistaken for the component's sample fraction (and those coefficients
+    are not constrained to 0--1).
     """
     comp_df = best.component_trace.copy()
     if comp_df.empty:
@@ -82,22 +92,25 @@ def _render_component_breakdown(ax, best, title="TME cell-type breakdown"):
     y = np.arange(len(comp_df))
     ax.barh(y, comp_df["fraction"] * 100, color="#4c78a8", alpha=0.85, height=0.55)
     ax.set_yticks(y)
-    ax.set_yticklabels(comp_df["component"], fontsize=9)
-    ax.set_xlabel("Fraction of sample (%)")
+    ax.set_yticklabels(
+        [
+            component_display_label(value, include_model_role=True)
+            for value in comp_df["component"]
+        ],
+        fontsize=9,
+    )
+    ax.set_xlabel("Estimated share of the RNA-mixture model (%)")
     ax.set_title(title, fontweight="bold")
     for idx, row in comp_df.iterrows():
         if row["fraction"] < 0.005:
             continue  # skip labels for sub-0.5% components (#96)
-        # A marker_score of 0.00 with n_markers=0 means the compartment
-        # had no markers to evaluate (typical for matched-normal
-        # compartments in mixture-cohort templates). Showing "0.00"
-        # reads as a bad fit; "n/a" is more honest.
-        n_markers = int(row.get("n_markers") or 0)
-        if n_markers == 0 or row["marker_score"] is None:
-            txt = "n/a"
-        else:
-            txt = f"{row['marker_score']:.2f}"
-        ax.text(row["fraction"] * 100 + 0.8, idx, txt, va="center", fontsize=8)
+        ax.text(
+            row["fraction"] * 100 + 0.8,
+            idx,
+            f"{row['fraction']:.0%}",
+            va="center",
+            fontsize=8,
+        )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
@@ -136,15 +149,17 @@ def plot_decomposition_component_breakdown(
     """Standalone horizontal-bar plot of per-component TME fractions.
 
     Same content as panel 3 of plot_decomposition_summary, rendered
-    larger with a cleaner title and numeric marker-support annotations
-    (no 'marker=' prefix).
+    larger with a cleaner title and direct percentage annotations.
     """
     fig, ax = plt.subplots(figsize=(10, 6))
     _render_component_breakdown(
         ax,
         best,
         title=title
-        or f"TME cell-type breakdown — {best.cancer_type} / {best.template}",
+        or (
+            "Estimated stromal/immune reference contributions — "
+            f"{best.cancer_type} / {best.template}"
+        ),
     )
     fig.tight_layout()
     if save_to_filename:
@@ -274,7 +289,7 @@ def plot_decomposition_candidates(
         edgecolor="white",
         linewidth=0.5,
         height=0.6,
-        label="Tumor",
+        label="Estimated tumor fraction (RNA model)",
     )
     ax.barh(
         y,
@@ -284,7 +299,7 @@ def plot_decomposition_candidates(
         edgecolor="white",
         linewidth=0.5,
         height=0.6,
-        label="Template-specific host/site compartment",
+        label="Estimated host/site reference contribution",
     )
     ax.barh(
         y,
@@ -294,7 +309,7 @@ def plot_decomposition_candidates(
         edgecolor="white",
         linewidth=0.5,
         height=0.6,
-        label="Shared immune / stroma",
+        label="Estimated shared immune/stromal reference contribution",
     )
 
     # Inline percent labels inside each segment, only if the segment is
@@ -376,7 +391,7 @@ def plot_decomposition_candidates(
             101,
             i + 0.20,
             (
-                f"tumor fraction {float(row.purity or 0.0):.0%} · "
+                f"estimated tumor fraction {float(row.purity or 0.0):.0%} · "
                 f"host site/shared {tmpl_vals[i]:.0%}/{shared_vals[i]:.0%} · "
                 f"fit err {err:.2f} · markers {median_marker:.2f}"
                 + (f" · host-site evidence {site_status}" if site_status else "")
@@ -533,10 +548,18 @@ def plot_decomposition_summary(
             )
 
     # --- Panel 2: final composition ---
-    _render_composition_bar(ax_frac, best, title="Sample composition")
+    _render_composition_bar(
+        ax_frac,
+        best,
+        title="Estimated patient RNA composition",
+    )
 
     # --- Panel 3: TME component breakdown ---
-    _render_component_breakdown(ax_comp, best, title="TME cell-type breakdown")
+    _render_component_breakdown(
+        ax_comp,
+        best,
+        title="Estimated stromal/immune reference contributions",
+    )
 
     # --- Panel 4: marker trace text ---
     ax_mark.set_title("Marker logic", fontweight="bold")
