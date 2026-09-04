@@ -8,7 +8,45 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
-## Unreleased — typed variant provenance (issues #140 and #141)
+## 1.26.0 — 2026-09-04 — patient-facing RNA interpretation and decision provenance
+
+### Cancer identity and composition
+
+- Decomposition now emits a typed cancer-type decision at the entity-evidence
+  stage, distinguishes majority-supported from decomposition-only selections,
+  and marks decisions that cannot select the report diagnosis as blocked.
+- Same-lineage tumor and background programs can leave purity quantitatively
+  unresolved instead of manufacturing a precise estimate; model-estimated
+  composition labels are written in plain language and identify external
+  reference panels explicitly.
+- Preliminary whole-bulk RNA similarities remain audit evidence but no longer
+  appear as patient-facing diagnosis plots or competing report labels.
+
+### Targets and therapy follow-up
+
+- RNA-only biomarker proxies now nominate confirmatory follow-up for MSI/MMR,
+  HER2, FGFR3, BRAF/RAS, PTEN, PSMA, homologous-recombination repair, and related
+  eligibility questions while stating that bulk RNA does not establish the
+  required clinical biomarker.
+- Cancer-testis-antigen prioritization uses model-estimated tumor RNA with an
+  uncertainty interval and preserves expression-family ambiguity rather than
+  overstating exact paralog attribution.
+- Therapy shortlists retain diagnosis and molecular-eligibility gates, so a
+  pathway pattern or negative/inconclusive alteration result cannot independently
+  select a drug.
+
+### Report safety and presentation
+
+- Patient-facing PDFs focus on quality control, the final analysis, prioritized
+  targets, and actionable follow-up; preliminary decomposition guesses remain in
+  the machine-readable audit trail.
+- Final report refreshes clear stale cancer-call rescue metadata, and generated
+  Markdown/PDF labels consistently describe estimates as model-derived rather
+  than measurements from a matched patient normal.
+- The runtime reference stack now requires `pirlygenes>=6.0.2,<7` and
+  `oncoref>=1.8.193,<2`.
+
+## 1.25.0 — 2026-08-26 — typed variant provenance (issues #140 and #141)
 
 - `VariantRecord` now distinguishes assembly-neutral symbolic calls from
   coordinate-bearing calls and retains source format, caller version, genome
