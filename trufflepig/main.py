@@ -3312,7 +3312,7 @@ def _analyze_body(run: AnalyzeRun):
                 best_decomp.cancer_type
             )
         if call_summary.get("site_indeterminate"):
-            decomp_context_suffix = "host context indeterminate"
+            decomp_context_suffix = "external tissue reference not resolved"
         elif call_summary.get("reported_site"):
             decomp_context_suffix = call_summary["reported_site"]
         else:
@@ -6040,7 +6040,10 @@ def _template_site_display(template_name, *, analysis=None, cancer_code=None):
             template_text, analysis=analysis, cancer_code=cancer_code
         ):
             return f"primary-compatible {base} context"
-        return f"{base}-associated host context"
+        # These names identify the external normal-tissue reference used by the
+        # RNA decomposition.  They are not observations of the patient's biopsy
+        # site and must not read like a metastatic-site call.
+        return f"external {base} reference context"
     return base
 
 
@@ -6052,8 +6055,14 @@ def _hypothesis_display_label(result, *, primary_code=None, analysis=None):
     ):
         cancer_label = _cancer_label(cancer_code)
         if primary_code and cancer_code == primary_code:
-            return f"{cancer_label} host-background fit pattern (site indeterminate)"
-        return f"{cancer_label}-like host-background fit pattern (site indeterminate)"
+            return (
+                f"{cancer_label} using an external tissue reference "
+                "(site not resolved)"
+            )
+        return (
+            f"{cancer_label} comparison using an external tissue reference "
+            "(site not resolved)"
+        )
     return _hypothesis_label(
         f"{cancer_code} / {template}",
         primary_code=primary_code,

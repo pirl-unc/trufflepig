@@ -8,6 +8,20 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.26.2 — 2026-09-05 — external-reference and trial-eligibility clarity
+
+- Decomposition labels now call site-shaped normal-tissue matches external
+  reference contexts instead of host contexts, and the interpretive PDF carries
+  the explicit reminder that this RNA match does not establish biopsy or
+  metastatic site. Unresolved comparison fits use the same plain external
+  reference wording instead of a host-background label.
+- Prostate ifinatamab deruxtecan rows no longer imply that B7-H3 expression or a
+  companion assay is a trial eligibility requirement; disease state, treatment
+  history, cohort status, and recruiting-site availability still require
+  clinical confirmation.
+- Interpretive therapy tables consistently label their mixed gene and drug
+  column `Target / agent`, including agent-only recommendations.
+
 ## 1.26.1 — 2026-09-04 — report-language and therapy-shortlist corrections
 
 - Patient-facing cancer-type narratives now describe preliminary bulk patterns,

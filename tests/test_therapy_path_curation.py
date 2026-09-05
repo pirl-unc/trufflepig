@@ -339,6 +339,21 @@ def test_adcc_lenvatinib_is_not_fgf2_expression_gated():
     assert expression_independent_indication(row) is True
 
 
+def test_prad_ifinatamab_is_not_b7h3_companion_assay_gated():
+    row = {
+        "cancer_code": "PRAD",
+        "symbol": "CD276",
+        "agent": "ifinatamab deruxtecan",
+        "agent_class": "ADC",
+        "phase": "phase_3",
+        "indication": "metastatic castration-resistant prostate cancer",
+        "rationale": "B7-H3-directed ADC in an active phase 3 mCRPC program",
+    }
+
+    assert indication_biomarker(row) == "histology_only"
+    assert expression_independent_indication(row) is True
+
+
 def test_agent_only_rows_preserve_biomarker_gates():
     pdl1_row = {
         "cancer_code": "COAD",
