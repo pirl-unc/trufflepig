@@ -430,22 +430,29 @@ def _current_therapy_row_overrides(target_row) -> dict:
             "phase": "phase_1",
             "treatment_path_tier": "trial_follow_up",
             "rationale": (
-                "PSCA-directed CAR-T in the recruiting 2026 mCRPC study "
-                "NCT07543055; the earlier NCT02744287 study was terminated"
+                "PSCA-directed CAR-T in the planned 2026 mCRPC study "
+                "NCT07543055; the registry listed it as not yet recruiting at "
+                "last curation, and the earlier NCT02744287 study was terminated"
             ),
             "eligibility_note": (
-                "recruiting phase 1 trial; requires protocol-specific mCRPC, "
-                "prior-treatment, organ-function, and site eligibility; RNA can "
-                "nominate follow-up but does not establish eligibility"
+                "phase 1 trial follow-up; verify whether recruitment has opened "
+                "and whether a site is available; requires protocol-specific "
+                "mCRPC, prior-treatment, organ-function, and site eligibility; "
+                "RNA can nominate follow-up but does not establish eligibility"
             ),
         }
     if cancer_code == "SARC_OS" and "trastuzumab deruxtecan" in agent:
         return {
             "requires_verified_alteration": True,
+            "rationale": (
+                "NCT04616560 was listed as suspended after its first stage "
+                "completed accrual at last curation; do not treat it as an "
+                "open osteosarcoma cohort"
+            ),
             "eligibility_note": (
-                "osteosarcoma use remains investigational; verify that an "
-                "osteosarcoma cohort is currently open and use the protocol's "
-                "clinical tissue HER2 assessment rather than RNA"
+                "osteosarcoma use remains investigational; use clinical tissue "
+                "HER2 assessment rather than RNA and check for an open successor "
+                "study before considering trial follow-up"
             ),
         }
     if cancer_code == "PRAD" and any(
@@ -977,9 +984,10 @@ _TARGET_EXPRESSION_INDICATION = re.compile(
 )
 _CLINICAL_TARGET_ASSAY_INDICATION = re.compile(
     r"(?:\b(?:ihc|fish|companion\s+diagnostic|protein\s+expression|"
-    r"expression|overexpress(?:ion|ing)?|expressing|positive|cps|tps)\b|"
+    r"(?<!co-)expression|overexpress(?:ion|ing)?|(?<!co-)expressing|"
+    r"positive|cps|tps)\b|"
     r"\b(?:her2|er|hr|pd[- ]?l1|mage[- ]?a4|prame|psca|ceacam5|"
-    r"b7[- ]?h3)\s*[+-])",
+    r"b7[- ]?h3)\s*[+-](?![a-z]))",
     re.IGNORECASE,
 )
 _MUTATION_INDICATION = re.compile(

@@ -2624,7 +2624,7 @@ def _analyze_body(run: AnalyzeRun):
     tissue_str = ", ".join(f"{t} ({s:.2f})" for t, s, _ in top_tissues)
     print(f"[analysis] Top background signatures: {tissue_str}")
     if inferred_site_context:
-        print(f"[analysis] Inferred site context: {inferred_site_context['message']}")
+        print(f"[analysis] RNA background context: {inferred_site_context['message']}")
     mhc1 = analysis["mhc1"]
     print(
         f"[analysis] MHC-I: HLA-A={mhc1.get('HLA-A', 0):.0f}, "
@@ -5272,7 +5272,7 @@ def _infer_likely_met_site_context(
     tumor_context="auto",
     decomposition_templates=None,
 ):
-    """Infer likely metastatic host site from strong off-primary tissue signal.
+    """Select an RNA background context from strong off-primary tissue signal.
 
     This is intentionally not a user constraint. It is a report/decomposition
     prior for cases like BLCA with a high liver residual program: strong host
@@ -5336,8 +5336,10 @@ def _infer_likely_met_site_context(
             f"Strong {top_tissue.replace('_', ' ')} host/background program "
             f"({top_score:.2f}) exceeds the expected primary-tissue program "
             f"{primary_tissue.replace('_', ' ') if primary_tissue else 'unknown'} "
-            f"({primary_score:.2f}); treating {site_hint.replace('_', ' ')} as a likely "
-            "metastatic host site for decomposition and target-background modeling."
+            f"({primary_score:.2f}); the RNA model will use a "
+            f"{site_hint.replace('_', ' ')} background for decomposition and "
+            "target attribution. This does not establish the biopsy site or a "
+            "metastatic site."
         ),
     }
 
@@ -7618,11 +7620,12 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             else ""
         )
         bullets.append(
-            "- **Inferred host site**: "
-            f"{tissue.replace('_', ' ')} background is strong "
-            f"({float(inferred_site.get('score') or 0.0):.2f}){primary_clause}; "
-            f"treating {str(inferred_site.get('site') or '').replace('_', ' ')} as a "
-            "likely metastatic host context for decomposition and target-background modeling."
+            "- **RNA background context**: the external reference comparison "
+            f"most closely matched {tissue.replace('_', ' ')} "
+            f"({float(inferred_site.get('score') or 0.0):.2f}){primary_clause}. "
+            f"The RNA model uses a {str(inferred_site.get('site') or '').replace('_', ' ')} "
+            "background for decomposition and target attribution; this does not "
+            "establish the biopsy site or a metastatic site."
         )
     call_rescue = analysis.get("cancer_call_rescue") or {}
     if call_rescue:
@@ -7709,16 +7712,19 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
         )
         if evidence_selected_discordant and decomposition_selected_scope:
+            bulk_pattern = (
+                "a sarcoma-like pattern"
+                if best_code.startswith("SARC")
+                else f"a {_cancer_label(best_code)}-like pattern"
+            )
             sentence = (
                 "- **RNA signal attribution**: the bulk pan-cancer "
-                f"signature ranker favors {_cancer_label(best_code)}, retained "
-                "as background/differential context; candidate-independent "
-                "background subtraction recovered a complete marker and ontology "
-                "program for "
+                f"signature ranker initially showed {bulk_pattern}, retained "
+                "as background/differential context; the RNA background models "
+                "consistently nominated the marker and ontology programs for "
                 f"{_cancer_label(decomposition_decision.supported_code)} "
-                "across every usable "
-                "model, and the final-scope decomposition refit reproduced that "
-                "cancer-type decision"
+                "across the usable models, and the final-scope decomposition "
+                "refit agreed"
             )
         elif evidence_selected_discordant:
             sentence = (
@@ -9179,11 +9185,11 @@ def _generate_text_reports(
     inferred_site = analysis.get("inferred_site_context") or {}
     if inferred_site:
         lines.append(
-            "- **Inferred host site**: "
-            f"{str(inferred_site.get('site') or '').replace('_', ' ')} "
-            f"(background tissue {str(inferred_site.get('tissue') or '').replace('_', ' ')}, "
-            f"score {float(inferred_site.get('score') or 0.0):.2f}); inferred from "
-            "off-primary expression background, not supplied as a user constraint."
+            "- **RNA background context**: external reference comparison "
+            f"matched {str(inferred_site.get('tissue') or '').replace('_', ' ')} "
+            f"(score {float(inferred_site.get('score') or 0.0):.2f}); the model uses "
+            f"a {str(inferred_site.get('site') or '').replace('_', ' ')} background, "
+            "but this does not establish the biopsy site or a metastatic site."
         )
     # Display candidates in the order of the stated ranking metric (Normalized =
     # support_fraction_of_top, top = 1.0). The stored trace order can lag this,
@@ -10964,11 +10970,11 @@ def _build_target_report(
     inferred_site = analysis.get("inferred_site_context") or {}
     if inferred_site:
         lines.append(
-            "- **Inferred host site**: "
-            f"{str(inferred_site.get('site') or '').replace('_', ' ')} "
-            f"(background tissue {str(inferred_site.get('tissue') or '').replace('_', ' ')}, "
-            f"score {float(inferred_site.get('score') or 0.0):.2f}); this was inferred "
-            "from expression, not supplied as a user constraint."
+            "- **RNA background context**: external reference comparison "
+            f"matched {str(inferred_site.get('tissue') or '').replace('_', ' ')} "
+            f"(score {float(inferred_site.get('score') or 0.0):.2f}); the model uses "
+            f"a {str(inferred_site.get('site') or '').replace('_', ' ')} background, "
+            "but this does not establish the biopsy site or a metastatic site."
         )
     lines.append(f"- **Analysis mode**: {_sample_mode_display(sample_mode)}.")
     lines.append(

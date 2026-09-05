@@ -352,9 +352,9 @@ def test_background_separated_call_names_bulk_signal_as_host_context():
     text = "\n".join(_integrated_evidence_bullets(analysis))
 
     assert "**RNA signal attribution**" in text
-    assert "bulk pan-cancer signature ranker favors SARC_DDLPS" in text
+    assert "bulk pan-cancer signature ranker initially showed a sarcoma-like pattern" in text
     assert "retained as background/differential context" in text
-    assert "final-scope decomposition refit reproduced" in text
+    assert "final-scope decomposition refit agreed" in text
     assert "ahead of SARC_PLEOLPS" not in text
     assert "; signature 0.74" not in text
 

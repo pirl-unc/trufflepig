@@ -195,7 +195,7 @@ def test_lineage_panel_explains_background_resolved_low_marker_violation():
         "benign structural-tissue reference signal can explain the expected-low violation"
         in line
     )
-    assert "complete panel and ontology programs agree" in line
+    assert "marker and ontology programs support the same label" in line
     assert "not a claim that every measured DES transcript is non-tumor" in line
     assert "noted, did not change the call" not in line
 
@@ -556,8 +556,9 @@ def test_summary_surfaces_inferred_met_site_context():
         sample_id="sample_X",
     )
 
-    assert "**Inferred site context:** likely liver metastatic host/background" in md
-    assert "inferred from expression, not supplied as a user constraint" in md
+    assert "**RNA background context:**" in md
+    assert "external reference comparison most closely matched liver" in md
+    assert "does not establish the biopsy site or a metastatic site" in md
 
 
 def test_summary_marks_supplied_cancer_type_basis():
@@ -628,13 +629,14 @@ def test_summary_names_background_separated_cancer_type_basis():
     )
 
     assert "Cancer-type basis" in md
-    assert "bulk profile initially favored SARC_DDLPS" in md
-    assert "tissue-composition screen was dominated by smooth muscle" in md
-    assert "candidate-independent decomposition recovered" in md
-    assert "complete and invariant CRC (Colorectal Adenocarcinoma)" in md
-    assert "refitted for that final scope reproduced it" in md
-    assert "remains only in the audit differential" in md
+    assert "bulk profile initially showed a sarcoma-like pattern" in md
+    assert "alongside a strong smooth muscle signal" in md
+    assert "decomposition consistently nominated" in md
+    assert "CRC (Colorectal Adenocarcinoma)" in md
+    assert "final refit agreed" in md
+    assert "preliminary pattern remains in the audit detail" in md
     assert "does not drive downstream interpretation" in md
+    assert "SARC_DDLPS" not in md
     assert "**Retained RNA differential:**" not in md
 
 
@@ -1476,6 +1478,44 @@ def test_expression_independent_therapy_without_eligibility_stays_out_of_shortli
         line.startswith("- **CD274**") for line in md.splitlines()
     )
     assert "## Top candidate therapies" in md
+
+
+def test_target_dependent_phase_one_row_with_no_estimated_tumor_signal_stays_out():
+    analysis = _make_analysis()
+    targets_df = pd.DataFrame(
+        [
+            {
+                "cancer_code": "PRAD",
+                "symbol": "PSCA",
+                "agent": "BPX-601",
+                "agent_class": "CAR-T",
+                "phase": "phase_1",
+                "indication": "mCRPC",
+                "rationale": "PSCA-directed CAR-T study",
+            }
+        ]
+    )
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "PSCA",
+                "observed_tpm": 15.0,
+                "attr_tumor_tpm": 0.0,
+                "attr_tumor_tpm_low": 0.0,
+                "attr_tumor_tpm_high": 0.0,
+                "attr_tumor_fraction": 0.0,
+                "attr_tumor_fraction_low": 0.0,
+                "attr_tumor_fraction_high": 0.0,
+                "attr_top_compartment": "matched_normal_prostate",
+                "attr_top_compartment_tpm": 9.0,
+                "matched_normal_over_predicted": True,
+                "tme_dominant": True,
+                "tme_explainable": True,
+            }
+        ]
+    )
+
+    assert _top_therapies(targets_df, ranges_df, analysis=analysis) == []
 
 
 def test_expression_independent_therapy_surfaces_missing_required_evidence():

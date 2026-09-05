@@ -421,11 +421,15 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     therapy_rows = therapy.get("rows")
     y = _section_heading(draw, "Candidate therapies", y + 25)
     if therapy_rows:
+        therapy_columns = [
+            "Target / agent" if column == "Target" else column
+            for column in therapy["columns"]
+        ]
         y = _draw_table(
             draw,
             MARGIN,
             y,
-            therapy["columns"],
+            therapy_columns,
             therapy_rows,
             total_width=PAGE_W - 2 * MARGIN,
         )
