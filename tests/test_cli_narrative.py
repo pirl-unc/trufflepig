@@ -635,7 +635,31 @@ def test_summarize_call_met_template_with_good_site():
     )
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
     assert result["reported_context"] == "met"
-    assert result["reported_site"] == "liver-associated host context"
+    assert result["reported_site"] == "external liver reference context"
+
+
+def test_unsupported_met_template_is_plain_external_reference_comparison():
+    analysis = _base_analysis(cancer_type="BLCA", fit_quality={"label": "ambiguous"})
+    best = _mock_decomp_result(
+        cancer_type="LUSC",
+        template="met_lung",
+        template_site_factor=0.1,
+        template_tissue_score=0.1,
+        site_evidence={"site_supported": False, "status": "site_indeterminate"},
+        warnings=[],
+    )
+
+    label = _hypothesis_display_label(
+        best,
+        primary_code="BLCA",
+        analysis=analysis,
+    )
+
+    assert label == (
+        "LUSC (Lung Squamous Cell Carcinoma) comparison using an external "
+        "tissue reference (site not resolved)"
+    )
+    assert "host" not in label
 
 
 def test_summarize_call_primary_compatible_met_template_is_not_indeterminate():
@@ -843,7 +867,7 @@ def test_summarize_call_explicit_site_hint_survives_divergent_warning():
     )
     result = _summarize_sample_call(analysis, [best], sample_mode="solid")
     assert result["site_indeterminate"] is False
-    assert result["reported_site"] == "bone-associated host context"
+    assert result["reported_site"] == "external bone reference context"
 
 
 def test_summarize_call_explicit_met_site_survives_fit_warning():
@@ -865,7 +889,7 @@ def test_summarize_call_explicit_met_site_survives_fit_warning():
 
     assert result["site_indeterminate"] is False
     assert result["reported_context"] == "met"
-    assert result["reported_site"] == "liver-associated host context"
+    assert result["reported_site"] == "external liver reference context"
 
 
 def test_explicit_met_site_does_not_bless_a_different_template():

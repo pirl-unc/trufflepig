@@ -1062,6 +1062,11 @@ def indication_biomarker(target_row) -> str:
     symbol = canonical_target_symbol(
         target_row.get("symbol") if hasattr(target_row, "get") else ""
     )
+    if cancer_code == "PRAD" and "ifinatamab deruxtecan" in agent_low:
+        # The current mCRPC phase 3 program is selected by disease and treatment
+        # history, not by a B7-H3 companion assay.  CD276 RNA can prioritize the
+        # row biologically, but it is not an eligibility biomarker.
+        return "histology_only"
     if cancer_code == "NUTM" and "small_molecule" in agent_class:
         # BET/EP300/HDAC studies are scoped to an established NUT carcinoma
         # diagnosis, not to an arbitrary alteration in the row's drug-target

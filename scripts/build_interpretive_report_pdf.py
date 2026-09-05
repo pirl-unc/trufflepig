@@ -398,6 +398,7 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
         ("MMR RNA", record_value(records, "Mismatch-repair RNA context")),
         ("Competing RNA context", record_value(records, "Retained RNA differential")),
         ("Composition caution", record_value(records, "Tissue composition hint")),
+        ("Background reference", record_value(records, "RNA background context")),
         ("Rare-marker prompt", record_value(records, "Rare-marker prompt")),
         ("Disease state", record_value(records, "Disease state")),
     ]
@@ -422,8 +423,8 @@ def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
     y = _section_heading(draw, "Candidate therapies", y + 25)
     if therapy_rows:
         therapy_columns = [
-            "Target / agent" if column == "Target" else column
-            for column in therapy["columns"]
+            ("Target / agent" if title == "Target" else title, weight)
+            for title, weight in therapy["columns"]
         ]
         y = _draw_table(
             draw,
