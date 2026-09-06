@@ -579,6 +579,7 @@ def build_analysis_parameters(
             "fusions": config.fusion_path_list(),
             "variants": config.variant_input_list(),
             "variant_genome_build": config.variant_genome_build,
+            "treatment_history": config.treatment_history,
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,
@@ -663,6 +664,11 @@ def write_analysis_output_records(
         run.paths.out_dir,
         run.paths.prefix_base,
         report_view=report_view,
+        treatment_history=(
+            (run.steps.get("input").outputs or {}).get("treatment_history", [])
+            if run.steps.get("input") is not None
+            else []
+        ),
     )
     manifest_path = run.paths.file("manifest.json")
     run.artifacts = discover_output_artifacts(

@@ -54,8 +54,10 @@ tumor-attributed expression, or therapy relevance:
    estimates how much observed expression is likely tumor-cell derived.
    Outputs: tumor-source TPM ranges, attribution flags, and confidence tiers.
 8. **Therapy Prioritization** ranks actionable targets and pathway states
-   using tumor-attributed expression, indication curation, antigen-presentation
-   status, immune/background attribution, and pathway/treatment-state signals.
+   using supplied patient treatment outcomes first, then sourced clinical
+   benefit/toxicity evidence, indication curation, antigen-presentation status,
+   tumor-attributed expression, immune/background attribution, and
+   pathway/treatment-state signals.
    Outputs: therapy shortlist, target tables, pathway/treatment-state evidence,
    and caveats.
 
@@ -65,7 +67,7 @@ tumor-attributed expression, or therapy relevance:
 pip install -e .
 ```
 
-Pulls `pirlygenes>=5.0.0` for the curated gene sets and reference data.
+Pulls `pirlygenes>=6.0.2` for the curated gene sets and reference data.
 
 ## Usage
 
@@ -96,6 +98,7 @@ seam for per-stage extraction (trufflepig#2–#14); once stages start
 writing their own records, `analyze/` shrinks.
 
 Common pass-through flags: `--hla-types`, `--fusions`, `--variants`,
+`--treatment-history`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,
 `--met-site`, `--decomposition-templates`, `--output-image-prefix`,
 `--sample-id-col`, `--sample-id-value`, `--gene-id-col`, `--gene-name-col`,
@@ -112,6 +115,16 @@ alias. VCF and MAF fail closed until their standards-aware adapters land; see
 [variant input and coordinate provenance](docs/variant-inputs.md) and issues
 [#140](https://github.com/pirl-unc/trufflepig/issues/140) and
 [#141](https://github.com/pirl-unc/trufflepig/issues/141).
+
+`--treatment-history` accepts CSV, TSV, JSON, or JSONL with `therapy`,
+`status`, and optional `target`, `modality`, `note`, and `source` fields.
+Patient outcomes are considered before the RNA model's target support: prior
+benefit can keep a treatment path visible even when expression is assigned to
+background, while prior progression, lack of benefit, intolerance, or a
+contraindication keeps the same treatment out of the shortlist. This input is
+clinical context; it does not establish current eligibility or make retreatment
+appropriate.
+See [treatment history input](docs/treatment-history.md).
 
 ### Multi-sample (longitudinal)
 

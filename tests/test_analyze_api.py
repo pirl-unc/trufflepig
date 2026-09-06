@@ -197,6 +197,31 @@ def test_build_analysis_parameters_records_variant_inputs():
     assert params["input"]["variant_genome_build"] == "GRCh37"
 
 
+def test_build_analysis_parameters_records_treatment_history_path():
+    quality = {
+        "degradation": {"level": "unknown", "long_short_ratio": None},
+        "culture": {"level": "unknown", "stress_score": None},
+        "has_issues": False,
+    }
+    config = AnalyzeConfig(
+        input_path="gene.tsv",
+        treatment_history="patient-treatment-history.tsv",
+    )
+    resolution = resolve_analyze_inputs(config, sniff_input_level=lambda _path: "gene")
+
+    params = build_analysis_parameters(
+        config=config,
+        resolution=resolution,
+        template_overrides=[],
+        selected_sample_mode="bulk",
+        quality=quality,
+        tumor_purity_parameters={},
+        decomposition_parameters={},
+    )
+
+    assert params["input"]["treatment_history"] == "patient-treatment-history.tsv"
+
+
 def test_legacy_alterations_config_serializes_as_variants():
     config = AnalyzeConfig(input_path="gene.tsv", alterations="EGFR KDD")
 

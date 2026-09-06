@@ -1720,6 +1720,13 @@ def clinical_maturity_info(target_row, target_panel=None):
         )
 
     phase = _clean_text(target_row.get("phase"))
+    if phase == "patient_history":
+        return {
+            "tier": "patient history",
+            "summary": "",
+            "n_agents": 0,
+            "n_modalities": 0,
+        }
     phase_label = {
         "approved": "approved",
         "phase_3": "late clinical",
@@ -2109,6 +2116,7 @@ THERAPY_PATH_TIERS = frozenset(
         "trial_follow_up",
         "preclinical",
         "off_label",
+        "patient_history",
     }
 )
 
@@ -2143,6 +2151,7 @@ _THERAPY_PATH_RANK = {
     "trial_follow_up": 5,
     "preclinical": 6,
     "off_label": 7,
+    "patient_history": 8,
 }
 _THERAPY_PATH_DEFAULT_NOTE = {
     "approved_standard": "confirm indication and line of therapy",
@@ -2153,6 +2162,7 @@ _THERAPY_PATH_DEFAULT_NOTE = {
     "trial_follow_up": "not default standard",
     "preclinical": "not a clinical recommendation",
     "off_label": "confirm rationale and alternatives",
+    "patient_history": "confirm current suitability and eligibility",
 }
 _THERAPY_EXPOSURE_RULES = (
     {
@@ -2297,6 +2307,8 @@ def _therapy_path_context_for_tier(target_row, tier: str, note: str = "") -> str
         prefix = "preclinical follow-up"
     elif tier == "off_label":
         prefix = "off-label follow-up"
+    elif tier == "patient_history":
+        prefix = "prior treatment path for this patient"
     else:
         return ""
 
@@ -2630,7 +2642,20 @@ def hla_restricted_target_supported(target_row, *, analysis=None) -> bool:
 
 def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:
     """Brief reader-facing treatment-path context for curated therapy rows."""
-    parts = [_therapy_path_info(target_row)["context"]]
+    from .treatment_history import (
+        population_therapy_evidence_context,
+        treatment_history_context,
+    )
+
+    history_context = treatment_history_context(target_row, analysis)
+    path_context = _therapy_path_info(target_row)["context"]
+    if _phase_text(target_row) == "patient_history" and history_context:
+        path_context = ""
+    parts = [
+        history_context,
+        population_therapy_evidence_context(target_row),
+        path_context,
+    ]
     hla_context = hla_eligibility_context(target_row, analysis=analysis)
     if hla_context:
         parts.append(hla_context)
@@ -2639,6 +2664,16 @@ def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> st
 
 def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:
     """Sort standard paths ahead of exploratory rows in concise reports."""
+    from .treatment_history import (
+        treatment_history_blocks_row,
+        treatment_history_rank,
+        treatment_history_supports_review,
+    )
+
+    if treatment_history_blocks_row(target_row, analysis):
+        return 99
+    if treatment_history_supports_review(target_row, analysis):
+        return -10 + treatment_history_rank(target_row, analysis)
     return int(_therapy_path_info(target_row)["rank"])
 
 
@@ -2701,24 +2736,23 @@ def target_interpretation_summary(
     expr_independent = target_row is not None and expression_independent_indication(
         target_row
     )
-    if expr_independent:
-        parts = [
-            expression_independent_interpretation(target_row),
-            expression_independent_rna_context(expression_row),
-        ]
-    else:
-        parts = [source["label"], source["band"]]
-        parts.append(normal["label"])
-    details = list(normal.get("details") or [])
-    if details and not expr_independent:
-        parts.append(details[0])
     path_context = (
         therapy_path_context(target_row, analysis=analysis, disease_state=disease_state)
         if target_row is not None
         else ""
     )
-    if path_context:
-        parts.append(path_context)
+    if expr_independent:
+        parts = [
+            path_context,
+            expression_independent_interpretation(target_row),
+            expression_independent_rna_context(expression_row),
+        ]
+    else:
+        parts = [path_context, source["label"], source["band"]]
+        parts.append(normal["label"])
+    details = list(normal.get("details") or [])
+    if details and not expr_independent:
+        parts.append(details[0])
     conflict = (
         therapy_rna_context_conflict(
             target_row, analysis=analysis, disease_state=disease_state
@@ -3269,11 +3303,29 @@ def cancer_therapy_panel_for_analysis(
     supplement_df = pd.DataFrame(
         _current_therapy_supplement_rows(active_cancer_code)
     )
-    parts = [
+    base_parts = [
         frame
         for frame in (targets_df, molecular_df, supplement_df)
         if frame is not None and not frame.empty
     ]
+    from .treatment_history import (
+        add_population_therapy_evidence,
+        treatment_history_supplement_rows,
+    )
+
+    existing_rows = (
+        pd.concat(base_parts, ignore_index=True, sort=False)
+        if base_parts
+        else pd.DataFrame()
+    )
+    history_df = pd.DataFrame(
+        treatment_history_supplement_rows(
+            analysis,
+            cancer_code=active_cancer_code,
+            existing_rows=existing_rows,
+        )
+    )
+    parts = [*base_parts, *([history_df] if not history_df.empty else [])]
     if not parts:
         if targets_df is not None:
             return panel_code, panel_subtype, targets_df.reset_index(drop=True)
@@ -3286,7 +3338,13 @@ def cancer_therapy_panel_for_analysis(
     ]
     if dedupe_columns:
         targets_df = targets_df.drop_duplicates(subset=dedupe_columns, keep="last")
-    return panel_code, panel_subtype, filter_current_therapy_targets(targets_df)
+    targets_df = filter_current_therapy_targets(targets_df)
+    targets_df = add_population_therapy_evidence(
+        targets_df,
+        cancer_code=panel_code,
+        subtype=panel_subtype or "",
+    )
+    return panel_code, panel_subtype, targets_df
 
 
 def subtype_key_for_analysis(analysis, ranges_df=None):
