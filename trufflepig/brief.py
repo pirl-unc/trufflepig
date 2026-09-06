@@ -97,6 +97,14 @@ from .biomarker_proxies import (
     her2_proxy_summary_line,
     her2_proxy_therapy_context,
 )
+from .treatment_history import (
+    population_therapy_evidence_rank,
+    treatment_history_blocks_row,
+    treatment_history_marks_current,
+    treatment_history_rank,
+    treatment_history_summary_lines,
+    treatment_history_supports_review,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +445,7 @@ def _phase_label(phase: str) -> str:
         "phase_1": "Phase 1",
         "preclinical": "Preclinical",
         "off_label": "Off-label / transfer rationale",
+        "patient_history": "Prior treatment",
     }.get(phase, phase)
 
 
@@ -653,12 +662,11 @@ def _format_therapy_bullet(
     if expression_row is None:
         if expr_independent:
             parts = [
+                path_context,
                 expression_independent_interpretation(target_row),
                 expression_independent_rna_context(None),
                 _eligibility_evidence_gap(),
             ]
-            if path_context:
-                parts.append(path_context)
             return (
                 f"{_header()}{_sentence(parts, maturity=maturity)}"
                 f"{caution_suffix}"
@@ -680,12 +688,11 @@ def _format_therapy_bullet(
     if observed < 1.0:
         if expr_independent:
             parts = [
+                path_context,
                 expression_independent_interpretation(target_row),
                 expression_independent_rna_context(expression_row),
                 _eligibility_evidence_gap(),
             ]
-            if path_context:
-                parts.append(path_context)
             return (
                 f"{_header()}{_sentence(parts, maturity=maturity)}"
                 f"{caution_suffix}"
@@ -696,11 +703,10 @@ def _format_therapy_bullet(
         )
     if not tumor_band_available(expression_row):
         parts = [
+            path_context,
             f"Bulk TPM {observed:.0f}",
             "tumor-inferred model interval unavailable",
         ]
-        if path_context:
-            parts.append(path_context)
         return (
             f"{_header()}{_sentence(parts, maturity=maturity)}"
             f"{caution_suffix}"
@@ -709,6 +715,7 @@ def _format_therapy_bullet(
     normal = normal_expression_context(expression_row)
     if expr_independent:
         interpretation_parts = [
+            path_context,
             source["label"],
             source["band"],
             normal["label"],
@@ -717,12 +724,15 @@ def _format_therapy_bullet(
             _eligibility_evidence_gap(),
         ]
     else:
-        interpretation_parts = [source["label"], source["band"], normal["label"]]
+        interpretation_parts = [
+            path_context,
+            source["label"],
+            source["band"],
+            normal["label"],
+        ]
     notes = list(source.get("notes") or []) + list(normal.get("details") or [])
     if notes and not expr_independent:
         interpretation_parts.append(notes[0])
-    if path_context:
-        interpretation_parts.append(path_context)
     agent_meta = agent_metadata_clause(target_row)
     if agent_meta:
         interpretation_parts.append(agent_meta)
@@ -782,13 +792,18 @@ def _top_therapies(
         if expr is None:
             expr = sym_to_row.get(sym)
         expr_independent = expression_independent_indication(t)
+        history_supported = treatment_history_supports_review(t, analysis)
+        if treatment_history_blocks_row(t, analysis) or treatment_history_marks_current(
+            t, analysis
+        ):
+            continue
         if _subtype_specific_row_out_of_scope(t, analysis):
             continue
         if therapy_row_rna_context_inactive(
             t,
             analysis=analysis,
             disease_state=disease_state,
-        ):
+        ) and not history_supported:
             continue
         supplied_variant_match = bool(
             supplied_variant_supports_target_row(t, analysis)
@@ -812,27 +827,31 @@ def _top_therapies(
             0 if supplied_variant_match or direct_eligibility_match else 1
         )
         if requires_variant_match and not supplied_variant_match:
-            continue
+            if not history_supported:
+                continue
         if (
             therapy_row_requires_confirmed_eligibility(t)
             and supplied_variant_rank != 0
+            and not history_supported
         ):
             continue
         if expr is None:
             if not hla_restricted_target_supported(t, analysis=analysis):
                 continue
-            if expr_independent:
+            if expr_independent or history_supported:
                 phase = str(t.get("phase") or "")
                 label = sym or _therapy_agent_label(t)
                 scored.append(
                     (
                         (
+                            treatment_history_rank(t, analysis),
                             supplied_variant_rank,
                             therapy_path_rank(
                                 t,
                                 analysis=analysis,
                                 disease_state=disease_state,
                             ),
+                            *population_therapy_evidence_rank(t),
                             phase_priority.get(phase, 99),
                             1,
                             1,
@@ -847,7 +866,7 @@ def _top_therapies(
         if not hla_restricted_target_supported(t, analysis=analysis):
             continue
         observed = float(expr.get("observed_tpm") or 0.0)
-        if observed < 1.0 and not expr_independent:
+        if observed < 1.0 and not expr_independent and not history_supported:
             # Target absent — the brief reports presence, not absence.
             # The full landscape in targets.md has the absence noted.
             continue
@@ -866,12 +885,17 @@ def _top_therapies(
         if (
             attr_fraction < 0.30
             and not expr_independent
+            and not history_supported
             and not lineage_material
             and not interval_material
         ):
             continue
         reliability_status = target_reliability_status(expr, target_row=t)
-        if reliability_status == "unsupported" and not interval_material:
+        if (
+            reliability_status == "unsupported"
+            and not interval_material
+            and not history_supported
+        ):
             continue
         # Note (#128): we deliberately do NOT filter on
         # ``broadly_expressed`` here. The caller's ``targets_df`` is
@@ -891,12 +915,14 @@ def _top_therapies(
         }.get(reliability_status, 2)
         expression_rank = 1 if expr_independent else 0
         sort_key = (
+            treatment_history_rank(t, analysis),
             supplied_variant_rank,
             therapy_path_rank(
                 t,
                 analysis=analysis,
                 disease_state=disease_state,
             ),
+            *population_therapy_evidence_rank(t),
             phase_priority.get(phase, 99),
             expression_rank,
             reliability_rank,
@@ -1168,8 +1194,8 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
         return ""
     lines = [
         "**Where target RNA signal appears to come from** — *source attribution "
-        "is a caveat, not an automatic exclusion; clinical maturity and "
-        "eligibility still set the shortlist order.*",
+        "is a caveat, not an automatic exclusion; supplied patient evidence, "
+        "clinical outcomes, eligibility, and maturity set priority before RNA.*",
         "",
         "| Gene | Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
@@ -3075,6 +3101,17 @@ def build_summary(
 
     lines.append("")
 
+    history_lines = treatment_history_summary_lines(analysis)
+    if history_lines:
+        lines.append("## Supplied treatment history\n")
+        lines.append(
+            "*Clinical input for this patient was supplied to this run. It takes "
+            "priority over RNA-based target attribution, but does not establish "
+            "current eligibility or make retreatment appropriate.*\n"
+        )
+        lines.extend(history_lines)
+        lines.append("")
+
     # Top therapies — subtype/direct-code resolved when the umbrella
     # cancer call narrows onto a more specific curated panel.
     panel_code, panel_subtype, targets_df = _curated_target_panel_for_sample(
@@ -3098,7 +3135,9 @@ def build_summary(
         lines.append("## Top candidate therapies\n")
         lines.append(
             "*Static curation, not a live NCCN or trial-matching engine; ranked by "
-            "treatment-path maturity first, then estimated patient tumor support. Verify current "
+            "supplied patient treatment evidence first, then sourced clinical "
+            "outcomes, treatment-path maturity, eligibility evidence, and estimated "
+            "patient tumor support. Verify current "
             "NCCN/trial status and current therapy before acting on any row. This "
             "molecular/targeted shortlist is not a complete treatment plan and does "
             "not comprehensively enumerate surgery, radiation, cytotoxic, endocrine, "
@@ -3124,6 +3163,7 @@ def build_summary(
             # on-label / in-trial distinction explicit rather than only inline.
             from .plot_target_deep_dive import _PRIORITY_STATUS_LABELS
 
+            patient_evidence_bullets = []
             supplied_evidence_bullets, approved_bullets, clinical_bullets = [], [], []
             for target_row, expression_row in top:
                 bullet = _format_therapy_bullet(
@@ -3135,12 +3175,18 @@ def build_summary(
                     ranges_df=ranges_df,
                 )
                 phase = str(target_row.get("phase") or "").strip().lower()
-                if supplied_variant_supports_target_row(target_row, therapy_analysis):
+                if treatment_history_supports_review(target_row, therapy_analysis):
+                    patient_evidence_bullets.append(bullet)
+                elif supplied_variant_supports_target_row(target_row, therapy_analysis):
                     supplied_evidence_bullets.append(bullet)
                 elif phase == "approved":
                     approved_bullets.append(bullet)
                 else:
                     clinical_bullets.append(bullet)
+            if patient_evidence_bullets:
+                lines.append("### Patient treatment evidence\n")
+                lines.extend(patient_evidence_bullets)
+                lines.append("")
             if supplied_evidence_bullets:
                 lines.append("### Supplied eligibility evidence matched\n")
                 lines.extend(supplied_evidence_bullets)
@@ -3391,6 +3437,17 @@ def build_actionable(
         lines.append(f"\n{her2_proxy_line}")
     lines.append("")
 
+    history_lines = treatment_history_summary_lines(analysis)
+    if history_lines:
+        lines.append("## Supplied treatment history\n")
+        lines.append(
+            "Clinical input for this patient takes priority over RNA-based target "
+            "attribution. It still does not establish current eligibility or make "
+            "retreatment appropriate."
+        )
+        lines.extend(history_lines)
+        lines.append("")
+
     # Therapy prioritization.
     panel_code, panel_subtype, targets_df = _curated_target_panel_for_sample(
         cancer_code,
@@ -3420,7 +3477,9 @@ def build_actionable(
             lines.append(
                 "Agents with an approved or trialed indication for "
                 f"{cancer_code_display_name(panel_code, panel_label)}, cross-referenced to this sample. "
-                "Approved agents listed first. Interpretation separates "
+                "Supplied patient treatment evidence is considered first, then "
+                "sourced clinical outcomes, treatment-path maturity, eligibility, "
+                "and RNA support. Interpretation separates "
                 "estimated patient tumor support from external healthy-tissue reference context so "
                 "lineage markers are not confused with tumor-exclusive "
                 "targets. Treatment-path context flags standard options, "
@@ -3441,12 +3500,15 @@ def build_actionable(
             }
             _target_records = targets_df.to_dict("records")
             sorted_df = targets_df.assign(
+                _history_key=[
+                    treatment_history_rank(t, analysis) for t in _target_records
+                ],
                 _inactive_key=[
                     1 if therapy_row_rna_context_inactive(
                         t,
                         analysis=analysis,
                         disease_state=disease_state_display,
-                    ) else 0
+                    ) and not treatment_history_supports_review(t, analysis) else 0
                     for t in _target_records
                 ],
                 _path_key=[
@@ -3458,7 +3520,9 @@ def build_actionable(
                     for t in _target_records
                 ],
                 _po=targets_df["phase"].map(lambda p: phase_order.get(str(p), 99)),
-            ).sort_values(["_inactive_key", "_path_key", "_po", "symbol", "agent"])
+            ).sort_values(
+                ["_history_key", "_inactive_key", "_path_key", "_po", "symbol", "agent"]
+            )
 
             def _cell(value):
                 """Render a cell, turning NaN / blank / 'nan' into em-dash."""
@@ -3473,6 +3537,9 @@ def build_actionable(
                 raw_sym = t.get("symbol")
                 sym = canonical_target_symbol(_cell(raw_sym))
                 reliability = "provisional"
+                history_supported = treatment_history_supports_review(t, analysis)
+                history_blocked = treatment_history_blocks_row(t, analysis)
+                history_current = treatment_history_marks_current(t, analysis)
                 # Agent-only rows (no gene target — e.g. doxorubicin, pazopanib,
                 # trabectedin for sarcoma) have a blank ``symbol``; sym_to_row
                 # keying by "nan" would always miss, so skip the lookup and
@@ -3513,7 +3580,7 @@ def build_actionable(
                         )
                         extra_parts = []
                         if path_context:
-                            extra_parts.append(path_context)
+                            interp_cell = path_context + "; " + interp_cell
                         if state_caution:
                             extra_parts.append(
                                 f"current-therapy check: {state_caution}"
@@ -3568,7 +3635,7 @@ def build_actionable(
                             disease_state=disease_state_display,
                         )
                         if path_context:
-                            interp_parts.append(path_context)
+                            interp_parts.insert(0, path_context)
                         state_caution = therapy_state_caution(
                             t,
                             analysis=analysis,
@@ -3595,8 +3662,19 @@ def build_actionable(
                 audit_only = (
                     reliability == "unsupported"
                     and not expression_independent_indication(t)
-                )
-                if audit_only:
+                    and not history_supported
+                ) or history_blocked or history_current
+                if history_blocked:
+                    interp_cell = (
+                        "not prioritized because supplied treatment history reports "
+                        "a negative outcome; " + interp_cell
+                    )
+                elif history_current:
+                    interp_cell = (
+                        "listed as current treatment rather than a new candidate; "
+                        + interp_cell
+                    )
+                elif audit_only:
                     interp_cell = (
                         "not sample-supported; negative/background evidence; "
                         + interp_cell
@@ -3647,7 +3725,8 @@ def build_actionable(
 
             if audit_records:
                 lines.append(
-                    "### Clinically reviewable or eligibility-dependent rows\n"
+                    "### Supported by patient treatment history, clinically reviewable, or "
+                    "eligibility-dependent rows\n"
                 )
                 if active_records:
                     _render_therapy_records(active_records)

@@ -1742,6 +1742,7 @@ def analyze(
     fusions: Optional[str] = None,
     variants: Optional[str] = None,
     variant_genome_build: Optional[str] = None,
+    treatment_history: Optional[str] = None,
     # Deprecated Python compatibility; use ``variants``.
     alterations: Optional[str] = None,
     alignment_qc: Optional[str] = None,
@@ -1790,6 +1791,7 @@ def analyze(
         fusions=fusions,
         variants=variants,
         variant_genome_build=variant_genome_build,
+        treatment_history=treatment_history,
         alterations=alterations,
         alignment_qc=alignment_qc,
         expression_qc_rescue=expression_qc_rescue,
@@ -2090,6 +2092,14 @@ def _analyze_body(run: AnalyzeRun):
             f"[variant] Parsed {len(variant_records)} variant calls from "
             f"{len(variant_inputs)} input(s)"
         )
+    from .treatment_history import parse_treatment_history
+
+    treatment_records = parse_treatment_history(config.treatment_history)
+    if treatment_records:
+        print(
+            f"[treatment] Parsed {len(treatment_records)} patient treatment "
+            f"record(s) from {config.treatment_history}"
+        )
     run.note_step(
         "input",
         outputs={
@@ -2100,6 +2110,10 @@ def _analyze_body(run: AnalyzeRun):
             "variant_inputs": len(variant_inputs),
             "variant_records": len(variant_records),
             "variant_genome_build": config.variant_genome_build,
+            "treatment_history_records": len(treatment_records),
+            "treatment_history": [
+                record.public_dict() for record in treatment_records
+            ],
         },
     )
     forced_labels = _parse_always_label_genes(label_genes)
@@ -2426,6 +2440,9 @@ def _analyze_body(run: AnalyzeRun):
     analysis["variant_records"] = [
         record.public_dict() if hasattr(record, "public_dict") else dict(record)
         for record in variant_records
+    ]
+    analysis["treatment_history"] = [
+        record.public_dict() for record in treatment_records
     ]
     # One canonical decision stream: dedicated fusion records keep their
     # source-specific provenance but are normalized and deduplicated here with
@@ -10022,6 +10039,12 @@ def _build_target_report(
 ):
     """Return tumor-expression range report using purity/decomposition bounds."""
     import pandas as pd
+    from .treatment_history import (
+        treatment_history_blocks_row,
+        treatment_history_marks_current,
+        treatment_history_rank,
+        treatment_history_supports_review,
+    )
 
     cancer_type_context = cancer_type_context_from_analysis(analysis)
     cancer_code = cancer_type
@@ -10240,7 +10263,7 @@ def _build_target_report(
                     disease_state=disease_state,
                 )
                 if path_context:
-                    parts.append(path_context)
+                    parts.insert(0, path_context)
                 conflict = therapy_rna_context_conflict(
                     target_row,
                     analysis=analysis,
@@ -10292,7 +10315,7 @@ def _build_target_report(
                 disease_state=disease_state,
             )
             if path_context:
-                parts.append(path_context)
+                parts.insert(0, path_context)
             conflict = therapy_rna_context_conflict(
                 target_row,
                 analysis=analysis,
@@ -10613,7 +10636,8 @@ def _build_target_report(
                 "targets with expression signal even when the agent is generic, "
                 "approved only in another indication, or not disease-matched. "
                 "The **priority** list is intentionally narrower: it ranks the "
-                "curated cancer-specific therapy landscape by indication fit, "
+                "curated cancer-specific therapy landscape by supplied patient "
+                "treatment evidence, sourced clinical outcomes, indication fit, "
                 "required variant or HLA evidence, clinical maturity, and "
                 "estimated patient tumor attribution. A target such as HER3/ERBB3 or "
                 "ADAM9 can therefore appear in the expression screen without "
@@ -10638,12 +10662,16 @@ def _build_target_report(
                     "preclinical": 4,
                 }
                 targets_sorted = targets_df.assign(
+                    _history_key=[
+                        treatment_history_rank(trow, analysis)
+                        for _, trow in targets_df.iterrows()
+                    ],
                     _inactive_key=[
                         1 if therapy_row_rna_context_inactive(
                             trow,
                             analysis=analysis,
                             disease_state=disease_state,
-                        ) else 0
+                        ) and not treatment_history_supports_review(trow, analysis) else 0
                         for _, trow in targets_df.iterrows()
                     ],
                     _path_key=[
@@ -10658,7 +10686,14 @@ def _build_target_report(
                         lambda p: phase_order.get(str(p), 99)
                     ),
                 ).sort_values(
-                    ["_inactive_key", "_path_key", "_phase_key", "symbol", "agent"]
+                    [
+                        "_history_key",
+                        "_inactive_key",
+                        "_path_key",
+                        "_phase_key",
+                        "symbol",
+                        "agent",
+                    ]
                 )
 
                 def _cell(value):
@@ -10676,6 +10711,11 @@ def _build_target_report(
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
                     expr = None if sym == "—" else sym_to_row.get(sym)
+                    history_supported = treatment_history_supports_review(
+                        trow, analysis
+                    )
+                    history_blocked = treatment_history_blocks_row(trow, analysis)
+                    history_current = treatment_history_marks_current(trow, analysis)
                     reliability = "provisional"
                     source_reliability = reliability
                     if sym == "—":
@@ -10733,8 +10773,19 @@ def _build_target_report(
                     audit_only = (
                         source_reliability == "unsupported"
                         and not expression_independent_indication(trow)
-                    ) or eligibility_missing
-                    if eligibility_missing:
+                        and not history_supported
+                    ) or (eligibility_missing and not history_supported) or history_blocked or history_current
+                    if history_blocked:
+                        interpretation_cell = (
+                            "not prioritized because supplied treatment history "
+                            "reports a negative outcome; " + interpretation_cell
+                        )
+                    elif history_current:
+                        interpretation_cell = (
+                            "listed as current treatment rather than a new candidate; "
+                            + interpretation_cell
+                        )
+                    elif eligibility_missing:
                         interpretation_cell = (
                             "clinical eligibility not supplied; RNA context is shown "
                             "to prioritize confirmatory review; " + interpretation_cell
@@ -10789,7 +10840,10 @@ def _build_target_report(
                     lines.append("")
 
                 if audit_records:
-                    lines.append("### Sample-supported / clinically reviewable rows\n")
+                    lines.append(
+                        "### Supported by patient treatment history, sample evidence, or otherwise "
+                        "clinically reviewable rows\n"
+                    )
                     if active_records:
                         _render_target_records(active_records)
                     else:
@@ -11530,6 +11584,7 @@ def plot_expression(
     hla_types: Optional[str] = None,
     variants: Optional[str] = None,
     variant_genome_build: Optional[str] = None,
+    treatment_history: Optional[str] = None,
     alterations: Optional[str] = None,
     therapy_target_top_k: int = 10,
     therapy_target_tpm_threshold: float = 30.0,
@@ -11563,6 +11618,7 @@ def plot_expression(
         hla_types=hla_types,
         variants=variants,
         variant_genome_build=variant_genome_build,
+        treatment_history=treatment_history,
         alterations=alterations,
         therapy_target_top_k=therapy_target_top_k,
         therapy_target_tpm_threshold=therapy_target_tpm_threshold,

@@ -210,8 +210,41 @@ def test_write_and_load_roundtrip(tmp_path):
     assert on_disk["headline"]["purity"] == 0.10
 
 
+def test_report_document_retains_structured_treatment_history(tmp_path):
+    _write_reports(tmp_path)
+    history = [
+        {
+            "therapy": "FAP-targeted radioligand therapy",
+            "target": "FAP",
+            "modality": "RLT",
+            "status": "major_benefit",
+            "note": "Very effective",
+            "source": "clinical history",
+        }
+    ]
+
+    doc = rd.build_report_document(
+        tmp_path,
+        _PREFIX,
+        report_view=_report_view(),
+        treatment_history=history,
+    )
+
+    assert doc["treatment_history"] == history
+
+
 def test_output_finalization_writes_structured_records_without_figures(tmp_path):
     _write_reports(tmp_path, emit_figures=())
+    history = [
+        {
+            "therapy": "FAP-targeted radioligand therapy",
+            "target": "FAP",
+            "modality": "RLT",
+            "status": "major_benefit",
+            "note": "Very effective",
+            "source": "clinical history",
+        }
+    ]
     run = AnalyzeRun(
         config=AnalyzeConfig(input_path="sample.tsv", output_dir=str(tmp_path)),
         inputs=InputResolution(
@@ -226,6 +259,7 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
             sample_display_id=_PREFIX,
         ),
     )
+    run.note_step("input", outputs={"treatment_history": history})
 
     outputs = write_analysis_output_records(run, _report_view())
 
@@ -239,6 +273,7 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
     assert manifest["steps"]["output"]["outputs"]["report_document"] == str(
         report_path
     )
+    assert json.loads(report_path.read_text())["treatment_history"] == history
     assert not any(
         artifact["kind"] == "figure" for artifact in manifest["artifacts"]
     )

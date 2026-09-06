@@ -27,6 +27,8 @@ The document carries, per sample:
   bullet highlights.
 - ``therapy`` / ``targets`` — the therapy shortlist and priority-target tables as
   ``{"columns": [[name, width], ...], "rows": [[cell, ...], ...]}``.
+- ``treatment_history`` — structured patient treatment records supplied to the
+  run, retained so downstream consumers do not have to recover them from prose.
 - ``figures`` — a manifest of every reader figure with its interpretation caption
   and a ``present`` flag. A figure is only emitted when its underlying belief
   passed threshold, so ``present`` is belief-gated: the PDF ships a figure iff the
@@ -669,6 +671,7 @@ def build_report_document(
     prefix: Optional[str] = None,
     *,
     report_view: "ReportView",
+    treatment_history: Optional[List[dict]] = None,
 ) -> dict:
     """Assemble the structured report document for one analyze directory.
 
@@ -692,6 +695,7 @@ def build_report_document(
         "headline": headline,
         "records": records,
         "highlights": highlight_lines(summary_path, analysis_path),
+        "treatment_history": list(treatment_history or []),
         "therapy": parse_therapy_recommendations(summary_path),
         "targets": _priority_target_table(analyze_dir, prefix),
         "figures": build_figure_manifest(
@@ -708,10 +712,16 @@ def write_report_document(
     prefix: str,
     *,
     report_view: "ReportView",
+    treatment_history: Optional[List[dict]] = None,
 ) -> Path:
     """Build and write ``<prefix>-report.json`` into *analyze_dir*; return its path."""
     analyze_dir = Path(analyze_dir)
-    document = build_report_document(analyze_dir, prefix, report_view=report_view)
+    document = build_report_document(
+        analyze_dir,
+        prefix,
+        report_view=report_view,
+        treatment_history=treatment_history,
+    )
     path = analyze_dir / f"{prefix}-report.json"
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False))
     return path

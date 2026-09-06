@@ -111,6 +111,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
         "--fusions", "/tmp/fusions.tsv",
         "--variants", "/tmp/variants.tsv",
         "--variant-genome-build", "GRCh38",
+        "--treatment-history", "/tmp/treatment-history.tsv",
         "--alignment-qc", "/tmp/aqc.tsv",
         "--sample-mode", "tumor_bulk",
         "--tumor-context", "primary",
@@ -123,6 +124,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
     assert captured["fusions"] == "/tmp/fusions.tsv"
     assert captured["variants"] == "/tmp/variants.tsv"
     assert captured["variant_genome_build"] == "GRCh38"
+    assert captured["treatment_history"] == "/tmp/treatment-history.tsv"
     assert captured["alignment_qc"] == "/tmp/aqc.tsv"
     assert captured["sample_mode"] == "tumor_bulk"
     assert captured["tumor_context"] == "primary"

@@ -74,6 +74,14 @@ def _add_run_parser(sub):
             "symbolic calls such as 'EGFR KDD' do not need it."
         ),
     )
+    p.add_argument(
+        "--treatment-history",
+        default=None,
+        help=(
+            "CSV, TSV, JSON, or JSONL patient treatment history. Records use "
+            "therapy, status, and optional target, modality, note, and source fields."
+        ),
+    )
     p.add_argument("--alignment-qc", default=None)
     p.add_argument("--decomposition-templates", default=None)
     p.add_argument(
@@ -156,6 +164,7 @@ def cmd_run(args) -> int:
         "fusions": args.fusions,
         "variants": args.variants,
         "variant_genome_build": args.variant_genome_build,
+        "treatment_history": args.treatment_history,
         "alignment_qc": args.alignment_qc,
         "decomposition_templates": args.decomposition_templates,
         "output_image_prefix": args.output_image_prefix,
