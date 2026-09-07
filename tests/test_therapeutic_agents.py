@@ -65,9 +65,11 @@ def test_registry_loads_with_required_columns():
         "key_pmids",
     ):
         assert col in df.columns
-    # Every row names an agent and a target gene.
+    # Clinical names can be registered without nominating a target from RNA.
     assert (df["agent"].str.strip() != "").all()
-    assert (df["target_gene"].str.strip() != "").all()
+    names_only = df.loc[df["target_gene"].str.strip().eq("")]
+    assert names_only["identity_source"].str.strip().ne("").all()
+    assert set(df["identity_kind"]) <= {"agent", "regimen", "alternatives", "class", "unspecified_product"}
 
 
 def test_every_agent_uses_the_controlled_modality_vocab():

@@ -17,7 +17,9 @@ import re
 from typing import Any, Mapping
 
 from .reporting import canonical_target_symbol
-from .therapeutic_agents import agent_identity, agents_for_name, agents_for_target
+from .therapeutic_agents import (
+    agent_identity, agents_for_name, agents_for_target, resolve_therapy_identity,
+)
 
 
 TREATMENT_STATUSES = (
@@ -206,13 +208,22 @@ class TreatmentRecord:
             status=_clean(first("status", "outcome", "response")),
             note=_clean(first("note", "notes", "details")),
             source=_clean(first("source", "provenance")),
-            source_path=source_path,
-            row_index=row_index,
+            source_path=source_path or _clean(normalized.get("source_path")),
+            row_index=row_index if row_index is not None else normalized.get("row_index"),
         )
 
     def public_dict(self) -> dict[str, Any]:
+        identity = resolve_therapy_identity(self.therapy)
         return {
             "therapy": self.therapy,
+            "therapy_identity": {
+                "canonical_name": identity.canonical_name,
+                "key": identity.key,
+                "kind": identity.kind,
+                "components": list(identity.components),
+                "registered": identity.registered,
+                "parent_agent": identity.parent_agent,
+            },
             "target": self.target,
             "modality": self.modality,
             "status": self.status,
@@ -299,11 +310,35 @@ def _row_modality(target_row: Mapping[str, Any]) -> str:
 def treatment_record_match_kind(
     record: TreatmentRecord, target_row: Mapping[str, Any]
 ) -> str:
-    """Return ``exact_agent``, ``target_modality``, or an empty non-match."""
-    row_agent = agent_identity(target_row.get("agent"))
-    record_agent = agent_identity(record.therapy)
+    """Return exact-agent, contraindicated-component, or explicit class match."""
+    row_identity = resolve_therapy_identity(target_row.get("agent"))
+    record_identity = resolve_therapy_identity(record.therapy)
+    row_agent = row_identity.key
+    record_agent = record_identity.key
     if row_agent and record_agent and row_agent == record_agent:
         return "exact_agent"
+
+    if (
+        record.status == "contraindicated"
+        and record_identity.parent_agent in row_identity.components
+        and resolve_therapy_identity(record_identity.parent_agent).kind == "unspecified_product"
+    ):
+        # A formulation-specific restriction cannot be cleared by a row that
+        # leaves the product unspecified. Distinct specified products stay distinct.
+        return "unresolved_product"
+
+    if (
+        record.status == "contraindicated"
+        and record_agent
+        and record_identity.kind in {"agent", "unknown", "unspecified_product"}
+        and (
+            (row_identity.kind == "regimen" and record_agent in row_identity.components)
+            or record_agent == row_identity.parent_agent
+            or any(record_agent == resolve_therapy_identity(part).parent_agent
+                   for part in row_identity.components)
+        )
+    ):
+        return "contraindicated_component"
 
     if record.therapy and record.status in _NEGATIVE_STATUSES | {"current"}:
         return ""
@@ -346,7 +381,10 @@ def treatment_history_supports_review(target_row, analysis) -> bool:
 def treatment_history_blocks_row(target_row, analysis) -> bool:
     """Whether supplied history argues against presenting this as a candidate.
 
-    A named negative outcome blocks that same agent. A target-and-modality-only
+    A named negative outcome blocks that same agent. An explicit component
+    contraindication also blocks regimens containing it. Progression,
+    intolerance, and current treatment do not propagate to new combinations.
+    A target-and-modality-only
     record intentionally applies to the whole specified class. A negative
     outcome never spills across unrelated modalities for the same target.
     """
@@ -391,37 +429,23 @@ def treatment_history_context(target_row, analysis) -> str:
     match = best_treatment_history_match(target_row, analysis)
     if match is None:
         return ""
+    from .report_language import render_report_paragraph
+
     record = match["record"]
     therapy = record.therapy or "this target and modality"
-    status_text = {
-        "major_benefit": "major prior benefit",
-        "benefit": "prior benefit",
-        "stable_disease": "prior disease control",
-        "current": "current treatment",
-        "no_benefit": "no prior benefit",
-        "progression": "prior progression",
-        "intolerance": "prior intolerance",
-        "contraindicated": "a contraindication",
-    }[record.status]
-    relation = (
-        "this agent" if match["match_kind"] == "exact_agent" else "this target and modality"
-    )
-    base = f"Supplied treatment history reports {status_text} with {therapy} ({relation})"
+    identity = resolve_therapy_identity(record.therapy)
     if record.status in {"major_benefit", "benefit", "stable_disease"}:
-        base += (
-            "; this evidence from the patient outranks the RNA source estimate, "
-            "but current suitability, resistance, toxicity, organ function, and "
-            "eligibility still require clinical review"
-        )
-    elif record.status == "current":
-        base += "; reconcile response and toxicity before presenting it as a new start"
+        action = "prior_benefit"
+    elif record.status in {"current", "contraindicated"}:
+        action = record.status
     else:
-        base += "; do not prioritize the same treatment without a specific clinical rationale"
-    if record.note:
-        base += f"; supplied note: {record.note.replace('|', '/')}"
-    if record.source:
-        base += f"; supplied source: {record.source.replace('|', '/')}"
-    return base
+        action = "negative"
+    return render_report_paragraph(
+        "treatment_history", record=record, therapy=therapy,
+        identity=identity, action=action, match_kind=match["match_kind"],
+        show_identity=identity.registered and identity.canonical_name.casefold() != therapy.casefold(),
+        unresolved_product=match["match_kind"] == "unresolved_product",
+    )
 
 
 def treatment_history_summary_lines(analysis) -> list[str]:
@@ -452,7 +476,8 @@ def treatment_history_supplement_rows(
     rows = []
     for record in treatment_records(analysis):
         if any(
-            treatment_record_match_kind(record, row)
+            treatment_record_match_kind(record, row) == "exact_agent"
+            if record.therapy else bool(treatment_record_match_kind(record, row))
             for row in existing_records
             if hasattr(row, "get")
         ):

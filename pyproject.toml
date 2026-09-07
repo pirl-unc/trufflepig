@@ -39,6 +39,7 @@ dependencies = [
     "Pillow>=9.1",
     "mhcgnomes>=3.64.1,<4",
     "markdown-it-py>=3,<5",
+    "Jinja2>=3.1.6,<4",
     # scipy (nnls background subtraction, spearman, rankdata) and scikit-learn
     # (the learned expression classifier) are core runtime deps; seaborn and
     # adjustText are imported at module top in the plotting modules. All four
@@ -68,7 +69,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-trufflepig = ["py.typed", "data/*.csv", "data/*.csv.gz", "data/*.txt.gz", "data/LICENCE-*.md", "web/static/*", "web/templates/*"]
+trufflepig = ["py.typed", "data/*.csv", "data/*.csv.gz", "data/*.txt.gz", "data/LICENCE-*.md", "report_templates/*.j2", "web/static/*", "web/templates/*"]
 
 
 [project.optional-dependencies]
