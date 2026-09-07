@@ -23,5 +23,38 @@ repair contradictory eligibility decisions. HLA, RNA observation state and
 clinical evidence requests are the next paragraphs to migrate as their shared
 decision contracts are consolidated.
 
+The report should read in a consistent order:
+
+1. The conclusion and the evidence supporting it, including uncertainty in the
+   disease call and the specimen context.
+2. The therapeutic candidates, each with its evidence basis, current blockers
+   and a reference to any information needed to resolve them.
+3. One list of missing or conflicting information, with each request naming the
+   affected decisions and the accepted structured inputs.
+4. Detailed evidence, source records and figures for audit.
+
+Deduplicate information requests by their meaning before rendering. For example,
+several therapies may depend on the same clinical MSI/MMR result; their entries
+should link to one request rather than each repeat instructions for obtaining it.
+A known HLA mismatch is a blocker, not a missing-typing request. An unspecified
+mutation is missing allele evidence, not a confirmed drug-specific biomarker.
+
+Use a small number of templates for coherent report sections and repeatable
+paragraphs. Introduce a shared macro only when several templates truly reuse the
+same presentation. Keep display conditionals such as an optional source citation
+in templates; compute clinical status, ranking and request deduplication in
+Python. Do not recreate the current sentence-fragment assembly with many tiny
+template files.
+
+The treatment-history paragraph migration is implemented. Consolidating other
+decisions and replacing the current Markdown-to-JSON parsing are subsequent
+steps. The intended main path is evidence → decisions → structured report →
+Markdown / JSON / PDF. JSON must retain typed evidence and complete rationale;
+it should not recover clinical meaning from generated prose. Format renderers
+may change layout, but must share the same decisions and authored paragraphs.
+
 Keep clinical labels and numerical evidence intact. Tests should check whether
 important blockers and source facts survive, rather than freeze every adjective.
+An optional language editor can later improve phrasing against this fixed
+content, with deterministic template output retained as the fallback. It must
+preserve decisions, negation, uncertainty, identifiers, values and citations.

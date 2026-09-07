@@ -310,7 +310,7 @@ def test_negative_outcome_blocks_only_the_named_agent():
 
     assert treatment_history_blocks_row(doxorubicin, analysis) is True
     assert treatment_history_blocks_row(pazopanib, analysis) is False
-    assert "do not prioritize" in treatment_history_context(doxorubicin, analysis)
+    assert "do not prioritize" in treatment_history_context(doxorubicin, analysis).casefold()
 
     class_specific = {
         "treatment_history": [
