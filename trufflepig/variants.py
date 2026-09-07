@@ -100,6 +100,39 @@ _GENOME_BUILD_ALIASES = {
 }
 
 
+_AMINO_ACID_CODES = dict(zip(
+    ("Ala", "Arg", "Asn", "Asp", "Cys", "Gln", "Glu", "Gly", "His", "Ile",
+     "Leu", "Lys", "Met", "Phe", "Pro", "Ser", "Thr", "Trp", "Tyr", "Val", "Ter"),
+    "ARNDCQEGHILKMFPSTWYV*",
+))
+
+
+def normalize_protein_substitution(value: object, *, gene: str = "") -> str:
+    """Canonical one-letter substitution, or empty for imprecise/non-protein input.
+
+    Accept an exact HGVS protein substitution (optionally prefixed by the
+    stated gene). Do not extract an allele from prose,
+    a nucleotide coordinate, an ambiguity list, or another gene's assertion.
+    """
+    text = str(value or "").strip()
+    if gene:
+        text = re.sub(rf"^{re.escape(gene)}(?:\s+|:)", "", text, flags=re.I).strip()
+    text = re.sub(r"^p\.", "", text)
+    if text.startswith("(") or text.endswith(")"):
+        if not (text.startswith("(") and text.endswith(")")):
+            return ""
+        text = text[1:-1]
+    match = re.fullmatch(r"([A-Z][a-z]{2}|[A-Z*])([1-9]\d*)([A-Z][a-z]{2}|[A-Z*])", text)
+    if match is None:
+        return ""
+    before, position, after = match.groups()
+    before = _AMINO_ACID_CODES.get(before, before)
+    after = _AMINO_ACID_CODES.get(after, after)
+    if before not in _AMINO_ACID_CODES.values() or after not in _AMINO_ACID_CODES.values():
+        return ""
+    return f"{before}{position}{after}"
+
+
 def normalize_genome_build(value: object) -> str:
     """Return one canonical genome-build label or an empty unknown value."""
     build = str(value or "").strip()

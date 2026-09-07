@@ -1,60 +1,67 @@
-# Report language
+# Report content and rendering
 
-Clinical decisions and wording have separate owners. Python evaluates supplied
-evidence, eligibility, blockers and uncertainty. Named Jinja templates describe
-those decisions in complete paragraphs. The emitted paragraph is shared by the
-Markdown report and its structured JSON/PDF projection.
+`build_report_content` authors one report from the finalized `ReportView`, curated
+therapy panel and supplied evidence. Markdown, JSON and the native-text PDF use
+its sections in the same order:
 
-`trufflepig.report_language.render_report_paragraph(name, **facts)` loads only
-packaged templates from `trufflepig/report_templates/`. `StrictUndefined` makes
-missing required facts an error instead of silently omitting an explanation.
-Input text is a template value; it is never evaluated as template code. HTML
-escaping is performed by the HTML renderer, not this plain-Markdown layer.
+1. **Conclusion and supporting evidence:** disease call, confidence, competing
+   evidence, tumor-fraction uncertainty and specimen context.
+2. **Therapy rationale and blockers:** ranked candidates with patient and
+   population evidence; known exclusions and treatments awaiting eligibility.
+3. **Information needed:** one list grouped by evidence requirement, retaining
+   every affected therapy and the specific results needed.
+4. **Detailed evidence and figures:** supplied history, attribution explanations,
+   limitations, links to full tables and the emitted figure manifest.
 
-Treatment-history interpretation is the first migrated paragraph. Its template
-owns the status names, relationship phrases, explanation and source wording.
-`treatment_history_context` obtains the shared history match and passes an
-explicit action to the template. It does not assemble sentence fragments.
+The main APIs are:
 
-Further migration should follow the same contract: produce one evidence decision,
-then use it for selection and presentation. Do not move clinical criteria into
-Jinja, create separate summaries that reinterpret the evidence, or use an LLM to
-repair contradictory eligibility decisions. HLA, RNA observation state and
-clinical evidence requests are the next paragraphs to migrate as their shared
-decision contracts are consolidated.
+| API | Purpose |
+|---|---|
+| `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
+| `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
+| `report_content.build_report_content` | Author the report and deduplicate information requests |
+| `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
+| `report_language.render_report_template` | Render the complete Markdown layout |
+| `report_document.write_report_document` | Serialize authored content, headline and figure provenance |
+| `report_pdf.build_interpretive_report_pdf` | Render the serialized report as a searchable PDF |
 
-The report should read in a consistent order:
+Python owns matching, status, ranking and request deduplication. Packaged Jinja
+`StrictUndefined` templates own paragraph wording and layout. Missing template
+facts raise an error. Supplied text is a value; it is never executed as template
+code. The PDF escapes HTML and preserves HLA tokens using the same mhcgnomes
+nomenclature boundary as other HLA operations.
 
-1. The conclusion and the evidence supporting it, including uncertainty in the
-   disease call and the specimen context.
-2. The therapeutic candidates, each with its evidence basis, current blockers
-   and a reference to any information needed to resolve them.
-3. One list of missing or conflicting information, with each request naming the
-   affected decisions and the accepted structured inputs.
-4. Detailed evidence, source records and figures for audit.
+Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
+`blocked`. Prior benefit can support review while an assay remains missing; it
+does not confirm that assay or override conflicting molecular evidence. A known HLA mismatch or exclusion remains a blocker; it does not become
+a request for new typing. An explicitly contraindicated component blocks its
+containing regimen. Requests on an already excluded treatment remain in the audit
+assessment without generating a new testing task. Sharing a request does not
+merge different treatments or erase different assay requirements.
 
-Deduplicate information requests by their meaning before rendering. For example,
-several therapies may depend on the same clinical MSI/MMR result; their entries
-should link to one request rather than each repeat instructions for obtaining it.
-A known HLA mismatch is a blocker, not a missing-typing request. An unspecified
-mutation is missing allele evidence, not a confirmed drug-specific biomarker.
+RNA abundance does not establish a mutation. Exact protein requirements on the
+covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,
+a nucleotide-only assertion and an unrelated variant file. These rules do not
+constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
+remains context for confirmation; a validated structured clinical-assay input is
+tracked separately in #168. VCF/MAF adapters remain tracked in #140/#141. The
+current accepted variant input is a normalized table or an explicit symbolic
+call; requests can also name the clinical report needed for reconciliation.
 
-Use a small number of templates for coherent report sections and repeatable
-paragraphs. Introduce a shared macro only when several templates truly reuse the
-same presentation. Keep display conditionals such as an optional source citation
-in templates; compute clinical status, ranking and request deduplication in
-Python. Do not recreate the current sentence-fragment assembly with many tiny
-template files.
+Report JSON schema 2 retains complete authored paragraphs, therapy assessments,
+requirements, treatment history and figures. It does not recover clinical meaning
+from generated Markdown. Older schema-1 reports must be regenerated before using
+the new PDF renderer. PDFs use native text, clickable source links, automatic
+pagination and packaged Unicode fonts; no fixed line count truncates a rationale.
 
-The treatment-history paragraph migration is implemented. Consolidating other
-decisions and replacing the current Markdown-to-JSON parsing are subsequent
-steps. The intended main path is evidence → decisions → structured report →
-Markdown / JSON / PDF. JSON must retain typed evidence and complete rationale;
-it should not recover clinical meaning from generated prose. Format renderers
-may change layout, but must share the same decisions and authored paragraphs.
+The detailed analysis and evidence tables retain broader curation and source
+attribution. They refer to the summary's consolidated information list. Figures
+must describe measured or modeled RNA patterns and their uncertainty; they must
+not assert treatment exposure, receptor-assay status or a mutation from expression.
 
-Keep clinical labels and numerical evidence intact. Tests should check whether
-important blockers and source facts survive, rather than freeze every adjective.
-An optional language editor can later improve phrasing against this fixed
-content, with deterministic template output retained as the fallback. It must
-preserve decisions, negation, uncertainty, identifiers, values and citations.
+An optional LLM language editor remains a separate feature. It may eventually
+improve phrasing over these fixed facts, with review and deterministic output
+available. It must preserve decisions, negation, uncertainty, identifiers, values
+and citations. Clinical-background extraction and the validated structured input
+contract belong to #163; language editing cannot repair an eligibility decision.

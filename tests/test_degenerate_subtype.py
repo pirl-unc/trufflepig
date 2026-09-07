@@ -641,7 +641,7 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
         disease_state="",
         sample_id="synthetic-bone-os-panel",
     )
-    assert "Using osteosarcoma-specific therapy evidence" in summary, summary
+    assert "curated SARC_OS panel" in summary, summary
     assert "ganitumab + chemo" not in summary, summary
     assert "brigimadlin" not in summary, summary
 

@@ -40,6 +40,7 @@ dependencies = [
     "mhcgnomes>=3.64.1,<4",
     "markdown-it-py>=3,<5",
     "Jinja2>=3.1.6,<4",
+    "reportlab>=4.4,<5",
     # scipy (nnls background subtraction, spearman, rankdata) and scikit-learn
     # (the learned expression classifier) are core runtime deps; seaborn and
     # adjustText are imported at module top in the plotting modules. All four
@@ -80,6 +81,7 @@ web = [
     "markdown>=3.4",
 ]
 test = [
+    "pypdf>=5,<7",
     "pytest",
     "pytest-cov",
     "pytest-xdist",

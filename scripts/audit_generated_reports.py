@@ -17,7 +17,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from trufflepig.report_document import parse_therapy_recommendations
+from trufflepig.report_language import render_report_template
 
 try:
     from .analyze_reports import (
@@ -339,6 +339,7 @@ def _sample_issues(
             }
         )
     report_path = paths.get("report")
+    report_document = None
     if report_path is not None:
         try:
             report_document = json.loads(report_path.read_text(encoding="utf-8"))
@@ -353,23 +354,35 @@ def _sample_issues(
             )
         else:
             summary_path = paths.get("summary")
-            summary_therapy = (
-                parse_therapy_recommendations(summary_path)
-                if summary_path is not None
-                else None
+            expected_summary = render_report_template(
+                "report", sample_id=report_document.get("sample_id") or "",
+                sections=[{**section, "blocks": [block for block in section["blocks"] if block["kind"] != "figure"]}
+                          for section in report_document.get("sections", [])],
             )
-            if report_document.get("therapy") != summary_therapy:
+            if summary_path is None or summary_path.read_text().strip() != expected_summary.strip():
                 issues.append(
                     {
                         "sample": sample_id,
                         "severity": "error",
-                        "category": "therapy_shortlist_mismatch",
+                        "category": "authored_summary_mismatch",
                         "detail": (
-                            "structured therapy recommendations differ from "
+                            "authored report sections differ from "
                             "the reader summary"
                         ),
                     }
                 )
+    if report_document is not None:
+        for assessment in report_document.get('therapy_assessments', []):
+            if assessment.get('selected') and not assessment.get('eligibility', {}).get('permits_review'):
+                issues.append({'sample': sample_id, 'severity': 'error',
+                               'category': 'selected_therapy_has_unresolved_requirements',
+                               'detail': assessment.get('agent', '')})
+        request_keys = [key for request in report_document.get('evidence_requests', [])
+                        for key in request.get('keys', [request['key']])]
+        if len(request_keys) != len(set(request_keys)):
+            issues.append({'sample': sample_id, 'severity': 'error',
+                           'category': 'duplicate_evidence_request',
+                           'detail': 'A requirement appears in more than one information request.'})
     if expected and working_codes and not any(
         compat(code, accepted)
         for code in working_codes
@@ -455,27 +468,6 @@ def _sample_issues(
                 "detail": "fallback-reference decomposition lacks explanatory context",
             }
         )
-    therapy_lines = [
-        line
-        for line in summary_text.splitlines()
-        if line.startswith("- **") and ("Phase " in line or "Off-label" in line)
-    ]
-    for line in therapy_lines:
-        lower = line.lower()
-        if (
-            any(token in lower for token in ("fusion", "mutation", "amplification"))
-            and "confirm" not in lower
-            and "verify" not in lower
-        ):
-            issues.append(
-                {
-                    "sample": sample_id,
-                    "severity": "warning",
-                    "category": "therapy_requires_molecular_confirmation",
-                    "detail": line[:240],
-                }
-            )
-            break
     return issues
 
 

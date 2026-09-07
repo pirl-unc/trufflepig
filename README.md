@@ -281,3 +281,17 @@ The script refuses to write inside the repo. The default `--root` is
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+
+### Report interpretation and Python API
+
+The summary and interpretive PDF follow four sections: conclusion with evidence;
+therapy rationale and blockers; one consolidated information list; then detailed
+evidence and figures. Their shared content is retained directly in report JSON
+schema 2. The PDF contains searchable text and clickable source citations.
+
+Use `trufflepig.report_content.assess_therapy` to inspect an individual therapy's
+identity, RNA observation and eligibility requirements, including treatments that
+were excluded. Use `trufflepig.therapy_eligibility.evaluate_therapy_eligibility`
+for the shared requirement decision. A supplied file is not proof of a matching
+mutation, and unknown or conflicting evidence does not establish eligibility.
+See [report content and rendering](docs/report-language.md).

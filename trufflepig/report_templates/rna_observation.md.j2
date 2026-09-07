@@ -1,0 +1,20 @@
+{% if state == 'measured' %}
+{% if context_only %}
+Target RNA is context only (patient bulk {{ '%.1f' | format(observed_tpm) }} TPM,
+measured; it does not establish eligibility).
+{% else %}
+Patient bulk target RNA is {{ '%.1f' | format(observed_tpm) }} TPM (measured).
+A tumor-expression interval is unavailable; RNA abundance alone does not confirm
+clinical target positivity.
+{% endif %}
+{% elif state == 'below_detection' %}
+Target RNA is below detection in this sample (bulk TPM approximately zero);
+this RNA observation does not establish absence of target protein or clinical
+ineligibility.
+{% elif state == 'not_in_input' %}
+The target gene is not present in the input file. This is a coverage gap;
+eligibility is not inferred from expression.
+{% else %}
+Target RNA was not measured or its observation state is unavailable;
+eligibility is not inferred from expression.
+{% endif %}

@@ -646,26 +646,15 @@ def population_therapy_evidence_context(target_row) -> str:
     source_url = _clean(target_row.get("therapy_evidence_url"))
     if not any((benefit, toxicity, endpoint, major_toxicities)):
         return ""
-    parts = ["sourced clinical outcome evidence"]
-    if benefit:
-        parts.append(f"benefit tier {benefit.replace('_', ' ')}")
-    if endpoint:
-        parts.append(endpoint)
-    if toxicity:
-        parts.append(f"toxicity tier {toxicity.replace('_', ' ')}")
-    if major_toxicities:
-        toxicities = ", ".join(
-            item.strip() for item in major_toxicities.split(";") if item.strip()
-        )
-        if toxicities:
-            parts.append(f"major toxicities include {toxicities}")
-    if source:
-        citation = f"[{source}]({source_url})" if source_url else source
-        parts.append(f"source {citation}")
-    note = _clean(target_row.get("therapy_evidence_note"))
-    if note:
-        parts.append(note)
-    return "; ".join(parts)
+    from .report_language import render_report_paragraph
+
+    return render_report_paragraph(
+        'population_evidence', benefit=benefit.replace('_', ' '),
+        endpoint=endpoint, toxicity=toxicity.replace('_', ' '),
+        toxicities=', '.join(item.strip() for item in major_toxicities.split(';') if item.strip()),
+        source=source, source_url=source_url, note=_clean(target_row.get('therapy_evidence_note')),
+    )
+
 
 
 __all__ = [

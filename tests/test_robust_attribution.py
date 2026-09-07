@@ -638,7 +638,7 @@ def test_brief_keeps_mature_target_when_interval_support_is_material():
 
 
 def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
-    from trufflepig.brief import _format_therapy_bullet, recommend_therapies
+    from trufflepig.brief import recommend_therapies
 
     targets_df = pd.DataFrame(
         [
@@ -705,7 +705,7 @@ def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
     symbols = [t["symbol"] for t, _ in top]
     assert symbols == ["FOLH1"]
 
-    bullet = _format_therapy_bullet(top[0][0], top[0][1], target_panel=targets_df)
+    bullet = therapy_review_text(top[0][0], top[0][1], target_panel=targets_df)
     assert "also expected in healthy tissue" in bullet
     assert "mostly tumor" in bullet
     assert "Provisional:" not in bullet
@@ -766,7 +766,7 @@ def test_same_lineage_target_can_stay_supported_when_band_remains_material():
 
 
 def test_expression_independent_indication_is_not_demoted_by_target_tpm():
-    from trufflepig.brief import _format_therapy_bullet, recommend_therapies
+    from trufflepig.brief import recommend_therapies
     from trufflepig.reporting import indication_biomarker, target_reliability_status
 
     targets_df = pd.DataFrame(
@@ -819,7 +819,7 @@ def test_expression_independent_indication_is_not_demoted_by_target_tpm():
         target_reliability_status(ranges_df.iloc[0], target_row=targets_df.iloc[0])
         == "provisional"
     )
-    bullet = _format_therapy_bullet(top[0][0], top[0][1], target_panel=targets_df)
+    bullet = therapy_review_text(top[0][0], top[0][1], target_panel=targets_df)
     assert "target expression is not the eligibility criterion" in bullet
     assert "target absent" not in bullet.lower()
 
@@ -914,3 +914,12 @@ def test_tumor_attribution_context_adds_low_sample_purity_note():
     assert any("low estimated tumor fraction" in n for n in with_flag["notes"])
     without = tumor_attribution_context(base)
     assert not any("low sample purity" in n for n in without["notes"])
+
+
+def therapy_review_text(target, expression, target_panel=None, **context):
+    from trufflepig.report_content import assess_therapy
+    from trufflepig.brief import _expression_independent_evidence_gap
+    assessment = assess_therapy(target, expression, target_panel=target_panel, **context)
+    return " ".join([assessment['agent'], assessment['phase'], assessment['indication'],
+                     *assessment['rationale'], assessment['maturity'],
+                     _expression_independent_evidence_gap(target, context.get('analysis'))])
