@@ -2,10 +2,13 @@
 off-context surfacing (#47)."""
 
 import pandas as pd
+import pytest
 
 from trufflepig.common import ensembl_id_to_symbol_map
 from trufflepig.therapeutic_agents import (
     MODALITIES,
+    agent_identity,
+    agents_for_name,
     agents_for_target,
     all_target_genes,
     best_agent_for_target,
@@ -18,6 +21,36 @@ from trufflepig.therapeutic_agents import (
     therapeutic_targets,
 )
 from trufflepig.reporting import cross_cancer_target_index, offcontext_known_targets
+
+
+@pytest.mark.parametrize("name", [
+    "afami-cel", " ADP-A2M4 ", "Tecelra", "afamitresgene autoleucel",
+    "afami-cel (Tecelra)", "TECELRA (AFAMI-CEL)",
+    "afamitresgene autoleucel (ADP-A2M4)",
+])
+def test_registered_agent_names_brands_and_display_labels_share_identity(name):
+    agents = agents_for_name(name)
+    assert agents and agents[0].agent == "afamitresgene autoleucel"
+    assert agent_identity(name) == agent_identity("afamitresgene autoleucel")
+
+
+@pytest.mark.parametrize("name", [
+    "ADP-A2M4CD8", "afami-cel + ADP-A2M4CD8", "afami-cel (ADP-A2M4CD8)",
+    "afami-cel (different formulation)", "unregistered product (Tecelra)",
+])
+def test_agent_normalization_does_not_equate_different_or_uncertain_products(name):
+    assert agent_identity(name) != agent_identity("afami-cel")
+
+
+def test_registered_parenthetical_product_identity_is_preserved():
+    assert agents_for_name("CD371 CAR-T (MSK)")[0].agent == "CD371 CAR-T (MSK)"
+    assert agent_identity("CD371 CAR-T (MSK)") != agent_identity("CD371 CAR-T (other)")
+
+
+@pytest.mark.parametrize("missing", [None, float("nan"), pd.NA, "", "null"])
+def test_missing_agent_values_do_not_acquire_an_identity(missing):
+    assert agent_identity(missing) == ""
+    assert agents_for_name(missing) == ()
 
 
 def test_registry_loads_with_required_columns():

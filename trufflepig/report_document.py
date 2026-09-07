@@ -61,9 +61,8 @@ SCHEMA_VERSION = 1
 # final-call composition/purity, selected biological analyses, then recommendations.
 #
 # Preliminary ranker leaders, alternative decomposition candidates, raw reference
-# maps, and redundant technical plots are intentionally absent. They remain in the
-# figure-audit PDF, where their audit role is explicit and they cannot be mistaken
-# for the finalized cancer label.
+# maps, and redundant technical plots are intentionally absent. Individual PNGs
+# and the evidence tables retain them for technical review.
 FIGURE_REGISTRY = [
     (
         "sample-context.png",
@@ -102,7 +101,8 @@ FIGURE_REGISTRY = [
         "therapy-pathway-state.png",
         "Therapy pathway state",
         "Expression state of therapy-relevant pathways provides biological context "
-        "for the candidate recommendations.",
+        "for the candidate recommendations. These cohort-relative RNA panels do not "
+        "establish prior treatment, drug sensitivity, or resistance.",
     ),
     (
         "subtype-signature.png",
@@ -111,18 +111,6 @@ FIGURE_REGISTRY = [
         "contains enough evidence for a specific subtype analysis.",
     ),
 ]
-PATIENT_FIGURE_SUFFIXES = tuple(suffix for suffix, _, _ in FIGURE_REGISTRY)
-
-
-def is_patient_figure(path: str | Path | None) -> bool:
-    """Whether *path* belongs in the curated patient-facing figure set."""
-
-    if not path:
-        return False
-    name = Path(path).name
-    return any(name.endswith(suffix) for suffix in PATIENT_FIGURE_SUFFIXES)
-
-
 # --------------------------------------------------------------------------- #
 # Pure markdown parsers (relocated from the PDF script so both the pipeline and
 # the PDF share one implementation).
@@ -130,6 +118,7 @@ def is_patient_figure(path: str | Path | None) -> bool:
 def clean_markdown(line: str) -> str:
     line = re.sub(r"`([^`]+)`", r"\1", line)
     line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
+    line = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", line)
     line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
     line = line.replace("—", "-").replace("–", "-")
     return line.strip()
@@ -360,10 +349,11 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
 
     in_therapy_section = False
     rows: List[List[str]] = []
+    sources: dict[str, str] = {}
     bullet = re.compile(r"^- \*\*([^*]+)\*\*\s+[—-]\s+(.+)$")
     recommendation = re.compile(
         r"^(.*?)\s+\((Approved|Phase\s+\d(?:/\d)?|"
-        r"Off-label\s*/\s*transfer rationale)(?:,\s*[^)]*)?\)\.\s*(.*)$",
+        r"Off-label\s*/\s*transfer rationale|Prior treatment|Preclinical)(?:,\s*(.*?))?\)\.\s*(.*)$",
         re.IGNORECASE,
     )
     for raw in summary_path.read_text(errors="replace").splitlines():
@@ -382,11 +372,16 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
 
         target = clean_markdown(match.group(1))
         body = match.group(2).strip()
+        for label, url in re.findall(r"\[([^\]]+)\]\((https?://[^)]+)\)", body):
+            sources[url] = label
         parsed = recommendation.match(body)
         if parsed:
             agent = clean_markdown(parsed.group(1))
             phase = clean_markdown(parsed.group(2))
-            interpretation = clean_markdown(parsed.group(3))
+            indication = clean_markdown(parsed.group(3) or "")
+            interpretation = clean_markdown(parsed.group(4))
+            if indication:
+                interpretation += f" Indication: {indication}."
         else:
             agent = lead_clause(body, max_chars=80)
             phase = ""
@@ -419,7 +414,7 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
                 target,
                 " · ".join(part for part in (agent, phase) if part),
                 tumor,
-                lead_clause(interpretation),
+                interpretation,
             ]
         )
         if len(rows) >= 3:
@@ -435,6 +430,7 @@ def parse_therapy_recommendations(summary_path: Path) -> Optional[dict]:
             ["Eligibility / RNA provenance", 39],
         ],
         "rows": rows,
+        "sources": [{"label": label, "url": url} for url, label in sources.items()],
     }
 
 

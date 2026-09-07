@@ -11,12 +11,8 @@ Shape:
     trufflepig data
     trufflepig cancers [--family ...] [--tissue ...] [--details]
     trufflepig plot-cancer-cohorts [--output-prefix ...]
-    trufflepig list-stages
-    trufflepig stage <name> --workspace ...    # scaffolded; per-stage extraction is trufflepig#2..#13
 
-`run` and `compare` write a ``meta.json`` describing the run. The
-`stage` / `list-stages` commands sit on top of the stage DAG in
-:mod:`trufflepig.pipeline`.
+`run` and `compare` write a ``meta.json`` describing the run.
 """
 
 from __future__ import annotations
@@ -297,26 +293,6 @@ def cmd_plot_cancer_cohorts(args) -> int:
     return 0
 
 
-def cmd_stage(args) -> int:
-    print(
-        "[trufflepig] per-stage extraction is not wired yet — `trufflepig run` "
-        "currently runs the migrated full pipeline. Track stage extraction in "
-        "pirl-unc/trufflepig#2..#13.",
-        file=sys.stderr,
-    )
-    return 2
-
-
-def cmd_list_stages(args) -> int:
-    from .pipeline import STAGE_DEPS, STAGE_ORDER
-
-    for stage in STAGE_ORDER:
-        deps = STAGE_DEPS[stage]
-        dep_str = ", ".join(deps) if deps else "(root)"
-        print(f"{stage:20s}  <- {dep_str}")
-    return 0
-
-
 def cmd_serve(args) -> int:
     """Run the web UI locally (dev convenience)."""
     # Guard every web-extra import behind one try block so a partial
@@ -377,15 +353,6 @@ def main(argv=None):
     pc_p.add_argument("--output-prefix", default=None)
     pc_p.add_argument("--output-dpi", type=int, default=300)
 
-    stage_p = sub.add_parser(
-        "stage",
-        help="Run a single pipeline stage against an existing workspace.",
-    )
-    stage_p.add_argument("name")
-    stage_p.add_argument("--workspace", required=True)
-
-    sub.add_parser("list-stages", help="List pipeline stages and their dependencies.")
-
     serve_p = sub.add_parser("serve", help="Run the web UI locally.")
     serve_p.add_argument("--host", default="127.0.0.1")
     serve_p.add_argument("--port", type=int, default=8000)
@@ -398,8 +365,6 @@ def main(argv=None):
         "data": cmd_data,
         "cancers": cmd_cancers,
         "plot-cancer-cohorts": cmd_plot_cancer_cohorts,
-        "stage": cmd_stage,
-        "list-stages": cmd_list_stages,
         "serve": cmd_serve,
     }
     fn = dispatch.get(args.cmd)

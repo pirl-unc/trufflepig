@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import re
 
 import pandas as pd
 
@@ -84,7 +85,7 @@ def _clean(value) -> str:
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
     text = str(value).strip()
-    return "" if text.lower() in {"nan", "none"} else text
+    return "" if text.lower() in {"nan", "none", "<na>", "null"} else text
 
 
 @lru_cache(maxsize=1)
@@ -162,6 +163,54 @@ def agents_for_target(symbol: str | None) -> tuple[TherapeuticAgent, ...]:
     if not symbol:
         return ()
     return _agents_by_gene().get(str(symbol).strip(), ())
+
+
+def _agent_name_key(name: object) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", _clean(name).casefold()))
+
+
+@lru_cache(maxsize=1)
+def _agents_by_name() -> dict[str, tuple[TherapeuticAgent, ...]]:
+    names: dict[str, list[TherapeuticAgent]] = {}
+    for agents in _agents_by_gene().values():
+        for agent in agents:
+            for name in {agent.agent, *agent.aliases.split(";"), *agent.brand_name.split(";")}:
+                key = _agent_name_key(name)
+                if key:
+                    names.setdefault(key, []).append(agent)
+    # An ambiguous alias must not equate distinct treatments.
+    return {
+        key: tuple(agents)
+        for key, agents in names.items()
+        if len({_agent_name_key(agent.agent) for agent in agents}) == 1
+    }
+
+
+def agents_for_name(name: object) -> tuple[TherapeuticAgent, ...]:
+    """Resolve a canonical name, registered alias, brand, or display label.
+
+    A label such as ``afami-cel (Tecelra)`` resolves only when both names
+    identify the same registered treatment. Preserve complete registered names
+    first: parentheticals can also distinguish products or formulations.
+    Unknown annotations and combinations never collapse to a single agent.
+    """
+    names = _agents_by_name()
+    exact = names.get(_agent_name_key(name), ())
+    if exact:
+        return exact
+    decorated = re.fullmatch(r"\s*([^()]+?)\s*\(([^()]+)\)\s*", _clean(name))
+    if decorated:
+        base = names.get(_agent_name_key(decorated.group(1)), ())
+        annotation = names.get(_agent_name_key(decorated.group(2)), ())
+        if base and annotation and _agent_name_key(base[0].agent) == _agent_name_key(annotation[0].agent):
+            return base
+    return ()
+
+
+def agent_identity(name: object) -> str:
+    """Comparable agent identity, retaining literal names outside the registry."""
+    agents = agents_for_name(name)
+    return _agent_name_key(agents[0].agent if agents else name)
 
 
 def best_agent_for_target(symbol: str | None) -> TherapeuticAgent | None:

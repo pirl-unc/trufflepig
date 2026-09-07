@@ -127,6 +127,14 @@ def _safe_int(value, default=0) -> int:
 
 _THERAPY_FILTER_RULES = (
     {
+        "cancer_code": "PRAD",
+        "symbol": "FAP",
+        "agent_contains": "[68ga]fapi-46",
+        "indication_contains": ("mcrpc", "prostate"),
+        # https://www.cancer.gov/publications/dictionaries/cancer-drug/def/gallium-ga-68-fapi-46
+        "note": "diagnostic PET tracer; not a therapeutic radioligand",
+    },
+    {
         "cancer_code": "BLCA",
         "symbol": "TACSTD2",
         "agent_contains": "sacituzumab govitecan",
@@ -342,6 +350,15 @@ def _current_therapy_row_overrides(target_row) -> dict:
                 "context; target RNA is not the assay"
             ),
         }
+    if cancer_code in {"COAD", "READ"} and agent == "pembrolizumab":
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires validated MSI-H/dMMR status and unresectable or "
+                "metastatic colorectal cancer; reconcile prior checkpoint "
+                "therapy and immune toxicity; RNA is not the MSI/MMR assay"
+            ),
+        }
     if cancer_code in {"COAD", "READ"} and any(
         name in agent
         for name in (
@@ -378,6 +395,15 @@ def _current_therapy_row_overrides(target_row) -> dict:
                 "histology- and disease-setting-based approval; confirm clinical "
                 "fitness and treatment context, not NECTIN4 RNA"
             ),
+            "benefit_tier": "major_survival",
+            "benefit_endpoint": (
+                "EV-302 median OS 31.5 vs 16.1 months with platinum chemotherapy "
+                "in previously untreated advanced urothelial cancer (886 patients)"
+            ),
+            "major_toxicities": "rash; peripheral neuropathy; hyperglycemia; immune-mediated adverse effects",
+            "therapy_evidence_source": "FDA EV-302 approval review",
+            "therapy_evidence_url": "https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-enfortumab-vedotin-ejfv-pembrolizumab-locally-advanced-or-metastatic-urothelial-cancer",
+            "therapy_evidence_note": "Trial-population result; not an individual survival prediction",
         }
     if cancer_code == "BLCA" and "trastuzumab deruxtecan" in agent:
         return {
@@ -394,10 +420,46 @@ def _current_therapy_row_overrides(target_row) -> dict:
                 "therapy, and no satisfactory alternative options"
             ),
         }
+    if cancer_code == "BLCA" and agent == "avelumab":
+        return {
+            "eligibility_note": (
+                "for this maintenance pathway, confirm locally advanced/metastatic "
+                "urothelial disease without progression after first-line platinum "
+                "chemotherapy; reconcile prior checkpoint exposure and immune toxicity"
+            ),
+        }
+    if cancer_code == "BLCA" and agent == "pembrolizumab":
+        # FDA label section 1.7: these advanced-UC monotherapy settings do
+        # not require a PD-L1 companion assay.
+        return {
+            "indication": "advanced urothelial carcinoma after platinum or when no platinum chemotherapy is suitable",
+            "indication_biomarker": "histology_only",
+            "treatment_path_tier": "approved_indication_matched",
+            "requires_verified_alteration": False,
+            "eligibility_note": (
+                "confirm progression during/after platinum, recurrence within "
+                "12 months of perioperative platinum, or ineligibility for any "
+                "platinum chemotherapy; reconcile prior checkpoint therapy and "
+                "immune toxicity; PD-L1 RNA or IHC is not required for these settings"
+            ),
+        }
     if cancer_code == "BRCA" and any(
         token in agent for token in ("olaparib", "talazoparib", "pembrolizumab")
     ):
-        return {"requires_verified_alteration": True}
+        return {
+            "requires_verified_alteration": True,
+            "eligibility_note": (
+                "requires clinically confirmed triple-negative disease; "
+                "distinguish the high-risk early-stage perioperative regimen "
+                "from unresectable recurrent/metastatic disease requiring "
+                "PD-L1 CPS at least 10; confirm the chemotherapy combination "
+                "and prior checkpoint therapy"
+                if "pembrolizumab" in agent else
+                "requires a qualifying germline BRCA1/2 variant and HER2-negative "
+                "disease; confirm this agent's indication-specific disease stage "
+                "and prior-treatment criteria"
+            ),
+        }
     if cancer_code == "BRCA" and agent:
         return {
             "requires_verified_alteration": True,
@@ -405,6 +467,16 @@ def _current_therapy_row_overrides(target_row) -> dict:
                 "requires the indication-specific clinical ER/PR/HER2, genomic, "
                 "or companion-diagnostic result and treatment-line context; "
                 "tumor RNA alone is not the eligibility assay"
+            ),
+        }
+    if cancer_code == "PRAD" and agent == "enzalutamide":
+        return {
+            "eligibility_note": (
+                "for this mCRPC pathway, confirm metastatic castration-resistant "
+                "disease, continued medical/surgical castration, and prior "
+                "AR-pathway therapy and response; review seizure/fall risk, "
+                "cardiovascular risk, and drug interactions; AR RNA does not "
+                "establish progression or castration resistance"
             ),
         }
     if cancer_code == "PRAD" and "ifinatamab deruxtecan" in agent:
@@ -472,6 +544,49 @@ def _current_therapy_row_overrides(target_row) -> dict:
 def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
     """Small current-study additions missing from the upstream disease table."""
     cancer_code = _clean_text(cancer_code).upper()
+    if cancer_code == "SARC_OS":
+        common = {
+            "cancer_code": cancer_code,
+            "symbol": "",
+            "agent_class": "multikinase inhibitor",
+            "phase": "off_label",
+            "treatment_path_tier": "off_label",
+            "line_of_therapy": "relapsed_refractory",
+            "requires_verified_alteration": False,
+            "indication": "recurrent, progressive metastatic osteosarcoma after chemotherapy",
+            "eligibility_note": (
+                "sarcoma specialist review only if recurrent/progressive disease "
+                "after chemotherapy is confirmed; assess resectability, prior "
+                "treatments, organ function, blood pressure, and toxicity; "
+                "not a replacement for surgery and initial multiagent chemotherapy"
+            ),
+            "benefit_tier": "modest",
+            "toxicity_tier": "high",
+            "therapy_evidence_transfer": "disease_matched",
+        }
+        return [
+            {
+                **common,
+                "agent": "regorafenib",
+                "benefit_tier": "meaningful_pfs",
+                "rationale": "randomized phase 2 evidence in recurrent osteosarcoma",
+                "benefit_endpoint": "SARC024 median PFS 3.6 vs 1.7 months with placebo (42 patients)",
+                "major_toxicities": "grade 3-4 treatment-related events in 64% of 22 treated patients; hypertension; hand-foot toxicity; gastrointestinal perforation",
+                "therapy_evidence_source": "SARC024",
+                "therapy_evidence_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7799443/",
+                "therapy_evidence_note": "PFS benefit; an overall-survival benefit was not established",
+            },
+            {
+                **common,
+                "agent": "cabozantinib",
+                "rationale": "single-arm phase 2 CABONE evidence in advanced osteosarcoma",
+                "benefit_endpoint": "CABONE 6-month response 12% and non-progression 33% (42 evaluable osteosarcoma patients)",
+                "major_toxicities": "hypophosphatemia; liver enzyme elevation; hand-foot toxicity; neutropenia; pneumothorax",
+                "therapy_evidence_source": "CABONE",
+                "therapy_evidence_url": "https://pubmed.ncbi.nlm.nih.gov/32078813/",
+                "therapy_evidence_note": "Single-arm study; no randomized survival comparison",
+            },
+        ]
     if cancer_code == "NUTM":
         return [
             {
@@ -608,12 +723,12 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
 
 
 def therapy_filter_note(target_row) -> str:
-    """Return why a stale therapy row should be hidden from reports.
+    """Return why an inapplicable therapy row should be hidden from reports.
 
     This is deliberately report-layer filtering. Pirlygenes owns the source
     curation table, but trufflepig should not present known-withdrawn or
-    miscited disease-specific rows as active recommendations while the upstream
-    release catches up.
+    miscited disease-specific rows or diagnostic tracers as active therapies
+    while the upstream release catches up.
     """
     if target_row is None or not hasattr(target_row, "get"):
         return ""
@@ -3265,6 +3380,7 @@ def cancer_therapy_panel_for_analysis(
     if (
         is_grouping
         and panel_code == active_cancer_code
+        and not panel_subtype
         and targets_df is not None
         and "subtype" in targets_df.columns
     ):
@@ -3277,6 +3393,24 @@ def cancer_therapy_panel_for_analysis(
         # row may cross that boundary only when the sample itself supplies the
         # molecular eligibility event; expression resemblance is insufficient.
         targets_df = targets_df.loc[~subtype.astype(bool) | molecular_match]
+
+    # The loader resolves direct child codes to their curated table tile (e.g.
+    # SARC_GIST -> SARC/gist). Carry that scope through the evidence join. An
+    # unresolved grouping must never acquire a subtype from its therapy rows.
+    if (
+        targets_df is not None
+        and not targets_df.empty
+        and (not is_grouping or panel_subtype)
+        and {"cancer_code", "subtype"}.issubset(targets_df.columns)
+    ):
+        scopes = {
+            (_clean_text(row["cancer_code"]), _clean_text(row["subtype"]))
+            for row in targets_df.to_dict("records")
+        }
+        if len(scopes) == 1:
+            resolved_code, resolved_subtype = scopes.pop()
+            if resolved_code:
+                panel_code, panel_subtype = resolved_code, resolved_subtype or None
 
     molecular_df = infantile_spindle_therapy_targets(active_cancer_code, analysis)
     has_molecular_panel = molecular_df is not None and not molecular_df.empty

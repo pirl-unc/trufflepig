@@ -267,6 +267,7 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
     manifest_path = Path(outputs["manifest"])
     assert report_path.name == f"{_PREFIX}-report.json"
     assert report_path.exists()
+    assert Path(outputs["report_pdf"]).is_file()
     assert manifest_path.name == f"{_PREFIX}-manifest.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text())
@@ -274,6 +275,7 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
         report_path
     )
     assert json.loads(report_path.read_text())["treatment_history"] == history
+    assert manifest["steps"]["output"]["outputs"]["report_pdf"] == outputs["report_pdf"]
     assert not any(
         artifact["kind"] == "figure" for artifact in manifest["artifacts"]
     )

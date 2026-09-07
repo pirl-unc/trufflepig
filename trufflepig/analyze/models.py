@@ -150,9 +150,6 @@ class AnalyzeArtifact:
     step: str
     role: str
     description: str = ""
-    include_in_pdf: bool = False
-    move_to_figures: bool = False
-    audit_only: bool = False
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -213,9 +210,6 @@ class AnalyzeRun:
         step: str,
         role: str,
         description: str = "",
-        include_in_pdf: bool = False,
-        move_to_figures: bool = False,
-        audit_only: bool = False,
     ) -> str:
         artifact = AnalyzeArtifact(
             path=str(path),
@@ -223,9 +217,6 @@ class AnalyzeRun:
             step=step,
             role=role,
             description=description,
-            include_in_pdf=include_in_pdf,
-            move_to_figures=move_to_figures,
-            audit_only=audit_only,
         )
         self.artifacts.append(artifact)
         return artifact.path

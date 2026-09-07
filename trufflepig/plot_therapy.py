@@ -1604,6 +1604,14 @@ def _format_axis_label(therapy_class: str) -> str:
         "EMT": "EMT",
         "hypoxia": "Hypoxia",
         "IFN_response": "IFN response",
+        "aPD1_circular_treg": "Regulatory T-cell program",
+        "aPD1_exclusion_Wnt": "Wnt-associated immune exclusion",
+        "aPD1_exclusion_Wnt_target": "Wnt target program",
+        "aPD1_exclusion_TGFb_response": "TGF-beta response",
+        "aPD1_antigen_presentation": "Antigen presentation",
+        "aPD1_exclusion_angiogenesis": "Angiogenesis program",
+        "aPD1_exclusion_adenosine": "Adenosine program",
+        "aPD1_circular_checkpoints": "Checkpoint RNA program",
     }
     return mapping.get(therapy_class, therapy_class.replace("_", " "))
 
@@ -1688,7 +1696,6 @@ def plot_therapy_pathway_state(
                     "fold": item["up_fold"],
                     "n": item["up_n"],
                     "marker": "o",
-                    "arrow": "\u2191",
                     "panel_label": "expected-up genes",
                     "legend_label": "genes expected up when pathway active",
                 }
@@ -1700,7 +1707,6 @@ def plot_therapy_pathway_state(
                     "fold": item["down_fold"],
                     "n": item["down_n"],
                     "marker": "s",
-                    "arrow": "\u2193",
                     "panel_label": "expected-down genes",
                     "legend_label": "genes expected down when pathway active",
                 }
@@ -1727,11 +1733,11 @@ def plot_therapy_pathway_state(
     fig = plt.figure(figsize=figsize)
     # Top area for the dumbbells, bottom for the narrative caption.
     if disease_state_caption:
-        ax = fig.add_axes([0.07, 0.30, 0.88, 0.60])
-        ax_caption = fig.add_axes([0.07, 0.02, 0.88, 0.22])
+        ax = fig.add_axes([0.07, 0.38, 0.88, 0.52])
+        ax_caption = fig.add_axes([0.07, 0.02, 0.88, 0.18])
         ax_caption.axis("off")
     else:
-        ax = fig.add_axes([0.07, 0.10, 0.88, 0.80])
+        ax = fig.add_axes([0.07, 0.24, 0.88, 0.66])
         ax_caption = None
 
     # --- Dumbbell plot ---
@@ -1775,7 +1781,7 @@ def plot_therapy_pathway_state(
         ax.text(
             text_x,
             i,
-            f"{row['arrow']} {fold:.2f}\u00d7",
+            f"{fold:.2f}\u00d7",
             ha=ha,
             va="center",
             fontsize=8,
@@ -1823,7 +1829,7 @@ def plot_therapy_pathway_state(
     title = "Therapy-response pathway RNA"
     if cancer_code:
         title += f" \u2014 {cancer_code}"
-    ax.set_title(title, fontsize=12, fontweight="bold", loc="left")
+    ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=32)
     ax.text(
         0.0,
         1.03,
@@ -1862,12 +1868,13 @@ def plot_therapy_pathway_state(
     ]
     ax.legend(
         handles=band_handles + shape_handles,
-        loc="lower right",
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.13),
         fontsize=7.5,
         frameon=False,
         markerscale=0.9,
         handletextpad=0.5,
-        ncol=2,
+        ncol=4,
     )
 
     # --- Caption ---

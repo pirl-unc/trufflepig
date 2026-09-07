@@ -89,6 +89,17 @@ def test_translate_command_can_request_full_figures(tmp_path):
     assert "--no-figures" not in cmd
 
 
+def test_replay_preserves_treatment_history_and_variant_context(tmp_path):
+    regen = _load_regen_module()
+    flags = ["--treatment-history", "/tmp/history.json", "--variants", "/tmp/variants.tsv",
+             "--variant-genome-build", "GRCh37"]
+    cmd = regen._translate_command("sample", {
+        "command": ["trufflepig", "run", "--sample", "/tmp/sample.tsv", *flags],
+    }, tmp_path / "ws")
+    for flag, value in zip(flags[::2], flags[1::2]):
+        assert cmd[cmd.index(flag) + 1] == value
+
+
 def test_remove_logging_handlers_for_per_run_stream(tmp_path):
     regen = _load_regen_module()
     logger = logging.getLogger("trufflepig-test-regenerate-local-reports")

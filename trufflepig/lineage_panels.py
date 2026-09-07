@@ -681,7 +681,8 @@ _BLCA_LUMINAL = LineagePanel(
     references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
     program_note=(
         "luminal urothelial program (FOXA1, GATA3, PPARG, UPK1A/UPK2). "
-        "Less chemo-sensitive than basal MIBC; FGFR3 alterations enriched"
+        "FGFR3 alterations are enriched at the cohort level; this RNA program "
+        "does not establish FGFR3 status or chemotherapy sensitivity"
     ),
 )
 
@@ -919,7 +920,8 @@ _BLCA_BASAL_PANEL = LineagePanel(
     references=("Damrauer 2014 PNAS", "Choi 2014 Cancer Cell"),
     program_note=(
         "basal-like muscle-invasive bladder program (KRT5/KRT14/KRT6A, S100P, low FOXA1/GATA3). "
-        "More chemo-sensitive than luminal MIBC; squamous-like differentiation"
+        "squamous-like differentiation; this RNA program does not establish "
+        "chemotherapy sensitivity"
     ),
 )
 

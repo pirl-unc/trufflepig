@@ -478,7 +478,7 @@ def test_brief_trusts_curation_over_broadly_expressed_flag():
     legitimate first-line agents get silently dropped from the
     clinician handoff (#128).
     """
-    from trufflepig.brief import _top_therapies
+    from trufflepig.brief import recommend_therapies
 
     targets_df = pd.DataFrame(
         [
@@ -530,7 +530,7 @@ def test_brief_trusts_curation_over_broadly_expressed_flag():
         ]
     )
 
-    top = _top_therapies(targets_df, ranges_df, limit=3)
+    top = recommend_therapies(targets_df, ranges_df, limit=3)
     symbols = [t["symbol"] for t, _ in top]
     assert "ERBB2" in symbols, (
         "curated HER2 target must remain in the brief top-3 despite "
@@ -540,7 +540,7 @@ def test_brief_trusts_curation_over_broadly_expressed_flag():
 
 
 def test_brief_does_not_prioritize_her2_therapy_when_her2_axis_is_down():
-    from trufflepig.brief import _top_therapies
+    from trufflepig.brief import recommend_therapies
 
     targets_df = pd.DataFrame(
         [
@@ -588,12 +588,12 @@ def test_brief_does_not_prioritize_her2_therapy_when_her2_axis_is_down():
     )
     analysis = {"therapy_response_scores": {"HER2_signaling": {"state": "down"}}}
 
-    top = _top_therapies(targets_df, ranges_df, limit=3, analysis=analysis)
+    top = recommend_therapies(targets_df, ranges_df, limit=3, analysis=analysis)
     assert [t["symbol"] for t, _ in top] == ["TACSTD2"]
 
 
 def test_brief_keeps_mature_target_when_interval_support_is_material():
-    from trufflepig.brief import _source_trace_reason, _top_therapies
+    from trufflepig.brief import _source_trace_reason, recommend_therapies
 
     target = {
         "cancer_code": "BRCA",
@@ -628,7 +628,7 @@ def test_brief_keeps_mature_target_when_interval_support_is_material():
         ]
     )
 
-    top = _top_therapies(targets_df, ranges_df, limit=3, analysis={})
+    top = recommend_therapies(targets_df, ranges_df, limit=3, analysis={})
     assert [t["symbol"] for t, _ in top] == ["TACSTD2"]
     assert "interval includes material tumor signal" in _source_trace_reason(
         target,
@@ -638,7 +638,7 @@ def test_brief_keeps_mature_target_when_interval_support_is_material():
 
 
 def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
-    from trufflepig.brief import _format_therapy_bullet, _top_therapies
+    from trufflepig.brief import _format_therapy_bullet, recommend_therapies
 
     targets_df = pd.DataFrame(
         [
@@ -701,7 +701,7 @@ def test_brief_keeps_same_lineage_targets_but_skips_background_dominant_rows():
         ]
     )
 
-    top = _top_therapies(targets_df, ranges_df, limit=3)
+    top = recommend_therapies(targets_df, ranges_df, limit=3)
     symbols = [t["symbol"] for t, _ in top]
     assert symbols == ["FOLH1"]
 
@@ -766,7 +766,7 @@ def test_same_lineage_target_can_stay_supported_when_band_remains_material():
 
 
 def test_expression_independent_indication_is_not_demoted_by_target_tpm():
-    from trufflepig.brief import _format_therapy_bullet, _top_therapies
+    from trufflepig.brief import _format_therapy_bullet, recommend_therapies
     from trufflepig.reporting import indication_biomarker, target_reliability_status
 
     targets_df = pd.DataFrame(
@@ -812,7 +812,7 @@ def test_expression_independent_indication_is_not_demoted_by_target_tpm():
         ]
     )
 
-    top = _top_therapies(targets_df, ranges_df, limit=3)
+    top = recommend_therapies(targets_df, ranges_df, limit=3)
     assert [t["symbol"] for t, _ in top] == ["PDCD1"]
     assert indication_biomarker(targets_df.iloc[0]) == "msi_high"
     assert (

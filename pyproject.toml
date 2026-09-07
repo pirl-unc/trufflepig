@@ -2,7 +2,7 @@
 name = "pirl-trufflepig"
 requires-python = ">=3.9"
 authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
-description = "RNA tumor analysis driven by pirlygenes gene sets. Migrates the pirlygenes analyze pipeline into composable sub-commands with serializable intermediate state for incremental website-style runs."
+description = "RNA tumor analysis, therapeutic evidence, and decision-aligned reports driven by pirlygenes gene sets."
 classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Environment :: Console",
@@ -36,6 +36,7 @@ dependencies = [
     # cap is a deliberate pandas-3 migration, tracked separately.
     "pandas>=2.0,<3",
     "matplotlib>=3.5.0",
+    "Pillow>=9.1",
     # scipy (nnls background subtraction, spearman, rankdata) and scikit-learn
     # (the learned expression classifier) are core runtime deps; seaborn and
     # adjustText are imported at module top in the plotting modules. All four
@@ -61,7 +62,6 @@ packages = [
     "trufflepig",
     "trufflepig.analyze",
     "trufflepig.decomposition",
-    "trufflepig.stages",
     "trufflepig.web",
 ]
 

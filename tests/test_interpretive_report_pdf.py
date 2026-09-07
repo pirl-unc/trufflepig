@@ -10,9 +10,8 @@ one serialized decision); these are cheap structural checks, and the rendering
 itself is validated by eye against a real report.
 """
 
-import importlib.util
 import inspect
-from pathlib import Path
+import re
 
 import pytest
 
@@ -21,12 +20,9 @@ from trufflepig.report_view import build_report_view
 
 
 def _load_pdf_builder():
-    path = Path(__file__).resolve().parents[1] / "scripts" / "build_interpretive_report_pdf.py"
-    spec = importlib.util.spec_from_file_location("build_interpretive_report_pdf", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    from trufflepig import report_pdf
+
+    return report_pdf
 
 
 def test_figure_registry_entries_are_suffix_title_interpretation_triples():
@@ -60,10 +56,6 @@ def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
         "priority-target-context.png",
         "actionable-targets.png",
     }.isdisjoint(suffixes)
-    assert rd.is_patient_figure("sample-decomposition-composition.png")
-    assert not rd.is_patient_figure("sample-decomposition-candidates.png")
-    assert not rd.is_patient_figure("sample-cancer-type-signal-matrix.png")
-    assert not rd.is_patient_figure("sample-prad-genes.png")
 
 
 def test_figure_page_captions_with_interpretation_not_filename():
@@ -167,9 +159,10 @@ def test_therapy_recommendations_follow_summary_and_limit_to_three(tmp_path):
     assert [r[0] for r in rows] == ["CD274", "CEACAM5", "EGFR"]
     assert rows[0][1] == "pembrolizumab · Approved"
     assert rows[0][2] == "2.5 bulk; context only"
-    # leading actionable clause only, not the whole eligibility tail
+    # Preserve the full rationale and eligibility tail for PDF rendering.
     assert rows[0][3].startswith("target expression is not the eligibility criterion")
-    assert rows[1][3] == "tumor-supported"
+    assert rows[1][3].startswith("tumor-supported;")
+    assert "353-895" in rows[1][3]
 
 
 def test_priority_target_table_reads_tumor_source_and_safety_band(tmp_path):
@@ -244,6 +237,18 @@ def test_headline_cards_require_the_structured_headline():
         b._headline_cards(doc)
 
 
+def test_pdf_does_not_present_unresolved_purity_as_a_measurement():
+    b = _load_pdf_builder()
+    _, purity = b._headline_cards({"headline": {
+        "cancer_type": "SARC_OS", "purity": 0.11,
+        "purity_status": "discordant_estimators",
+        "purity_unresolved_reason": "same_lineage_not_identifiable",
+    }})
+    assert "unresolved" in purity
+    assert "operating model" in purity
+    assert "11%" not in purity
+
+
 def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     b = _load_pdf_builder()
     # A report with no therapy/target tables (the local-sweep safety case): the
@@ -269,3 +274,17 @@ def test_missing_tables_degrade_to_none_and_pdf_still_builds(tmp_path):
     rd.write_report_document(tmp_path, "s", report_view=view)
     out = b.build_interpretive_report_pdf(tmp_path)
     assert out.exists() and out.stat().st_size > 0
+    page_boxes = re.findall(rb"/MediaBox\s*\[([^]]+)\]", out.read_bytes())
+    assert page_boxes
+    assert all([float(value) for value in box.split()] == [0, 0, 612, 792] for box in page_boxes)
+
+
+def test_full_rationale_wrap_preserves_long_source_urls():
+    from PIL import Image, ImageDraw
+
+    b = _load_pdf_builder()
+    draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    url = "https://example.org/" + "long-evidence-source-" * 30
+    lines = b._wrap_cell(draw, url, b._font(32), 1000, max_lines=10000)
+    assert "".join(lines) == url
+    assert all(b._line_width(draw, line, b._font(32)) <= 1000 for line in lines)

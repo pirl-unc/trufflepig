@@ -124,21 +124,16 @@ seconds, not minutes. The architecture should split into:
 4. Repeat-request hit (same idempotency key) skips compute, returns
    the cached artifact set.
 
-### Plot rendering as a separate concern
-- Default web mode: text + TSV only (analogous to `--no-figures`).
-- Figures rendered lazily on first viewer request, cached afterward.
-- Heavy multi-page PDFs (`*-all-figures.pdf`, `*-vs-cancer.pdf`)
-  rendered by a separate "report bundler" worker, async.
+### Production reporting
+The CLI and web UI use the same analysis path. Every run finalizes Markdown,
+structured JSON, and one interpretive PDF together. `--no-figures` skips plot
+generation while retaining the clinical text PDF. Individual PNGs retain the
+technical evidence when figures are enabled.
 
-### Stage-level caching
-- Trufflepig's pipeline already has named stages (`load_expression`,
-  `analyze`, `decompose`, `ranges`, `confidence`, render_*) — see
-  `trufflepig list-stages`. Each stage's output is already cacheable
-  by its input hash.
-- In service mode: per-stage cache keyed on (sample_hash,
-  pirlygenes_version, trufflepig_version, stage_inputs_hash).
-  Re-running with a tweaked `--cancer-type` hint should reuse
-  `load_expression` and `analyze` outputs.
+The run manifest records analysis steps, but these are not independently
+executable or cached stages. The unused stage-command scaffold has been
+removed. Any future incremental cache must define and validate its dependency
+and invalidation contract before reusing intermediate analysis results.
 
 ### Observability
 - Per-stage timing → metric `trufflepig_stage_seconds{stage=...}`.

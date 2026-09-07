@@ -16,6 +16,9 @@ from pathlib import Path
 import re
 from typing import Any, Mapping
 
+from .reporting import canonical_target_symbol
+from .therapeutic_agents import agent_identity, agents_for_name, agents_for_target
+
 
 TREATMENT_STATUSES = (
     "major_benefit",
@@ -123,10 +126,6 @@ def _clean(value: object) -> str:
     return "" if text.lower() in {"nan", "none", "<na>"} else text
 
 
-def _normalized_words(value: object) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", _clean(value).casefold()))
-
-
 def normalize_treatment_status(value: object) -> str:
     text = _clean(value).casefold().replace("-", " ").replace("_", " ")
     status = _STATUS_ALIASES.get(text, text.replace(" ", "_"))
@@ -161,7 +160,7 @@ class TreatmentRecord:
 
     def __post_init__(self) -> None:
         therapy = _clean(self.therapy).replace("|", "/")
-        target = _clean(self.target).upper()
+        target = canonical_target_symbol(_clean(self.target).upper())
         modality = normalize_treatment_modality(self.modality).replace("|", "/")
         status = normalize_treatment_status(self.status)
         if not therapy and not target:
@@ -293,7 +292,7 @@ def treatment_records(analysis: object) -> list[TreatmentRecord]:
 
 def _row_modality(target_row: Mapping[str, Any]) -> str:
     return normalize_treatment_modality(
-        target_row.get("modality") or target_row.get("agent_class")
+        _clean(target_row.get("modality")) or target_row.get("agent_class")
     )
 
 
@@ -301,12 +300,17 @@ def treatment_record_match_kind(
     record: TreatmentRecord, target_row: Mapping[str, Any]
 ) -> str:
     """Return ``exact_agent``, ``target_modality``, or an empty non-match."""
-    row_agent = _normalized_words(target_row.get("agent"))
-    record_agent = _normalized_words(record.therapy)
+    row_agent = agent_identity(target_row.get("agent"))
+    record_agent = agent_identity(record.therapy)
     if row_agent and record_agent and row_agent == record_agent:
         return "exact_agent"
 
-    row_target = _clean(target_row.get("symbol") or target_row.get("target_gene")).upper()
+    if record.therapy and record.status in _NEGATIVE_STATUSES | {"current"}:
+        return ""
+
+    row_target = canonical_target_symbol(
+        (_clean(target_row.get("symbol")) or _clean(target_row.get("target_gene"))).upper()
+    )
     if not record.target or not row_target or record.target != row_target:
         return ""
     if record.modality and record.modality == _row_modality(target_row):
@@ -348,9 +352,7 @@ def treatment_history_blocks_row(target_row, analysis) -> bool:
     """
     for match in treatment_history_matches(target_row, analysis):
         record = match["record"]
-        if record.status not in _NEGATIVE_STATUSES:
-            continue
-        if match["match_kind"] == "exact_agent" or not record.therapy:
+        if record.status in _NEGATIVE_STATUSES:
             return True
     return False
 
@@ -358,22 +360,12 @@ def treatment_history_blocks_row(target_row, analysis) -> bool:
 def treatment_history_marks_current(target_row, analysis) -> bool:
     return any(
         match["record"].status == "current"
-        and (
-            match["match_kind"] == "exact_agent"
-            or not match["record"].therapy
-        )
         for match in treatment_history_matches(target_row, analysis)
     )
 
 
 def best_treatment_history_match(target_row, analysis) -> dict[str, Any] | None:
-    matches = [
-        match
-        for match in treatment_history_matches(target_row, analysis)
-        if match["record"].status in _POSITIVE_RANK
-        or match["match_kind"] == "exact_agent"
-        or not match["record"].therapy
-    ]
+    matches = treatment_history_matches(target_row, analysis)
     if not matches:
         return None
     status_rank = {
@@ -447,47 +439,6 @@ def treatment_history_summary_lines(analysis) -> list[str]:
     return lines
 
 
-def _registry_agents_for_record(record: TreatmentRecord):
-    from .therapeutic_agents import agents_for_target, therapeutic_agents
-
-    candidates = list(agents_for_target(record.target)) if record.target else []
-    if not candidates and record.therapy:
-        wanted = _normalized_words(record.therapy)
-        registry = therapeutic_agents()
-        for _, row in registry.iterrows():
-            names = [row.get("agent"), *str(row.get("aliases") or "").split(";")]
-            if wanted and wanted in {_normalized_words(name) for name in names}:
-                candidates.extend(agents_for_target(row.get("target_gene")))
-                break
-    if record.modality:
-        candidates = [agent for agent in candidates if agent.modality == record.modality]
-    if record.therapy:
-        wanted = _normalized_words(record.therapy)
-        exact = [
-            agent
-            for agent in candidates
-            if wanted
-            in {
-                _normalized_words(agent.agent),
-                *(_normalized_words(name) for name in agent.aliases.split(";")),
-            }
-        ]
-        if exact:
-            return exact
-    return candidates
-
-
-def _record_names_registry_agent(record: TreatmentRecord, agent) -> bool:
-    if not record.therapy or agent is None:
-        return False
-    wanted = _normalized_words(record.therapy)
-    names = {
-        _normalized_words(agent.agent),
-        *(_normalized_words(name) for name in agent.aliases.split(";")),
-    }
-    return bool(wanted and wanted in names)
-
-
 def treatment_history_supplement_rows(
     analysis: object, *, cancer_code: str, existing_rows: object = None
 ) -> list[dict[str, Any]]:
@@ -506,13 +457,19 @@ def treatment_history_supplement_rows(
             if hasattr(row, "get")
         ):
             continue
-        candidates = _registry_agents_for_record(record)
+        named_agents = agents_for_name(record.therapy)
+        candidates = named_agents or agents_for_target(record.target)
+        candidates = [
+            agent for agent in candidates
+            if (not record.target or canonical_target_symbol(agent.target_gene.upper()) == record.target)
+            and (not record.modality or agent.modality == record.modality)
+        ]
         candidate = candidates[0] if candidates else None
         use_registry_metadata = bool(
             candidate
             and (
                 not record.therapy
-                or _record_names_registry_agent(record, candidate)
+                or candidate in named_agents
             )
         )
         target = record.target or (candidate.target_gene if candidate else "")
@@ -552,13 +509,6 @@ def treatment_history_supplement_rows(
     return rows
 
 
-def _population_agent_key(value: object) -> str:
-    # Brand names and explanatory parentheticals should not prevent a match
-    # between e.g. ``afami-cel (Tecelra)`` and the same canonical agent.
-    text = re.sub(r"\([^)]*\)", " ", _clean(value))
-    return _normalized_words(text)
-
-
 def add_population_therapy_evidence(targets_df, *, cancer_code: str, subtype: str = ""):
     """Join sourced benefit/toxicity facts onto disease-curated therapy rows.
 
@@ -580,18 +530,17 @@ def add_population_therapy_evidence(targets_df, *, cancer_code: str, subtype: st
     wanted_code = _clean(cancer_code).casefold()
     code_values = evidence["cancer_code"].fillna("").astype(str).str.strip().str.casefold()
     evidence = evidence.loc[code_values.eq(wanted_code)]
-    if subtype:
-        wanted_subtype = _clean(subtype).casefold()
-        subtype_values = (
-            evidence["subtype"].fillna("").astype(str).str.strip().str.casefold()
-        )
-        evidence = evidence.loc[subtype_values.isin(("", wanted_subtype))]
+    wanted_subtype = _clean(subtype).casefold()
+    subtype_values = (
+        evidence["subtype"].fillna("").astype(str).str.strip().str.casefold()
+    )
+    evidence = evidence.loc[subtype_values.isin(("", wanted_subtype))]
     if evidence.empty:
         return targets_df
 
     by_agent: dict[str, list[Mapping[str, Any]]] = {}
     for record in evidence.to_dict("records"):
-        key = _population_agent_key(record.get("agent"))
+        key = agent_identity(record.get("agent"))
         if key:
             by_agent.setdefault(key, []).append(record)
 
@@ -607,7 +556,7 @@ def add_population_therapy_evidence(targets_df, *, cancer_code: str, subtype: st
         "therapy_evidence_note": [],
     }
     for _, target_row in frame.iterrows():
-        matches = by_agent.get(_population_agent_key(target_row.get("agent")), [])
+        matches = by_agent.get(agent_identity(target_row.get("agent")), [])
         if matches:
             record = min(
                 matches,
@@ -669,6 +618,7 @@ def population_therapy_evidence_context(target_row) -> str:
     endpoint = _clean(target_row.get("benefit_endpoint"))
     major_toxicities = _clean(target_row.get("major_toxicities"))
     source = _clean(target_row.get("therapy_evidence_source"))
+    source_url = _clean(target_row.get("therapy_evidence_url"))
     if not any((benefit, toxicity, endpoint, major_toxicities)):
         return ""
     parts = ["sourced clinical outcome evidence"]
@@ -685,7 +635,11 @@ def population_therapy_evidence_context(target_row) -> str:
         if toxicities:
             parts.append(f"major toxicities include {toxicities}")
     if source:
-        parts.append(f"source {source}")
+        citation = f"[{source}]({source_url})" if source_url else source
+        parts.append(f"source {citation}")
+    note = _clean(target_row.get("therapy_evidence_note"))
+    if note:
+        parts.append(note)
     return "; ".join(parts)
 
 

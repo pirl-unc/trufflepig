@@ -6,12 +6,12 @@ Public entry points:
   ``pirlygenes analyze`` before the migration).
 * :func:`trufflepig.main.compare_analyze` — multi-sample longitudinal
   comparison (was ``pirlygenes compare-analyze``).
+* :func:`trufflepig.brief.recommend_therapies` — select typed therapy-review
+  candidates using patient history, clinical eligibility, and RNA context.
 * :mod:`trufflepig.cli` — argparse entry point exposed as the
   ``trufflepig`` console script.
 
-The stage DAG in :mod:`trufflepig.pipeline` is the seam for the future
-per-stage extraction (trufflepig#2..#14) so a web UI can run and stream
-single stages independently.
+The CLI and web UI share the production analysis path and report finalization.
 """
 
 import warnings

@@ -11,9 +11,8 @@ which is now data-only.
 
 The legacy `pirlygenes analyze` CLI has been **fully migrated** into
 this repo as `trufflepig run`. Multi-sample longitudinal comparison
-(`pirlygenes compare-analyze`) is `trufflepig compare`. Per-stage
-extraction of the analyze pipeline (so a web UI can stream incremental
-results) is the next track.
+(`pirlygenes compare-analyze`) is `trufflepig compare`. The CLI and web UI
+use the same production analysis and reporting path.
 
 ## Documentation
 
@@ -86,16 +85,11 @@ Output layout:
 out/patient_X_baseline/
   meta.json            # trufflepig run metadata (versions + args)
   analyze/             # full analyze output: figures, markdown reports, TSVs
-  records/             # (created, currently empty) — reserved for per-stage
-                       #   records once Phase 2 extraction lands
-  figures/             # (created, currently empty) — reserved for the
-                       #   stage-level figure layout
 ```
 
-Today, every analyze artifact (markdown, figures, TSVs, the bundled
-PDF) lives under `analyze/`. The empty sibling directories are the
-seam for per-stage extraction (trufflepig#2–#14); once stages start
-writing their own records, `analyze/` shrinks.
+Every analysis artifact lives under `analyze/`. Start with the automatically
+generated `*-interpretive-report.pdf`: it includes the clinical summary, full
+treatment rationales and requirements, and figures supporting the final call.
 
 Common pass-through flags: `--hla-types`, `--fusions`, `--variants`,
 `--treatment-history`,
@@ -125,6 +119,11 @@ contraindication keeps the same treatment out of the shortlist. This input is
 clinical context; it does not establish current eligibility or make retreatment
 appropriate.
 See [treatment history input](docs/treatment-history.md).
+
+Python callers use `trufflepig.brief.recommend_therapies`, the same selection API
+as the production summary. It returns `TherapyRecommendation` records with
+named `therapy` and `expression` fields; see the
+[Python API example](docs/treatment-history.md#python-recommendation-api).
 
 ### Multi-sample (longitudinal)
 
@@ -187,28 +186,16 @@ stage stream back, and read the rendered `summary.md` / `analysis.md` /
 by ID. Each run writes a self-contained workspace under
 `$TRUFFLEPIG_WEB_ROOT` (default `$HOME/trufflepig-web-runs`).
 
-### Pipeline DAG
-
-```
-trufflepig list-stages
-```
-
-The DAG is the post-migration target for `trufflepig stage <name>`. The
-top-level `trufflepig run` already runs the full pipeline; stage-level
-execution is wired in as stages are extracted from the migrated
-codebase.
-
 ## Layout
 
 ```
 trufflepig/
   cli.py            # argparse entry exposed as the `trufflepig` console script
   main.py           # migrated analyze/compare_analyze + report assembly
-  workspace.py      # workspace layout (meta.json + records/ + figures/)
-  pipeline.py       # stage DAG (name -> upstream dependencies)
+  workspace.py      # workspace root and run metadata
+  report_pdf.py     # reader PDF from the finalized report document
   analyze/          # data contracts shared with the migrated pipeline
   decomposition/    # compartment-fit engine + panels + plot helpers
-  stages/           # one module per stage (post-extraction)
   load_expression.py, sample_context.py, tumor_purity.py,
   decomposition/, plot*.py, brief.py, confidence.py, ...   # the analysis code
 ```
@@ -225,30 +212,11 @@ trufflepig/
       (trufflepig#1). pirlygenes now ships data only.
 - [x] Native `trufflepig run` / `trufflepig compare` dispatch — no bridge
 
-### Phase 2 — Per-stage extraction
+### Reporting
 
-Break the migrated `analyze` function into the stage DAG so a web UI
-can run and stream single stages:
-
-- [ ] `load_expression` — parse sample TPM TSV/CSV into a canonical
-      frame ([#2](https://github.com/pirl-unc/trufflepig/issues/2))
-- [ ] `sample_context` — infer library prep, preservation, degradation
-      ([#3](https://github.com/pirl-unc/trufflepig/issues/3))
-- [ ] `analyze` — cancer-type call + purity
-      ([#4](https://github.com/pirl-unc/trufflepig/issues/4))
-- [ ] `decompose` — compartment-level decomposition fit
-      ([#5](https://github.com/pirl-unc/trufflepig/issues/5))
-- [ ] `ranges` — per-target tumor-expression ranges + attribution
-      ([#6](https://github.com/pirl-unc/trufflepig/issues/6))
-- [ ] `confidence` — purity + per-target confidence tiers
-      ([#7](https://github.com/pirl-unc/trufflepig/issues/7))
-- [ ] `render_targets`, `render_summary`, `render_analysis`,
-      `render_provenance`, `render_brief`
-      ([#8](https://github.com/pirl-unc/trufflepig/issues/8)–[#12](https://github.com/pirl-unc/trufflepig/issues/12))
-- [ ] `bundle` — figures into PDF + finalize `meta.json`
-      ([#13](https://github.com/pirl-unc/trufflepig/issues/13))
-- [ ] Per-stage record schema documentation
-      ([#14](https://github.com/pirl-unc/trufflepig/issues/14))
+The production path runs the complete analysis and finalizes Markdown, JSON,
+and the reader PDF together. Unimplemented stage commands and their unused
+record directories have been removed.
 
 ### Phase 3 — Multi-sample / longitudinal
 

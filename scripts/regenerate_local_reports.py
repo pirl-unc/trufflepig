@@ -55,6 +55,7 @@ DEFAULT_ROOT = Path.home() / "trufflepig-local-reports"
 _PASSTHROUGH = {
     "--cancer-type", "--sample-mode", "--tumor-context", "--site-hint",
     "--met-site", "--hla-types", "--fusions", "--alterations",
+    "--variants", "--variant-genome-build", "--treatment-history",
     "--alignment-qc", "--decomposition-templates", "--output-image-prefix",
     "--sample-id-col", "--sample-id-value", "--gene-id-col",
     "--gene-name-col", "--label-genes", "--genes", "--transcripts",
