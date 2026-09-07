@@ -1742,6 +1742,7 @@ def analyze(
     fusions: Optional[str] = None,
     variants: Optional[str] = None,
     variant_genome_build: Optional[str] = None,
+    treatment_history: Optional[str] = None,
     # Deprecated Python compatibility; use ``variants``.
     alterations: Optional[str] = None,
     alignment_qc: Optional[str] = None,
@@ -1790,6 +1791,7 @@ def analyze(
         fusions=fusions,
         variants=variants,
         variant_genome_build=variant_genome_build,
+        treatment_history=treatment_history,
         alterations=alterations,
         alignment_qc=alignment_qc,
         expression_qc_rescue=expression_qc_rescue,
@@ -2090,6 +2092,14 @@ def _analyze_body(run: AnalyzeRun):
             f"[variant] Parsed {len(variant_records)} variant calls from "
             f"{len(variant_inputs)} input(s)"
         )
+    from .treatment_history import parse_treatment_history
+
+    treatment_records = parse_treatment_history(config.treatment_history)
+    if treatment_records:
+        print(
+            f"[treatment] Parsed {len(treatment_records)} patient treatment "
+            f"record(s) from {config.treatment_history}"
+        )
     run.note_step(
         "input",
         outputs={
@@ -2100,6 +2110,10 @@ def _analyze_body(run: AnalyzeRun):
             "variant_inputs": len(variant_inputs),
             "variant_records": len(variant_records),
             "variant_genome_build": config.variant_genome_build,
+            "treatment_history_records": len(treatment_records),
+            "treatment_history": [
+                record.public_dict() for record in treatment_records
+            ],
         },
     )
     forced_labels = _parse_always_label_genes(label_genes)
@@ -2343,47 +2357,24 @@ def _analyze_body(run: AnalyzeRun):
         except Exception as exc:  # noqa: BLE001
             print(f"[plot] degradation-index plot failed: {exc}")
 
-    # Strip plot: therapy modalities. The per-category strip plots
-    # (Immune_checkpoints / Oncogenes / CTAs / ...) are emitted
-    # elsewhere; the aggregate immune / tumor / antigens overview
-    # panels were retired as redundant in v4.46.0.
-    # Therapy modalities
-    therapy_sets = {
-        "TCR-T": therapy_target_gene_id_to_name("TCR-T"),
-        "CAR-T": therapy_target_gene_id_to_name("CAR-T"),
-        "bispecifics": therapy_target_gene_id_to_name("bispecific-antibodies"),
-        "pMHC-TCEs": pMHC_TCE_target_gene_id_to_name(),
-        "surface-TCEs": surface_TCE_target_gene_id_to_name(),
-        "ADCs": therapy_target_gene_id_to_name("ADC"),
-        "Radio": therapy_target_gene_id_to_name("radioligand"),
-    }
-
-    # The ``immune`` / ``tumor`` / ``antigens`` overview strip plots
-    # duplicate the 10 curated category strip plots (Immune_checkpoints,
-    # Oncogenes, Tumor_suppressors, CTAs, Cancer_surfaceome, …) that
-    # this CLI also emits. Per the figure audit (docs/figure-audit.md),
-    # the overview set is the redundant one — retired in 4.46.0. The
-    # ``treatments`` plot stays because it's organized by therapy
-    # modality (ADC / TCR-T / CAR-T / bispecific / …), not by gene-set
-    # category, so it's not covered by the per-category plots.
-    strip_plots = [
-        ("treatments", therapy_sets),
-    ]
-    if plot_ctx.enabled:
-        for i, (name, gene_sets) in enumerate(strip_plots):
-            output_image = "%s-%s.png" % (prefix, name) if prefix else "%s.png" % name
-            print(f"[plot] Generating {name} strip plot...")
-            plot_gene_expression(
-                df_expr,
-                gene_sets=gene_sets,
-                save_to_filename=output_image,
-                save_dpi=output_dpi,
-                plot_height=plot_height,
-                plot_aspect=plot_aspect,
-                always_label_genes=forced_labels,
-                verbose=(i == 0),  # only log remaps on first call
-                source_file=input_path,
-            )
+    # The raw modality survey is a legacy figure. The clinical report uses the
+    # disease-curated therapy panel and its eligibility-aware recommendations.
+    if plot_ctx.enabled and deprecated_figures:
+        therapy_sets = {
+            "TCR-T": therapy_target_gene_id_to_name("TCR-T"),
+            "CAR-T": therapy_target_gene_id_to_name("CAR-T"),
+            "bispecifics": therapy_target_gene_id_to_name("bispecific-antibodies"),
+            "pMHC-TCEs": pMHC_TCE_target_gene_id_to_name(),
+            "surface-TCEs": surface_TCE_target_gene_id_to_name(),
+            "ADCs": therapy_target_gene_id_to_name("ADC"),
+            "Radio": therapy_target_gene_id_to_name("radioligand"),
+        }
+        output_image = f"{prefix}-treatments.png" if prefix else "treatments.png"
+        plot_gene_expression(
+            df_expr, gene_sets=therapy_sets, save_to_filename=output_image,
+            save_dpi=output_dpi, plot_height=plot_height, plot_aspect=plot_aspect,
+            always_label_genes=forced_labels, source_file=input_path,
+        )
 
     import matplotlib.pyplot as _plt
 
@@ -2426,6 +2417,9 @@ def _analyze_body(run: AnalyzeRun):
     analysis["variant_records"] = [
         record.public_dict() if hasattr(record, "public_dict") else dict(record)
         for record in variant_records
+    ]
+    analysis["treatment_history"] = [
+        record.public_dict() for record in treatment_records
     ]
     # One canonical decision stream: dedicated fusion records keep their
     # source-specific provenance but are normalized and deduplicated here with
@@ -3717,8 +3711,8 @@ def _analyze_body(run: AnalyzeRun):
     # Sample-among-reference context: emit a global normal-inclusive MDS plus
     # a ranked nearest-reference distance plot. These are audit/context views:
     # they intentionally bypass the fused evidence graph, so they are kept out
-    # of the main figure packet and grouped in figure-audit instead.
-    audit_only_pngs = []
+    # of the reader PDF and retained as individual technical figures.
+    generated_pngs = []
     mds_png = "%s-reference-mds.png" % prefix
     neighborhood_png = "%s-reference-neighborhood.png" % prefix
     embedding_pngs = [mds_png, neighborhood_png]
@@ -3870,7 +3864,6 @@ def _analyze_body(run: AnalyzeRun):
     # Purity-adjusted tumor expression analysis (9-point ranges, one PNG per category)
     print("[analysis] Generating tumor expression range analysis...")
     purity_dict = effective_purity
-    adj_pngs = []
     ranges_df = None
     expression_reference_cancer_code = (
         cancer_type_context.code_for("expression") or effective_cancer_type
@@ -3990,7 +3983,7 @@ def _analyze_body(run: AnalyzeRun):
                     save_to_filename=cat_png,
                     save_dpi=output_dpi,
                 )
-                adj_pngs.append(cat_png)
+                generated_pngs.append(cat_png)
                 _plt.close("all")
 
         # Per-target compositional attribution (#108). One PNG per
@@ -3998,7 +3991,7 @@ def _analyze_body(run: AnalyzeRun):
         # breakdown. Emitted only when decomposition produced an
         # attribution; the function returns None otherwise and no file
         # is written, which the CLI respects by not appending to
-        # adj_pngs.
+        # generated_pngs.
         if (
             plot_ctx.enabled
             and "attribution" in ranges_df.columns
@@ -4022,12 +4015,12 @@ def _analyze_body(run: AnalyzeRun):
                     sample_tpm_by_symbol=sample_tpm_by_symbol,
                 )
                 if fig is not None:
-                    audit_only_pngs.append(attr_png)
+                    generated_pngs.append(attr_png)
                 _plt.close("all")
 
         # Per-gene subtype-reference correction audit (#56 / #58).
         # This is mainly provenance/debug material, so keep it out of
-        # the main all-figures packet and reserve it for figure-audit.
+        # the reader PDF and retain the individual PNG for technical review.
         if (
             plot_ctx.enabled
             and "subtype_refined" in ranges_df.columns
@@ -4049,7 +4042,7 @@ def _analyze_body(run: AnalyzeRun):
                     save_dpi=output_dpi,
                 )
                 if fig is not None:
-                    audit_only_pngs.append(sub_png)
+                    generated_pngs.append(sub_png)
                 _plt.close("all")
 
         # Per-gene matched-normal attribution (issue #55). One PNG per
@@ -4077,7 +4070,7 @@ def _analyze_body(run: AnalyzeRun):
                     sample_tpm_by_symbol=sample_tpm_by_symbol,
                 )
                 if fig is not None:
-                    audit_only_pngs.append(mn_png)
+                    generated_pngs.append(mn_png)
                 _plt.close("all")
 
         target_report_md = _build_target_report(
@@ -4149,7 +4142,7 @@ def _analyze_body(run: AnalyzeRun):
                     save_dpi=output_dpi,
                 )
                 if fig is not None:
-                    adj_pngs.append(priority_targets_png)
+                    generated_pngs.append(priority_targets_png)
                     print(f"[plot] Saved priority targets to {priority_targets_png}")
                 else:
                     priority_targets_png = None
@@ -4179,11 +4172,9 @@ def _analyze_body(run: AnalyzeRun):
                     save_dpi=output_dpi,
                 )
                 if fig is not None:
-                    # priority-target-context.png is audit-only (§2.5): its tumor-
-                    # source/safety-band cue is now folded into priority-targets.png
-                    # (the single reader target figure). Route to audit, not adj_pngs
-                    # (which flows to the reader packet).
-                    audit_only_pngs.append(priority_target_context_png)
+                    # Retain the technical plot; the report document selects
+                    # figures that support the interpreted reader report.
+                    generated_pngs.append(priority_target_context_png)
                     print(
                         f"[plot] Saved priority target context to {priority_target_context_png}"
                     )
@@ -4304,429 +4295,43 @@ def _analyze_body(run: AnalyzeRun):
 
         traceback.print_exc()
 
-    if not plot_ctx.enabled:
-        print("[output] --no-figures: skipped figure PDF collection")
-        output_records = write_analysis_output_records(run, report_view)
-        print(f"[output] Wrote {output_records['report_document']}")
-        print(f"[output] Wrote {output_records['manifest']}")
-        return
-
-    # Collect all figures into one PDF (native resolution)
-    from PIL import Image, ImageDraw, ImageFont
-
-    all_pdf = "%s-all-figures.pdf" % prefix if prefix else "all-figures.pdf"
-    print("[output] Collecting figures into PDF...")
-    # Patient-reader flow: compact QC, final-call composition, selected biology,
-    # then recommendations.  Preliminary cancer labels, competing decomposition
-    # models, redundant technical diagnostics, and raw expression surveys are
-    # preserved in figure-audit.pdf but must not look like patient conclusions.
-    from .report_document import is_patient_figure
-
-    # Every standard plot passes through the same suffix policy used by the
-    # interpretive PDF manifest. This prevents the two patient PDFs from drifting.
-    standard_pngs = [
-        context_png,
-        concentration_top_png,
-        concentration_curve_png,
-        reference_mtdna_qc_png,
-        burden_qc_png,
-        degradation_png,
-        summary_png,
-        hypotheses_png,
-        signal_png,
-        tissues_png,
-        decomp_png,
-        composition_png,
-        components_png,
-        candidates_png,
-        purity_png,
-        methods_png,
-        mhc_png,
-        "%s-provenance.png" % prefix if prefix else "provenance.png",
-        pathway_state_png,
-        "%s-treatments.png" % prefix if prefix else "treatments.png",
-        *embedding_pngs,
-    ]
-    png_files = []
-    for figure_path in standard_pngs:
-        if is_patient_figure(figure_path):
-            png_files.append(figure_path)
-        elif figure_path:
-            audit_only_pngs.append(figure_path)
-    if ct_png:
-        if is_patient_figure(ct_png):
-            png_files.append(ct_png)
-        else:
-            audit_only_pngs.append(ct_png)
-    # actionable-targets.png is audit-only (§2.5): it is a near-duplicate target
-    # dumbbell of priority-targets.png (the single reader target figure, which now
-    # carries the tumor-source/safety cue), so route it to audit while the reader
-    # keeps one target figure.
-    if targets_deep_png and Path(targets_deep_png).exists():
-        audit_only_pngs.append(targets_deep_png)
-    # The CTA deep dive overlaps the tumor-adjusted CTA range plot; keep it as
-    # audit detail. A final-call subtype plot, when one exists, remains useful in
-    # the reader packet.
-    if cta_deep_png and Path(cta_deep_png).exists():
-        audit_only_pngs.append(cta_deep_png)
-    for _ddp in [attrib_targets_png, attrib_cta_png, subtype_png]:
-        if not (_ddp and Path(_ddp).exists()):
-            continue
-        if is_patient_figure(_ddp):
-            png_files.append(_ddp)
-        else:
-            audit_only_pngs.append(_ddp)
-
-    # Per-category curated-panel scatter PNGs (DNA_repair, Oncogenes, CTAs, …) are
-    # audit-only (§2.5): ~10 near-overlapping panel scatters bury the ~decision
-    # figures in the reader packet (all-figures.pdf). Route them to audit_only_pngs
-    # so they still move into figures/ and appear in figure-audit.pdf, but no longer
-    # pad the reader packet.
-    scatter_dir = Path(scatter_pdf).parent / Path(scatter_pdf).stem
-    if scatter_dir.is_dir():
-        audit_only_pngs.extend(sorted(str(p) for p in scatter_dir.glob("*.png")))
-    # Purity-adjusted plots go last (different RNA measure), partitioned through
-    # the same patient/audit policy.
-    for adj_p in adj_pngs:
-        if not Path(adj_p).exists():
-            continue
-        if is_patient_figure(adj_p):
-            png_files.append(adj_p)
-        else:
-            audit_only_pngs.append(adj_p)
-
-    def _pdf_font(size: int, *, bold: bool = False):
-        """Return a scalable PDF text font; fall back gracefully."""
-        candidates = (
-            (
-                "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-                if bold
-                else "/System/Library/Fonts/Supplemental/Arial.ttf"
-            ),
-            (
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-                if bold
-                else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-            ),
-            "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-            "Arial Bold.ttf" if bold else "Arial.ttf",
-        )
-        for candidate in candidates:
-            try:
-                return ImageFont.truetype(candidate, size=size)
-            except Exception:
-                continue
-        try:
-            return ImageFont.load_default(size=size)
-        except TypeError:
-            return ImageFont.load_default()
-
-    def _with_filename_caption(img, filename):
-        """Add filename strips around the figure.
-
-        The top-left label is intentionally visible in the figure audit
-        PDF, where readers are deciding which source PNGs are good or
-        bad. The bottom-right caption is retained for the all-figures
-        packet. Both sit outside the plot area so labels never obscure
-        the figure.
-        """
-        caption_font = _pdf_font(26)
-        header_font = _pdf_font(32, bold=True)
-        header_h = 58
-        caption_h = 42
-        new_w, new_h = img.width, img.height + header_h + caption_h
-        canvas = Image.new("RGB", (new_w, new_h), color="white")
-        draw = ImageDraw.Draw(canvas)
-        draw.rectangle((0, 0, new_w, header_h), fill="#f3f4f6")
-        text = filename
-        draw.text((18, 12), text, fill="#333333", font=header_font)
-        canvas.paste(img, (0, header_h))
-        # Bottom-right, light gray.
-        try:
-            bbox = draw.textbbox((0, 0), text, font=caption_font)
-            tw = bbox[2] - bbox[0]
-        except AttributeError:  # pragma: no cover — very old PIL
-            tw = len(text) * 14
-        draw.text(
-            (max(12, new_w - tw - 18), header_h + img.height + 6),
-            text,
-            fill="#888888",
-            font=caption_font,
-        )
-        return canvas
-
-    images = []
     if plot_ctx.enabled:
-        for png_path in png_files:
-            if not png_path:
-                continue
-            p = Path(png_path)
-            if p.exists():
-                img = Image.open(p).convert("RGB")
-                images.append(_with_filename_caption(img, p.name))
-
-    if images:
-        images[0].save(
-            all_pdf, save_all=True, append_images=images[1:], resolution=output_dpi
-        )
-        print(f"Saved {all_pdf} ({len(images)} pages)")
-    else:
-        print("No images to collect into PDF")
-
-    # Move PNGs and per-figure PDFs into figures/ subdir,
-    # keeping all-figures.pdf and markdown reports in place.
-    fig_out_dir = Path(prefix).parent
-    figures_dir = fig_out_dir / "figures"
-    figures_dir.mkdir(exist_ok=True)
-    moved = 0
-    move_png_files = png_files + [p for p in audit_only_pngs if p]
-
-    for png_path in move_png_files:
-        if not png_path:
-            continue
-        p = Path(png_path)
-        if p.exists() and p.suffix == ".png":
-            p.rename(figures_dir / p.name)
-            moved += 1
-    # Move scatter dir contents and per-plot PDFs
-    if scatter_dir.is_dir():
-        for p in scatter_dir.glob("*.png"):
-            p.rename(figures_dir / p.name)
-            moved += 1
-        # Remove empty scatter dir
-        try:
-            scatter_dir.rmdir()
-        except OSError:
-            pass
-    for extra in [scatter_pdf, tissue_pdf]:
-        p = Path(extra) if isinstance(extra, str) else extra
-        if p.exists():
-            p.rename(figures_dir / p.name)
-            moved += 1
-    if moved:
-        print(f"[output] Moved {moved} figures to {figures_dir}/")
-
-    figure_audit_pdf = "%s-figure-audit.pdf" % prefix if prefix else "figure-audit.pdf"
-
-    def _make_audit_text_page(title, lines):
-        from textwrap import wrap
-
-        width, height = 1800, 2400
-        img = Image.new("RGB", (width, height), color="white")
-        draw = ImageDraw.Draw(img)
-        title_font = _pdf_font(62, bold=True)
-        body_font = _pdf_font(36)
-        y = 80
-        draw.text((90, y), title, fill="black", font=title_font)
-        y += 105
-        for line in lines:
-            wrapped = wrap(str(line), width=68) or [""]
-            for piece in wrapped:
-                draw.text((90, y), piece, fill="#333333", font=body_font)
-                y += 48
-            y += 22
-        return img
-
-    def _existing_figure_paths(*suffixes):
-        out = []
-        suffixes = tuple(suffixes)
-        for path in sorted(figures_dir.iterdir()):
-            if path.is_file() and any(path.name.endswith(suffix) for suffix in suffixes):
-                out.append(path)
-        return out
-
-    def _artifact_page(path):
-        path = Path(path)
-        if path.suffix.lower() == ".png":
-            img = Image.open(path).convert("RGB")
-            return _with_filename_caption(img, path.name)
-        return _make_audit_text_page(
-            f"Figure Artifact: {path.name}",
-            [
-                "This figure is emitted as a PDF artifact rather than a single PNG page.",
-                f"Path: {path}",
-                "If a sibling PNG page series exists, those pages appear elsewhere in this audit packet.",
-            ],
-        )
-
-    audit_sections = [
-        (
-            "Patient Reader Set",
-            [
-                {
-                    "title": "QC",
-                    "note": "Compact checks retained in the patient PDF because they directly qualify interpretation.",
-                    "files": _existing_figure_paths(
-                        "sample-context.png",
-                        "degradation-index.png",
-                    ),
-                },
-                {
-                    "title": "Final-Call Composition and Purity",
-                    "note": "Figures tied to the finalized cancer scope and selected background-separated model.",
-                    "files": _existing_figure_paths(
-                        "decomposition-composition.png",
-                        "decomposition-components.png",
-                        "purity-methods.png",
-                    ),
-                },
-                {
-                    "title": "Biology and Recommendations",
-                    "note": "Selected immune, pathway, and final-call subtype analyses. Drug eligibility remains in the clinically gated text report.",
-                    "files": _existing_figure_paths(
-                        "therapy-pathway-state.png",
-                        "subtype-signature.png",
-                    ),
-                },
-            ],
-        ),
-        (
-            "Audit-Only Figures",
-            [
-                {
-                    "title": "Preliminary Labels and Alternative Models",
-                    "note": "These preserve how candidates were generated and rejected. They are excluded from the patient PDF so a preliminary label cannot be mistaken for the final call.",
-                    "files": _existing_figure_paths(
-                        "cancer-hypotheses.png",
-                        "cancer-type-signal-matrix.png",
-                        "decomposition-candidates.png",
-                        "reference-mds.png",
-                        "reference-neighborhood.png",
-                        "vs-cancer.pdf",
-                    ),
-                },
-                {
-                    "title": "Detailed or Redundant QC",
-                    "note": "Useful for technical review when a QC warning needs investigation; redundant with the compact reader QC pages otherwise.",
-                    "files": _existing_figure_paths(
-                        "expression-top-features-qc.png",
-                        "expression-concentration-curve-qc.png",
-                        "qc-reference-mtdna.png",
-                        "qc-reference-technical-rna-burden.png",
-                        "sample-summary.png",
-                    ),
-                },
-                {
-                    "title": "Detailed or Redundant Analysis",
-                    "note": "Provenance and broad discovery screens retained for technical review. They are not patient-facing recommendations or eligibility determinations.",
-                    "files": _existing_figure_paths(
-                        "decomposition.png",
-                        "purity.png",
-                        "provenance.png",
-                        "background-tissues.png",
-                        "mhc-expression.png",
-                        "treatments.png",
-                        "cta-deep-dive.png",
-                        "purity-ctas.png",
-                        "purity-surface.png",
-                        "actionable-targets.png",
-                        "priority-targets.png",
-                        "priority-target-context.png",
-                        "target-tissues.pdf",
-                    ),
-                },
-                {
-                    "title": "Attribution and Reference Detail",
-                    "note": "Per-target RNA source estimates and healthy-tissue reference corrections for reproducibility and debugging; no separate normal sample from this patient is implied.",
-                    "files": _existing_figure_paths(
-                        "target-attribution-targets.png",
-                        "target-attribution-ctas.png",
-                        "target-attribution-surface.png",
-                        "matched-normal-targets.png",
-                        "matched-normal-ctas.png",
-                        "matched-normal-surface.png",
-                        "subtype-attribution-targets.png",
-                        "subtype-attribution-ctas.png",
-                        "subtype-attribution-surface.png",
-                    ),
-                },
-            ],
-        ),
-    ]
-    audit_seen = set()
-
-    audit_images = (
-        [
-            _make_audit_text_page(
-                "Figure Audit",
-                [
-                    "This PDF groups every emitted figure by patient-reader or audit-only role.",
-                    "Each artifact appears once unless it is added to the coverage appendix.",
-                    "PNG pages are reproduced directly after each group cover page; PDF-only figures are listed on the cover page but not rasterized here.",
-                    f"Source directory: {figures_dir}",
-                ],
-            )
+        # Keep one reader PDF, rendered from the finalized report document below.
+        # Individual figure artifacts retain the full technical evidence.
+        figure_paths = [
+            context_png, concentration_top_png, concentration_curve_png,
+            reference_mtdna_qc_png, burden_qc_png, degradation_png,
+            summary_png, hypotheses_png, signal_png, tissues_png,
+            decomp_png, composition_png, components_png, candidates_png,
+            purity_png, methods_png, mhc_png, pathway_state_png, ct_png,
+            targets_deep_png, cta_deep_png, attrib_targets_png, attrib_cta_png,
+            subtype_png, f"{prefix}-provenance.png", f"{prefix}-treatments.png",
+            *embedding_pngs, *generated_pngs,
         ]
-        if plot_ctx.enabled
-        else []
-    )
-    for section_title, groups in audit_sections if plot_ctx.enabled else []:
-        audit_images.append(
-            _make_audit_text_page(
-                section_title,
-                [
-                    "The following pages are grouped by how they function in the report packet.",
-                ],
-            )
-        )
-        for group in groups:
-            files = group["files"]
-            file_labels = (
-                ", ".join(path.name for path in files)
-                if files
-                else "No matching figures emitted for this run."
-            )
-            audit_images.append(
-                _make_audit_text_page(
-                    group["title"],
-                    [
-                        group["note"],
-                        f"Included: {file_labels}",
-                    ],
-                )
-            )
-            for path in files:
-                audit_seen.add(path.name)
-                audit_images.append(_artifact_page(path))
-
-    remaining_files = (
-        [
-            path
-            for path in sorted(figures_dir.iterdir())
-            if path.is_file() and path.name not in audit_seen
-        ]
-        if plot_ctx.enabled
-        else []
-    )
-    if remaining_files:
-        audit_images.append(
-            _make_audit_text_page(
-                "Coverage Appendix",
-                [
-                    "Every emitted figure is included at least once in this packet.",
-                    "The following pages cover artifacts that did not fit one of the opinionated groups above.",
-                ],
-            )
-        )
-        audit_images.append(
-            _make_audit_text_page(
-                "Other Emitted Figures",
-                [
-                    "Included: " + ", ".join(path.name for path in remaining_files),
-                ],
-            )
-        )
-        for path in remaining_files:
-            audit_images.append(_artifact_page(path))
-
-    if audit_images:
-        audit_images[0].save(
-            figure_audit_pdf,
-            save_all=True,
-            append_images=audit_images[1:],
-            resolution=output_dpi,
-        )
-        print(f"Saved {figure_audit_pdf} ({len(audit_images)} pages)")
+        scatter_dir = Path(scatter_pdf).parent / Path(scatter_pdf).stem
+        if scatter_dir.is_dir():
+            figure_paths.extend(scatter_dir.glob("*.png"))
+        figures_dir = Path(prefix).parent / "figures"
+        figures_dir.mkdir(exist_ok=True)
+        moved = 0
+        for figure_path in dict.fromkeys(str(path) for path in figure_paths if path):
+            path = Path(figure_path)
+            destination = figures_dir / path.name
+            if path.is_file() and path.suffix == ".png" and path != destination:
+                path.rename(destination)
+                moved += 1
+        if scatter_dir.is_dir():
+            try:
+                scatter_dir.rmdir()
+            except OSError:
+                pass
+        for extra in (scatter_pdf, tissue_pdf):
+            if extra and Path(extra).is_file():
+                path = Path(extra)
+                path.rename(figures_dir / path.name)
+                moved += 1
+        if moved:
+            print(f"[output] Moved {moved} figures to {figures_dir}/")
 
     # Write README explaining output files
     readme_path = Path(prefix).parent / "README.md"
@@ -4744,14 +4349,13 @@ context.
 
 | File | Description |
 |------|-------------|
-| `*-summary.md` | One-page distilled read (≤ 40 lines) — cancer call, purity, top therapies, caveats |
+| `*-interpretive-report.pdf` | Clinical summary, complete treatment rationales and requirements, and figures supporting the final analysis |
+| `*-summary.md` | Clinical summary — cancer call, purity, therapy rationale, missing eligibility evidence, and caveats |
 | `*-analysis.md` | Main interpreted report — disease-state, tissue-composition evidence, candidate trace, purity components, decomposition, and therapy landscape |
 | `*-evidence.md` | Stepwise/raw appendix — attribution chain plus full biomarker/target evidence tables |
-| `*-all-figures.pdf` | Curated patient figures: compact QC, final-call analyses, and recommendations |
-| `*-figure-audit.pdf` | Complete figure packet with preliminary, alternative-model, technical, and redundant plots explicitly separated from the patient set |
 
-Read `*-summary.md` first, use `*-analysis.md` for the reasoning, and open
-`*-evidence.md` or the audit packet only when validating a specific claim.
+Read `*-interpretive-report.pdf` or `*-summary.md` first, use `*-analysis.md` for the reasoning, and open
+`*-evidence.md` and individual figures when validating a specific claim.
 
 ## Data and normalization
 
@@ -4776,7 +4380,7 @@ available for QC and provenance.
 
 ## Figures (in `figures/`)
 
-Use `*-all-figures.pdf` for review and sharing. It includes only figures that qualify QC, support the finalized analysis, or explain recommendations. Preliminary cancer labels and alternative decomposition models remain available in `*-figure-audit.pdf`.
+Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical rationale and figures supporting the finalized analysis. Individual PNGs retain preliminary cancer labels and alternative decomposition models for technical review.
 
 | Figure | Reader role | Description |
 |--------|-------------|-------------|
@@ -10022,6 +9626,12 @@ def _build_target_report(
 ):
     """Return tumor-expression range report using purity/decomposition bounds."""
     import pandas as pd
+    from .treatment_history import (
+        treatment_history_blocks_row,
+        treatment_history_marks_current,
+        treatment_history_rank,
+        treatment_history_supports_review,
+    )
 
     cancer_type_context = cancer_type_context_from_analysis(analysis)
     cancer_code = cancer_type
@@ -10240,7 +9850,7 @@ def _build_target_report(
                     disease_state=disease_state,
                 )
                 if path_context:
-                    parts.append(path_context)
+                    parts.insert(0, path_context)
                 conflict = therapy_rna_context_conflict(
                     target_row,
                     analysis=analysis,
@@ -10292,7 +9902,7 @@ def _build_target_report(
                 disease_state=disease_state,
             )
             if path_context:
-                parts.append(path_context)
+                parts.insert(0, path_context)
             conflict = therapy_rna_context_conflict(
                 target_row,
                 analysis=analysis,
@@ -10613,7 +10223,8 @@ def _build_target_report(
                 "targets with expression signal even when the agent is generic, "
                 "approved only in another indication, or not disease-matched. "
                 "The **priority** list is intentionally narrower: it ranks the "
-                "curated cancer-specific therapy landscape by indication fit, "
+                "curated cancer-specific therapy landscape by supplied patient "
+                "treatment evidence, sourced clinical outcomes, indication fit, "
                 "required variant or HLA evidence, clinical maturity, and "
                 "estimated patient tumor attribution. A target such as HER3/ERBB3 or "
                 "ADAM9 can therefore appear in the expression screen without "
@@ -10638,12 +10249,16 @@ def _build_target_report(
                     "preclinical": 4,
                 }
                 targets_sorted = targets_df.assign(
+                    _history_key=[
+                        treatment_history_rank(trow, analysis)
+                        for _, trow in targets_df.iterrows()
+                    ],
                     _inactive_key=[
                         1 if therapy_row_rna_context_inactive(
                             trow,
                             analysis=analysis,
                             disease_state=disease_state,
-                        ) else 0
+                        ) and not treatment_history_supports_review(trow, analysis) else 0
                         for _, trow in targets_df.iterrows()
                     ],
                     _path_key=[
@@ -10658,7 +10273,14 @@ def _build_target_report(
                         lambda p: phase_order.get(str(p), 99)
                     ),
                 ).sort_values(
-                    ["_inactive_key", "_path_key", "_phase_key", "symbol", "agent"]
+                    [
+                        "_history_key",
+                        "_inactive_key",
+                        "_path_key",
+                        "_phase_key",
+                        "symbol",
+                        "agent",
+                    ]
                 )
 
                 def _cell(value):
@@ -10676,28 +10298,31 @@ def _build_target_report(
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
                     expr = None if sym == "—" else sym_to_row.get(sym)
+                    history_supported = treatment_history_supports_review(
+                        trow, analysis
+                    )
+                    history_blocked = treatment_history_blocks_row(trow, analysis)
+                    history_current = treatment_history_marks_current(trow, analysis)
                     reliability = "provisional"
                     source_reliability = reliability
-                    if sym == "—":
-                        obs_cell = "*not measured*"
-                        tumor_source_cell = "—"
-                        context_cell = "—"
-                        attr_cell = "—"
-                        interpretation_cell = "agent-only / no direct gene target"
-                    elif expr is None:
+                    if expr is None:
                         obs_state = target_observation_state(sym, ranges_df)
-                        obs_cell = format_missing_observation_cell(obs_state)
+                        obs_cell = (
+                            "*not measured*" if sym == "—"
+                            else format_missing_observation_cell(obs_state)
+                        )
                         tumor_source_cell = "—"
                         context_cell = "—"
                         attr_cell = "—"
-                        interpretation_cell = format_missing_observation_interp(
-                            obs_state
+                        interpretation_cell = _target_interpretation_cell(
+                            trow, None, target_panel=targets_df,
                         )
                         reliability = (
                             "provisional"
                             if expression_independent_indication(trow)
                             else "unsupported"
                         )
+                        source_reliability = reliability
                     else:
                         # Unify bulk-TPM formatting with the Surface Protein /
                         # target-landscape tables (render_tpm drops the decimal
@@ -10733,8 +10358,19 @@ def _build_target_report(
                     audit_only = (
                         source_reliability == "unsupported"
                         and not expression_independent_indication(trow)
-                    ) or eligibility_missing
-                    if eligibility_missing:
+                        and not history_supported
+                    ) or (eligibility_missing and not history_supported) or history_blocked or history_current
+                    if history_blocked:
+                        interpretation_cell = (
+                            "not prioritized because supplied treatment history "
+                            "reports a negative outcome; " + interpretation_cell
+                        )
+                    elif history_current:
+                        interpretation_cell = (
+                            "listed as current treatment rather than a new candidate; "
+                            + interpretation_cell
+                        )
+                    elif eligibility_missing:
                         interpretation_cell = (
                             "clinical eligibility not supplied; RNA context is shown "
                             "to prioritize confirmatory review; " + interpretation_cell
@@ -10789,7 +10425,10 @@ def _build_target_report(
                     lines.append("")
 
                 if audit_records:
-                    lines.append("### Sample-supported / clinically reviewable rows\n")
+                    lines.append(
+                        "### Supported by patient treatment history, sample evidence, or otherwise "
+                        "clinically reviewable rows\n"
+                    )
                     if active_records:
                         _render_target_records(active_records)
                     else:
@@ -11530,6 +11169,7 @@ def plot_expression(
     hla_types: Optional[str] = None,
     variants: Optional[str] = None,
     variant_genome_build: Optional[str] = None,
+    treatment_history: Optional[str] = None,
     alterations: Optional[str] = None,
     therapy_target_top_k: int = 10,
     therapy_target_tpm_threshold: float = 30.0,
@@ -11563,6 +11203,7 @@ def plot_expression(
         hla_types=hla_types,
         variants=variants,
         variant_genome_build=variant_genome_build,
+        treatment_history=treatment_history,
         alterations=alterations,
         therapy_target_top_k=therapy_target_top_k,
         therapy_target_tpm_threshold=therapy_target_tpm_threshold,

@@ -15,7 +15,7 @@ from trufflepig.brief import (
     _format_cta_outlier_bullet,
     _notable_cta_outliers,
     _shortlist_omission_note,
-    _top_therapies,
+    recommend_therapies,
     mismatch_repair_summary_line,
 )
 from trufflepig.confidence import ConfidenceTier
@@ -75,6 +75,7 @@ def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
     message = _empty_therapy_shortlist_message(targets, ranges)
 
     assert "did not meet the shortlist's" in message
+    assert "clinical eligibility" in message
     assert "non-tumor-supported" not in message
 
 
@@ -1515,7 +1516,7 @@ def test_target_dependent_phase_one_row_with_no_estimated_tumor_signal_stays_out
         ]
     )
 
-    assert _top_therapies(targets_df, ranges_df, analysis=analysis) == []
+    assert recommend_therapies(targets_df, ranges_df, analysis=analysis) == []
 
 
 def test_expression_independent_therapy_surfaces_missing_required_evidence():
@@ -1549,6 +1550,32 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
     assert "target RNA is context only" in line
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
+    # Losing the model interval must not lose the clinical requirement.
+    without_band = _format_therapy_bullet(
+        target, {"observed_tpm": 12.0}, analysis=analysis
+    )
+    assert "required eligibility evidence not supplied" in without_band
+    assert "target RNA is context only" in without_band
+
+
+def test_missing_eligibility_becomes_a_clinical_task_not_a_recommendation(monkeypatch, tmp_path):
+    from trufflepig import brief
+    from trufflepig.report_document import parse_therapy_recommendations, parse_summary_records
+
+    panel = pd.DataFrame([{
+        "cancer_code": "BRCA", "symbol": "BRCA1", "agent": "olaparib",
+        "phase": "approved", "indication": "germline BRCA-mutated HER2-negative breast cancer",
+        "requires_verified_alteration": True,
+        "eligibility_note": "requires clinical germline BRCA testing and HER2-negative disease",
+    }])
+    monkeypatch.setattr(brief, "_curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
+    analysis = {**_make_analysis(), "cancer_type": "BRCA"}
+    text = build_summary(analysis, _make_ranges_df(), cancer_code="BRCA", disease_state="")
+    path = tmp_path / "summary.md"
+    path.write_text(text)
+    assert parse_therapy_recommendations(path) is None
+    tasks = [r for r in parse_summary_records(path) if r["section"] == "Clinical evidence to reconcile"]
+    assert any("olaparib" in r["text"] and "germline BRCA testing" in r["text"] for r in tasks)
 
 
 def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
@@ -1588,11 +1615,11 @@ def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
     )
     ranges_df = pd.DataFrame(columns=["symbol", "observed_tpm"])
 
-    top = _top_therapies(targets_df, ranges_df, analysis=analysis)
+    top = recommend_therapies(targets_df, ranges_df, analysis=analysis)
 
     assert [row["agent"] for row, _expr in top] == ["doxorubicin", "pazopanib"]
     line = _format_therapy_bullet(top[0][0], top[0][1], analysis=analysis)
-    assert line.startswith("- **doxorubicin** — agent-only therapy")
+    assert line.startswith("- **Clinical pathway** — doxorubicin")
     assert "target expression is not the eligibility criterion" in line
     assert "nan" not in line.lower()
 
@@ -2427,7 +2454,7 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     # outlier must carry the "expression is not the eligibility criterion" caveat,
     # so the block can't contradict the report's own eligibility principle.
     # COAD TP53 is mutation-gated ("mutation common ... chemo response"); render a
-    # strongly-amplified, top-percentile TP53 row so it qualifies as an outlier.
+    # highly expressed, top-percentile TP53 row so it qualifies as an outlier.
     analysis = _make_analysis()
     analysis["cancer_type"] = "COAD"
     analysis["cancer_name"] = "Colon adenocarcinoma"
@@ -2459,6 +2486,9 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     assert "## Notable biomarker outliers" in md
     assert "TP53" in md
     assert "expression is not the eligibility criterion" in md
+    outlier = next(line for line in md.splitlines() if line.startswith("- **TP53**"))
+    assert "RNA abundance 15.0×" in outlier
+    assert "amplified" not in outlier
     assert len(md.splitlines()) <= 40
 
 

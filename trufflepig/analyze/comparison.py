@@ -436,7 +436,7 @@ def build_analyze_comparison_markdown(
         )
     lines.extend(
         [
-            "- Clinical interpretation still requires diagnosis, stage, prior lines, current medications, MSI/MMR/TMB, mutations/fusions/CNVs, relevant imaging such as HER2/PSMA, and current trial availability.",
+            "- Clinical interpretation still requires diagnosis, stage, prior lines, current medications, MSI/MMR/TMB, mutations/fusions/CNVs, protein assays such as HER2, relevant imaging such as PSMA PET, and current trial availability.",
         ]
     )
 

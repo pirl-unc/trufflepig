@@ -148,6 +148,19 @@ def test_target_row_sources_are_present_for_most_curation_rows():
     )
 
 
+def test_diagnostic_fapi_tracer_does_not_replace_therapeutic_lutetium_agent():
+    targets = pd.DataFrame([
+        {"cancer_code": "PRAD", "symbol": "FAP", "agent": agent,
+         "indication": "mCRPC", "agent_class": "radioligand"}
+        for agent in ("[68Ga]FAPI-46", "[177Lu]FAPI-46")
+    ])
+
+    filtered = filter_current_therapy_targets(targets)
+
+    assert list(filtered["agent"]) == ["[177Lu]FAPI-46"]
+    assert therapy_withdrawal_note(targets.iloc[0]) == ""
+
+
 def test_withdrawn_disease_specific_rows_are_filtered_from_reports():
     targets = pd.DataFrame(
         [

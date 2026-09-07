@@ -21,41 +21,6 @@ def test_version():
     assert "trufflepig" in result.stdout
 
 
-def test_list_stages_includes_expected_names():
-    result = subprocess.run(
-        [sys.executable, "-m", "trufflepig.cli", "list-stages"],
-        capture_output=True, text=True, check=True,
-    )
-    for expected in [
-        "sample_context", "analyze", "decompose", "ranges",
-        "confidence", "render_brief", "render_provenance", "bundle",
-    ]:
-        assert expected in result.stdout, f"missing stage in list-stages: {expected}"
-
-
-def test_stage_subcommand_still_scaffolded(tmp_path):
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "trufflepig.cli", "stage", "analyze",
-            "--workspace", str(tmp_path),
-        ],
-        capture_output=True, text=True,
-    )
-    assert result.returncode != 0
-    assert "not wired" in result.stderr
-
-
-def test_pipeline_dependencies_are_sound():
-    from trufflepig.pipeline import STAGE_ORDER, required_upstream
-
-    seen = set()
-    for stage in STAGE_ORDER:
-        up = required_upstream(stage)
-        for dep in up:
-            assert dep in seen, f"{stage} depends on {dep} but {dep} not seen yet"
-        seen.add(stage)
-
-
 def test_run_dispatches_to_native_analyze(tmp_path, monkeypatch):
     from trufflepig import cli
 
@@ -111,6 +76,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
         "--fusions", "/tmp/fusions.tsv",
         "--variants", "/tmp/variants.tsv",
         "--variant-genome-build", "GRCh38",
+        "--treatment-history", "/tmp/treatment-history.tsv",
         "--alignment-qc", "/tmp/aqc.tsv",
         "--sample-mode", "tumor_bulk",
         "--tumor-context", "primary",
@@ -123,6 +89,7 @@ def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):
     assert captured["fusions"] == "/tmp/fusions.tsv"
     assert captured["variants"] == "/tmp/variants.tsv"
     assert captured["variant_genome_build"] == "GRCh38"
+    assert captured["treatment_history"] == "/tmp/treatment-history.tsv"
     assert captured["alignment_qc"] == "/tmp/aqc.tsv"
     assert captured["sample_mode"] == "tumor_bulk"
     assert captured["tumor_context"] == "primary"

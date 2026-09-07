@@ -53,6 +53,13 @@ from .reporting import (
     therapy_state_caution,
     tumor_attribution_context,
 )
+from .treatment_history import (
+    treatment_history_blocks_row,
+    treatment_history_context,
+    treatment_history_marks_current,
+    treatment_history_rank,
+    treatment_history_supports_review,
+)
 
 # ── Essential tissues for safety context ─────────────────────────────────
 
@@ -83,12 +90,14 @@ _PRIORITY_PHASE_POINTS = {
     "preclinical": 1.0,
 }
 _PRIORITY_STATUS_ORDER = {
-    "approved_disease_matched": 0,
-    "clinical_disease_matched": 1,
-    "approved_other_context": 2,
-    "exploratory_or_expression_linked": 3,
+    "patient_treatment_evidence": 0,
+    "approved_disease_matched": 1,
+    "clinical_disease_matched": 2,
+    "approved_other_context": 3,
+    "exploratory_or_expression_linked": 4,
 }
 _PRIORITY_STATUS_LABELS = {
+    "patient_treatment_evidence": "Patient treatment evidence",
     "approved_disease_matched": "Approved pathway / eligibility pending",
     "clinical_disease_matched": "Clinical trial / eligibility pending",
     "approved_other_context": "Approved elsewhere / generic target",
@@ -1012,6 +1021,7 @@ def _priority_target_rows(
         cancer_code = str(cancer_type)
 
     curated_by_symbol = {}
+    history_excluded_symbols = set()
     if (
         target_panel is not None
         and len(target_panel)
@@ -1021,7 +1031,13 @@ def _priority_target_rows(
             sym = str(trow.get("symbol") or "").strip()
             if not sym or sym.lower() == "nan":
                 continue
+            if treatment_history_blocks_row(trow, analysis) or treatment_history_marks_current(
+                trow, analysis
+            ):
+                history_excluded_symbols.add(sym)
+                continue
             sort_key = (
+                treatment_history_rank(trow, analysis),
                 _PRIORITY_PHASE_PRIORITY.get(str(trow.get("phase") or ""), 99),
                 str(trow.get("agent") or ""),
             )
@@ -1030,6 +1046,7 @@ def _priority_target_rows(
                 or sort_key < curated_by_symbol[sym]["sort_key"]
             ):
                 curated_by_symbol[sym] = {"target": trow, "sort_key": sort_key}
+    history_excluded_symbols.difference_update(curated_by_symbol)
 
     generic_by_symbol = {}
     if df_gene_expr is not None:
@@ -1105,7 +1122,9 @@ def _priority_target_rows(
         )
 
     def _status_for_target(curated, generic):
-        if curated is not None:
+        if curated is not None and treatment_history_supports_review(curated, analysis):
+            key = "patient_treatment_evidence"
+        elif curated is not None:
             phase = str(curated.get("phase") or "").strip()
             if phase == "approved":
                 key = "approved_disease_matched"
@@ -1160,6 +1179,10 @@ def _priority_target_rows(
         score = 0.35
         notes = []
 
+        if treatment_history_supports_review(curated, analysis):
+            score += 1.35
+            notes.append("patient treatment benefit supplied")
+
         hla = target_hla_eligibility(curated, analysis=analysis)
         hla_status = hla.get("status")
         if hla_status == "matched":
@@ -1193,6 +1216,10 @@ def _priority_target_rows(
         if caution:
             score -= 0.55
             notes.append("current-therapy state caveat")
+
+        history_context = treatment_history_context(curated, analysis)
+        if history_context and not treatment_history_supports_review(curated, analysis):
+            notes.append("treatment history requires review")
 
         return max(0.0, min(1.7, score)), "; ".join(notes)
 
@@ -1239,6 +1266,8 @@ def _priority_target_rows(
         if not sym or sym.lower() == "nan":
             continue
         if target_symbol_set is not None and sym not in target_symbol_set:
+            continue
+        if sym in history_excluded_symbols:
             continue
         therapies = _therapy_list(row)
         curated = curated_by_symbol.get(sym, {}).get("target")

@@ -242,9 +242,8 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli_mod, "plot_gene_expression", lambda *a, **k: calls.append(k)
     )
-    # PR-4 (§2.5): materialize the per-category curated panel scatter PNGs that the
-    # real plot_sample_vs_cancer emits into its {prefix}-vs-cancer/ dir, so the
-    # reader-vs-audit routing of those PNGs is exercised (asserted at the end).
+    # Materialize technical scatter PNGs so retention and PDF exclusion are
+    # exercised through the production output path.
     def _fake_plot_sample_vs_cancer(*a, **k):
         scatter_calls.append(k)
         save_to = k.get("save_to_filename")
@@ -256,9 +255,7 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli_mod, "plot_sample_vs_cancer", _fake_plot_sample_vs_cancer)
 
-    # Record every Image.open path: the reader packet (all-figures.pdf) opens
-    # png_files from their original locations; the audit packet (figure-audit.pdf)
-    # opens the moved figures/ copies. This lets us prove the scatters route to audit.
+    # The single reader PDF must not open exploratory figure artifacts.
     opened_paths = []
     _real_image_open = cli_mod.Image.open
 
@@ -340,8 +337,7 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
             "has_issues": False,
         },
     )
-    # PR-5 (§2.5): materialize the 4-panel composite PNG the real plot_sample_summary
-    # writes, so its reader-vs-audit routing is exercised (asserted at the end).
+    # The exploratory summary composite stays available as an individual PNG.
     def _fake_plot_sample_summary(*a, **k):
         save_to = k.get("save_to_filename")
         if save_to:
@@ -408,14 +404,8 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     )
     # prefix becomes output_dir/output_image_prefix
     expected_prefix = str(tmp_path / "test-output" / "out")
-    # v4.46.0: retired the immune / tumor / antigens overview strip
-    # plots — they duplicated the 10 per-category curated strip plots
-    # (Immune_checkpoints / Oncogenes / CTAs / ...). Only the
-    # treatments modality strip plot remains.
-    assert len(calls) == 1
-    assert calls[0]["save_to_filename"] == f"{expected_prefix}-treatments.png"
-    assert calls[0]["gene_sets"]["Radio"] == {"ENSG_MOCK": "radioligand"}
-    assert calls[0]["always_label_genes"] == {"FAP", "CD276"}
+    # The legacy raw-modality strip is not part of the default report.
+    assert calls == []
     assert len(scatter_calls) == 1
     assert scatter_calls[0]["save_to_filename"] == f"{expected_prefix}-vs-cancer.pdf"
     # #83: scatter must use the resolved cancer type (PRAD from
@@ -475,48 +465,21 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     readme = (tmp_path / "test-output" / "README.md").read_text()
     assert readme.startswith("# Trufflepig Analysis Output")
     assert readme.index("## Start here") < readme.index("## Data and normalization")
-    assert "Use `*-all-figures.pdf` for review and sharing" in readme
+    assert "Use `*-interpretive-report.pdf` for review and sharing" in readme
     assert "*-decomposition-composition.png" in readme
     assert "*-decomposition-candidates.png` | Audit only" in readme
     assert "*-decomposition.png" not in readme
 
-    # PR-4 (§2.5): the ~10 curated per-category panel scatters are audit-only. The
-    # mock created out-vs-cancer/{Oncogenes,CTAs}.png; each must be relocated into
-    # figures/ (retained, swept into figure-audit.pdf) but NEVER collected into the
-    # reader packet (all-figures.pdf). Reader collection opens png_files from the
-    # original vs-cancer/ location; audit collection opens the moved figures/ copy —
-    # so the vs-cancer/ path must not appear among opened figures, the figures/ copy
-    # must, and the file must survive in figures/.
-    figures_dir = tmp_path / "test-output" / "figures"
-    for _name in ("Oncogenes.png", "CTAs.png"):
-        assert (figures_dir / _name).exists()  # retained in the audit set, not deleted
-        assert not any(
-            f"out-vs-cancer/{_name}" in op for op in opened_paths
-        )  # never collected into the reader packet from its original location
-        assert any(
-            f"figures/{_name}" in op for op in opened_paths
-        )  # present in the audit packet (opened from figures/)
-
-    # PR-5 (§2.5): the 4-panel sample-summary.png composite is audit-only. The mock
-    # wrote {prefix}-sample-summary.png; it must relocate into figures/ (audit) and
-    # NOT be collected into the reader packet from its original location — the four
-    # standalone panels it duplicates stay in the reader set (untouched here).
-    assert (figures_dir / "out-sample-summary.png").exists()  # retained in audit
-    assert (
-        f"{expected_prefix}-sample-summary.png" not in opened_paths
-    )  # composite never collected into the reader packet
-    assert any(
-        "figures/out-sample-summary.png" in op for op in opened_paths
-    )  # composite present in the audit packet
-
-    # The raw cancer-hypotheses bar chart is also audit-only. Its preliminary
-    # bulk-ranker leader seeds candidate generation, but a losing label should
-    # not appear as a patient-facing conclusion in all-figures.pdf.
-    assert (figures_dir / "out-cancer-hypotheses.png").exists()
-    assert f"{expected_prefix}-cancer-hypotheses.png" not in opened_paths
-    assert any(
-        "figures/out-cancer-hypotheses.png" in op for op in opened_paths
-    )
+    assert sorted(p.name for p in Path(out_dir).glob("*.pdf")) == [
+        "out-interpretive-report.pdf"
+    ]
+    figures_dir = Path(out_dir) / "figures"
+    for name in (
+        "Oncogenes.png", "CTAs.png", "out-sample-summary.png",
+        "out-cancer-hypotheses.png",
+    ):
+        assert (figures_dir / name).exists()
+        assert not any(Path(path).name == name for path in opened_paths)
 
     # After the migration, `python -m trufflepig.main` no longer ships
     # a CLI — it's a redirect-only entry point that prints a

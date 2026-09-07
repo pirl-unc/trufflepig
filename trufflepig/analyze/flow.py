@@ -579,6 +579,7 @@ def build_analysis_parameters(
             "fusions": config.fusion_path_list(),
             "variants": config.variant_input_list(),
             "variant_genome_build": config.variant_genome_build,
+            "treatment_history": config.treatment_history,
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,
@@ -658,12 +659,19 @@ def write_analysis_output_records(
     runs from drifting into different metadata contracts.
     """
     from ..report_document import write_report_document
+    from ..report_pdf import build_interpretive_report_pdf
 
     report_document_path = write_report_document(
         run.paths.out_dir,
         run.paths.prefix_base,
         report_view=report_view,
+        treatment_history=(
+            (run.steps.get("input").outputs or {}).get("treatment_history", [])
+            if run.steps.get("input") is not None
+            else []
+        ),
     )
+    report_pdf_path = build_interpretive_report_pdf(run.paths.out_dir)
     manifest_path = run.paths.file("manifest.json")
     run.artifacts = discover_output_artifacts(
         run.paths.out_dir,
@@ -683,6 +691,7 @@ def write_analysis_output_records(
         "output",
         outputs={
             "report_document": str(report_document_path),
+            "report_pdf": str(report_pdf_path),
             "manifest": manifest_path,
             "n_artifacts": len(run.artifacts),
         },
@@ -690,5 +699,6 @@ def write_analysis_output_records(
     write_json(manifest_path, run.public_manifest())
     return {
         "report_document": str(report_document_path),
+        "report_pdf": str(report_pdf_path),
         "manifest": manifest_path,
     }
