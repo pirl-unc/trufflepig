@@ -1,0 +1,18 @@
+{% if tier == 'approved_standard' %}
+This is a guideline-standard approved pathway for the curated indication.
+{% elif tier == 'approved_indication_matched' %}
+This is an approved biomarker/indication-matched pathway.
+{% elif tier == 'approved_later_line' %}
+This is an approved later-line pathway; its place in treatment depends on prior therapy.
+{% elif tier == 'late_clinical' %}
+This is a late-clinical follow-up pathway with investigational evidence.
+{% elif tier == 'investigational_biomarker_matched' %}
+This is a biomarker-matched investigational pathway.
+{% elif tier == 'trial_follow_up' %}
+This is a clinical-trial follow-up pathway, not default standard treatment.
+{% elif tier == 'preclinical' %}
+This pathway has preclinical evidence only.
+{% elif tier == 'off_label' %}
+This is an off-label follow-up pathway; evidence is transferred from another clinical setting or remains exploratory.
+{% endif %}
+{% if setting %}Curated treatment setting: {{ setting }}.{% endif %}

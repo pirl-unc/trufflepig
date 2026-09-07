@@ -1,10 +1,2 @@
-{% if selected %}
-Candidate for clinical review.
-{% else %}
-This treatment is not shortlisted.
-{% endif %}
 {% if indication %}Curated indication: {{ indication }}.{% endif %}
-{% if maturity %}Clinical evidence: {{ maturity }}.{% endif %}
-{% if request_labels %}
-Information still needed: {{ request_labels | join('; ') }}.
-{% endif %}
+{% if maturity %}Evidence maturity: {{ maturity }}.{% endif %}

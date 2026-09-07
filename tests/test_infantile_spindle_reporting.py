@@ -275,7 +275,7 @@ def test_cmn_egfr_kdd_surfaces_case_level_egfr_tki_review_with_site_caveat():
     assert (
         "EGFR TKI review (afatinib; osimertinib secondary) ·" in report
     )
-    assert "case-level evidence only" in report
+    assert "case-level/off-label TKI evidence" in report
     assert "target rna is context only" in report.lower()
 
 
@@ -362,3 +362,15 @@ def test_full_report_driver_spectrum_preserves_entity_and_frequency(monkeypatch)
     assert "| CMN | EGFR kinase-domain ITD | 43/80 (54%) |" in differential
     assert "prioritize confirmatory testing" in differential
     assert "do not establish this sample's diagnosis" in differential
+
+
+def test_matched_egfr_report_does_not_repeat_generic_testing_tasks():
+    report = build_summary(_analysis("SARC", "EGFR KDD"), _ranges(EGFR=300.0),
+                           cancer_code="SARC", disease_state="")
+    therapy_text = report.split("## Therapy rationale and blockers", 1)[1].split("## Information needed", 1)[0]
+    assert "case-level/off-label TKI evidence" in therapy_text
+    assert "larotrectinib" not in therapy_text
+    assert "confirm mutation / fusion / amplification status" not in therapy_text
+    assert "off-label follow-up; off-label/trial follow-up" not in therapy_text
+    assert "The supplied variant evidence matches" in therapy_text
+    assert "supplied clinical assay reports" in report.split("## Information needed", 1)[1]

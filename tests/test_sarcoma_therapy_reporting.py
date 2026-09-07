@@ -74,7 +74,7 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
     assert panel["agent"].eq("crizotinib").sum() == 1
     assert "tumor_agnostic_alteration" in set(panel["eligibility_basis"])
     assert "crizotinib ·" in report
-    assert "validated ALK IHC or a molecular method such as FISH" in report
+    assert "validated ALK IHC or an orthogonal molecular method such as FISH" in report
     assert "imatinib-resistant GIST" not in report
 
     expression_only = build_summary(

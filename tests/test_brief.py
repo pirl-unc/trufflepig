@@ -103,7 +103,7 @@ def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
     assert "100 patient bulk TPM" in bullet
     assert "60 estimated patient tumor TPM" in bullet
     assert "RNA model interval 30-100" in bullet
-    assert "check HLA" in bullet
+    assert "protein/peptide presentation and treatment eligibility are not established" in bullet
 
 
 def test_subtype_line_suppressed_when_panel_blocked_against_call():

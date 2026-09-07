@@ -499,7 +499,7 @@ def test_osteosarcoma_paths_carry_disease_matched_evidence_without_rna_selection
     doc = history_report_content(analysis, pd.DataFrame()).therapy
     assert len(doc["sources"]) == 2
     rego = next(row for row in doc["rows"] if row[1].startswith("regorafenib"))
-    for expected in ("3.6 vs 1.7", "recurrent/progressive", "64%", "not established"):
+    for expected in ("3.6 vs 1.7", "recurrent, progressive", "64%", "not established"):
         assert expected in rego[3]
 
 
@@ -543,7 +543,7 @@ def test_agent_only_salvage_rationale_survives_both_detailed_tables():
     ]
     for report in reports:
         rego = next(line for line in report.splitlines() if "| regorafenib |" in line)
-        assert "recurrent/progressive" in rego
+        assert "recurrent, progressive" in rego
         assert "SARC024" in rego and "3.6 vs 1.7" in rego
         assert "64%" in rego
         assert "agent-only / no direct gene target" not in rego

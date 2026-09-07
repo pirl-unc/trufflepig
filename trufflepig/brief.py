@@ -2291,7 +2291,7 @@ def _format_cta_outlier_bullet(row: dict) -> str:
     return (
         f"- **{sym}** — "
         + "; ".join(parts)
-        + " (CTA RNA signal; check HLA, peptide or protein evidence, and a matching therapy or trial)"
+        + " (exploratory CTA RNA signal; protein/peptide presentation and treatment eligibility are not established)"
     )
 
 

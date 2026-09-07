@@ -1,7 +1,7 @@
 {% if state == 'measured' %}
 {% if context_only %}
 Target RNA is context only (patient bulk {{ '%.1f' | format(observed_tpm) }} TPM,
-measured; it does not establish eligibility).
+measured).
 {% else %}
 Patient bulk target RNA is {{ '%.1f' | format(observed_tpm) }} TPM (measured).
 A tumor-expression interval is unavailable; RNA abundance alone does not confirm
@@ -21,3 +21,5 @@ eligibility is not inferred from expression.
 Target RNA was not measured or its observation state is unavailable;
 eligibility is not inferred from expression.
 {% endif %}
+
+{% if context_only %}For this pathway, target expression is not the eligibility criterion.{% endif %}

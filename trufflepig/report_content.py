@@ -88,22 +88,22 @@ def assess_therapy(
 
     rationale.extend(therapy_rationale_paragraphs(row, analysis=analysis))
     if expression_independent_indication(row):
-        from .reporting import expression_independent_interpretation
-
-        rationale.append(expression_independent_interpretation(row))
         rationale.append(expression_independent_rna_context(expr, observation_state=state))
     if state in {"measured", "below_detection"} and expr is not None and tumor_band_available(expr):
         source = tumor_attribution_context(expr)
         normal = normal_expression_context(expr)
-        rationale.append(
-            "; ".join(
-                part for part in (source["label"], source["band"], normal["label"]) if part
-            ).rstrip(". ")
-            + "."
+        notes = list(
+            dict.fromkeys(list(source.get("notes") or []) + list(normal.get("details") or []))
         )
-        notes = list(source.get("notes") or []) + list(normal.get("details") or [])
-        if notes:
-            rationale.append(notes[0].rstrip(". ") + ".")
+        rationale.append(
+            render_report_paragraph(
+                "therapy_rna_attribution",
+                target=gene,
+                source=source,
+                normal=normal,
+                notes=[note.rstrip(". ") for note in notes],
+            )
+        )
     elif not expression_independent_indication(row):
         rationale.append(
             render_report_paragraph(
@@ -131,6 +131,10 @@ def assess_therapy(
         and expr is not None
         and tumor_band_available(expr)
         else "—",
+        "curation": {
+            key: clean_therapy_value(row.get(key))
+            for key in ("eligibility_note", "line_of_therapy", "treatment_path_tier", "rationale")
+        },
         "source": clean_therapy_value(row.get("therapy_evidence_source")),
         "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
     }
@@ -281,7 +285,7 @@ def build_report_content(
             "clinical_setting",
             "unresolved",
             "A report candidate is not confirmation of individual treatment fitness.",
-            "Reconcile the current disease setting, treatment sequence, response, toxicity and organ function before choosing a treatment. For trial options, verify protocol criteria and current recruitment.",
+            "Reconcile the supplied clinical assay reports, current disease setting, treatment sequence, response, toxicity and organ function before choosing a treatment. For trial options, verify protocol criteria and current recruitment.",
             (
                 "current oncology assessment",
                 "treatment and toxicity history",
@@ -327,10 +331,8 @@ def build_report_content(
             paragraph(
                 render_report_paragraph(
                     "therapy_candidate",
-                    selected=True,
                     indication=assessment["indication"],
                     maturity=assessment["maturity"],
-                    request_labels=["see the consolidated Information needed section"],
                 )
             )
         )
@@ -441,6 +443,14 @@ def build_report_content(
     caveats = _caveats_from_purity_tier(
         report_view.purity.confidence, analysis.get("sample_context"), analysis
     )
+    from .report_language import report_plain_text
+
+    conclusion_text = " ".join(report_plain_text(block["text"]) for block in conclusion).casefold()
+    caveats = [
+        text
+        for text in caveats
+        if report_plain_text(text).split(": ", 1)[-1].rstrip(". ").casefold() not in conclusion_text
+    ]
     if caveats:
         detail.append({"kind": "heading", "text": "Interpretation limits"})
         detail.extend({"kind": "bullet", "text": text} for text in dict.fromkeys(caveats))

@@ -1511,10 +1511,10 @@ def supplied_variant_context_for_target_row(target_row, analysis) -> str:
             labels.append(f"{gene} {variant}".strip())
     suffix = "" if len(supported) <= 3 else f" (+{len(supported) - 3} more)"
     return (
-        "supplied variant evidence matches this therapy requirement: "
+        "The supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
-        + "; verify against the clinical assay report"
+
     )
 
 
@@ -2278,8 +2278,8 @@ THERAPY_PATH_TIERS = frozenset(
 # tier/phase values outside trufflepig's controlled vocabulary. trufflepig owns
 # the therapy-path clinical layer, so it quarantines these rather than hard-
 # failing on data it does not produce: the report renderer already degrades an
-# unknown tier to *inferred* ranking (see ``_explicit_therapy_path_info`` —
-# unknown tier -> ``None`` -> phase/agent-class inference), and the curation
+# unknown tier to *inferred* ranking (see ``_therapy_path_info`` —
+# unknown tiers fall back to phase/agent-class inference), and the curation
 # contract tests exempt exactly these rows. Keyed by ``(cancer_code,
 # target_gene)``. The quarantine is pinned in the tests: a NEW non-conformance
 # still fails, and a row that becomes conforming upstream also fails (forcing
@@ -2306,17 +2306,6 @@ _THERAPY_PATH_RANK = {
     "preclinical": 6,
     "off_label": 7,
     "patient_history": 8,
-}
-_THERAPY_PATH_DEFAULT_NOTE = {
-    "approved_standard": "confirm indication and line of therapy",
-    "approved_indication_matched": "confirm clinical eligibility",
-    "approved_later_line": "confirm prior therapies and indication-specific eligibility",
-    "late_clinical": "not default standard",
-    "investigational_biomarker_matched": "confirm biomarker and trial eligibility",
-    "trial_follow_up": "not default standard",
-    "preclinical": "not a clinical recommendation",
-    "off_label": "confirm rationale and alternatives",
-    "patient_history": "confirm current suitability and eligibility",
 }
 _THERAPY_EXPOSURE_RULES = (
     {
@@ -2439,151 +2428,32 @@ def _therapy_row_matches_exposure_rule(target_row, rule: dict) -> bool:
     return False
 
 
-def _therapy_path_context_for_tier(target_row, tier: str, note: str = "") -> str:
-    agent_class = _agent_class_text(target_row)
-    if tier == "approved_standard":
-        prefix = "guideline-standard approved pathway"
-    elif tier == "approved_indication_matched":
-        prefix = "approved biomarker/indication-matched pathway"
-    elif tier == "approved_later_line":
-        prefix = (
-            "approved radioligand pathway"
-            if "radioligand" in agent_class
-            else "approved later-line pathway"
-        )
-    elif tier == "late_clinical":
-        prefix = "late-clinical follow-up"
-    elif tier == "investigational_biomarker_matched":
-        prefix = "biomarker-matched investigational pathway"
-    elif tier == "trial_follow_up":
-        prefix = "clinical-trial follow-up"
-    elif tier == "preclinical":
-        prefix = "preclinical follow-up"
-    elif tier == "off_label":
-        prefix = "off-label follow-up"
-    elif tier == "patient_history":
-        prefix = "prior treatment path for this patient"
-    else:
-        return ""
-
-    suffix = _clean_text(note) or _THERAPY_PATH_DEFAULT_NOTE.get(tier, "")
-    suffix_lc = suffix.lower()
-    prefix_lc = prefix.lower()
-    if suffix_lc == prefix_lc:
-        suffix = ""
-    elif suffix_lc.startswith(prefix_lc + ";"):
-        suffix = suffix[len(prefix) :].lstrip(" ;")
-    elif suffix_lc.startswith(prefix_lc + ","):
-        suffix = suffix[len(prefix) :].lstrip(" ,")
-    elif suffix_lc.startswith(prefix_lc + " -"):
-        suffix = suffix[len(prefix) :].lstrip(" -")
-    if suffix:
-        return f"{prefix}; {suffix}"
-    return prefix
-
-
-def _explicit_therapy_path_info(target_row) -> dict | None:
-    tier = _clean_text(
-        target_row.get("treatment_path_tier") if hasattr(target_row, "get") else ""
-    ).lower()
-    if not tier:
-        return None
-    if tier not in THERAPY_PATH_TIERS:
-        return None
-    note = _clean_text(
-        target_row.get("eligibility_note") if hasattr(target_row, "get") else ""
-    )
-    return {
-        "tier": tier,
-        "rank": _THERAPY_PATH_RANK.get(tier, 99),
-        "context": _therapy_path_context_for_tier(target_row, tier, note),
-        "source": "curated",
-    }
-
-
-def _inferred_therapy_path_info(target_row) -> dict:
-    phase = _phase_text(target_row)
-    agent_class = _agent_class_text(target_row)
-    text = _therapy_row_text(target_row)
-    is_standard = _STANDARD_PATH_TEXT.search(text) is not None
-    is_later_line = _LATER_LINE_TEXT.search(text) is not None
-
-    if phase == "approved":
-        if "radioligand" in agent_class:
-            return {
-                "tier": "approved_later_line",
-                "rank": 2,
-                "context": (
-                    "approved radioligand pathway; confirm imaging/eligibility "
-                    "and prior-line requirements"
-                ),
-                "source": "inferred",
-            }
-        if is_standard:
-            return {
-                "tier": "approved_standard",
-                "rank": 0,
-                "context": (
-                    "guideline-standard approved pathway; confirm the indication "
-                    "and line of therapy"
-                ),
-                "source": "inferred",
-            }
-        if is_later_line:
-            return {
-                "tier": "approved_later_line",
-                "rank": 2,
-                "context": (
-                    "approved later-line pathway; confirm prior therapies and "
-                    "indication-specific eligibility"
-                ),
-                "source": "inferred",
-            }
-        return {
-            "tier": "approved_indication_matched",
-            "rank": 1,
-            "context": (
-                "approved biomarker/indication-matched pathway; confirm clinical "
-                "eligibility"
-            ),
-            "source": "inferred",
-        }
-
-    phase_context = {
-        "phase_3": (
-            "late_clinical",
-            3,
-            "late-clinical follow-up, not default standard",
-        ),
-        "phase_2": (
-            "trial_follow_up",
-            4,
-            "clinical-trial follow-up, not default standard",
-        ),
-        "phase_1": (
-            "trial_follow_up",
-            5,
-            "clinical-trial follow-up, not default standard",
-        ),
-        "preclinical": (
-            "preclinical",
-            6,
-            "preclinical follow-up, not a clinical recommendation",
-        ),
-        "off_label": (
-            "off_label",
-            7,
-            "off-label follow-up; confirm rationale and alternatives",
-        ),
-    }
-    tier, rank, context = phase_context.get(phase, ("unknown", 99, ""))
-    return {"tier": tier, "rank": rank, "context": context, "source": "inferred"}
-
-
 def _therapy_path_info(target_row) -> dict:
-    return _explicit_therapy_path_info(target_row) or _inferred_therapy_path_info(
-        target_row
-    )
+    """Resolve the curated treatment tier, with the established phase fallback."""
+    target_row = target_row if hasattr(target_row, "get") else {}
+    tier = _clean_text(target_row.get("treatment_path_tier")).lower()
+    if tier in THERAPY_PATH_TIERS:
+        return {"tier": tier, "rank": _THERAPY_PATH_RANK.get(tier, 99), "source": "curated"}
+    phase = _phase_text(target_row)
+    if phase == "approved":
+        text = _therapy_row_text(target_row)
+        if "radioligand" in _agent_class_text(target_row):
+            tier = "approved_later_line"
+        elif _STANDARD_PATH_TEXT.search(text):
+            tier = "approved_standard"
+        elif _LATER_LINE_TEXT.search(text):
+            tier = "approved_later_line"
+        else:
+            tier = "approved_indication_matched"
+        return {"tier": tier, "rank": _THERAPY_PATH_RANK[tier], "source": "inferred"}
+    tier, rank = {
+        "phase_3": ("late_clinical", 3),
+        "phase_2": ("trial_follow_up", 4),
+        "phase_1": ("trial_follow_up", 5),
+        "preclinical": ("preclinical", 6),
+        "off_label": ("off_label", 7),
+    }.get(phase, ("unknown", 99))
+    return {"tier": tier, "rank": rank, "source": "inferred"}
 
 
 def therapy_path_tier(target_row) -> str:
@@ -2770,7 +2640,12 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
     from .treatment_history import population_therapy_evidence_context, treatment_history_context
 
     history = treatment_history_context(target_row, analysis)
-    path = _therapy_path_info(target_row)["context"]
+    from .report_language import render_report_paragraph
+
+    path = render_report_paragraph(
+        "treatment_path", tier=therapy_path_tier(target_row),
+        setting=_clean_text(target_row.get("line_of_therapy")),
+    )
     if _phase_text(target_row) == "patient_history" and history:
         path = ""
     return [text.rstrip(". ") + "." for text in (
