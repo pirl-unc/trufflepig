@@ -1,134 +1,208 @@
-"""Small helpers for class-I HLA eligibility strings.
+"""HLA nomenclature and auditable class-I therapy requirements.
 
-The analyze report uses RNA expression, but TCR-T / pMHC-style therapies
-also require a germline HLA match. Keep this parser deliberately narrow:
-it normalizes common clinical shorthand and leaves full HLA interpretation
-to a clinical-grade typing tool.
+mhcgnomes owns parsing and canonical display. Protein-group membership comes
+from the unmodified IPD-IMGT/HLA WMDA reference bundled with its attribution.
+Normalization and matching do not establish clinical assay validity.
 """
 
 from __future__ import annotations
 
+import gzip
 import re
 from collections.abc import Iterable
+from dataclasses import asdict, dataclass
+from functools import lru_cache
+from pathlib import Path
+
+from mhcgnomes import Allele, parse
 
 
-_HLA_TOKEN_RE = re.compile(
-    r"""
-    (?:
-        HLA[-_\s]?
-    )?
-    (?P<locus>[ABC])
-    \*?
-    (?P<field1>\d{2})
-    (?:
-        :?
-        (?P<field2>\d{2})
-    )?
-    (?P<suffix>[A-Z])?
-    \+?
-    """,
-    re.IGNORECASE | re.VERBOSE,
-)
+# Locate candidate tokens in prose; mhcgnomes interprets each token.
 _HLA_TEXT_TOKEN_RE = re.compile(
-    r"""
-    \b
-    (?:
-        HLA[-_\s]?[ABC]\*?\d{2}(?::?\d{2})?[A-Z]?\+?
-        |
-        [ABC]\*\d{2}(?::?\d{2})?[A-Z]?\+?
-    )
-    \b
-    """,
-    re.IGNORECASE | re.VERBOSE,
+    r"(?<![\w:])(?:HLA[-_\s]?)?[ABC]\*?\d{2,8}"
+    r"(?::\d{2,3}){0,3}[NLSCAQPG]?\+?(?![\w:])",
+    re.IGNORECASE,
 )
+
+
+@lru_cache(maxsize=8192)
+def hla_allele(value: str) -> Allele | None:
+    """Parse one human class-I allele, retaining every field and annotation."""
+    text = str(value).strip().rstrip(",;.")
+    text = re.sub(r"(?:\s+positive|\s+pos|\+)$", "", text, flags=re.I)
+    result = parse(text, species="Homo sapiens", only_class1=True, raise_on_error=False)
+    if not isinstance(result, Allele) or result.gene_name not in {"A", "B", "C"}:
+        return None
+    return result
 
 
 def normalize_hla_type(value: object) -> str:
-    """Return normalized ``A*02:01`` / ``A*02`` text when parseable."""
-    text = str(value or "").strip().upper()
-    if not text:
-        return ""
-    text = text.replace("HLA_", "HLA-").replace(" ", "")
-    text = text.rstrip(",;.")
-    text = re.sub(r"(POSITIVE|POS|\+)$", "", text)
-    # FDA labels sometimes use protein-expression suffixes such as
-    # A*02:01P. For eligibility matching, the allele fields are enough.
-    text = re.sub(r"([ABC]\*?\d{2}:?\d{0,2})[A-Z]$", r"\1", text)
-    match = _HLA_TOKEN_RE.fullmatch(text)
-    if not match:
-        return ""
-    locus = match.group("locus").upper()
-    field1 = match.group("field1")
-    field2 = match.group("field2")
-    if field2:
-        return f"{locus}*{field1}:{field2}"
-    return f"{locus}*{field1}"
+    """Canonical display of one allele, retaining full resolution and suffix."""
+    allele = hla_allele(str(value or ""))
+    return allele.to_string(include_species=False) if allele else ""
 
 
 def parse_hla_types(value: object) -> list[str]:
-    """Parse comma/semicolon/whitespace-separated HLA class-I types."""
+    """Normalize a comma/semicolon/whitespace-separated list of supplied alleles.
+
+    Invalid or ambiguous values raise a diagnostic instead of disappearing.
+    Use a list or commas for co-present alleles; slash ambiguity is not a genotype.
+    """
     if value is None:
         return []
     if isinstance(value, str):
-        pieces = re.split(r"[,;\s]+", value)
+        value = re.sub(r"\bHLA\s+(?=[ABC]\*?\d)", "HLA-", value, flags=re.I)
+        pieces = [piece for piece in re.split(r"[,;\s]+", value.strip()) if piece]
     elif isinstance(value, Iterable):
-        pieces = []
-        for item in value:
-            pieces.extend(parse_hla_types(item))
-        return sorted(set(pieces))
+        return sorted({item for part in value for item in parse_hla_types(part)})
     else:
         pieces = [str(value)]
-    normalized = [normalize_hla_type(piece) for piece in pieces]
-    return sorted({item for item in normalized if item})
+    normalized = []
+    for piece in pieces:
+        canonical = normalize_hla_type(piece)
+        if not canonical:
+            raise ValueError(
+                f"Invalid or ambiguous HLA type {piece!r}; supply human class-I "
+                "alleles such as A*02:01, retaining typing resolution and suffixes. "
+                "Separate co-present alleles with commas."
+            )
+        normalized.append(canonical)
+    return sorted(set(normalized))
 
 
 def extract_hla_types_from_text(text: object) -> list[str]:
-    """Extract HLA-like restrictions embedded in free text."""
-    found: list[str] = []
-    for match in _HLA_TEXT_TOKEN_RE.finditer(str(text or "")):
-        normalized = normalize_hla_type(match.group(0))
-        if normalized:
-            found.append(normalized)
-    return sorted(set(found))
+    """Locate restrictions in prose and normalize each with mhcgnomes."""
+    return sorted({
+        canonical for match in _HLA_TEXT_TOKEN_RE.finditer(str(text or ""))
+        if (canonical := normalize_hla_type(match.group(0)))
+    })
 
 
-def hla_types_compatible(
-    supplied_hla_types: Iterable[str],
-    required_hla_types: Iterable[str],
-) -> tuple[bool, str | None, str | None]:
-    """Return whether any supplied type satisfies any required type.
-
-    Broad required restrictions such as ``A*02`` are satisfied by concrete
-    supplied alleles such as ``A*02:01``. The inverse is not true: a broad
-    supplied type does not establish eligibility for an exact required allele.
-    """
-    status, matched_supplied, matched_required = hla_types_compatibility_status(
-        supplied_hla_types,
-        required_hla_types,
+def is_hla_asterisk(text: str, position: int) -> bool:
+    """Whether a character belongs to a parsed allele rather than markup."""
+    return text[position:position + 1] == "*" and any(
+        match.start() <= position < match.end() and hla_allele(match.group(0)) is not None
+        for match in _HLA_TEXT_TOKEN_RE.finditer(text)
     )
-    return status == "matched", matched_supplied, matched_required
 
 
-def hla_types_compatibility_status(
-    supplied_hla_types: Iterable[str],
-    required_hla_types: Iterable[str],
-) -> tuple[str, str | None, str | None]:
-    """Return matched / insufficient_resolution / mismatched HLA status."""
-    supplied = parse_hla_types(supplied_hla_types)
-    required = parse_hla_types(required_hla_types)
-    insufficient: tuple[str, str] | None = None
-    for supplied_type in supplied:
-        for required_type in required:
-            if supplied_type == required_type:
-                return "matched", supplied_type, required_type
-            if ":" not in required_type and supplied_type.startswith(
-                required_type + ":"
-            ):
-                return "matched", supplied_type, required_type
-            if ":" not in supplied_type and required_type.startswith(
-                supplied_type + ":"
-            ):
-                insufficient = insufficient or (supplied_type, required_type)
-    if insufficient:
-        return "insufficient_resolution", insufficient[0], insufficient[1]
-    return "mismatched", None, None
+@lru_cache(maxsize=1)
+def protein_group_reference() -> tuple[dict, str]:
+    """Known class-I allele memberships and release of the IPD-IMGT/HLA source."""
+    entries = {}
+    version = ""
+    path = Path(__file__).parent / "data" / "hla_nom_p.txt.gz"
+    with gzip.open(path, "rt") as source:
+        for line in source:
+            if line.startswith("# version:"):
+                version = line.partition(":")[2].strip()
+            if not line.startswith(("A*;", "B*;", "C*;")):
+                continue
+            locus, members, group = line.strip().split(";")
+            canonical_group = normalize_hla_type(locus + group) if group else ""
+            for member in members.split("/"):
+                allele = hla_allele(locus + member)
+                if allele is None:
+                    raise ValueError(f"Unparseable allele in HLA reference: {locus}{member}")
+                # Prefixes retain all possible memberships at supplied resolution.
+                for depth in range(1, len(allele.allele_fields) + 1):
+                    key = (allele.gene_name, allele.allele_fields[:depth], allele.annotations)
+                    entries.setdefault(key, set()).add(canonical_group)
+    return entries, version
+
+
+def hla_requirement_match(supplied: Allele, required: Allele) -> str:
+    """Return matched, mismatched, or unresolved for one allele requirement."""
+    if supplied.gene != required.gene:
+        return "mismatched"
+    if supplied.mutations or required.mutations:
+        return "unresolved"
+    # Null, secreted, and cytoplasmic products cannot supply ordinary surface HLA.
+    if set(supplied.annotations) & {"N", "S", "C"}:
+        return "mismatched"
+    if supplied == required:
+        return "matched"
+    if "G" in supplied.annotations or "G" in required.annotations:
+        return "unresolved"
+    if required.annotations == ("P",):
+        if supplied.annotations == ("P",):
+            return "mismatched"
+        groups, _ = protein_group_reference()
+        observed = groups.get((supplied.gene_name, supplied.allele_fields, supplied.annotations))
+        if observed is None:
+            return "unresolved"
+        desired = required.to_string(include_species=False)
+        if desired not in observed:
+            return "mismatched"
+        return "matched" if observed == {desired} else "unresolved"
+    if supplied.annotations or required.annotations:
+        return "unresolved"
+    required_fields, supplied_fields = required.allele_fields, supplied.allele_fields
+    if supplied_fields[:len(required_fields)] == required_fields:
+        return "matched"
+    if required_fields[:len(supplied_fields)] == supplied_fields:
+        return "unresolved"
+    return "mismatched"
+
+
+@dataclass(frozen=True)
+class HlaEligibility:
+    """One decision shared by shortlist selection and report interpretation."""
+
+    status: str
+    required: tuple[str, ...]
+    supplied: tuple[str, ...]
+    excluded: tuple[str, ...] = ()
+    matched_supplied: str | None = None
+    matched_required: str | None = None
+    reason: str = ""
+    nomenclature_version: str = ""
+
+    def public_dict(self) -> dict:
+        result = asdict(self)
+        for key in ("required", "supplied", "excluded"):
+            result[key] = list(result[key])
+        return result
+
+
+def evaluate_hla_eligibility(supplied, required, *, excluded=()) -> HlaEligibility:
+    """Evaluate positive requirements and exclusions, with exclusions first."""
+    supplied = tuple(parse_hla_types(supplied))
+    required = tuple(parse_hla_types(required))
+    excluded = tuple(parse_hla_types(excluded))
+    version = protein_group_reference()[1] if any(
+        hla_allele(name).annotations == ("P",) for name in required + excluded
+    ) else ""
+
+    def decision(status, observed=None, expected=None, reason=""):
+        return HlaEligibility(status, required, supplied, excluded, observed, expected, reason, version)
+
+    if not required and not excluded:
+        return decision("not_hla_restricted")
+    if not supplied:
+        return decision("unknown", reason="HLA typing was not supplied")
+    unresolved_exclusion = None
+    for observed in supplied:
+        for blocked in excluded:
+            match = hla_requirement_match(hla_allele(observed), hla_allele(blocked))
+            if match == "matched":
+                return decision("excluded", observed, blocked, "Supplied typing matches an excluded HLA group")
+            if match == "unresolved":
+                unresolved_exclusion = unresolved_exclusion or (observed, blocked)
+    if unresolved_exclusion:
+        return decision("insufficient_resolution", *unresolved_exclusion,
+                        reason="Supplied typing cannot resolve the HLA exclusion")
+    if not required:
+        return decision("matched", reason="Supplied typing does not match an excluded group")
+    unresolved = None
+    for observed in supplied:
+        for expected in required:
+            match = hla_requirement_match(hla_allele(observed), hla_allele(expected))
+            if match == "matched":
+                return decision("matched", observed, expected)
+            if match == "unresolved":
+                unresolved = unresolved or (observed, expected)
+    if unresolved:
+        return decision("insufficient_resolution", *unresolved,
+                        reason="Typing resolution, group membership, or expression annotation remains unresolved")
+    return decision("mismatched", reason="Supplied typing does not satisfy the required HLA")

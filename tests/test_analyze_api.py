@@ -144,6 +144,7 @@ def test_build_analysis_parameters_records_hla_types():
 
     assert config.hla_type_list() == ["A*02:01", "A*24:02"]
     assert params["input"]["hla_types"] == ["A*02:01", "A*24:02"]
+    assert params["input"]["hla_types_raw"] == "HLA-A*02:01, A24:02"
 
 
 def test_build_analysis_parameters_records_fusion_paths():

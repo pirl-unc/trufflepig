@@ -6432,6 +6432,7 @@ def _analysis_constraints(
         parsed_hla = parse_hla_types(hla_types)
         if parsed_hla:
             constraints["hla_types"] = parsed_hla
+            constraints["hla_types_raw"] = hla_types
     if variants:
         from .variants import split_variant_inputs
 
