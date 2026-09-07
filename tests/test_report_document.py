@@ -22,6 +22,28 @@ from trufflepig.analyze import (
 )
 from trufflepig.report_view import build_report_view
 
+
+@pytest.mark.parametrize("text, expected", [
+    ("HLA A*02:01 / A*24:02", "HLA A*02:01 / A*24:02"),
+    ("**HLA A*02:01 / A*24:02**", "HLA A*02:01 / A*24:02"),
+    ("*HLA A*02:01 / A*24:02*", "HLA A*02:01 / A*24:02"),
+    ("`HLA A*02:01 / A*24:02`", "HLA A*02:01 / A*24:02"),
+    ("**A*02:01P**; A*02:05P", "A*02:01P; A*02:05P"),
+    ("[A*02:01:01:01N](https://example.org)", "A*02:01:01:01N"),
+    (r"\*literal\* and A\*02:01", "*literal* and A*02:01"),
+    ("**Important:** A*02:01 is *required*.", "Important: A*02:01 is required."),
+])
+def test_markdown_preserves_hla_literals_and_genuine_formatting(text, expected):
+    assert rd.clean_markdown(text) == expected
+
+
+def test_hla_identifiers_round_trip_into_structured_report(tmp_path):
+    _write_reports(tmp_path)
+    summary = tmp_path / f"{_PREFIX}-summary.md"
+    summary.write_text(summary.read_text() + "\n**Supplied HLA:** A*02:01 / A*24:02\n")
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
+    assert rd.record_value(doc["records"], "Supplied HLA") == "A*02:01 / A*24:02"
+
 _SUMMARY = """# Summary
 
 **Cancer call:** PRAD (Prostate adenocarcinoma).

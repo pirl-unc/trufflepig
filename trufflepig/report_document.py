@@ -36,9 +36,9 @@ The document carries, per sample:
 
 The ``records``/``therapy``/``targets`` are parsed once, server-side, from the
 pipeline's own just-emitted markdown, so the markdown stays byte-stable and the
-document is a faithful projection of it (parity by construction). This module is
-deliberately dependency-light (stdlib only) so the PDF script can import it
-without pulling in matplotlib/pandas.
+document is a faithful projection of it (parity by construction). This module
+uses an inline Markdown parser with HLA-aware literal tokens so biomedical
+identifiers survive formatting removal.
 """
 
 from __future__ import annotations
@@ -47,6 +47,10 @@ import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
+
+from markdown_it import MarkdownIt
+
+from .hla import is_hla_asterisk
 
 if TYPE_CHECKING:
     from .report_view import ReportView
@@ -115,11 +119,27 @@ FIGURE_REGISTRY = [
 # Pure markdown parsers (relocated from the PDF script so both the pipeline and
 # the PDF share one implementation).
 # --------------------------------------------------------------------------- #
+def _literal_hla_asterisk(state, silent: bool) -> bool:
+    if not is_hla_asterisk(state.src, state.pos):
+        return False
+    if not silent:
+        state.pending += "*"
+    state.pos += 1
+    return True
+
+
+_INLINE_MARKDOWN = MarkdownIt("commonmark", {"html": False})
+_INLINE_MARKDOWN.inline.ruler.before("emphasis", "hla_allele", _literal_hla_asterisk)
+
+
 def clean_markdown(line: str) -> str:
-    line = re.sub(r"`([^`]+)`", r"\1", line)
-    line = re.sub(r"\*\*([^*]+)\*\*", r"\1", line)
-    line = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", line)
-    line = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", line)
+    """Render inline Markdown as text, preserving literal biomedical identifiers."""
+    tokens = _INLINE_MARKDOWN.parseInline(line)[0].children or []
+    line = "".join(
+        " " if token.type in {"softbreak", "hardbreak"} else token.content
+        for token in tokens
+        if token.type in {"text", "code_inline", "image", "softbreak", "hardbreak"}
+    )
     line = line.replace("—", "-").replace("–", "-")
     return line.strip()
 

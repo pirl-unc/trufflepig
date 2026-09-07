@@ -606,7 +606,7 @@ def test_low_resolution_hla_does_not_match_exact_allele_requirement():
     assert eligibility["matched_required"] == "A*02:01"
     assert "HLA unresolved" in context
     assert "HLA match" not in context
-    assert hla_restricted_target_supported(row, analysis=low_resolution) is True
+    assert hla_restricted_target_supported(row, analysis=low_resolution) is False
 
 
 def test_low_resolution_hla_matches_broad_requirement_only():

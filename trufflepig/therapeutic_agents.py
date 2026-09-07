@@ -66,6 +66,10 @@ class TherapeuticAgent:
     key_trials: str
     key_pmids: str
     notes: str
+    hla_allowed: str = ""
+    hla_excluded: str = ""
+    hla_source: str = ""
+    hla_reviewed_at: str = ""
 
     @property
     def modality_label(self) -> str:
@@ -122,6 +126,10 @@ def _agents_by_gene() -> dict[str, tuple[TherapeuticAgent, ...]]:
             key_trials=_clean(row.get("key_trials")),
             key_pmids=_clean(row.get("key_pmids")),
             notes=_clean(row.get("notes")),
+            hla_allowed=_clean(row.get("hla_allowed")),
+            hla_excluded=_clean(row.get("hla_excluded")),
+            hla_source=_clean(row.get("hla_source")),
+            hla_reviewed_at=_clean(row.get("hla_reviewed_at")),
         )
         out.setdefault(gene, []).append(agent)
     # Most-advanced agents first: approved, then by phase, then name.
@@ -211,6 +219,28 @@ def agent_identity(name: object) -> str:
     """Comparable agent identity, retaining literal names outside the registry."""
     agents = agents_for_name(name)
     return _agent_name_key(agents[0].agent if agents else name)
+
+
+def hla_requirements_for_agent(name: object) -> dict:
+    """Source-versioned HLA policy for a registered agent or one of its names."""
+    from .hla import parse_hla_types
+
+    policies = {
+        (agent.hla_allowed, agent.hla_excluded, agent.hla_source, agent.hla_reviewed_at)
+        for agent in agents_for_name(name)
+        if agent.hla_allowed or agent.hla_excluded
+    }
+    if len(policies) > 1:
+        raise ValueError(f"Conflicting registered HLA policies for {name!r}")
+    if not policies:
+        return {}
+    allowed, excluded, source, reviewed_at = policies.pop()
+    return {
+        "required": parse_hla_types(allowed),
+        "excluded": parse_hla_types(excluded),
+        "source": source,
+        "reviewed_at": reviewed_at,
+    }
 
 
 def best_agent_for_target(symbol: str | None) -> TherapeuticAgent | None:

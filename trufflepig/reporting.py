@@ -15,10 +15,11 @@ import re
 
 from .cancer_ontology import cancer_codes_context_compatible
 from .hla import (
+    evaluate_hla_eligibility,
     extract_hla_types_from_text,
-    hla_types_compatibility_status,
     parse_hla_types,
 )
+from .therapeutic_agents import hla_requirements_for_agent
 
 
 def _truthy(value) -> bool:
@@ -2671,11 +2672,15 @@ def hla_restrictions_for_target_row(target_row) -> list[str]:
     """Return class-I HLA restrictions encoded in a therapy row."""
     if not hasattr(target_row, "get"):
         return []
+    policy = hla_requirements_for_agent(target_row.get("agent"))
+    if policy:
+        return policy["required"]
     explicit = []
     for key in ("hla_restriction", "HLA_Restriction", "hla", "HLA"):
         value = target_row.get(key)
         if _clean_text(value):
-            explicit.extend(parse_hla_types(value))
+            # Curated restrictions are alternatives, unlike a supplied genotype.
+            explicit.extend(parse_hla_types(str(value).replace("/", ",")))
     if explicit:
         return sorted(set(explicit))
 
@@ -2693,32 +2698,13 @@ def target_hla_eligibility(target_row, *, analysis=None) -> dict:
     if isinstance(analysis, dict):
         constraints = analysis.get("analysis_constraints") or {}
         supplied = parse_hla_types(constraints.get("hla_types"))
-    if not restrictions:
-        return {
-            "status": "not_hla_restricted",
-            "required": [],
-            "supplied": supplied,
-            "matched_supplied": None,
-            "matched_required": None,
-        }
-    if not supplied:
-        return {
-            "status": "unknown",
-            "required": restrictions,
-            "supplied": [],
-            "matched_supplied": None,
-            "matched_required": None,
-        }
-    status, matched_supplied, matched_required = hla_types_compatibility_status(
-        supplied, restrictions
-    )
-    return {
-        "status": status,
-        "required": restrictions,
-        "supplied": supplied,
-        "matched_supplied": matched_supplied,
-        "matched_required": matched_required,
-    }
+    policy = hla_requirements_for_agent(target_row.get("agent")) if hasattr(target_row, "get") else {}
+    result = evaluate_hla_eligibility(
+        supplied, restrictions, excluded=policy.get("excluded", ()),
+    ).public_dict()
+    result["source"] = policy.get("source", "")
+    result["reviewed_at"] = policy.get("reviewed_at", "")
+    return result
 
 
 def hla_eligibility_context(target_row, *, analysis=None) -> str:
@@ -2736,9 +2722,18 @@ def hla_eligibility_context(target_row, *, analysis=None) -> str:
         )
     if status == "insufficient_resolution":
         return (
-            f"HLA unresolved: supplied {eligibility['matched_supplied']} is lower "
-            f"resolution than required {eligibility['matched_required']}; provide "
-            "high-resolution HLA typing to assess eligibility"
+            f"HLA unresolved: {eligibility['reason']}; supplied "
+            f"{eligibility['matched_supplied']}, requirement "
+            f"{eligibility['matched_required']}; reconcile high-resolution HLA typing "
+            "and group or expression annotations before assessing eligibility"
+        )
+    if status == "excluded":
+        source = eligibility["source"]
+        citation = f" ([HLA eligibility source]({source}))" if source else ""
+        return (
+            f"HLA exclusion: supplied {eligibility['matched_supplied']} matches "
+            f"excluded {eligibility['matched_required']}; this treatment is excluded "
+            f"even when another supplied allele matches an allowed group{citation}"
         )
     if status == "mismatched":
         return f"HLA mismatch: supplied {supplied} does not match required {required}"
@@ -2752,7 +2747,9 @@ def hla_eligibility_context(target_row, *, analysis=None) -> str:
 
 def hla_restricted_target_supported(target_row, *, analysis=None) -> bool:
     """Whether an HLA-restricted therapy can be shortlisted."""
-    return target_hla_eligibility(target_row, analysis=analysis)["status"] != "mismatched"
+    return target_hla_eligibility(target_row, analysis=analysis)["status"] in {
+        "not_hla_restricted", "matched",
+    }
 
 
 def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:

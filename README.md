@@ -101,6 +101,11 @@ Common pass-through flags: `--hla-types`, `--fusions`, `--variants`,
 `--therapy-target-top-k`, `--therapy-target-tpm-threshold`, `--force`.
 All have the same meaning as in the old `pirlygenes analyze`.
 
+HLA inputs use mhcgnomes nomenclature and retain typing resolution and
+annotations. Registered therapy requirements include explicit exclusions;
+unresolved typing does not establish a match. See [HLA inputs and therapy
+requirements](docs/hla-inputs.md).
+
 `--variants` accepts a variant table or an explicit symbolic call such as
 `"EGFR KDD"`. Fusions supplied through `--fusions` enter the same normalized
 variant evidence stream. MSI-H/TMB-like sample states are not variants and are

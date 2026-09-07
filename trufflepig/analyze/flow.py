@@ -576,6 +576,7 @@ def build_analysis_parameters(
             "met_site": config.met_site,
             "decomposition_templates": template_overrides,
             "hla_types": config.hla_type_list(),
+            "hla_types_raw": config.hla_types,
             "fusions": config.fusion_path_list(),
             "variants": config.variant_input_list(),
             "variant_genome_build": config.variant_genome_build,
