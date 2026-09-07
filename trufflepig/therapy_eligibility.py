@@ -226,13 +226,14 @@ def evaluate_therapy_eligibility(
 
 
 def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
-    """Deduplicate unresolved requirements while retaining affected therapies.
+    """Combine shared evidence requests, including transitive key/question matches.
 
-    Requirements on an already excluded treatment remain in its detailed audit
-    record. They do not generate new testing tasks for an excluded pathway.
+    Already blocked treatments retain requirements in their audit assessment
+    without generating testing tasks. Merging retains every affected treatment,
+    distinct assay specification and reason.
     """
-    grouped = {}
-    by_question = {}
+    groups = []
+    list_fields = ("keys", "accepted_inputs", "affects", "reasons", "requirements")
     for assessment in assessments:
         requirements = assessment.get("eligibility", {}).get("requirements", [])
         if any(r["status"] == "blocked" for r in requirements):
@@ -240,43 +241,53 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
         for requirement in requirements:
             if requirement["status"] not in {"missing", "unresolved"}:
                 continue
-            original_key = requirement["key"]
-            semantic_question = (
+            key = requirement["key"]
+            signature = (
                 requirement["kind"],
                 requirement["question"].strip().casefold(),
                 tuple(requirement["accepted_inputs"]),
             )
-            key = by_question.get(semantic_question, original_key)
-            by_question[semantic_question] = key
-            if key not in grouped:
-                digest = hashlib.sha256(key.encode()).hexdigest()[:10]
-                grouped[key] = {
-                    "id": "request-" + digest,
+            matches = [
+                group
+                for group in groups
+                if key in group["keys"] or signature in group["question_signatures"]
+            ]
+            if matches:
+                request = matches[0]
+                for other in matches[1:]:
+                    for field in list_fields:
+                        request[field].extend(
+                            value for value in other[field] if value not in request[field]
+                        )
+                    request["question_signatures"].update(other["question_signatures"])
+                    if other["status"] == "unresolved":
+                        request["status"] = "unresolved"
+                    groups.remove(other)
+            else:
+                request = {
+                    "id": "request-" + hashlib.sha256(key.encode()).hexdigest()[:10],
                     "key": key,
-                    "keys": [original_key],
                     "kind": requirement["kind"],
                     "status": requirement["status"],
                     "question": requirement["question"],
-                    "accepted_inputs": list(requirement["accepted_inputs"]),
-                    "affects": [],
-                    "reasons": [],
-                    "requirements": [],
+                    "question_signatures": set(),
+                    **{field: [] for field in list_fields},
                 }
-            request = grouped[key]
-            if original_key not in request["keys"]:
-                request["keys"].append(original_key)
-            for accepted in requirement["accepted_inputs"]:
-                if accepted not in request["accepted_inputs"]:
-                    request["accepted_inputs"].append(accepted)
-            agent = assessment["agent"]
-            if agent not in request["affects"]:
-                request["affects"].append(agent)
-            for output_field, value in [
-                ("reasons", requirement["description"]),
-                ("requirements", requirement["question"]),
-            ]:
-                if value and value not in request[output_field]:
-                    request[output_field].append(value)
+                groups.append(request)
+            request["question_signatures"].add(signature)
+            values = {
+                "keys": [key],
+                "accepted_inputs": requirement["accepted_inputs"],
+                "affects": [assessment["agent"]],
+                "reasons": [requirement["description"]],
+                "requirements": [requirement["question"]],
+            }
+            for field in list_fields:
+                request[field].extend(
+                    value for value in values[field] if value and value not in request[field]
+                )
             if requirement["status"] == "unresolved":
                 request["status"] = "unresolved"
-    return list(grouped.values())
+    for request in groups:
+        del request["question_signatures"]
+    return groups

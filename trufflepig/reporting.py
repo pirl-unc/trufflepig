@@ -1255,11 +1255,10 @@ def expression_independent_rna_context(expression_row, *, observation_state="unk
     """Explain RNA values when eligibility does not depend on target expression."""
     from .report_language import render_report_paragraph
 
-    observed = _safe_float(expression_row.get("observed_tpm"), 0.0) if expression_row is not None else None
-    return render_report_paragraph(
-        "rna_observation", state="measured" if expression_row is not None else observation_state,
-        observed_tpm=observed, context_only=True,
-    )
+    observation = target_rna_observation(expression_row)
+    if expression_row is None:
+        observation["state"] = observation_state
+    return render_report_paragraph("rna_observation", **observation, context_only=True)
 
 
 _TARGET_SYMBOL_ALIASES = {
@@ -1297,6 +1296,28 @@ def target_observation_state(sym, ranges_df) -> str:
         return "unknown"
     input_syms = {canonical_target_symbol(value) for value in input_syms}
     return "below_detection" if sym in input_syms else "not_in_input"
+
+
+def target_rna_observation(expression_row=None, *, symbol="", ranges_df=None) -> dict:
+    """Return RNA observation state and a finite nonnegative bulk TPM, if available.
+
+    An absent row uses input coverage. Invalid supplied values are unresolved,
+    never converted to measured zero or accepted as RNA support.
+    """
+    import math
+
+    if expression_row is None:
+        return {"state": target_observation_state(symbol, ranges_df), "observed_tpm": None}
+    raw = expression_row.get("observed_tpm")
+    if raw is None:
+        return {"state": "unknown", "observed_tpm": None}
+    try:
+        observed = float(raw)
+    except (TypeError, ValueError):
+        return {"state": "invalid", "observed_tpm": None}
+    if not math.isfinite(observed) or observed < 0:
+        return {"state": "invalid", "observed_tpm": None}
+    return {"state": "below_detection" if observed < 0.01 else "measured", "observed_tpm": observed}
 
 
 def format_missing_observation_cell(state: str) -> str:

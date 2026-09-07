@@ -584,6 +584,7 @@ def recommend_therapies(
     sym_to_row = ranges_by_symbol(ranges_df)
 
     from .therapy_eligibility import evaluate_therapy_eligibility
+    from .reporting import target_rna_observation
 
     phase_priority = {
         "approved": 0,
@@ -620,7 +621,10 @@ def recommend_therapies(
         if expr is None and not (expr_independent or history_supported):
             continue
         expression = expr if expr is not None else {}
-        observed = float(expression.get("observed_tpm") or 0.0)
+        observation = target_rna_observation(expr, symbol=sym, ranges_df=ranges_df)
+        if observation["state"] in {"invalid", "unknown"} and not (expr_independent or history_supported):
+            continue
+        observed = observation["observed_tpm"] or 0.0
         if observed < 1.0 and not expr_independent and not history_supported:
             # Low RNA abundance does not meet this discovery threshold.
             # The full landscape in targets.md has the absence noted.
@@ -2328,40 +2332,29 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
     )
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)  # fallback for ID-less frames
-    input_syms = getattr(ranges_df, "attrs", {}).get(
-        "sample_input_symbols"
-    ) or set()
-    n_total = 0
-    n_in_input_low = 0
-    n_in_input_present = 0
-    n_not_in_input = 0
-    n_agent_only = 0
-    for t in target_records:
-        sym = canonical_target_symbol(t.get("symbol"))
-        if not sym:
-            if expression_independent_indication(t):
-                n_total += 1
-                n_agent_only += 1
+    from collections import Counter
+    from .reporting import target_rna_observation
+
+    counts = Counter()
+    for target in target_records:
+        symbol = canonical_target_symbol(target.get("symbol"))
+        if not symbol:
+            if expression_independent_indication(target):
+                counts["agent_only"] += 1
             continue
-        n_total += 1
-        gene_id = sym_to_id.get(sym.strip())
-        expr = id_to_row.get(gene_id) if gene_id else None
-        if expr is None:
-            expr = sym_to_row.get(sym)
-        if expr is not None:
-            observed = float(expr.get("observed_tpm") or 0.0)
-            if observed >= 1.0:
-                n_in_input_present += 1
-            else:
-                n_in_input_low += 1
-        elif input_syms and sym in input_syms:
-            n_in_input_low += 1
-        elif input_syms:
-            n_not_in_input += 1
-        else:
-            # Legacy ranges_df with no input-symbol attrs — can't
-            # disambiguate (a) vs (b).
-            n_in_input_low += 1
+        expression = id_to_row.get(sym_to_id.get(symbol))
+        if expression is None:
+            expression = sym_to_row.get(symbol)
+        observation = target_rna_observation(expression, symbol=symbol, ranges_df=ranges_df)
+        state = observation["state"]
+        if state == "measured" and observation["observed_tpm"] < 1.0:
+            state = "below_detection"  # shortlist discovery floor is 1 TPM
+        counts[state] += 1
+    n_total = sum(counts.values())
+    n_in_input_present = counts["measured"]
+    n_in_input_low = counts["below_detection"]
+    n_not_in_input = counts["not_in_input"]
+    n_agent_only = counts["agent_only"]
     if n_total == 0:
         return (
             "*No curated agents available for this cancer type — see the "
@@ -2389,6 +2382,10 @@ def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
             f"{n_agent_only} agent-only / histology-indication rows without "
             "a direct RNA target"
         )
+    if counts["invalid"]:
+        parts.append(f"{counts['invalid']} with invalid or unresolved RNA values")
+    if counts["unknown"]:
+        parts.append(f"{counts['unknown']} with unavailable RNA observation state")
     body = "; ".join(parts) if parts else "no qualifying rows"
     return (
         f"*Therapy shortlist is empty: of {n_total} curated agents, "

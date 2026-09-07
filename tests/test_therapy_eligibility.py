@@ -236,3 +236,85 @@ def test_spindle_diagnostic_workup_occurs_only_in_the_information_section():
     assert summary.count(workup) == 1
     assert summary.index(workup) > summary.index("## Information needed")
     assert any(r["key"] == "spindle_diagnostic_context" for r in content.evidence_requests)
+
+
+@pytest.mark.parametrize(
+    "observed, expected",
+    [
+        (0.0, "below_detection"),
+        (12.0, "measured"),
+        (float("nan"), "invalid"),
+        (float("inf"), "invalid"),
+        (-1, "invalid"),
+        ("bad", "invalid"),
+        (None, "unknown"),
+    ],
+)
+def test_shared_rna_observation_preserves_zero_missing_and_invalid(observed, expected):
+    from trufflepig.reporting import target_rna_observation, expression_independent_rna_context
+
+    expression = {"observed_tpm": observed}
+    result = target_rna_observation(expression)
+    assert result["state"] == expected
+    assessment = assess_therapy({"symbol": "FAP", "agent": "Example"}, expression)
+    assert assessment["observation"] == result
+    narrative = expression_independent_rna_context(expression)
+    if expected == "invalid":
+        assert "invalid or unresolved" in narrative
+        ranges = pd.DataFrame(
+            [
+                {
+                    "symbol": "FAP",
+                    "observed_tpm": observed,
+                    "attr_tumor_tpm": 20,
+                    "attr_tumor_fraction": 0.9,
+                }
+            ]
+        )
+        assert (
+            recommend_therapies(
+                pd.DataFrame([{"symbol": "FAP", "agent": "Example", "phase": "phase_2"}]), ranges
+            )
+            == []
+        )
+    if expected == "below_detection":
+        assert "below detection" in narrative and "not measured" not in narrative
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    [
+        [
+            ("target:A", "Shared assay"),
+            ("target:B", "Shared assay"),
+            ("target:B", "Additional assay detail"),
+        ],
+        [("target:A", "First assay"), ("target:B", "Second assay"), ("target:A", "Second assay")],
+    ],
+)
+def test_request_deduplication_merges_transitive_keys_and_questions(pairs):
+    from trufflepig.therapy_eligibility import EvidenceRequirement
+
+    assessments = [
+        {
+            "agent": f"Therapy {index}",
+            "eligibility": {
+                "requirements": [
+                    EvidenceRequirement(
+                        key,
+                        "clinical_target_assay",
+                        "missing",
+                        "Assay unavailable",
+                        question,
+                        ("clinical report",),
+                    ).public_dict()
+                ]
+            },
+        }
+        for index, (key, question) in enumerate(pairs)
+    ]
+    requests = collect_evidence_requests(assessments)
+    assert len(requests) == 1
+    assert set(requests[0]["keys"]) == {"target:A", "target:B"}
+    assert len(requests[0]["affects"]) == 3
+    assert set(requests[0]["requirements"]) == {question for _, question in pairs}

@@ -19,6 +19,7 @@ The main APIs are:
 |---|---|
 | `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
 | `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `reporting.target_rna_observation` | Preserve measured, below-detection, missing and invalid RNA states |
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
 | `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
@@ -38,7 +39,10 @@ does not confirm that assay or override conflicting molecular evidence. A known 
 a request for new typing. An explicitly contraindicated component blocks its
 containing regimen. Requests on an already excluded treatment remain in the audit
 assessment without generating a new testing task. Sharing a request does not
-merge different treatments or erase different assay requirements.
+merge different treatments or erase different assay requirements. Overlapping
+target keys and shared assay questions are merged transitively, so a later
+requirement cannot recreate a duplicate request. Clinical-setting questions
+use this same collector.
 
 RNA abundance does not establish a mutation. Exact protein requirements on the
 covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,

@@ -81,9 +81,10 @@ FIGURE_REGISTRY = [
     ),
     (
         "subtype-signature.png",
-        "Final-call subtype evidence",
-        "Subtype-program expression refines the finalized cancer call when the sample "
-        "contains enough evidence for a specific subtype analysis.",
+        "Subtype RNA context",
+        "Cohort-relative expression of the displayed subtype-panel genes provides "
+        "biological context. It does not establish a clinical subtype, treatment "
+        "history or drug eligibility, and does not change the finalized report call.",
     ),
 ]
 

@@ -6,7 +6,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 import hashlib
 import json
-import math
 
 from .report_language import render_report_paragraph, render_report_template
 from .reporting import (
@@ -15,7 +14,7 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_rna_context,
     normal_expression_context,
-    target_observation_state,
+    target_rna_observation,
     therapy_state_caution,
     tumor_attribution_context,
     tumor_band_available,
@@ -77,12 +76,8 @@ def assess_therapy(
     agent = _therapy_agent_label(row)
     identity = resolve_therapy_identity(row.get("agent"))
     gene = canonical_target_symbol(row.get("symbol"))
-    observed = None
-    if expr is not None:
-        value = expr.get("observed_tpm")
-        if value is not None and math.isfinite(float(value)):
-            observed = float(value)
-    state = "measured" if observed is not None else target_observation_state(gene, ranges_df)
+    observation = target_rna_observation(expr, symbol=gene, ranges_df=ranges_df)
+    state, observed = observation["state"], observation["observed_tpm"]
     eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
     rationale = []
     if eligibility.supplied_variant_supported:
@@ -97,7 +92,7 @@ def assess_therapy(
 
         rationale.append(expression_independent_interpretation(row))
         rationale.append(expression_independent_rna_context(expr, observation_state=state))
-    if expr is not None and tumor_band_available(expr):
+    if state in {"measured", "below_detection"} and expr is not None and tumor_band_available(expr):
         source = tumor_attribution_context(expr)
         normal = normal_expression_context(expr)
         rationale.append(
@@ -130,9 +125,11 @@ def assess_therapy(
         "maturity": clinical_maturity_summary(row, target_panel=target_panel),
         "eligibility": eligibility.public_dict(),
         "rationale": rationale,
-        "observation": {"state": state, "observed_tpm": observed},
+        "observation": observation,
         "tumor_band": tumor_band_cell(expr)
-        if expr is not None and tumor_band_available(expr)
+        if state in {"measured", "below_detection"}
+        and expr is not None
+        and tumor_band_available(expr)
         else "—",
         "source": clean_therapy_value(row.get("therapy_evidence_source")),
         "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
@@ -226,6 +223,13 @@ def build_report_content(
         )
         assessments.append(assessment)
 
+    selected_assessments = []
+    for recommendation in recommended:
+        key = therapy_assessment_id(recommendation.therapy)
+        match = next((a for a in assessments if a["id"] == key and a["selected"]), None)
+        if match is not None and match not in selected_assessments:
+            selected_assessments.append(match)
+
     # Report-level questions join therapy requirements before deduplication.
     from .brief import mismatch_repair_summary_context
 
@@ -270,41 +274,37 @@ def build_report_content(
                 ("MSI-PCR result", "MMR IHC report", "validated clinical sequencing result"),
             )
         )
+    clinical_requirements = []
+    if selected_assessments:
+        clinical_requirement = EvidenceRequirement(
+            "clinical_setting",
+            "clinical_setting",
+            "unresolved",
+            "A report candidate is not confirmation of individual treatment fitness.",
+            "Reconcile the current disease setting, treatment sequence, response, toxicity and organ function before choosing a treatment. For trial options, verify protocol criteria and current recruitment.",
+            (
+                "current oncology assessment",
+                "treatment and toxicity history",
+                "relevant laboratory and imaging results",
+            ),
+        )
+        clinical_requirements = [
+            {
+                "agent": assessment["agent"],
+                "eligibility": {"requirements": [clinical_requirement.public_dict()]},
+            }
+            for assessment in selected_assessments
+        ]
     requests = collect_evidence_requests(
         [
             *assessments,
+            *clinical_requirements,
             {
                 "agent": "report conclusion",
                 "eligibility": {"requirements": [r.public_dict() for r in report_requirements]},
             },
         ]
     )
-    selected_assessments = []
-    for recommendation in recommended:
-        key = therapy_assessment_id(recommendation.therapy)
-        match = next((a for a in assessments if a["id"] == key and a["selected"]), None)
-        if match is not None and match not in selected_assessments:
-            selected_assessments.append(match)
-    if selected_assessments:
-        requests.append(
-            {
-                "id": "request-clinical-setting",
-                "key": "clinical_setting",
-                "kind": "clinical_setting",
-                "status": "unresolved",
-                "question": "Reconcile the current disease setting, treatment sequence, response, toxicity and organ function before choosing a treatment. For trial options, verify protocol criteria and current recruitment.",
-                "accepted_inputs": [
-                    "current oncology assessment",
-                    "treatment and toxicity history",
-                    "relevant laboratory and imaging results",
-                ],
-                "affects": [a["agent"] for a in selected_assessments],
-                "reasons": [
-                    "A report candidate is not confirmation of individual treatment fitness."
-                ],
-                "requirements": [],
-            }
-        )
 
     therapies = [
         paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))

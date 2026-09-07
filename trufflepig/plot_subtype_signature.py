@@ -165,14 +165,10 @@ def plot_subtype_signature(
         sample_tpm, ref, cancer_code, cancer_sigs[axis_b_name].get("down", [])
     )
 
-    # Combine up + down for each axis, tag direction
-    def _tagged(rows, tag):
-        for r in rows:
-            r["panel_role"] = tag
-        return rows
-
-    axis_a_all = _tagged(axis_a_up, "up") + _tagged(axis_a_down, "down")
-    axis_b_all = _tagged(axis_b_up, "up") + _tagged(axis_b_down, "down")
+    # Display raw expression of every panel gene; the caption describes RNA,
+    # not signed pathway activity or a clinical diagnosis.
+    axis_a_all = axis_a_up + axis_a_down
+    axis_b_all = axis_b_up + axis_b_down
 
     if not axis_a_all and not axis_b_all:
         return None

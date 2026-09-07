@@ -11,6 +11,9 @@ clinical target positivity.
 Target RNA is below detection in this sample (bulk TPM approximately zero);
 this RNA observation does not establish absence of target protein or clinical
 ineligibility.
+{% elif state == 'invalid' %}
+The supplied target RNA value is invalid or unresolved; it is not a measured
+zero and cannot support an expression-based recommendation.
 {% elif state == 'not_in_input' %}
 The target gene is not present in the input file. This is a coverage gap;
 eligibility is not inferred from expression.
