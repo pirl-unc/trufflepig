@@ -423,6 +423,7 @@ def _current_therapy_row_overrides(target_row) -> dict:
         }
     if cancer_code == "BLCA" and agent == "avelumab":
         return {
+            "line_of_therapy": "maintenance_after_first_line_platinum",
             "eligibility_note": (
                 "for this maintenance pathway, confirm locally advanced/metastatic "
                 "urothelial disease without progression after first-line platinum "
@@ -1251,15 +1252,14 @@ def expression_independent_interpretation(target_row) -> str:
     )
 
 
-def expression_independent_rna_context(expression_row) -> str:
+def expression_independent_rna_context(expression_row, *, observation_state="unknown") -> str:
     """Explain RNA values when eligibility does not depend on target expression."""
+    from .report_language import render_report_paragraph
+
+    observation = target_rna_observation(expression_row)
     if expression_row is None:
-        return "target RNA not measured; eligibility is not inferred from expression"
-    observed = _safe_float(expression_row.get("observed_tpm"), 0.0)
-    return (
-        f"target RNA is context only (patient bulk {observed:.1f} TPM, measured; "
-        "it does not establish eligibility)"
-    )
+        observation["state"] = observation_state
+    return render_report_paragraph("rna_observation", **observation, context_only=True)
 
 
 _TARGET_SYMBOL_ALIASES = {
@@ -1281,7 +1281,8 @@ def target_observation_state(sym, ranges_df) -> str:
     Returns one of:
       ``"below_detection"`` — symbol is in the input file but produced no
           row in ``ranges_df`` (TPM below the ``< 0.01`` filter in
-          ``estimate_tumor_expression_ranges``). Clinically: a real negative.
+          ``estimate_tumor_expression_ranges``). This is an RNA observation,
+          not a validated clinical negative or evidence of absent protein.
       ``"not_in_input"``   — symbol is *not* in the input file at all.
           Clinically: a coverage gap, not biology.
       ``"unknown"``        — input-symbol set was not attached to
@@ -1292,9 +1293,32 @@ def target_observation_state(sym, ranges_df) -> str:
     if not isinstance(sym, str) or sym in ("", "—"):
         return "unknown"
     input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")
-    if not input_syms:
+    if input_syms is None:
         return "unknown"
+    input_syms = {canonical_target_symbol(value) for value in input_syms}
     return "below_detection" if sym in input_syms else "not_in_input"
+
+
+def target_rna_observation(expression_row=None, *, symbol="", ranges_df=None) -> dict:
+    """Return RNA observation state and a finite nonnegative bulk TPM, if available.
+
+    An absent row uses input coverage. Invalid supplied values are unresolved,
+    never converted to measured zero or accepted as RNA support.
+    """
+    import math
+
+    if expression_row is None:
+        return {"state": target_observation_state(symbol, ranges_df), "observed_tpm": None}
+    raw = expression_row.get("observed_tpm")
+    if raw is None:
+        return {"state": "unknown", "observed_tpm": None}
+    try:
+        observed = float(raw)
+    except (TypeError, ValueError):
+        return {"state": "invalid", "observed_tpm": None}
+    if not math.isfinite(observed) or observed < 0:
+        return {"state": "invalid", "observed_tpm": None}
+    return {"state": "below_detection" if observed < 0.01 else "measured", "observed_tpm": observed}
 
 
 def format_missing_observation_cell(state: str) -> str:
@@ -1330,21 +1354,63 @@ def supplied_variants_for_gene(analysis, gene: str) -> list[dict]:
     return variant_evidence_for_gene(analysis, wanted)
 
 
+def required_protein_changes_for_therapy(target_row) -> tuple[str, ...]:
+    """Exact protein requirements for a curated drug, target and disease scope.
+
+    Structured row requirements take precedence. These drug-specific criteria
+    are independent of RNA expression and of prose mentioning other alleles.
+    """
+    from .variants import normalize_protein_substitution
+    from .therapeutic_agents import resolve_therapy_identity
+
+    explicit = target_row.get("required_protein_changes")
+    if isinstance(explicit, (tuple, list)):
+        raw = explicit
+    else:
+        raw = _clean_text(explicit).split(";")
+    if any(_clean_text(value) for value in raw):
+        parsed = tuple(normalize_protein_substitution(value) for value in raw)
+        if not all(parsed):
+            raise ValueError(f"Invalid required protein substitutions: {explicit!r}")
+        return parsed
+    gene = canonical_target_symbol(target_row.get("symbol"))
+    identity = resolve_therapy_identity(target_row.get("agent"))
+    components = set(identity.components)
+    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-sotorasib-panitumumab-kras-g12c-mutated-colorectal-cancer
+    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-grants-accelerated-approval-adagrasib-cetuximab-kras-g12c-mutated-colorectal-cancer
+    if gene == "KRAS":
+        if components & {"sotorasib", "adagrasib"}:
+            return ("G12C",)
+    # FDA BRAFTOVI label: https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/210496s021lbl.pdf
+    # TAFINLAR label: https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fee1e6b1-e1a5-4254-9f2e-a70e0f8dbdea
+    if gene == "BRAF":
+        code = _clean_text(target_row.get("cancer_code")).upper()
+        if components & {"dabrafenib", "encorafenib"}:
+            return ("V600E", "V600K") if code == "SKCM" else ("V600E",)
+        if "vemurafenib" in components:
+            return ("V600E",)
+    return ()
+
+
 def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     """Return supplied variants compatible with a therapy row.
 
     This is intentionally conservative: a row that requires EGFR KDD is not
     supported by generic EGFR expression or a vague EGFR variant. For broader
-    mutation/fusion/amplification rows, a same-gene supplied variant of a
-    compatible coarse class is enough to mark the eligibility evidence as
-    present, still with clinical verification language in the reports.
+    mutation/fusion/amplification rows, same-gene evidence must have the required alteration class. Allele-specific
+    treatments additionally require the exact protein substitution.
     """
-    from .variants import classify_variant_type
+    from .variants import classify_variant_type, normalize_protein_substitution
 
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
     records = supplied_variants_for_gene(analysis, sym)
     if not records:
         return []
+    required_alleles = required_protein_changes_for_therapy(target_row)
+    if required_alleles:
+        return [record for record in records
+                if _clean_text(record.get("variant_type")).lower() == "mutation"
+                and normalize_protein_substitution(record.get("variant"), gene=sym) in required_alleles]
     text = " ".join(
         _clean_text(target_row.get(key))
         for key in ("indication", "rationale", "eligibility_note")
@@ -1366,16 +1432,7 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
     elif indication_biomarker(target_row) == "mutation":
-        required_types.update(
-            {
-                "mutation",
-                "fusion",
-                "amplification",
-                "loss",
-                "kdd",
-                "internal_tandem_duplication",
-            }
-        )
+        required_types.add("mutation")
     if not required_types:
         return []
     supported: list[dict] = []
@@ -1405,6 +1462,8 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     """
     if not hasattr(target_row, "get"):
         return False
+    if required_protein_changes_for_therapy(target_row):
+        return True
     if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
         # Pirlygenes therapy tables retain this legacy column.
         target_row.get("requires_supplied_alteration")
@@ -1422,33 +1481,13 @@ def direct_eligibility_input_supplied(analysis, biomarker: str) -> bool:
         return False
     constraints = analysis.get("analysis_constraints") or {}
     if biomarker == "mutation":
-        return any(
-            bool(analysis.get(key))
-            for key in (
-                "fusion_inputs_supplied",
-                "variant_inputs_supplied",
-                "alteration_inputs_supplied",
-                "mutation_inputs_supplied",
-                "cnv_inputs_supplied",
-            )
-        ) or any(
-            bool(constraints.get(key))
-            for key in (
-                "fusions",
-                "fusion_file",
-                "variants",
-                "mutations",
-                "cnvs",
-                "alterations",
-            )
-        )
-    if biomarker == "msi_high":
-        return any(
-            bool(constraints.get(key))
-            for key in ("msi_status", "mmr_status", "msi", "mmr")
-        )
-    if biomarker == "tmb_high":
-        return any(bool(constraints.get(key)) for key in ("tmb", "tmb_status"))
+        # A file can contain an unrelated or negative result. Only the row's
+        # target-specific variant matcher can satisfy a molecular requirement.
+        return False
+    if biomarker in {"msi_high", "tmb_high"}:
+        # These have no validated structured assay input in the current API.
+        # Unvalidated dictionary values and RNA surrogates cannot open a gate.
+        return False
     if biomarker == "histology_only":
         return bool(constraints.get("cancer_type")) or str(
             analysis.get("cancer_type_source") or ""
@@ -1473,10 +1512,10 @@ def supplied_variant_context_for_target_row(target_row, analysis) -> str:
             labels.append(f"{gene} {variant}".strip())
     suffix = "" if len(supported) <= 3 else f" (+{len(supported) - 3} more)"
     return (
-        "supplied variant evidence matches this therapy requirement: "
+        "The supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
-        + "; verify against the clinical assay report"
+
     )
 
 
@@ -2240,8 +2279,8 @@ THERAPY_PATH_TIERS = frozenset(
 # tier/phase values outside trufflepig's controlled vocabulary. trufflepig owns
 # the therapy-path clinical layer, so it quarantines these rather than hard-
 # failing on data it does not produce: the report renderer already degrades an
-# unknown tier to *inferred* ranking (see ``_explicit_therapy_path_info`` —
-# unknown tier -> ``None`` -> phase/agent-class inference), and the curation
+# unknown tier to *inferred* ranking (see ``_therapy_path_info`` —
+# unknown tiers fall back to phase/agent-class inference), and the curation
 # contract tests exempt exactly these rows. Keyed by ``(cancer_code,
 # target_gene)``. The quarantine is pinned in the tests: a NEW non-conformance
 # still fails, and a row that becomes conforming upstream also fails (forcing
@@ -2268,17 +2307,6 @@ _THERAPY_PATH_RANK = {
     "preclinical": 6,
     "off_label": 7,
     "patient_history": 8,
-}
-_THERAPY_PATH_DEFAULT_NOTE = {
-    "approved_standard": "confirm indication and line of therapy",
-    "approved_indication_matched": "confirm clinical eligibility",
-    "approved_later_line": "confirm prior therapies and indication-specific eligibility",
-    "late_clinical": "not default standard",
-    "investigational_biomarker_matched": "confirm biomarker and trial eligibility",
-    "trial_follow_up": "not default standard",
-    "preclinical": "not a clinical recommendation",
-    "off_label": "confirm rationale and alternatives",
-    "patient_history": "confirm current suitability and eligibility",
 }
 _THERAPY_EXPOSURE_RULES = (
     {
@@ -2401,151 +2429,32 @@ def _therapy_row_matches_exposure_rule(target_row, rule: dict) -> bool:
     return False
 
 
-def _therapy_path_context_for_tier(target_row, tier: str, note: str = "") -> str:
-    agent_class = _agent_class_text(target_row)
-    if tier == "approved_standard":
-        prefix = "guideline-standard approved pathway"
-    elif tier == "approved_indication_matched":
-        prefix = "approved biomarker/indication-matched pathway"
-    elif tier == "approved_later_line":
-        prefix = (
-            "approved radioligand pathway"
-            if "radioligand" in agent_class
-            else "approved later-line pathway"
-        )
-    elif tier == "late_clinical":
-        prefix = "late-clinical follow-up"
-    elif tier == "investigational_biomarker_matched":
-        prefix = "biomarker-matched investigational pathway"
-    elif tier == "trial_follow_up":
-        prefix = "clinical-trial follow-up"
-    elif tier == "preclinical":
-        prefix = "preclinical follow-up"
-    elif tier == "off_label":
-        prefix = "off-label follow-up"
-    elif tier == "patient_history":
-        prefix = "prior treatment path for this patient"
-    else:
-        return ""
-
-    suffix = _clean_text(note) or _THERAPY_PATH_DEFAULT_NOTE.get(tier, "")
-    suffix_lc = suffix.lower()
-    prefix_lc = prefix.lower()
-    if suffix_lc == prefix_lc:
-        suffix = ""
-    elif suffix_lc.startswith(prefix_lc + ";"):
-        suffix = suffix[len(prefix) :].lstrip(" ;")
-    elif suffix_lc.startswith(prefix_lc + ","):
-        suffix = suffix[len(prefix) :].lstrip(" ,")
-    elif suffix_lc.startswith(prefix_lc + " -"):
-        suffix = suffix[len(prefix) :].lstrip(" -")
-    if suffix:
-        return f"{prefix}; {suffix}"
-    return prefix
-
-
-def _explicit_therapy_path_info(target_row) -> dict | None:
-    tier = _clean_text(
-        target_row.get("treatment_path_tier") if hasattr(target_row, "get") else ""
-    ).lower()
-    if not tier:
-        return None
-    if tier not in THERAPY_PATH_TIERS:
-        return None
-    note = _clean_text(
-        target_row.get("eligibility_note") if hasattr(target_row, "get") else ""
-    )
-    return {
-        "tier": tier,
-        "rank": _THERAPY_PATH_RANK.get(tier, 99),
-        "context": _therapy_path_context_for_tier(target_row, tier, note),
-        "source": "curated",
-    }
-
-
-def _inferred_therapy_path_info(target_row) -> dict:
-    phase = _phase_text(target_row)
-    agent_class = _agent_class_text(target_row)
-    text = _therapy_row_text(target_row)
-    is_standard = _STANDARD_PATH_TEXT.search(text) is not None
-    is_later_line = _LATER_LINE_TEXT.search(text) is not None
-
-    if phase == "approved":
-        if "radioligand" in agent_class:
-            return {
-                "tier": "approved_later_line",
-                "rank": 2,
-                "context": (
-                    "approved radioligand pathway; confirm imaging/eligibility "
-                    "and prior-line requirements"
-                ),
-                "source": "inferred",
-            }
-        if is_standard:
-            return {
-                "tier": "approved_standard",
-                "rank": 0,
-                "context": (
-                    "guideline-standard approved pathway; confirm the indication "
-                    "and line of therapy"
-                ),
-                "source": "inferred",
-            }
-        if is_later_line:
-            return {
-                "tier": "approved_later_line",
-                "rank": 2,
-                "context": (
-                    "approved later-line pathway; confirm prior therapies and "
-                    "indication-specific eligibility"
-                ),
-                "source": "inferred",
-            }
-        return {
-            "tier": "approved_indication_matched",
-            "rank": 1,
-            "context": (
-                "approved biomarker/indication-matched pathway; confirm clinical "
-                "eligibility"
-            ),
-            "source": "inferred",
-        }
-
-    phase_context = {
-        "phase_3": (
-            "late_clinical",
-            3,
-            "late-clinical follow-up, not default standard",
-        ),
-        "phase_2": (
-            "trial_follow_up",
-            4,
-            "clinical-trial follow-up, not default standard",
-        ),
-        "phase_1": (
-            "trial_follow_up",
-            5,
-            "clinical-trial follow-up, not default standard",
-        ),
-        "preclinical": (
-            "preclinical",
-            6,
-            "preclinical follow-up, not a clinical recommendation",
-        ),
-        "off_label": (
-            "off_label",
-            7,
-            "off-label follow-up; confirm rationale and alternatives",
-        ),
-    }
-    tier, rank, context = phase_context.get(phase, ("unknown", 99, ""))
-    return {"tier": tier, "rank": rank, "context": context, "source": "inferred"}
-
-
 def _therapy_path_info(target_row) -> dict:
-    return _explicit_therapy_path_info(target_row) or _inferred_therapy_path_info(
-        target_row
-    )
+    """Resolve the curated treatment tier, with the established phase fallback."""
+    target_row = target_row if hasattr(target_row, "get") else {}
+    tier = _clean_text(target_row.get("treatment_path_tier")).lower()
+    if tier in THERAPY_PATH_TIERS:
+        return {"tier": tier, "rank": _THERAPY_PATH_RANK.get(tier, 99), "source": "curated"}
+    phase = _phase_text(target_row)
+    if phase == "approved":
+        text = _therapy_row_text(target_row)
+        if "radioligand" in _agent_class_text(target_row):
+            tier = "approved_later_line"
+        elif _STANDARD_PATH_TEXT.search(text):
+            tier = "approved_standard"
+        elif _LATER_LINE_TEXT.search(text):
+            tier = "approved_later_line"
+        else:
+            tier = "approved_indication_matched"
+        return {"tier": tier, "rank": _THERAPY_PATH_RANK[tier], "source": "inferred"}
+    tier, rank = {
+        "phase_3": ("late_clinical", 3),
+        "phase_2": ("trial_follow_up", 4),
+        "phase_1": ("trial_follow_up", 5),
+        "preclinical": ("preclinical", 6),
+        "off_label": ("off_label", 7),
+    }.get(phase, ("unknown", 99))
+    return {"tier": tier, "rank": rank, "source": "inferred"}
 
 
 def therapy_path_tier(target_row) -> str:
@@ -2709,39 +2618,14 @@ def target_hla_eligibility(target_row, *, analysis=None) -> dict:
 
 def hla_eligibility_context(target_row, *, analysis=None) -> str:
     """Reader-facing HLA note for TCR/pMHC-gated rows."""
+    from .report_language import render_report_paragraph
+
     eligibility = target_hla_eligibility(target_row, analysis=analysis)
-    status = eligibility["status"]
-    if status == "not_hla_restricted":
+    if eligibility["status"] == "not_hla_restricted":
         return ""
-    required = "/".join(eligibility["required"])
-    supplied = "/".join(eligibility["supplied"])
-    if status == "matched":
-        return (
-            f"HLA match: supplied {eligibility['matched_supplied']} is compatible "
-            f"with required {eligibility['matched_required']}"
-        )
-    if status == "insufficient_resolution":
-        return (
-            f"HLA unresolved: {eligibility['reason']}; supplied "
-            f"{eligibility['matched_supplied']}, requirement "
-            f"{eligibility['matched_required']}; reconcile high-resolution HLA typing "
-            "and group or expression annotations before assessing eligibility"
-        )
-    if status == "excluded":
-        source = eligibility["source"]
-        citation = f" ([HLA eligibility source]({source}))" if source else ""
-        return (
-            f"HLA exclusion: supplied {eligibility['matched_supplied']} matches "
-            f"excluded {eligibility['matched_required']}; this treatment is excluded "
-            f"even when another supplied allele matches an allowed group{citation}"
-        )
-    if status == "mismatched":
-        return f"HLA mismatch: supplied {supplied} does not match required {required}"
-    agent = _clean_text(target_row.get("agent")) if hasattr(target_row, "get") else ""
-    agent_clause = f" for {agent}" if agent else ""
-    return (
-        f"HLA requirement{agent_clause}: requires {required}; supply germline/tumor "
-        "HLA type to assess eligibility"
+    return render_report_paragraph(
+        "hla_eligibility", eligibility=eligibility,
+        agent=_clean_text(target_row.get("agent")),
     )
 
 
@@ -2752,26 +2636,28 @@ def hla_restricted_target_supported(target_row, *, analysis=None) -> bool:
     }
 
 
-def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:
-    """Brief reader-facing treatment-path context for curated therapy rows."""
-    from .treatment_history import (
-        population_therapy_evidence_context,
-        treatment_history_context,
-    )
+def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
+    """Author separate patient, population, treatment-path and HLA explanations."""
+    from .treatment_history import population_therapy_evidence_context, treatment_history_context
 
-    history_context = treatment_history_context(target_row, analysis)
-    path_context = _therapy_path_info(target_row)["context"]
-    if _phase_text(target_row) == "patient_history" and history_context:
-        path_context = ""
-    parts = [
-        history_context,
-        population_therapy_evidence_context(target_row),
-        path_context,
-    ]
-    hla_context = hla_eligibility_context(target_row, analysis=analysis)
-    if hla_context:
-        parts.append(hla_context)
-    return "; ".join(part for part in parts if part)
+    history = treatment_history_context(target_row, analysis)
+    from .report_language import render_report_paragraph
+
+    path = render_report_paragraph(
+        "treatment_path", tier=therapy_path_tier(target_row),
+        setting=_clean_text(target_row.get("line_of_therapy")).replace("_", " "),
+    )
+    if _phase_text(target_row) == "patient_history" and history:
+        path = ""
+    return [text.rstrip(". ") + "." for text in (
+        history, population_therapy_evidence_context(target_row), path,
+        hla_eligibility_context(target_row, analysis=analysis),
+    ) if text]
+
+
+def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:
+    """Treatment rationale in one cell for the detailed therapy landscape."""
+    return " ".join(therapy_rationale_paragraphs(target_row, analysis=analysis))
 
 
 def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:

@@ -3823,18 +3823,7 @@ def _analyze_body(run: AnalyzeRun):
 
     _plt.close("all")
 
-    # Generate text reports
-    print("[report] Generating text reports...")
     _embedding_meta = get_embedding_feature_metadata(method="panref")
-    _generate_text_reports(
-        analysis,
-        report_view,
-        _embedding_meta,
-        prefix,
-        decomp_results=decomp_results,
-        input_path=input_path,
-        df_expr=df_expr,
-    )
 
     # Cancer-type-specific gene set plot (only when --cancer-type specified
     # and backed by the pan-cancer expression reference).
@@ -4228,72 +4217,66 @@ def _analyze_body(run: AnalyzeRun):
             priority_targets_png = None
             priority_target_context_png = None
 
-        # The public markdown surface is intentionally compact:
-        # summary.md for the distilled read, analysis.md for the full
-        # interpreted report, and evidence.md for the stepwise/rawer
-        # support tables.
-        try:
-            from .brief import build_summary
-
-            disease_state_for_summary = compose_disease_state_narrative(analysis)
-            sample_id = sample_display_id or None
-            _generate_text_reports(
-                analysis,
-                report_view,
-                _embedding_meta,
-                prefix,
-                decomp_results=decomp_results,
-                input_path=input_path,
-                ranges_df=ranges_df,
-                sample_id=sample_id,
-                df_expr=df_expr,
-            )
-            summary_md = build_summary(
-                analysis,
-                ranges_df,
-                cancer_code=report_cancer_type,
-                disease_state=disease_state_for_summary,
-                sample_id=sample_id,
-                report_view=report_view,
-            )
-            evidence_md = _build_evidence_report(
-                analysis,
-                report_view,
-                ranges_df,
-                decomp_results,
-                cancer_code=report_cancer_type,
-                sample_id=sample_id,
-                target_report_md=target_report_md,
-            )
-            summary_path = "%s-summary.md" % prefix if prefix else "summary.md"
-            evidence_path = "%s-evidence.md" % prefix if prefix else "evidence.md"
-            with open(summary_path, "w") as f:
-                f.write(summary_md.rstrip() + "\n")
-            with open(evidence_path, "w") as f:
-                f.write(evidence_md.rstrip() + "\n")
-            print(f"[report] Saved {summary_path}")
-            print(f"[report] Saved {evidence_path}")
-            if plot_ctx.enabled:
-                from .provenance import plot_provenance_funnel
-
-                prov_png = "%s-provenance.png" % prefix if prefix else "provenance.png"
-                fig_out = plot_provenance_funnel(
-                    analysis,
-                    ranges_df,
-                    decomp_results,
-                    save_to_filename=prov_png,
-                    save_dpi=output_dpi,
-                    report_view=report_view,
-                )
-                if fig_out:
-                    print(f"[plot] Saved {prov_png}")
-        except Exception as brief_err:
-            print(f"[warn] Summary / evidence rendering failed: {brief_err}")
     except Exception as e:
-        print(f"[warn] Purity-adjusted analysis failed: {e}")
-        import traceback
+        raise RuntimeError("Required tumor-expression evidence stage failed") from e
 
-        traceback.print_exc()
+    # Author required reports once, after range estimation and before serialization.
+    from .report_content import build_report_content, render_report_summary
+
+    disease_state_for_summary = compose_disease_state_narrative(analysis)
+    sample_id = sample_display_id or None
+    _generate_text_reports(
+        analysis,
+        report_view,
+        _embedding_meta,
+        prefix,
+        decomp_results=decomp_results,
+        input_path=input_path,
+        ranges_df=ranges_df,
+        sample_id=sample_id,
+        df_expr=df_expr,
+    )
+    report_content = build_report_content(
+        analysis,
+        ranges_df,
+        cancer_code=report_cancer_type,
+        disease_state=disease_state_for_summary,
+        sample_id=sample_id,
+        report_view=report_view,
+        prefix=Path(prefix).name,
+    )
+    summary_md = render_report_summary(report_content)
+    evidence_md = _build_evidence_report(
+        analysis,
+        report_view,
+        ranges_df,
+        decomp_results,
+        cancer_code=report_cancer_type,
+        sample_id=sample_id,
+        target_report_md=target_report_md,
+    )
+    summary_path = "%s-summary.md" % prefix if prefix else "summary.md"
+    evidence_path = "%s-evidence.md" % prefix if prefix else "evidence.md"
+    with open(summary_path, "w") as f:
+        f.write(summary_md.rstrip() + "\n")
+    with open(evidence_path, "w") as f:
+        f.write(evidence_md.rstrip() + "\n")
+    print(f"[report] Saved {summary_path}")
+    print(f"[report] Saved {evidence_path}")
+    if plot_ctx.enabled:
+        from .provenance import plot_provenance_funnel
+
+        prov_png = "%s-provenance.png" % prefix if prefix else "provenance.png"
+        fig_out = plot_provenance_funnel(
+            analysis,
+            ranges_df,
+            decomp_results,
+            save_to_filename=prov_png,
+            save_dpi=output_dpi,
+            report_view=report_view,
+        )
+        if fig_out:
+            print(f"[plot] Saved {prov_png}")
 
     if plot_ctx.enabled:
         # Keep one reader PDF, rendered from the finalized report document below.
@@ -4420,7 +4403,7 @@ inferred from expression alone.
     readme_path.write_text(readme)
     print(f"[output] Wrote {readme_path}")
 
-    output_records = write_analysis_output_records(run, report_view)
+    output_records = write_analysis_output_records(run, report_view, content=report_content)
     print(f"[output] Wrote {output_records['report_document']}")
     print(f"[output] Wrote {output_records['manifest']}")
 
@@ -9836,7 +9819,7 @@ def _build_target_report(
             if target_row is not None and expression_independent_indication(target_row):
                 parts = [
                     expression_independent_interpretation(target_row),
-                    expression_independent_rna_context(None),
+                    expression_independent_rna_context(None, observation_state=target_observation_state(target_row.get("symbol"), ranges_df)),
                 ]
             else:
                 sym_for_state = (

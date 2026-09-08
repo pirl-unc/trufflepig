@@ -70,6 +70,11 @@ class TherapeuticAgent:
     hla_excluded: str = ""
     hla_source: str = ""
     hla_reviewed_at: str = ""
+    identity_kind: str = "agent"
+    components: str = ""
+    identity_source: str = ""
+    identity_reviewed_at: str = ""
+    parent_agent: str = ""
 
     @property
     def modality_label(self) -> str:
@@ -102,12 +107,11 @@ def therapeutic_agents() -> pd.DataFrame:
 
 
 @lru_cache(maxsize=1)
-def _agents_by_gene() -> dict[str, tuple[TherapeuticAgent, ...]]:
-    out: dict[str, list[TherapeuticAgent]] = {}
+def registered_agents() -> tuple[TherapeuticAgent, ...]:
+    """Registry records, including names without target-expression annotations."""
+    records = []
     for _, row in therapeutic_agents().iterrows():
         gene = _clean(row.get("target_gene"))
-        if not gene:
-            continue
         agent = TherapeuticAgent(
             agent=_clean(row.get("agent")),
             target_gene=gene,
@@ -130,8 +134,22 @@ def _agents_by_gene() -> dict[str, tuple[TherapeuticAgent, ...]]:
             hla_excluded=_clean(row.get("hla_excluded")),
             hla_source=_clean(row.get("hla_source")),
             hla_reviewed_at=_clean(row.get("hla_reviewed_at")),
+            identity_kind=_clean(row.get("identity_kind")) or "agent",
+            components=_clean(row.get("components")),
+            identity_source=_clean(row.get("identity_source")),
+            identity_reviewed_at=_clean(row.get("identity_reviewed_at")),
+            parent_agent=_clean(row.get("parent_agent")),
         )
-        out.setdefault(gene, []).append(agent)
+        records.append(agent)
+    return tuple(records)
+
+
+@lru_cache(maxsize=1)
+def _agents_by_gene() -> dict[str, tuple[TherapeuticAgent, ...]]:
+    out: dict[str, list[TherapeuticAgent]] = {}
+    for agent in registered_agents():
+        if agent.target_gene:
+            out.setdefault(agent.target_gene, []).append(agent)
     # Most-advanced agents first: approved, then by phase, then name.
     _phase_rank = {
         "approved": 0,
@@ -180,12 +198,11 @@ def _agent_name_key(name: object) -> str:
 @lru_cache(maxsize=1)
 def _agents_by_name() -> dict[str, tuple[TherapeuticAgent, ...]]:
     names: dict[str, list[TherapeuticAgent]] = {}
-    for agents in _agents_by_gene().values():
-        for agent in agents:
-            for name in {agent.agent, *agent.aliases.split(";"), *agent.brand_name.split(";")}:
-                key = _agent_name_key(name)
-                if key:
-                    names.setdefault(key, []).append(agent)
+    for agent in registered_agents():
+        for name in {agent.agent, *agent.aliases.split(";"), *agent.brand_name.split(";")}:
+            key = _agent_name_key(name)
+            if key:
+                names.setdefault(key, []).append(agent)
     # An ambiguous alias must not equate distinct treatments.
     return {
         key: tuple(agents)
@@ -216,9 +233,53 @@ def agents_for_name(name: object) -> tuple[TherapeuticAgent, ...]:
 
 
 def agent_identity(name: object) -> str:
-    """Comparable agent identity, retaining literal names outside the registry."""
-    agents = agents_for_name(name)
-    return _agent_name_key(agents[0].agent if agents else name)
+    """Comparable identity shared by agent and combination history/evidence."""
+    return resolve_therapy_identity(name).key
+
+
+@dataclass(frozen=True)
+class TherapyIdentity:
+    """Auditable identity; components are canonical keys, never substrings."""
+
+    supplied_name: str
+    canonical_name: str
+    key: str
+    kind: str
+    components: tuple[str, ...]
+    registered: bool
+    parent_agent: str = ""
+
+
+def resolve_therapy_identity(name: object) -> TherapyIdentity:
+    """Resolve registered names and explicit ``+`` combinations.
+
+    Slash alternatives and unspecified treatment classes remain distinct from
+    a regimen containing every named agent. Unknown names retain literal keys
+    with ``registered=False``; they never acquire an inferred drug identity.
+    """
+    supplied = _clean(name)
+    agents = agents_for_name(supplied)
+    agent = agents[0] if agents else None
+    canonical = agent.agent if agent else supplied
+    kind = agent.identity_kind if agent else "unknown"
+    parts = [p.strip() for p in agent.components.split(";") if p.strip()] if agent else []
+    if not parts and not agent and "+" in supplied:
+        parts = [p.strip() for p in supplied.split("+")]
+        if any(not p for p in parts):
+            parts = []
+    if parts:
+        resolved = [resolve_therapy_identity(part) for part in parts]
+        keys = tuple(sorted({key for part in resolved for key in part.components}))
+        if kind == "alternatives":
+            return TherapyIdentity(supplied, canonical, _agent_name_key(canonical), kind, keys, True)
+        return TherapyIdentity(
+            supplied, " + ".join(sorted({part.canonical_name for part in resolved})),
+            " + ".join(keys), "regimen", keys,
+            bool(agent) or all(part.registered for part in resolved),
+        )
+    key = _agent_name_key(canonical)
+    parent = agent_identity(agent.parent_agent) if agent and agent.parent_agent else ""
+    return TherapyIdentity(supplied, canonical, key, kind, (key,) if key else (), bool(agent), parent)
 
 
 def hla_requirements_for_agent(name: object) -> dict:

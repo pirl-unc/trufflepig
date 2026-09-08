@@ -438,7 +438,7 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert neighborhood_calls[0]["label_all"] is False
     assert neighborhood_calls[0]["focus_nearest_cancers"] == 25
     assert neighborhood_calls[0]["focus_nearest_normals"] == 10
-    assert len(report_calls) == 2
+    assert len(report_calls) == 1
     assert len(target_report_calls) == 1
     assert (tmp_path / "test-output" / "out-summary.md").exists()
     assert (tmp_path / "test-output" / "out-evidence.md").exists()

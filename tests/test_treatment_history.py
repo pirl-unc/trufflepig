@@ -5,7 +5,7 @@ import json
 import pandas as pd
 import pytest
 
-from trufflepig.brief import _format_therapy_bullet, recommend_therapies
+from trufflepig.brief import recommend_therapies
 from trufflepig.reporting import cancer_therapy_panel_for_analysis
 from trufflepig.plot_target_deep_dive import _priority_target_rows
 from trufflepig.treatment_history import (
@@ -258,7 +258,7 @@ def test_prior_benefit_keeps_background_attributed_fap_rlt_in_shortlist():
     assert without_history == []
     assert len(with_history) == 1
     assert with_history[0][0]["symbol"] == "FAP"
-    bullet = _format_therapy_bullet(
+    bullet = therapy_review_text(
         with_history[0][0],
         with_history[0][1],
         analysis=_fap_history(),
@@ -310,7 +310,7 @@ def test_negative_outcome_blocks_only_the_named_agent():
 
     assert treatment_history_blocks_row(doxorubicin, analysis) is True
     assert treatment_history_blocks_row(pazopanib, analysis) is False
-    assert "do not prioritize" in treatment_history_context(doxorubicin, analysis)
+    assert "do not prioritize" in treatment_history_context(doxorubicin, analysis).casefold()
 
     class_specific = {
         "treatment_history": [
@@ -474,37 +474,33 @@ def test_direct_gist_code_retains_population_evidence():
     assert imatinib["toxicity_tier"]
 
 
-def test_prior_treatment_shortlist_round_trips_rationale(tmp_path):
-    from trufflepig.report_document import parse_therapy_recommendations
+def history_report_content(analysis, ranges):
+    from trufflepig.report_content import build_report_content
+    from trufflepig.report_view import build_report_view
+    analysis = {"sample_mode": "solid", "purity": {}, **analysis}
+    view = build_report_view(analysis)
+    return build_report_content(analysis, ranges, analysis["cancer_type"], "", report_view=view)
 
-    row = {**_fap_target(), "agent": "FAP-targeted radioligand therapy", "phase": "patient_history"}
-    bullet = _format_therapy_bullet(row, _fap_expression(), analysis=_fap_history())
-    summary = tmp_path / "summary.md"
-    summary.write_text("## Top candidate therapies\n\n" + bullet + "\n")
-    parsed = parse_therapy_recommendations(summary)
-    recommendation = parsed["rows"][0]
-    assert recommendation[1] == "FAP-targeted radioligand therapy · Prior treatment"
+
+def test_prior_treatment_shortlist_round_trips_rationale(tmp_path):
+    analysis = {"cancer_type": "SARC", **_fap_history()}
+    content = history_report_content(analysis, pd.DataFrame([_fap_expression()]))
+    recommendation = next(row for row in content.therapy["rows"] if "Prior treatment" in row[1])
+    assert "FAP" in recommendation[1]
     assert "major prior benefit" in recommendation[3]
+    assert content.treatment_history
 
 
 def test_osteosarcoma_paths_carry_disease_matched_evidence_without_rna_selection(tmp_path):
-    from trufflepig.report_document import parse_therapy_recommendations
-
     analysis = {"cancer_type": "SARC_OS"}
     _, _, panel = cancer_therapy_panel_for_analysis("SARC_OS", analysis)
     top = recommend_therapies(panel, pd.DataFrame(), analysis=analysis)
     assert {row["agent"] for row, _ in top} == {"regorafenib", "cabozantinib"}
-    bullets = [_format_therapy_bullet(row, expr, analysis=analysis) for row, expr in top]
-    text = "## Top candidate therapies\n\n" + "\n".join(bullets)
-    path = tmp_path / "summary.md"
-    path.write_text(text)
-    doc = parse_therapy_recommendations(path)
+    doc = history_report_content(analysis, pd.DataFrame()).therapy
     assert len(doc["sources"]) == 2
     rego = next(row for row in doc["rows"] if row[1].startswith("regorafenib"))
-    assert "3.6 vs 1.7" in rego[3]
-    assert "recurrent/progressive" in rego[3]
-    assert "64%" in rego[3]
-    assert "not established" in rego[3]
+    for expected in ("3.6 vs 1.7", "recurrent, progressive", "64%", "not established"):
+        assert expected in rego[3]
 
 
 def test_bladder_pembrolizumab_uses_treatment_setting_not_pd_l1_assay():
@@ -547,7 +543,16 @@ def test_agent_only_salvage_rationale_survives_both_detailed_tables():
     ]
     for report in reports:
         rego = next(line for line in report.splitlines() if "| regorafenib |" in line)
-        assert "recurrent/progressive" in rego
+        assert "recurrent, progressive" in rego
         assert "SARC024" in rego and "3.6 vs 1.7" in rego
         assert "64%" in rego
         assert "agent-only / no direct gene target" not in rego
+
+
+def therapy_review_text(target, expression, target_panel=None, **context):
+    from trufflepig.report_content import assess_therapy
+    from trufflepig.brief import _expression_independent_evidence_gap
+    assessment = assess_therapy(target, expression, target_panel=target_panel, **context)
+    return " ".join([assessment['agent'], assessment['phase'], assessment['indication'],
+                     *assessment['rationale'], assessment['maturity'],
+                     _expression_independent_evidence_gap(target, context.get('analysis'))])

@@ -4,11 +4,9 @@ import pandas as pd
 
 from trufflepig.brief import (
     build_actionable as _build_actionable,
-    build_brief as _build_brief,
     build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
     _expression_independent_evidence_gap,
-    _format_therapy_bullet,
     _empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
@@ -38,10 +36,6 @@ def build_summary(analysis, *args, **kwargs):
 
 def build_actionable(analysis, *args, **kwargs):
     return _render_call(_build_actionable, analysis, *args, **kwargs)
-
-
-def build_brief(analysis, *args, **kwargs):
-    return _render_call(_build_brief, analysis, *args, **kwargs)
 
 
 def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
@@ -109,7 +103,7 @@ def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
     assert "100 patient bulk TPM" in bullet
     assert "60 estimated patient tumor TPM" in bullet
     assert "RNA model interval 30-100" in bullet
-    assert "check HLA" in bullet
+    assert "protein/peptide presentation and treatment eligibility are not established" in bullet
 
 
 def test_subtype_line_suppressed_when_panel_blocked_against_call():
@@ -436,10 +430,10 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
     assert "model interval 1%–43%" not in summary + actionable
 
 
-def test_brief_is_compact():
+def test_summary_has_four_complete_sections():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -447,8 +441,10 @@ def test_brief_is_compact():
         sample_id="sample_X",
     )
     lines = md.splitlines()
-    # ≤ 40 lines is the contract.
-    assert len(lines) <= 40, f"brief is {len(lines)} lines, must be ≤ 40:\n{md}"
+    assert [line for line in lines if line.startswith("## ")] == [
+        "## Conclusion and supporting evidence", "## Therapy rationale and blockers",
+        "## Information needed", "## Detailed evidence and figures",
+    ]
 
     # Key structural elements present.
     # File was renamed brief → summary in 4.41.0; header tracks the name.
@@ -458,7 +454,7 @@ def test_brief_is_compact():
     assert "model interval" in md
     assert "(CI " not in md
     assert "**Disease state:**" in md
-    assert "Top candidate therapies" in md
+    assert "Therapy rationale and blockers" in md
 
 
 def test_summary_surfaces_rna_qc_and_prad_stromal_pitfall():
@@ -578,7 +574,7 @@ def test_summary_marks_supplied_cancer_type_basis():
     assert "Cancer-type basis" in md
     assert "externally supplied PRAD (Prostate Adenocarcinoma) sets the report label" in md
     assert "RNA evidence is used downstream for confidence" in md
-    assert "Clinical interpretation still needs external patient context" in md
+    assert "## Information needed" in md
     assert "RNA-inferred — treat it as a hypothesis" not in md
 
 
@@ -906,8 +902,8 @@ def test_summary_marks_rna_inferred_cancer_type_as_hypothesis():
 
     assert "Cancer-type basis" in md
     assert "RNA-inferred hypothesis" in md
-    assert "Cancer type is RNA-inferred — treat it as a hypothesis" in md
-    assert "Clinical interpretation still needs external patient context" in md
+    assert "Reconcile the proposed disease and subtype with pathology" in md
+    assert "## Information needed" in md
 
 
 def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
@@ -1263,7 +1259,7 @@ def test_low_confidence_call_punctuation_is_clean():
     analysis["fit_quality"] = {"label": "weak", "message": "flat signature"}
     ranges_df = _make_ranges_df()
 
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1310,7 +1306,7 @@ def test_fusion_scoped_low_confidence_call_remains_explicitly_provisional():
         }
     )
 
-    summary = build_brief(
+    summary = build_summary(
         analysis,
         _make_ranges_df(),
         cancer_code="NUTM",
@@ -1326,7 +1322,7 @@ def test_fusion_scoped_low_confidence_call_remains_explicitly_provisional():
 def test_brief_excludes_absent_targets():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1339,7 +1335,7 @@ def test_brief_excludes_absent_targets():
 def test_brief_reports_tumor_attributed_for_present_targets():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1354,7 +1350,7 @@ def test_brief_renders_no_pattern_disease_state_when_scores_exist():
     analysis = _make_analysis()
     analysis["therapy_response_scores"] = {"IFN_response": object()}
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1377,7 +1373,7 @@ def test_brief_summarizes_active_mapk_pathway_inference():
         }
     ]
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1400,16 +1396,16 @@ def test_brief_prioritizes_ar_path_and_flags_possible_current_therapy():
         )
     }
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
         disease_state="**AR axis suppressed** — consistent with ADT exposure.",
     )
     assert "- **FOLH1**" not in md
-    ar_line = next(line for line in md.splitlines() if line.startswith("- **AR**"))
-    assert "guideline-standard approved pathway" in ar_line
-    assert "current/prior ADT or ARPI" in ar_line
+    ar_section = md.split("### 1. enzalutamide", 1)[1].split("### ", 1)[0]
+    assert "guideline-standard approved pathway" in ar_section
+    assert "current/prior ADT or ARPI" in ar_section
 
 
 def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
@@ -1440,7 +1436,7 @@ def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
             },
         ]
     )
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="BRCA",
@@ -1448,7 +1444,7 @@ def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
     )
     assert "- **ERBB2**" not in md
     assert "- **TACSTD2**" not in md
-    assert "## Top candidate therapies" in md
+    assert "## Therapy rationale and blockers" in md
 
 
 def test_expression_independent_therapy_without_eligibility_stays_out_of_shortlist():
@@ -1469,7 +1465,7 @@ def test_expression_independent_therapy_without_eligibility_stays_out_of_shortli
             },
         ]
     )
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="COAD",
@@ -1478,7 +1474,7 @@ def test_expression_independent_therapy_without_eligibility_stays_out_of_shortli
     assert not any(
         line.startswith("- **CD274**") for line in md.splitlines()
     )
-    assert "## Top candidate therapies" in md
+    assert "## Therapy rationale and blockers" in md
 
 
 def test_target_dependent_phase_one_row_with_no_estimated_tumor_signal_stays_out():
@@ -1544,23 +1540,23 @@ def test_expression_independent_therapy_surfaces_missing_required_evidence():
         }
     )
 
-    line = _format_therapy_bullet(target, expression, analysis=analysis)
+    line = therapy_review_text(target, expression, analysis=analysis)
 
     assert "target expression is not the eligibility criterion" in line
-    assert "target RNA is context only" in line
+    assert "target rna is context only" in line.lower()
     assert "required eligibility evidence not supplied" in line
     assert "confirm mutation / fusion / amplification before treating as eligible" in line
     # Losing the model interval must not lose the clinical requirement.
-    without_band = _format_therapy_bullet(
+    without_band = therapy_review_text(
         target, {"observed_tpm": 12.0}, analysis=analysis
     )
     assert "required eligibility evidence not supplied" in without_band
-    assert "target RNA is context only" in without_band
+    assert "target rna is context only" in without_band.lower()
 
 
 def test_missing_eligibility_becomes_a_clinical_task_not_a_recommendation(monkeypatch, tmp_path):
     from trufflepig import brief
-    from trufflepig.report_document import parse_therapy_recommendations, parse_summary_records
+    from trufflepig.report_content import build_report_content
 
     panel = pd.DataFrame([{
         "cancer_code": "BRCA", "symbol": "BRCA1", "agent": "olaparib",
@@ -1571,11 +1567,10 @@ def test_missing_eligibility_becomes_a_clinical_task_not_a_recommendation(monkey
     monkeypatch.setattr(brief, "_curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
     analysis = {**_make_analysis(), "cancer_type": "BRCA"}
     text = build_summary(analysis, _make_ranges_df(), cancer_code="BRCA", disease_state="")
-    path = tmp_path / "summary.md"
-    path.write_text(text)
-    assert parse_therapy_recommendations(path) is None
-    tasks = [r for r in parse_summary_records(path) if r["section"] == "Clinical evidence to reconcile"]
-    assert any("olaparib" in r["text"] and "germline BRCA testing" in r["text"] for r in tasks)
+    content = build_report_content(analysis, _make_ranges_df(), "BRCA", "", report_view=build_report_view(analysis))
+    assert content.therapy is None
+    assert any("olaparib" in request["affects"] and "germline BRCA testing" in request["question"] for request in content.evidence_requests)
+    assert "## Information needed" in text
 
 
 def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
@@ -1618,8 +1613,8 @@ def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
     top = recommend_therapies(targets_df, ranges_df, analysis=analysis)
 
     assert [row["agent"] for row, _expr in top] == ["doxorubicin", "pazopanib"]
-    line = _format_therapy_bullet(top[0][0], top[0][1], analysis=analysis)
-    assert line.startswith("- **Clinical pathway** — doxorubicin")
+    line = therapy_review_text(top[0][0], top[0][1], analysis=analysis)
+    assert line.startswith("doxorubicin Approved first-line STS")
     assert "target expression is not the eligibility criterion" in line
     assert "nan" not in line.lower()
 
@@ -1650,9 +1645,9 @@ def test_therapy_bullet_uses_agent_class_when_agent_is_missing():
         }
     )
 
-    line = _format_therapy_bullet(target, expression)
+    line = therapy_review_text(target, expression)
 
-    assert "**PGR** — hormone therapy (Approved, ER+/HER2- BRCA)" in line
+    assert line.startswith("hormone therapy Approved ER+/HER2- BRCA")
     assert "nan" not in line.lower()
 
 
@@ -1668,7 +1663,7 @@ def test_expression_independent_therapy_distinguishes_generic_fusion_file_from_s
             "indication": "NTRK fusion-positive solid tumor",
         }
     )
-    line = _format_therapy_bullet(target, None, analysis=analysis)
+    line = therapy_review_text(target, None, analysis=analysis)
 
     assert "orthogonal mutation/fusion/CNV evidence was supplied" in line
     assert "no target-specific supporting call was recognized" in line
@@ -1688,7 +1683,7 @@ def test_mutation_only_rows_do_not_treat_supplied_fusions_as_exact_evidence():
         }
     )
 
-    line = _format_therapy_bullet(target, None, analysis=analysis)
+    line = therapy_review_text(target, None, analysis=analysis)
 
     assert "orthogonal mutation/fusion/CNV evidence was supplied" in line
     assert "no target-specific supporting call was recognized" in line
@@ -1717,7 +1712,7 @@ def test_nutm_scope_level_rows_reference_report_scope_not_target_specific_mutati
         }
     )
 
-    line = _format_therapy_bullet(target, None, analysis=analysis)
+    line = therapy_review_text(target, None, analysis=analysis)
 
     assert "scope-level fusion evidence supports the NUTM report label" in line
     assert "no target-specific supporting call" not in line
@@ -1750,7 +1745,7 @@ def test_nutm_therapy_does_not_treat_an_unrelated_brd4_fusion_as_eligibility():
         }
     )
 
-    line = _format_therapy_bullet(target, None, analysis=analysis)
+    line = therapy_review_text(target, None, analysis=analysis)
 
     assert "NUTM report label is RNA-inferred" in line
     assert "confirm NUTM1 fusion/IHC/FISH/pathology" in line
@@ -1813,8 +1808,11 @@ def test_sarc_summary_uses_supplied_egfr_kdd_and_skips_unresolved_subtype_spillo
     md = build_summary(analysis, ranges_df, cancer_code="SARC", disease_state="")
 
     assert "**Variant evidence:** supplied EGFR kinase domain duplication" in md
-    top_lines = [line for line in md.splitlines() if line.startswith("- **")]
-    assert top_lines[0].startswith("- **EGFR**")
+    from trufflepig.report_content import build_report_content
+    content = build_report_content(analysis, ranges_df, "SARC", "", report_view=build_report_view(analysis))
+    selected = [row for row in content.therapy_assessments if row["selected"]]
+    assert selected and selected[0]["target"] == "EGFR"
+    assert all(row["target"] not in {"PDGFRA", "NTRK1", "CDK4", "PRAME"} for row in selected)
     assert "supplied variant evidence matches this therapy requirement" in md
     assert "- **PDGFRA**" not in md
     assert "- **NTRK1**" not in md
@@ -1870,7 +1868,7 @@ def test_summary_prompts_for_hla_when_hla_gated_target_is_plausible():
         disease_state="",
     )
 
-    assert "HLA typing needed for tebentafusp" in md
+    assert "HLA typing is unavailable for tebentafusp" in md
     assert "requires A*02:01" in md
 
 
@@ -1912,7 +1910,7 @@ def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
             },
         ]
     )
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="BRCA",
@@ -1982,7 +1980,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
         ],
         ignore_index=True,
     )
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -1995,7 +1993,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
     assert "PSCA" in md
     assert "prostate lineage reference (external panel)" in md
     assert "phase 1 exploratory" in md
-    assert len(md.splitlines()) <= 40
+    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## Conclusion and supporting evidence", "## Therapy rationale and blockers", "## Information needed", "## Detailed evidence and figures"]
 
 
 def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
@@ -2143,7 +2141,7 @@ def test_source_trace_does_not_call_non_lineage_component_lineage_background():
 def test_brief_no_internal_jargon():
     analysis = _make_analysis(purity_tier_label="low")
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -2172,7 +2170,7 @@ def test_brief_handles_uncurated_cancer_type():
     analysis = _make_analysis()
     analysis["cancer_type"] = "ZZUNCURATED"
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="ZZUNCURATED",
@@ -2250,7 +2248,7 @@ def test_actionable_surfaces_offcontext_expressed_target():
 def test_brief_normalizes_path_like_sample_id():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -2265,7 +2263,7 @@ def test_brief_does_not_promote_psma_rna_without_required_imaging():
     ranges_df = _make_ranges_df()
     idx = ranges_df.index[ranges_df["symbol"] == "FOLH1"][0]
     ranges_df.at[idx, "attribution"] = {}
-    md = build_brief(
+    md = build_summary(
         analysis,
         ranges_df,
         cancer_code="PRAD",
@@ -2483,13 +2481,13 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
         disease_state="",
         sample_id="sample_X",
     )
-    assert "## Notable biomarker outliers" in md
+    assert "### Notable biomarker outliers" in md
     assert "TP53" in md
     assert "expression is not the eligibility criterion" in md
     outlier = next(line for line in md.splitlines() if line.startswith("- **TP53**"))
     assert "RNA abundance 15.0×" in outlier
     assert "amplified" not in outlier
-    assert len(md.splitlines()) <= 40
+    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## Conclusion and supporting evidence", "## Therapy rationale and blockers", "## Information needed", "## Detailed evidence and figures"]
 
 
 def test_summary_low_purity_caveat_rides_on_tumor_source_tpm():
@@ -2580,3 +2578,12 @@ def test_rna_alternatives_no_caveat_when_concordance_missing():
     line = _rna_alternatives_line(analysis, "LUAD")
     assert "LUSC (rank 2" in line
     assert "lineage-incoherent" not in line
+
+
+def therapy_review_text(target, expression, target_panel=None, **context):
+    from trufflepig.report_content import assess_therapy
+    from trufflepig.brief import _expression_independent_evidence_gap
+    assessment = assess_therapy(target, expression, target_panel=target_panel, **context)
+    return " ".join([assessment['agent'], assessment['phase'], assessment['indication'],
+                     *assessment['rationale'], assessment['maturity'],
+                     _expression_independent_evidence_gap(target, context.get('analysis'))])

@@ -1,0 +1,22 @@
+# Summary{% if sample_id %}: {{ sample_id }}{% endif %}
+
+{% for section in sections %}
+## {{ section.title }}
+
+{% for block in section.blocks %}
+{% if block.kind == 'heading' %}
+### {{ block.text }}
+{% elif block.kind == 'paragraph' %}
+{{ block.text }}
+{% elif block.kind == 'bullet' %}
+- {{ block.text }}
+{% elif block.kind == 'table' %}
+| {{ block.headers | join(' | ') }} |
+|{% for header in block.headers %} --- |{% endfor %}
+{% for row in block.rows %}
+| {{ row | join(' | ') }} |
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% endfor %}

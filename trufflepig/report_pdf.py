@@ -1,619 +1,243 @@
-#!/usr/bin/env python3
-"""Render the reader PDF from the finalized report document.
-
-The production report combines clinical rationale with the plots that directly
-support the interpreted text. Individual PNGs and evidence tables retain raw
-reference-context maps and alternative models for technical review.
-
-The PDF renders entirely from the structured report document
-(``<prefix>-report.json``; see :mod:`trufflepig.report_document`) — the finalized
-headline, the at-a-glance records, the therapy and target tables, and a
-belief-gated figure manifest — and never re-reads the markdown, so it cannot
-disagree with the figures or the reports. The PDF requires that structured
-document and asks the caller to rerun analysis when it is absent.
-"""
+"""Native, searchable PDF rendering of the same sections used by Markdown."""
 
 from __future__ import annotations
 
 import argparse
-import re
-import textwrap
+from html import escape
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
-
-from trufflepig.report_document import (
-    find_figure,
-    load_report_document,
-    record_value,
-    section_records,
-    short_text,
+from matplotlib import get_data_path
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.platypus import (
+    CondPageBreak,
+    Image,
+    KeepTogether,
+    LongTable,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    TableStyle,
 )
 
-PAGE_W, PAGE_H = 2550, 3300
-MARGIN = 150
-TEXT_COLOR = (30, 41, 59)
-MUTED = (100, 116, 139)
-RULE = (203, 213, 225)
-ACCENT = (37, 99, 235)
-CARD_BG = (248, 250, 252)
-SOFT_BLUE = (239, 246, 255)
-SOFT_AMBER = (255, 251, 235)
-SOFT_GREEN = (240, 253, 244)
-SOFT_RED = (254, 242, 242)
+from .report_document import find_figure, load_report_document
+from .report_language import report_inline_tokens
 
 
-def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    arial = "/System/Library/Fonts/Supplemental/Arial.ttf"
-    arial_bold = "/System/Library/Fonts/Supplemental/Arial Bold.ttf"
-    dejavu = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    dejavu_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    candidates = (
-        arial_bold if bold else arial,
-        dejavu_bold if bold else dejavu,
-        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
-        "Arial Bold.ttf" if bold else "Arial.ttf",
-    )
-    for candidate in candidates:
-        try:
-            return ImageFont.truetype(candidate, size=size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
+def report_inline_html(text: str) -> str:
+    """Convert supported inline Markdown to PDF text markup, preserving HLA.
 
-
-def _line_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
-    bbox = draw.textbbox((0, 0), text, font=font)
-    return int(bbox[2] - bbox[0])
-
-
-def _draw_rich_wrapped(
-    draw: ImageDraw.ImageDraw,
-    segments: list[tuple[str, ImageFont.ImageFont, tuple[int, int, int]]],
-    xy: tuple[int, int],
-    *,
-    max_width: int,
-    line_gap: int = 11,
-) -> int:
-    """Draw wrapped text where individual segments can use bold/muted fonts."""
-
-    x, y = xy
-    line: list[tuple[str, ImageFont.ImageFont, tuple[int, int, int], int]] = []
-    line_width = 0
-    line_height = 0
-
-    def flush() -> None:
-        nonlocal y, line, line_width, line_height
-        cx = x
-        for text, font, fill, width in line:
-            draw.text((cx, y), text, fill=fill, font=font)
-            cx += width
-        y += max(line_height, 1) + line_gap
-        line = []
-        line_width = 0
-        line_height = 0
-
-    for text, font, fill in segments:
-        for token in re.findall(r"\S+\s*", text):
-            width = _line_width(draw, token, font)
-            height = getattr(font, "size", 30)
-            if line and line_width + width > max_width:
-                flush()
-                token = token.lstrip()
-                width = _line_width(draw, token, font)
-            line.append((token, font, fill, width))
-            line_width += width
-            line_height = max(line_height, height)
-    if line:
-        flush()
-    return y
-
-
-def _draw_card(
-    draw: ImageDraw.ImageDraw,
-    box: tuple[int, int, int, int],
-    *,
-    label: str,
-    value: str,
-    accent: tuple[int, int, int],
-    bg: tuple[int, int, int] = CARD_BG,
-) -> None:
-    x0, y0, x1, y1 = box
-    label_font = _font(24, bold=True)
-    value_font = _font(27)
-    draw.rounded_rectangle(box, radius=18, fill=bg, outline=RULE, width=2)
-    draw.rectangle((x0, y0, x0 + 12, y1), fill=accent)
-    max_width = x1 - x0 - 62
-    label_lines = _wrap_cell(draw, label.upper(), label_font, max_width, max_lines=2)
-    for index, line in enumerate(label_lines):
-        draw.text((x0 + 34, y0 + 26 + 29 * index), line, fill=accent, font=label_font)
-    words = re.findall(r"\S+\s*", short_text(value or "Not reported", max_chars=120))
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = current + word
-        if current and _line_width(draw, candidate, value_font) > max_width:
-            lines.append(current.rstrip())
-            current = word.lstrip()
-        else:
-            current = candidate
-    if current:
-        lines.append(current.rstrip())
-    max_lines = 4 if len(label_lines) == 1 else 3
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = short_text(lines[-1], max_chars=max(12, len(lines[-1]) - 3))
-    y = y0 + 43 + 29 * len(label_lines)
-    for line in lines:
-        draw.text((x0 + 34, y), line, fill=TEXT_COLOR, font=value_font)
-        y += 36
-
-
-def _section_heading(draw: ImageDraw.ImageDraw, text: str, y: int) -> int:
-    section_font = _font(40, bold=True)
-    draw.text((MARGIN, y), text, fill=TEXT_COLOR, font=section_font)
-    draw.rectangle((MARGIN, y + 48, PAGE_W - MARGIN, y + 51), fill=RULE)
-    return y + 80
-
-
-def _draw_labeled_bullet(
-    draw: ImageDraw.ImageDraw,
-    *,
-    label: str,
-    body: str,
-    y: int,
-    max_width: int,
-    fill: tuple[int, int, int] = TEXT_COLOR,
-) -> int:
-    body_font = _font(36)
-    bold_font = _font(36, bold=True)
-    draw.ellipse((MARGIN, y + 12, MARGIN + 13, y + 25), fill=ACCENT)
-    segments = []
-    if label:
-        segments.append((f"{label}: ", bold_font, TEXT_COLOR))
-    segments.append((short_text(body, max_chars=360), body_font, fill))
-    return (
-        _draw_rich_wrapped(
-            draw,
-            segments,
-            (MARGIN + 34, y),
-            max_width=max_width,
-            line_gap=10,
-        )
-        + 7
-    )
-
-
-def _draw_wrapped(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    xy: tuple[int, int],
-    *,
-    width_chars: int,
-    font: ImageFont.ImageFont,
-    fill: tuple[int, int, int] = TEXT_COLOR,
-    line_gap: int = 12,
-) -> int:
-    x, y = xy
-    for para in text.splitlines():
-        wrapped = textwrap.wrap(para, width=width_chars) or [""]
-        for line in wrapped:
-            draw.text((x, y), line, fill=fill, font=font)
-            y += font.size + line_gap if hasattr(font, "size") else 30
-    return y
-
-
-def _wrap_cell(
-    draw: ImageDraw.ImageDraw,
-    text: str,
-    font: ImageFont.ImageFont,
-    max_px: int,
-    *,
-    max_lines: int = 2,
-) -> list[str]:
-    """Wrap *text* into at most *max_lines* lines fitting *max_px*, ellipsizing the
-    last line when it still overflows."""
-    words = []
-    for word in re.findall(r"\S+\s*", text):
-        # Preserve long source URLs in the full rationale pages. Compact
-        # tables still truncate at their explicit line limit.
-        while _line_width(draw, word.rstrip(), font) > max_px:
-            split = len(word) - 1
-            while split > 1 and _line_width(draw, word[:split], font) > max_px:
-                split -= 1
-            words.append(word[:split])
-            word = word[split:]
-        words.append(word)
-    lines: list[str] = []
-    current = ""
-    for word in words:
-        candidate = current + word
-        if current and _line_width(draw, candidate, font) > max_px:
-            lines.append(current.rstrip())
-            current = word.lstrip()
-            if len(lines) >= max_lines:
-                break
-        else:
-            current = candidate
-    if current and len(lines) < max_lines:
-        lines.append(current.rstrip())
-    if not lines:
-        return [""]
-    # Ellipsize the last line whenever it still overflows — including a single
-    # unbreakable token that never got a chance to wrap — so a cell never bleeds
-    # into its neighbour column.
-    if _line_width(draw, lines[-1], font) > max_px:
-        while lines[-1] and _line_width(draw, lines[-1] + "...", font) > max_px:
-            lines[-1] = lines[-1].rsplit(" ", 1)[0] if " " in lines[-1] else lines[-1][:-1]
-        lines[-1] = lines[-1].rstrip() + "..."
-    return lines
-
-
-def _draw_table(
-    draw: ImageDraw.ImageDraw,
-    x: int,
-    y: int,
-    columns: list[tuple[str, int]],
-    rows: list[list[str]],
-    *,
-    total_width: int,
-    max_cell_lines: int = 2,
-) -> int:
-    """Render a compact table: a bold accent header row over a rule, then wrapped
-    cells with a faint separator between rows. *columns* is ``(title, weight)``;
-    weights set relative column widths. Returns the y below the table."""
-    header_font = _font(28, bold=True)
-    cell_font = _font(32)
-    total_weight = sum(weight for _, weight in columns) or 1
-    col_x: list[int] = []
-    col_w: list[int] = []
-    cursor = x
-    for _, weight in columns:
-        width = int(total_width * weight / total_weight)
-        col_x.append(cursor)
-        col_w.append(width)
-        cursor += width
-    header_lines = [
-        _wrap_cell(draw, title, header_font, width - 24, max_lines=3)
-        for (title, _), width in zip(columns, col_w)
-    ]
-    for lines, cxi in zip(header_lines, col_x):
-        for index, line in enumerate(lines):
-            draw.text((cxi, y + index * 36), line, fill=ACCENT, font=header_font)
-    y += max(len(lines) for lines in header_lines) * 36
-    draw.rectangle((x, y, x + total_width, y + 2), fill=RULE)
-    y += 14
-    for row in rows:
-        wrapped = [
-            _wrap_cell(draw, str(cell), cell_font, width - 24, max_lines=max_cell_lines)
-            for cell, width in zip(row, col_w)
-        ]
-        row_lines = max((len(lines) for lines in wrapped), default=1)
-        for lines, cxi in zip(wrapped, col_x):
-            ly = y
-            for line in lines:
-                draw.text((cxi, ly), line, fill=TEXT_COLOR, font=cell_font)
-                ly += 40
-        y += row_lines * 40 + 16
-        draw.rectangle((x, y - 9, x + total_width, y - 8), fill=RULE)
-    return y + 6
-
-
-def _headline_cards(document: dict) -> tuple[str, str]:
-    """Format the cancer-call and purity cards from the structured headline."""
-    headline = document.get("headline") or {}
-
-    ctype = headline.get("cancer_type")
-    if not ctype:
-        raise ValueError("Structured report headline is missing cancer_type")
-    name = headline.get("cancer_type_name") or ""
-    call = f"{ctype} ({name})" if name and name != ctype else str(ctype)
-
-    if headline.get("purity_status") == "discordant_estimators":
-        return call, "Quantitatively unresolved; attribution uses an operating model"
-
-    purity_value = headline.get("purity")
-    if purity_value is not None:
-        text = f"{purity_value:.0%}"
-        lo, hi = headline.get("purity_lo"), headline.get("purity_hi")
-        conf = headline.get("purity_confidence") or ""
-        if lo is not None and hi is not None:
-            text += f" (model interval {lo:.0%}-{hi:.0%}"
-            text += f", {conf} confidence)" if conf else ")"
-        elif conf:
-            text += f" ({conf} confidence)"
-        purity = text
-    else:
-        purity = "Not estimated"
-    return call, purity
-
-
-def _title_page(document: dict, analyze_dir: Path) -> Image.Image:
-    records = document.get("records") or []
-    title = document.get("prefix") or ""
-    img = Image.new("RGB", (PAGE_W, PAGE_H), "white")
-    draw = ImageDraw.Draw(img)
-    title_font = _font(62, bold=True)
-    subtitle_font = _font(27)
-    section_font = _font(34, bold=True)
-    small_font = _font(24)
-
-    while title_font.size > 32 and _line_width(draw, title, title_font) > PAGE_W - 2 * MARGIN:
-        title_font = _font(title_font.size - 2, bold=True)
-    draw.text((MARGIN, MARGIN), title, fill=TEXT_COLOR, font=title_font)
-    draw.text(
-        (MARGIN, MARGIN + 82),
-        "Interpretive snapshot - call, evidence, and downstream implications",
-        fill=MUTED,
-        font=subtitle_font,
-    )
-    draw.rectangle((MARGIN, MARGIN + 130, PAGE_W - MARGIN, MARGIN + 136), fill=ACCENT)
-
-    # Read the call + purity cards from the authoritative finalized headline so
-    # the PDF cannot drift from the figures or markdown by construction.
-    call, purity = _headline_cards(document)
-    mmr = record_value(records, "Mismatch-repair RNA context")
-    sample = record_value(records, "Sample")
-    quant = record_value(records, "RNA quant QC")
-    sample_card = sample
-    if quant:
-        sample_card = f"{sample}; {quant}" if sample else quant
-
-    card_y = MARGIN + 185
-    gap = 24
-    card_w = (PAGE_W - 2 * MARGIN - 3 * gap) // 4
-    card_h = 235
-    cards = [
-        ("Cancer call", call, ACCENT, SOFT_BLUE),
-        ("MMR RNA", mmr, (124, 58, 237), (245, 243, 255)),
-        ("Estimated tumor fraction (RNA model)", purity, (22, 163, 74), SOFT_GREEN),
-        ("Assay / QC", sample_card, (217, 119, 6), SOFT_AMBER),
-    ]
-    for idx, (label, value, accent, bg) in enumerate(cards):
-        x0 = MARGIN + idx * (card_w + gap)
-        _draw_card(
-            draw,
-            (x0, card_y, x0 + card_w, card_y + card_h),
-            label=label,
-            value=value,
-            accent=accent,
-            bg=bg,
-        )
-
-    y = card_y + card_h + 62
-    draw.text((MARGIN, y), "What matters first", fill=TEXT_COLOR, font=section_font)
-    draw.rectangle((MARGIN, y + 46, PAGE_W - MARGIN, y + 49), fill=RULE)
-    y += 78
-
-    interpretation_items = [
-        ("Call basis", record_value(records, "Cancer-type basis")),
-        ("MMR RNA", record_value(records, "Mismatch-repair RNA context")),
-        ("Competing RNA context", record_value(records, "Retained RNA differential")),
-        ("Composition caution", record_value(records, "Tissue composition hint")),
-        ("Background reference", record_value(records, "RNA background context")),
-        ("Rare-marker prompt", record_value(records, "Rare-marker prompt")),
-        ("Disease state", record_value(records, "Disease state")),
-    ]
-    for label, body in interpretation_items:
-        if not body:
-            continue
-        y = _draw_labeled_bullet(
-            draw,
-            label=label,
-            body=body,
-            y=y,
-            max_width=PAGE_W - 2 * MARGIN - 40,
-        )
-        if y > 1500:
-            break
-
-    therapy_rows = (document.get("therapy") or {}).get("rows") or []
-    y = _section_heading(draw, "Treatment priorities for clinical review", y + 25)
-    if therapy_rows:
-        y = _draw_table(
-            draw, MARGIN, y,
-            [("Target / context", 22), ("Recommendation - full rationale on next page", 78)],
-            [[row[0], row[1]] for row in therapy_rows],
-            total_width=PAGE_W - 2 * MARGIN,
-            max_cell_lines=3,
-        )
-    else:
-        y = _draw_labeled_bullet(
-            draw, label="Status",
-            body="No treatment meets the shortlist criteria. Review the detailed therapy "
-                 "landscape for the specific clinical assays and treatment context still needed.",
-            y=y, max_width=PAGE_W - 2 * MARGIN - 40,
-        )
-
-    # Top priority targets with estimated patient attribution and healthy-reference context.
-    targets = document.get("targets") or {}
-    target_rows = targets.get("rows")
-    if target_rows and y < PAGE_H - 950:
-        y = _section_heading(draw, "Target RNA context", y + 22)
-        y = _draw_table(
-            draw,
-            MARGIN,
-            y,
-            targets["columns"],
-            target_rows,
-            total_width=PAGE_W - 2 * MARGIN,
-        )
-
-    notable = [
-        record["text"]
-        for record in records
-        if record["section"] in {"Notable biomarker outliers", "Notable CTAs"}
-        and record["text"]
-        and record["text"][0].isalnum()
-    ][:4]
-    if notable:
-        y = _section_heading(draw, "Notable expression outliers", y + 22)
-        for line in notable:
-            label, body = ("", line)
-            if " - " in line:
-                label, body = line.split(" - ", 1)
-            y = _draw_labeled_bullet(
-                draw,
-                label=label,
-                body=body,
-                y=y,
-                max_width=PAGE_W - 2 * MARGIN - 40,
-                fill=TEXT_COLOR,
+    User HTML is escaped. Images remain their alternative text; rendering prose
+    never fetches remote resources or interprets a supplied string as code.
+    """
+    tokens = report_inline_tokens(text)
+    rendered = []
+    tags = {"strong_open": "<b>", "strong_close": "</b>", "em_open": "<i>", "em_close": "</i>"}
+    for token in tokens:
+        if token.type in tags:
+            rendered.append(tags[token.type])
+        elif token.type in {"text", "image", "html_inline"}:
+            rendered.append(
+                escape(token.content).replace("—", "-").replace("–", "-").replace("‑", "-")
             )
-            if y > PAGE_H - 560:
-                break
-
-    caveats = [
-        record["text"]
-        for record in section_records(records, "Caveats")
-        if record["text"]
-    ][:3]
-    if caveats and y < PAGE_H - 680:
-        y = _section_heading(draw, "Confirm before acting", y + 18)
-        for caveat in caveats:
-            y = _draw_labeled_bullet(
-                draw,
-                label="Caveat",
-                body=caveat,
-                y=y,
-                max_width=PAGE_W - 2 * MARGIN - 40,
-                fill=MUTED,
+        elif token.type == "code_inline":
+            rendered.append('<font name="ReportMono">' + escape(token.content) + "</font>")
+        elif token.type == "link_open":
+            rendered.append(
+                '<link href="'
+                + escape(token.attrGet("href") or "", quote=True)
+                + '" color="#245b80">'
             )
-            if y > PAGE_H - 420:
-                break
+        elif token.type == "link_close":
+            rendered.append("</link>")
+        elif token.type in {"softbreak", "hardbreak"}:
+            rendered.append("<br/>")
+    return "".join(rendered)
 
-    draw.rectangle((MARGIN, PAGE_H - 300, PAGE_W - MARGIN, PAGE_H - 298), fill=RULE)
-    _draw_wrapped(
-        draw,
-        "This compact PDF is generated from the interpreted report and decision-aligned figures. "
-        "Audit-only raw reference maps are intentionally omitted unless added explicitly.",
-        (MARGIN, PAGE_H - 260),
-        width_chars=110,
-        font=small_font,
-        fill=MUTED,
+
+def report_pdf_styles() -> dict:
+    """Use packaged fonts so Unicode identifiers render consistently across hosts."""
+    fonts = Path(get_data_path()) / "fonts" / "ttf"
+    for name, filename in (
+        ("Report", "DejaVuSans.ttf"),
+        ("ReportBold", "DejaVuSans-Bold.ttf"),
+        ("ReportItalic", "DejaVuSans-Oblique.ttf"),
+        ("ReportBoldItalic", "DejaVuSans-BoldOblique.ttf"),
+        ("ReportMono", "DejaVuSansMono.ttf"),
+    ):
+        if name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(name, str(fonts / filename)))
+    pdfmetrics.registerFontFamily(
+        "Report",
+        normal="Report",
+        bold="ReportBold",
+        italic="ReportItalic",
+        boldItalic="ReportBoldItalic",
     )
-    _draw_wrapped(
-        draw,
-        f"Source analyze directory: {analyze_dir}",
-        (MARGIN, PAGE_H - 150),
-        width_chars=128,
-        font=small_font,
-        fill=MUTED,
+    body = ParagraphStyle(
+        "Body",
+        fontName="Report",
+        fontSize=10,
+        leading=14,
+        textColor=colors.HexColor("#243340"),
+        spaceAfter=8,
+        alignment=TA_LEFT,
+        splitLongWords=True,
+        allowWidows=False,
+        allowOrphans=False,
     )
-    return img
+    return {
+        "body": body,
+        "title": ParagraphStyle(
+            "Title", parent=body, fontName="ReportBold", fontSize=20, leading=25, spaceAfter=12
+        ),
+        "section": ParagraphStyle(
+            "Section",
+            parent=body,
+            fontName="ReportBold",
+            fontSize=14,
+            leading=19,
+            spaceBefore=14,
+            spaceAfter=9,
+            keepWithNext=False,
+            textColor=colors.HexColor("#245b80"),
+        ),
+        "heading": ParagraphStyle(
+            "Heading",
+            parent=body,
+            fontName="ReportBold",
+            fontSize=11,
+            leading=15,
+            spaceBefore=9,
+            spaceAfter=6,
+            keepWithNext=False,
+        ),
+        "caption": ParagraphStyle(
+            "Caption", parent=body, fontSize=9, leading=12, textColor=colors.HexColor("#536471")
+        ),
+        "cell": ParagraphStyle("Cell", parent=body, fontSize=9, leading=12, spaceAfter=0),
+        "bullet": ParagraphStyle(
+            "Bullet", parent=body, leftIndent=12, firstLineIndent=0, bulletIndent=0
+        ),
+    }
 
 
-def _therapy_pages(document: dict) -> list[Image.Image]:
-    """Render the complete selected recommendations, with automatic page breaks."""
-    rows = (document.get("therapy") or {}).get("rows") or []
-    history = document.get("treatment_history") or []
-    follow_up = section_records(document.get("records") or [], "Clinical evidence to reconcile")
-    if not rows and not history and not follow_up:
-        return []
-    pages = []
-    body_font = _font(42)
-    heading_font = _font(46, bold=True)
-    page = None
-    draw = None
-    y = PAGE_H
-
-    def paragraph(text: str, font, *, gap: int = 22) -> None:
-        nonlocal page, draw, y
-        # Measure using the same font and width used to paint the text; no
-        # truncation of clinical conditions, history, or source attribution.
-        if draw is None:
-            draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        lines = _wrap_cell(draw, text, font, PAGE_W - 2 * MARGIN, max_lines=10000)
-        line_height = font.size + 12
-        for line in lines:
-            if y + line_height > PAGE_H - MARGIN:
-                page = Image.new("RGB", (PAGE_W, PAGE_H), "white")
-                pages.append(page)
-                draw = ImageDraw.Draw(page)
-                y = _section_heading(draw, "Treatment rationale and clinical requirements", MARGIN)
-            draw.text((MARGIN, y), line, font=font, fill=TEXT_COLOR)
-            y += line_height
-        y += gap
-
-    for index, row in enumerate(rows, 1):
-        paragraph(f"{index}. {row[1]} ({row[0]})", heading_font)
-        paragraph(row[3], body_font, gap=46)
-    if follow_up:
-        paragraph("Clinical evidence to reconcile", heading_font)
-        for record in follow_up:
-            paragraph(record["text"], body_font)
-    sources = (document.get("therapy") or {}).get("sources") or []
-    if sources:
-        paragraph("Evidence sources", heading_font)
-        for source in sources:
-            paragraph(f"{source['label']}: {source['url']}", _font(32))
-    if history:
-        paragraph("Supplied treatment history", heading_font)
-        for record in history:
-            name = record.get("therapy") or " ".join(
-                str(record.get(key) or "") for key in ("target", "modality")
-            )
-            details = [name, str(record.get("status") or "").replace("_", " ")]
-            details.extend(str(record[key]) for key in ("note", "source") if record.get(key))
-            paragraph("; ".join(details), body_font)
-    return pages
-
-
-def _figure_page(path: Path, title: str, interpretation: str = "") -> Image.Image:
-    """One figure per page: a bold title and its *interpretation sentence* — what the
-    figure means for the decision — instead of the raw PNG filename."""
-    page = Image.new("RGB", (PAGE_W, PAGE_H), "white")
-    draw = ImageDraw.Draw(page)
-    title_font = _font(38, bold=True)
-    caption_font = _font(32)
-    while title_font.size > 32 and _line_width(draw, title, title_font) > PAGE_W - 2 * MARGIN:
-        title_font = _font(title_font.size - 2, bold=True)
-    draw.text((MARGIN, MARGIN), title, fill=TEXT_COLOR, font=title_font)
-
-    # Wrap the interpretation sentence to the page width beneath the title.
-    caption_lines = textwrap.wrap(interpretation, width=118) if interpretation else []
-    y_caption = MARGIN + 58
-    for line in caption_lines:
-        draw.text((MARGIN, y_caption), line, fill=MUTED, font=caption_font)
-        y_caption += 36
-    rule_y = max(MARGIN + 95, y_caption + 10)
-    draw.rectangle((MARGIN, rule_y, PAGE_W - MARGIN, rule_y + 3), fill=RULE)
-
-    fig_top = rule_y + 50
-    with Image.open(path) as src:
-        fig = src.convert("RGB")
-    box_w = PAGE_W - 2 * MARGIN
-    box_h = PAGE_H - MARGIN - fig_top
-    scale = min(box_w / fig.width, box_h / fig.height)
-    new_size = (max(1, int(fig.width * scale)), max(1, int(fig.height * scale)))
-    fig = fig.resize(new_size, Image.Resampling.LANCZOS)
-    x = MARGIN + (box_w - fig.width) // 2
-    y = fig_top + (box_h - fig.height) // 2
-    page.paste(fig, (x, y))
-    return page
+def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
+    """Render the authored blocks without truncating rationale or reevaluating evidence."""
+    if document.get("schema_version") != 2 or not document.get("sections"):
+        raise ValueError("The PDF requires report schema 2 with authored sections; rerun analysis.")
+    styles = report_pdf_styles()
+    content_width = letter[0] - 88
+    title = document.get("sample_id") or document["prefix"]
+    story = [Paragraph(report_inline_html(str(title)), styles["title"])]
+    for section in document["sections"]:
+        story.extend(
+            [CondPageBreak(72), Paragraph(report_inline_html(section["title"]), styles["section"])]
+        )
+        for block in section["blocks"]:
+            kind = block["kind"]
+            if kind in {"paragraph", "heading", "bullet"}:
+                if kind == "heading":
+                    story.append(CondPageBreak(60))
+                style = styles["body"] if kind == "paragraph" else styles[kind]
+                story.append(
+                    Paragraph(
+                        report_inline_html(block["text"]),
+                        style,
+                        bulletText="•" if kind == "bullet" else None,
+                    )
+                )
+            elif kind == "table":
+                rows = [block["headers"], *block["rows"]]
+                cells = [
+                    [Paragraph(report_inline_html(str(cell)), styles["cell"]) for cell in row]
+                    for row in rows
+                ]
+                table = LongTable(
+                    cells,
+                    colWidths=[content_width / len(block["headers"])] * len(block["headers"]),
+                    repeatRows=1,
+                    hAlign="LEFT",
+                    splitByRow=True,
+                )
+                table.setStyle(
+                    TableStyle(
+                        [
+                            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#edf3f6")),
+                            ("LINEBELOW", (0, 0), (-1, 0), 0.6, colors.HexColor("#7e9baa")),
+                            ("LINEBELOW", (0, 1), (-1, -1), 0.3, colors.HexColor("#dbe3e8")),
+                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                            ("TOPPADDING", (0, 0), (-1, -1), 7),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+                        ]
+                    )
+                )
+                story.extend([table, Spacer(1, 9)])
+            elif kind == "figure":
+                path = find_figure(analyze_dir, document["prefix"], block["suffix"])
+                if path is None:
+                    raise FileNotFoundError(
+                        "A figure declared present in the report is missing: " + block["suffix"]
+                    )
+                figure = Image(str(path))
+                scale = min(content_width / figure.imageWidth, 450 / figure.imageHeight)
+                figure.drawWidth = figure.imageWidth * scale
+                figure.drawHeight = figure.imageHeight * scale
+                figure.hAlign = "CENTER"
+                story.append(
+                    KeepTogether(
+                        [
+                            Paragraph(report_inline_html(block["title"]), styles["heading"]),
+                            Paragraph(report_inline_html(block["caption"]), styles["caption"]),
+                            figure,
+                            Spacer(1, 10),
+                        ]
+                    )
+                )
+            else:
+                raise ValueError("Unknown report block kind: " + str(kind))
+    return story
 
 
 def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None) -> Path:
-    analyze_dir = analyze_dir.resolve()
+    """Write a Letter-size PDF with native text, links and automatic pagination."""
+    analyze_dir = Path(analyze_dir).resolve()
     document = load_report_document(analyze_dir)
-    prefix = document["prefix"]
-    output = output or analyze_dir / f"{prefix}-interpretive-report.pdf"
+    output = (
+        Path(output)
+        if output is not None
+        else analyze_dir / f"{document['prefix']}-interpretive-report.pdf"
+    )
+    story = report_pdf_flowables(document, analyze_dir)
+    pdf = SimpleDocTemplate(
+        str(output),
+        pagesize=letter,
+        leftMargin=44,
+        rightMargin=44,
+        topMargin=42,
+        bottomMargin=44,
+        title=str(document.get("sample_id") or document["prefix"]),
+        author="trufflepig",
+        subject="RNA evidence and therapeutic review",
+    )
 
-    pages = [_title_page(document, analyze_dir), *_therapy_pages(document)]
-    # Figure manifest is belief-gated at the source (a plot is only emitted when
-    # its underlying belief passed threshold), so ``present`` guarantees the PDF
-    # never ships a figure the report text denies.
-    for figure_spec in document.get("figures") or []:
-        if not figure_spec.get("present"):
-            continue
-        figure = find_figure(analyze_dir, prefix, figure_spec["suffix"])
-        if figure is not None:
-            pages.append(
-                _figure_page(figure, figure_spec["title"], figure_spec.get("caption") or "")
-            )
-    # Explicit resolution gives the 2550x3300 canvas a printable Letter page
-    # size; Pillow otherwise treats each pixel as a PDF point (35x46 inches).
-    pages[0].save(output, save_all=True, append_images=pages[1:], resolution=300)
+    def footer(canvas, doc):
+        canvas.saveState()
+        canvas.setStrokeColor(colors.HexColor("#dbe3e8"))
+        canvas.line(44, 31, letter[0] - 44, 31)
+        canvas.setFont("Report", 8)
+        canvas.setFillColor(colors.HexColor("#536471"))
+        canvas.drawString(44, 20, "trufflepig | RNA evidence and therapeutic review")
+        canvas.drawRightString(letter[0] - 44, 20, str(doc.page))
+        canvas.restoreState()
+
+    pdf.build(story, onFirstPage=footer, onLaterPages=footer)
     return output
 
 
@@ -622,8 +246,7 @@ def main() -> int:
     parser.add_argument("analyze_dir", type=Path)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
-    out = build_interpretive_report_pdf(args.analyze_dir, args.output)
-    print(out)
+    print(build_interpretive_report_pdf(args.analyze_dir, args.output))
     return 0
 
 

@@ -14,12 +14,14 @@
 
 Visualises therapy-response axis signatures (AR_signaling, NE_differentiation,
 ER_signaling, HER2_signaling, EMT, etc.) as heatmap-style or dot-strip plots
-that show per-gene fold-change vs cohort median, making subtype transitions
-(e.g. PRAD adenocarcinoma → NEPC) immediately visible.
+that show per-gene fold-change vs cohort median. These bulk RNA contrasts
+provide subtype context; pathology and clinical assays establish clinical states.
 
 Generalised: any pair of therapy-response axes can be contrasted for any
 cancer type where the signatures are applicable.
 """
+
+from textwrap import fill
 
 import numpy as np
 import matplotlib
@@ -40,27 +42,27 @@ from .plot_scatter import resolve_cancer_type
 SUBTYPE_CONTRASTS = {
     "PRAD": [
         {
-            "name": "Adenocarcinoma vs NEPC",
+            "name": "AR and neuroendocrine RNA programs",
             "axis_a": "AR_signaling",
             "axis_b": "NE_differentiation",
             "interpretation": {
-                "a_up_b_down": "Classic adenocarcinoma — AR program active, no NE differentiation",
-                "a_down_b_up": "Neuroendocrine prostate cancer (NEPC) — AR collapsed, NE markers elevated",
-                "a_down_b_down": "AR-suppressed (post-ADT) without NE emergence — CRPC, adenocarcinoma lineage retained",
-                "a_up_b_up": "Mixed phenotype — AR active with emerging NE features (treatment-emergent t-NEPC)",
+                "a_up_b_down": "AR-associated RNA is higher; neuroendocrine RNA is lower than the cohort reference.",
+                "a_down_b_up": "AR-associated RNA is lower; neuroendocrine RNA is higher. Correlate with pathology to assess lineage.",
+                "a_down_b_down": "Both RNA programs are lower. This does not establish prior androgen deprivation, resistance or retained lineage.",
+                "a_up_b_up": "Both RNA programs are higher. A mixed RNA pattern does not establish treatment-emergent NEPC.",
             },
         },
     ],
     "BRCA": [
         {
-            "name": "ER/PR status",
+            "name": "ER and HER2 RNA programs",
             "axis_a": "ER_signaling",
             "axis_b": "HER2_signaling",
             "interpretation": {
-                "a_up_b_down": "ER+/HER2- (luminal A/B) — endocrine therapy candidate",
-                "a_down_b_up": "ER-/HER2+ — trastuzumab / T-DXd candidate",
-                "a_down_b_down": "Triple-negative pattern — checkpoint / TROP2 ADC candidates",
-                "a_up_b_up": "ER+/HER2+ — dual-targeted therapy",
+                "a_up_b_down": "ER-associated RNA is higher; HER2-associated RNA is lower. Confirm clinical ER/PR and HER2 assays.",
+                "a_down_b_up": "HER2-associated RNA is higher; ER-associated RNA is lower. Confirm clinical ER/PR and HER2 assays.",
+                "a_down_b_down": "Both RNA programs are lower. Triple-negative status requires clinical ER, PR and HER2 testing.",
+                "a_up_b_up": "Both RNA programs are higher. Protein and amplification assays determine receptor eligibility.",
             },
         },
     ],
@@ -70,10 +72,10 @@ SUBTYPE_CONTRASTS = {
             "axis_a": "MAPK_EGFR_signaling",
             "axis_b": "EMT",
             "interpretation": {
-                "a_up_b_down": "EGFR-driven, epithelial — TKI candidate",
-                "a_down_b_up": "Mesenchymal phenotype — TKI-resistant, checkpoint candidate",
-                "a_up_b_up": "EGFR-active with mesenchymal features — emerging resistance",
-                "a_down_b_down": "Neither EGFR-driven nor mesenchymal — other driver likely",
+                "a_up_b_down": "EGFR-pathway RNA is higher; EMT RNA is lower. This does not establish an actionable EGFR alteration.",
+                "a_down_b_up": "EMT RNA is higher; EGFR-pathway RNA is lower. This does not establish resistance or checkpoint eligibility.",
+                "a_up_b_up": "Both RNA programs are higher. Confirm molecular findings and treatment course before inferring resistance.",
+                "a_down_b_down": "Both RNA programs are lower. No alternative driver is established by this contrast.",
             },
         },
     ],
@@ -163,20 +165,16 @@ def plot_subtype_signature(
         sample_tpm, ref, cancer_code, cancer_sigs[axis_b_name].get("down", [])
     )
 
-    # Combine up + down for each axis, tag direction
-    def _tagged(rows, tag):
-        for r in rows:
-            r["panel_role"] = tag
-        return rows
-
-    axis_a_all = _tagged(axis_a_up, "up") + _tagged(axis_a_down, "down")
-    axis_b_all = _tagged(axis_b_up, "up") + _tagged(axis_b_down, "down")
+    # Display raw expression of every panel gene; the caption describes RNA,
+    # not signed pathway activity or a clinical diagnosis.
+    axis_a_all = axis_a_up + axis_a_down
+    axis_b_all = axis_b_up + axis_b_down
 
     if not axis_a_all and not axis_b_all:
         return None
 
     fig, (ax1, ax2) = plt.subplots(
-        1, 2, figsize=(14, max(4, 0.4 * max(len(axis_a_all), len(axis_b_all))))
+        1, 2, figsize=(11, max(4.8, 0.4 * max(len(axis_a_all), len(axis_b_all))))
     )
 
     def _draw_axis_panel(ax, genes, axis_name):
@@ -193,28 +191,19 @@ def plot_subtype_signature(
         ax.barh(y_pos, log2_folds, color=colors, alpha=0.7, height=0.6)
         ax.axvline(0, color="black", linewidth=0.8, linestyle="-")
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(symbols, fontsize=9)
+        ax.set_yticklabels(symbols, fontsize=12)
         ax.set_xlabel("log₂(sample / TCGA cohort median)")
-        ax.set_title(axis_name.replace("_", " "), fontsize=11, fontweight="bold")
+        ax.set_title(axis_name.replace("_", " "), fontsize=13, fontweight="bold")
 
-        # Annotate with TPM
-        for i, g in enumerate(genes):
-            label = (
-                f"{g['sample_tpm']:.0f}"
-                if g["sample_tpm"] >= 1
-                else f"{g['sample_tpm']:.1f}"
-            )
-            side = "left" if g["log2_fold"] > 0 else "right"
-            offset = 0.1 if g["log2_fold"] > 0 else -0.1
-            ax.text(
-                g["log2_fold"] + offset,
-                i,
-                f"{label} TPM",
-                va="center",
-                ha=side,
-                fontsize=7,
-                color="#555555",
-            )
+        # A separate in-panel column keeps TPM labels away from gene names
+        # and negative bars, including values near the plotting boundary.
+        low, high = min(log2_folds + [0]), max(log2_folds + [0])
+        span = max(high - low, 1.0)
+        ax.set_xlim(low - 0.04 * span, high + 0.35 * span)
+        for i, gene in enumerate(genes):
+            ax.text(0.98, i, f"{gene['sample_tpm']:.1f} TPM",
+                    transform=ax.get_yaxis_transform(), va="center", ha="right",
+                    fontsize=10, color="#555555")
 
     _draw_axis_panel(ax1, axis_a_all, axis_a_name)
     _draw_axis_panel(ax2, axis_b_all, axis_b_name)
@@ -239,9 +228,9 @@ def plot_subtype_signature(
         fig.text(
             0.5,
             -0.02,
-            call,
+            fill(call, width=110),
             ha="center",
-            fontsize=10,
+            fontsize=11,
             style="italic",
             wrap=True,
             color="#333333",
