@@ -350,6 +350,15 @@ def test_selected_therapy_clinical_criteria_survive_all_report_formats(tmp_path,
     if code == "BLCA":
         assert "maintenance after first line platinum" in summary
         assert detail["affects"] == ["avelumab"]
+    if code == "PRAD":
+        # A shared BRCA2 work item must not apply niraparib's mCSPC setting
+        # to the other PARP-inhibitor combinations in the group.
+        paragraph = next(
+            block["text"] for section in content.sections if section["id"] == "information"
+            for block in section["blocks"] if "label-specific mCSPC" in block["text"]
+        )
+        assert "niraparib" in paragraph
+        assert "olaparib" not in paragraph
     write_report_document(tmp_path, "synthetic-clinical-setting", report_view=view, content=content)
     doc = load_report_document(tmp_path, "synthetic-clinical-setting")
     assert doc["evidence_requests"] == content.evidence_requests
