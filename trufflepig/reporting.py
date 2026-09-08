@@ -423,6 +423,7 @@ def _current_therapy_row_overrides(target_row) -> dict:
         }
     if cancer_code == "BLCA" and agent == "avelumab":
         return {
+            "line_of_therapy": "maintenance_after_first_line_platinum",
             "eligibility_note": (
                 "for this maintenance pathway, confirm locally advanced/metastatic "
                 "urothelial disease without progression after first-line platinum "
@@ -2644,7 +2645,7 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
 
     path = render_report_paragraph(
         "treatment_path", tier=therapy_path_tier(target_row),
-        setting=_clean_text(target_row.get("line_of_therapy")),
+        setting=_clean_text(target_row.get("line_of_therapy")).replace("_", " "),
     )
     if _phase_text(target_row) == "patient_history" and history:
         path = ""

@@ -233,7 +233,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
     distinct assay specification and reason.
     """
     groups = []
-    list_fields = ("keys", "accepted_inputs", "affects", "reasons", "requirements")
+    list_fields = ("keys", "accepted_inputs", "affects", "reasons", "requirements", "details")
     for assessment in assessments:
         requirements = assessment.get("eligibility", {}).get("requirements", [])
         if any(r["status"] == "blocked" for r in requirements):
@@ -281,6 +281,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 "affects": [assessment["agent"]],
                 "reasons": [requirement["description"]],
                 "requirements": [requirement["question"]],
+                "details": [{"question": requirement["question"], "agent": assessment["agent"]}],
             }
             for field in list_fields:
                 request[field].extend(
@@ -290,4 +291,14 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 request["status"] = "unresolved"
     for request in groups:
         del request["question_signatures"]
+        details = request["details"]
+        request["details"] = [
+            {
+                "question": question,
+                "affects": list(dict.fromkeys(
+                    detail["agent"] for detail in details if detail["question"] == question
+                )),
+            }
+            for question in request["requirements"]
+        ]
     return groups

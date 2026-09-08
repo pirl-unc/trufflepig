@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 import hashlib
 import json
@@ -299,6 +299,17 @@ def build_report_content(
             }
             for assessment in selected_assessments
         ]
+        for assessment, clinical in zip(selected_assessments, clinical_requirements):
+            note = assessment["curation"]["eligibility_note"]
+            # A satisfied molecular gate does not establish treatment setting
+            # or fitness. Preserve those curated criteria in the shared list.
+            if note and not any(
+                r["question"] == note and r["status"] in {"missing", "unresolved"}
+                for r in assessment["eligibility"]["requirements"]
+            ):
+                clinical["eligibility"]["requirements"].append(
+                    replace(clinical_requirement, question=note).public_dict()
+                )
     requests = collect_evidence_requests(
         [
             *assessments,
@@ -385,9 +396,12 @@ def build_report_content(
         )
         # Different therapies can require distinct tests for one evidence kind.
         # Keep those specifications visible even when the request is deduplicated.
-        for requirement in request["requirements"]:
-            if requirement != request["question"]:
-                request_blocks.append({"kind": "bullet", "text": requirement})
+        for detail in request["details"]:
+            if detail["question"] != request["question"]:
+                request_blocks.append({
+                    "kind": "bullet",
+                    "text": render_report_paragraph("evidence_request_detail", **detail),
+                })
     if not requests:
         request_blocks.append(
             paragraph(

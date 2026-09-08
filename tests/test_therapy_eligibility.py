@@ -318,3 +318,42 @@ def test_request_deduplication_merges_transitive_keys_and_questions(pairs):
     assert set(requests[0]["keys"]) == {"target:A", "target:B"}
     assert len(requests[0]["affects"]) == 3
     assert set(requests[0]["requirements"]) == {question for _, question in pairs}
+
+
+@pytest.mark.parametrize(
+    "code, agent, phrase",
+    [
+        ("BLCA", "avelumab", "without progression after first-line platinum"),
+        ("PRAD", "enzalutamide", "continued medical/surgical castration"),
+        ("SARC_OS", "regorafenib", "recurrent/progressive disease after chemotherapy"),
+    ],
+)
+def test_selected_therapy_clinical_criteria_survive_all_report_formats(tmp_path, code, agent, phrase):
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_document import write_report_document, load_report_document
+    from trufflepig.report_pdf import build_interpretive_report_pdf
+    from trufflepig.report_view import build_report_view
+    from pypdf import PdfReader
+
+    analysis = {"cancer_type": code, "purity": {}, "sample_mode": "solid"}
+    view = build_report_view(analysis, sample_id="synthetic-clinical-setting")
+    content = build_report_content(analysis, pd.DataFrame(), code, "", report_view=view)
+    assert any(a["agent"] == agent and a["selected"] for a in content.therapy_assessments)
+    summary = render_report_summary(content)
+    assert summary.count(phrase) == 1
+    assert summary.index(phrase) > summary.index("## Information needed")
+    request = next(r for r in content.evidence_requests if r["key"] == "clinical_setting")
+    detail = next(d for d in request["details"] if phrase in d["question"])
+    assert agent in detail["affects"]
+    if code == "SARC_OS":
+        assert set(detail["affects"]) == {"regorafenib", "cabozantinib"}
+    if code == "BLCA":
+        assert "maintenance after first line platinum" in summary
+        assert detail["affects"] == ["avelumab"]
+    write_report_document(tmp_path, "synthetic-clinical-setting", report_view=view, content=content)
+    doc = load_report_document(tmp_path, "synthetic-clinical-setting")
+    assert doc["evidence_requests"] == content.evidence_requests
+    (tmp_path / "synthetic-clinical-setting-summary.md").write_text(summary)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pdf_text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
+    assert pdf_text.count(phrase) == 1
