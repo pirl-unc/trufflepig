@@ -7,19 +7,23 @@ are explicit. This module does not infer clinical results from expression.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import date
 import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .hla import HlaEligibility
 
 
 ASSAY_RESULTS = {
     "msi": ("MSI-H", "MSI-L", "MSS", "indeterminate", "pending", "not_tested", "unknown"),
     "mmr": ("dMMR", "pMMR", "indeterminate", "pending", "not_tested", "unknown"),
     "tmb": ("measured", "indeterminate", "pending", "not_tested", "unknown"),
+    "hla": ("typed", "indeterminate", "pending", "not_tested", "unknown"),
 }
 POSITIVE_RESULTS = frozenset({"MSI-H", "dMMR"})
 NEGATIVE_RESULTS = frozenset({"MSI-L", "MSS", "pMMR"})
@@ -137,10 +141,12 @@ class ClinicalAssay:
     measurement: ClinicalMeasurement | None = None
     test_id: str = ""
     specimen_type: str = ""
+    alleles: tuple[str, ...] = ()
+    complete_loci: tuple[str, ...] = ()
 
     def __post_init__(self):
         for f in fields(self):
-            if f.name not in {"source", "protein_results", "measurement"} and not isinstance(
+            if f.name not in {"source", "protein_results", "measurement", "alleles", "complete_loci"} and not isinstance(
                 getattr(self, f.name), str
             ):
                 raise ValueError(f"Clinical assay {f.name} must be a string")
@@ -191,6 +197,20 @@ class ClinicalAssay:
                 object.__setattr__(self, "measurement", ClinicalMeasurement(
                     **validated_fields(ClinicalMeasurement, self.measurement)
                 ))
+        if not isinstance(self.alleles, (list, tuple)) or not isinstance(self.complete_loci, (list, tuple)):
+            raise ValueError("HLA alleles and complete loci must be arrays")
+        if (self.alleles or self.complete_loci) and self.kind != "hla":
+            raise ValueError("HLA typing belongs to an HLA assay")
+        from .hla import hla_allele, parse_hla_types
+
+        if any(not isinstance(allele, str) for allele in self.alleles):
+            raise ValueError("Each reported HLA allele must be a string")
+        object.__setattr__(self, "alleles", tuple(parse_hla_types(self.alleles)))
+        if any(not isinstance(locus, str) or locus not in {"A", "B", "C"} for locus in self.complete_loci):
+            raise ValueError("Complete HLA loci must be A, B or C")
+        object.__setattr__(self, "complete_loci", tuple(sorted(set(self.complete_loci))))
+        if set(self.complete_loci) - {hla_allele(allele).gene_name for allele in self.alleles}:
+            raise ValueError("A complete HLA locus must include its reported alleles")
         if not self.id:
             payload = {k: v for k, v in self.public_dict().items() if k != "id"}
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
@@ -209,14 +229,15 @@ class ClinicalAssay:
             limits.append(f"assay validity is {self.validity}")
         if self.reportability != "reportable":
             limits.append(f"reportability is {self.reportability}")
-        methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}, "tmb": {"NGS"}}
+        methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}, "tmb": {"NGS"},
+                   "hla": {"NGS", "SBT", "PCR", "SSP", "SSO"}}
         if self.method not in methods[self.kind]:
             limits.append("a supported clinical assay method is required")
         if not self.source.title.strip() and not self.source.reference.strip():
             limits.append("clinical source is missing")
         if self.source.review_status not in {"supplied", "confirmed"}:
             limits.append(f"source assertion is {self.source.review_status}")
-        usable_results = {"measured"} if self.kind == "tmb" else POSITIVE_RESULTS | NEGATIVE_RESULTS
+        usable_results = {"tmb": {"measured"}, "hla": {"typed"}}.get(self.kind, POSITIVE_RESULTS | NEGATIVE_RESULTS)
         if self.result not in usable_results:
             limits.append(f"result is {self.result}")
         if self.kind == "tmb":
@@ -224,6 +245,8 @@ class ClinicalAssay:
                 limits.append("absolute TMB measurement is missing")
             if self.measurement is None or self.measurement.unit != "mut/Mb":
                 limits.append("absolute TMB requires mutations per megabase")
+        if self.kind == "hla" and not self.alleles:
+            limits.append("reported HLA alleles are missing")
         # An explicit overall result cannot silently override contradictory IHC.
         if self.result == "pMMR" and "lost" in self.protein_results.values():
             limits.append("pMMR conflicts with a reported lost MMR protein")
@@ -238,9 +261,11 @@ class ClinicalAssay:
     def public_dict(self) -> dict:
         value = asdict(self)
         # Preserve v1 MSI/MMR records and their content-derived IDs exactly.
-        for key in ("measurement", "test_id", "specimen_type"):
-            if value[key] is None or value[key] == "":
+        for key in ("measurement", "test_id", "specimen_type", "alleles", "complete_loci"):
+            if value[key] is None or value[key] == "" or value[key] == ():
                 value.pop(key)
+            elif key in {"alleles", "complete_loci"}:
+                value[key] = list(value[key])
         return value
 
 
@@ -297,11 +322,42 @@ def load_clinical_context(value=None) -> ClinicalContext:
 
 def clinical_context_for_analysis(analysis) -> ClinicalContext:
     """Return the clinical contract carried by the ordinary analysis path."""
-    return (
-        load_clinical_context(analysis.get("clinical_context"))
-        if isinstance(analysis, Mapping)
-        else ClinicalContext()
+    if not isinstance(analysis, Mapping):
+        return ClinicalContext()
+    constraints = analysis.get("analysis_constraints") or {}
+    return normalize_clinical_inputs(
+        analysis.get("clinical_context"),
+        hla_types=constraints.get("hla_types_raw", constraints.get("hla_types")),
     )
+
+
+def normalize_clinical_inputs(context=None, *, hla_types=None) -> ClinicalContext:
+    """Retain legacy supplied typing in the same clinical assay contract.
+
+    Supplying an allele list binds that assertion to this run; it does not
+    supply an assay method, quality, full-locus coverage or specimen identity.
+    Identical normalization is idempotent, while different assertions survive.
+    """
+    from .hla import parse_hla_types
+
+    context = load_clinical_context(context)
+    alleles = tuple(parse_hla_types(hla_types))
+    if not alleles:
+        return context
+    assertion = ClinicalAssay(
+        kind="hla", result="typed", alleles=alleles,
+        specimen_id=context.specimen_id, scope="current", validity="unverified",
+        source=ClinicalSource(title="Supplied HLA allele input", reference="--hla-types",
+                              excerpt=hla_types if isinstance(hla_types, str) else json.dumps(hla_types)),
+    )
+    for existing in context.assays:
+        if existing.id == assertion.id and existing != assertion:
+            raise ValueError("Supplied HLA input conflicts with an existing assay ID; preserve distinct source IDs")
+        if (existing.kind == "hla" and existing.source.title == assertion.source.title
+                and existing.source.reference == "--hla-types" and existing.alleles == alleles
+                and existing.specimen_id == context.specimen_id and existing.scope == "current"):
+            return context
+    return replace(context, assays=context.assays + (assertion,))
 
 
 def report_identity(
@@ -394,6 +450,63 @@ def clinical_assay_records(context: ClinicalContext, *, kinds=None) -> tuple[dic
         {**a.public_dict(), "limitations": list(a.limitations(context.specimen_id))}
         for a in context.assays if kinds is None or a.kind in kinds
     )
+
+
+def evaluate_clinical_hla(
+    context: ClinicalContext, *, required: Iterable[str] | str,
+    excluded: Iterable[str] | str = (),
+) -> HlaEligibility:
+    """Reconcile sourced typing before applying the shared HLA compatibility API.
+
+    Failed, historical, unreviewed and unverified reports remain visible but
+    cannot establish a current clinical gate. Complete-locus assertions are
+    required to infer a mismatch or clear an excluded allele. Positive typing
+    never silently combines incompatible reports into a synthetic genotype.
+    """
+    from .hla import evaluate_hla_eligibility, hla_allele, hla_typings_conflict
+
+    initial = evaluate_hla_eligibility((), required, excluded=excluded)
+    if initial.status == "not_hla_restricted":
+        return initial
+    records = clinical_assay_records(context, kinds=("hla",))
+    current_typing = [r for r in records if not r['limitations']]
+    for record in records:
+        compatibility = evaluate_hla_eligibility(record.get('alleles', ()), required, excluded=excluded)
+        record['compatibility'] = compatibility.public_dict()
+        complete = set(record.get('complete_loci', ()))
+        needed = set()
+        if compatibility.status == 'mismatched':
+            needed.update(hla_allele(a).gene_name for a in initial.required)
+        if compatibility.status != 'excluded':
+            needed.update(hla_allele(a).gene_name for a in initial.excluded)
+        missing = sorted(needed - complete)
+        if missing:
+            record['limitations'].append('complete typing is not established for HLA locus ' + ', '.join(missing))
+    for index, left in enumerate(current_typing):
+        for right in current_typing[index + 1:]:
+            if hla_typings_conflict(left.get('alleles', ()), right.get('alleles', ()),
+                                   left_complete=left.get('complete_loci', ()),
+                                   right_complete=right.get('complete_loci', ())):
+                return replace(initial, status='conflicting', assays=records,
+                               reason='Reportable current HLA reports contain incompatible typing; reconcile the source reports and specimen identity.')
+    decisions = [r['compatibility'] for r in records if not r['limitations']]
+    definitive = [d for d in decisions if d['status'] in {'matched', 'mismatched', 'excluded'}]
+    if len({d['status'] == 'matched' for d in definitive}) > 1:
+        return replace(initial, status='conflicting', assays=records,
+                       reason='Reportable current HLA reports disagree on this requirement; reconcile the source reports.')
+    if definitive:
+        chosen = next((d for d in definitive if d['status'] == 'excluded'), definitive[0])
+    elif decisions:
+        chosen = decisions[0]
+    elif records:
+        limits = tuple(dict.fromkeys(limit for r in records for limit in r['limitations']))
+        return replace(initial, status='unresolved', assays=records,
+                       reason='Supplied HLA typing needs reconciliation: ' + '; '.join(limits) + '.')
+    else:
+        return initial
+    return replace(initial, status=chosen['status'], supplied=tuple(chosen['supplied']),
+                   matched_supplied=chosen['matched_supplied'], matched_required=chosen['matched_required'],
+                   reason=chosen['reason'], assays=records)
 
 
 @dataclass(frozen=True)

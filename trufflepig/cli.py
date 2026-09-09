@@ -48,9 +48,10 @@ def _add_run_parser(sub):
     p.add_argument("--tumor-context", default="auto")
     p.add_argument("--site-hint", default=None)
     p.add_argument("--met-site", default=None)
-    p.add_argument("--hla-types", default=None)
+    p.add_argument("--hla-types", default=None,
+                   help="Reported HLA alleles; supply clinical assay quality and complete loci through --clinical-context to establish eligibility.")
     p.add_argument("--clinical-context", default=None,
-                   help="Clinical-context JSON with specimen identity/purpose, MSI/MMR and absolute TMB results, and provenance.")
+                   help="Clinical-context JSON with specimen identity/purpose, MSI/MMR, absolute TMB, HLA typing, and assay provenance.")
     p.add_argument("--fusions", default=None)
     variant_group = p.add_mutually_exclusive_group()
     variant_group.add_argument(

@@ -565,7 +565,7 @@ def test_her2_rows_remain_prioritizable_when_sample_rna_context_is_her2_up():
     assert therapy_rna_context_conflict(row, analysis=analysis) == ""
 
 
-def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
+def test_hla_restricted_therapy_rows_use_supplied_hla_gate(clinical_hla_context):
     row = {
         "symbol": "TEST4",
         "agent": "example TCR-T",
@@ -576,8 +576,8 @@ def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
         "treatment_path_tier": "trial_follow_up",
         "eligibility_note": "clinical-trial follow-up; not default standard",
     }
-    matched = {"analysis_constraints": {"hla_types": ["A*02:01"]}}
-    mismatched = {"analysis_constraints": {"hla_types": ["A*24:02"]}}
+    matched = {"clinical_context": clinical_hla_context(["A*02:01"])}
+    mismatched = {"clinical_context": clinical_hla_context(["A*24:02"])}
 
     assert "HLA match" in hla_eligibility_context(row, analysis=matched)
     assert hla_restricted_target_supported(row, analysis=matched) is True
@@ -585,7 +585,7 @@ def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
     assert hla_restricted_target_supported(row, analysis=mismatched) is False
 
 
-def test_low_resolution_hla_does_not_match_exact_allele_requirement():
+def test_low_resolution_hla_does_not_match_exact_allele_requirement(clinical_hla_context):
     row = {
         "symbol": "TEST5",
         "agent": "example pMHC bispecific",
@@ -596,7 +596,7 @@ def test_low_resolution_hla_does_not_match_exact_allele_requirement():
         "treatment_path_tier": "approved_biomarker_matched",
         "eligibility_note": "confirm biomarker/indication-specific eligibility",
     }
-    low_resolution = {"analysis_constraints": {"hla_types": ["A*02"]}}
+    low_resolution = {"clinical_context": clinical_hla_context(["A*02"])}
 
     eligibility = target_hla_eligibility(row, analysis=low_resolution)
     context = hla_eligibility_context(row, analysis=low_resolution)
@@ -609,7 +609,7 @@ def test_low_resolution_hla_does_not_match_exact_allele_requirement():
     assert hla_restricted_target_supported(row, analysis=low_resolution) is False
 
 
-def test_low_resolution_hla_matches_broad_requirement_only():
+def test_low_resolution_hla_matches_broad_requirement_only(clinical_hla_context):
     row = {
         "symbol": "TEST6",
         "agent": "example broad TCR-T",
@@ -620,7 +620,7 @@ def test_low_resolution_hla_matches_broad_requirement_only():
         "treatment_path_tier": "trial_follow_up",
         "eligibility_note": "clinical-trial follow-up; not default standard",
     }
-    low_resolution = {"analysis_constraints": {"hla_types": ["A*02"]}}
+    low_resolution = {"clinical_context": clinical_hla_context(["A*02"])}
 
     assert target_hla_eligibility(row, analysis=low_resolution)["status"] == "matched"
     assert "HLA match" in hla_eligibility_context(row, analysis=low_resolution)

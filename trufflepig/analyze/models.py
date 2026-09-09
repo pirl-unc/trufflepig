@@ -59,9 +59,11 @@ class AnalyzeConfig:
     force: bool = False
 
     def __post_init__(self):
-        from ..clinical_context import load_clinical_context
+        from ..clinical_context import normalize_clinical_inputs
 
-        object.__setattr__(self, "clinical_context", load_clinical_context(self.clinical_context))
+        object.__setattr__(self, "clinical_context", normalize_clinical_inputs(
+            self.clinical_context, hla_types=self.hla_types,
+        ))
 
     def template_overrides(self) -> list[str]:
         if self.decomposition_templates is None:

@@ -1,6 +1,6 @@
 # Clinical and specimen input
 
-Supply existing clinical MSI/MMR or absolute TMB results through the same versioned
+Supply existing clinical MSI/MMR, absolute TMB or HLA results through the same versioned
 `ClinicalContext` contract in Python, the CLI or the web upload form:
 
 ```sh
@@ -11,7 +11,7 @@ trufflepig run --sample gene_tpm.tsv --workspace output/specimen-A \
 ```json
 {
   "schema_version": 1,
-    "specimen_id": "specimen-A",
+  "specimen_id": "specimen-A",
   "assays": [
     {
       "kind": "msi",
@@ -46,7 +46,7 @@ have `scope: "current"`. Dates are optional ISO dates; unknown dates stay unknow
 
 | Field | Accepted values or meaning |
 |---|---|
-| `kind` | `msi` or `mmr` |
+| `kind` | `msi`, `mmr`, `tmb` or `hla` (TMB and HLA fields are described below) |
 | MSI `result` | `MSI-H`, `MSI-L`, `MSS`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | MMR `result` | `dMMR`, `pMMR`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | `method` | Clinical MSI: `PCR` or `NGS`; clinical MMR: `IHC` or `NGS`. Other/unknown methods are retained as unresolved. RNA expression and RNA-read evidence cannot satisfy this gate. |
@@ -110,9 +110,10 @@ cannot be interpreted as a server-side file path. No clinical data is sent to an
 external model by this input path.
 
 RNA-only operation remains complete without this input. Other clinical facts,
-integration of existing variant/HLA/history inputs into this context and
-optional model extraction/editing remain in #163. Existing variant, fusion, HLA
-and treatment-history inputs continue to use their current contracts.
+integration of existing variant/history inputs into this context and
+optional model extraction/editing remain in #163. Existing variant, fusion
+and treatment-history inputs continue to use their current contracts. Supplied
+HLA alleles normalize into this context as described below.
 
 ## Absolute TMB measurements
 
@@ -226,3 +227,67 @@ uses this concise identifier on every page; the complete Unicode title wraps at
 the start. When no explicit identity is supplied, the title includes that
 document identifier, so files with the same basename remain distinguishable.
 This identifier is not a verified biological specimen identity.
+
+## Clinical HLA typing
+
+Use the same `assays` array for HLA reports. `alleles` contains the reported
+human class-I alleles; `mhcgnomes` preserves every field and expression/group
+annotation. `complete_loci` is an explicit assertion that the source contains
+complete typing for those loci. An omitted allele is not a negative result,
+and the number of reported alleles does not establish completeness.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "hla",
+    "result": "typed",
+    "alleles": ["A*02:01:01:01", "A*24:02"],
+    "complete_loci": ["A"],
+    "method": "NGS",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "validity": "validated",
+    "reportability": "reportable",
+    "reported_at": "2026-08-01",
+    "source": {
+      "title": "Clinical HLA typing report",
+      "reference": "report-A, page 2",
+      "excerpt": "HLA-A*02:01:01:01, A*24:02; complete HLA-A typing",
+      "review_status": "supplied"
+    }
+  }]
+}
+```
+
+HLA results may also be `indeterminate`, `pending`, `not_tested`, or `unknown`.
+Use an empty allele array when no alleles are available. Clinical assay
+method, validity, reportability, source and specimen binding must be supplied
+before typing can establish a clinical eligibility requirement. A negative
+compatibility decision needs complete typing of the relevant locus; an
+excluded allele can be detected in partial typing. Clearing an exclusion
+requires complete typing of the locus containing that exclusion.
+
+Public `evaluate_clinical_hla` reconciles these reports and calls the existing
+`evaluate_hla_eligibility` nomenclature/policy matcher. Incompatible usable
+reports produce `conflicting`, with each source and its compatibility result
+retained. Historical, failed, proposed and unverified reports remain visible
+without overriding a usable current report. Source conflicts are not resolved
+by concatenating alleles into one genotype. `target_hla_eligibility`, therapy
+selection and the report's requests consume this one decision.
+
+`normalize_clinical_inputs` also accepts the existing `--hla-types` input.
+It stores the canonical allele list as a supplied HLA assay in `ClinicalContext`
+without inventing a method, clinical validation, complete loci or specimen ID.
+**Behavior change:** a bare list now leaves clinical HLA eligibility unresolved.
+The report retains any reported match, mismatch or excluded allele, and asks
+for the source and missing assay information. Answer with an HLA assay in
+`--clinical-context`; the same stable request is resolved on the next run.
+Python, CLI and web uploads use the same context. A raw allele list remains
+valid input to the public nomenclature matcher for compatibility-only checks.
+
+The current context requires an explicit binding to the run specimen. It does
+not infer that a different blood/tumor specimen belongs to the same person;
+cross-assay identity binding remains part of #153. HLA input does not create an
+MSI/MMR result or request, and does not satisfy a separate antigen/protein assay.

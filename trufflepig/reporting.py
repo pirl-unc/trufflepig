@@ -15,7 +15,6 @@ import re
 
 from .cancer_ontology import cancer_codes_context_compatible
 from .hla import (
-    evaluate_hla_eligibility,
     extract_hla_types_from_text,
     parse_hla_types,
 )
@@ -2614,15 +2613,13 @@ def hla_restrictions_for_target_row(target_row) -> list[str]:
 
 
 def target_hla_eligibility(target_row, *, analysis=None) -> dict:
-    """Classify supplied HLA types against a row's HLA restriction."""
+    """Reconcile clinical typing and apply a row's sourced HLA restriction."""
+    from .clinical_context import clinical_context_for_analysis, evaluate_clinical_hla
+
     restrictions = hla_restrictions_for_target_row(target_row)
-    supplied = []
-    if isinstance(analysis, dict):
-        constraints = analysis.get("analysis_constraints") or {}
-        supplied = parse_hla_types(constraints.get("hla_types"))
     policy = hla_requirements_for_agent(target_row.get("agent")) if hasattr(target_row, "get") else {}
-    result = evaluate_hla_eligibility(
-        supplied, restrictions, excluded=policy.get("excluded", ()),
+    result = evaluate_clinical_hla(
+        clinical_context_for_analysis(analysis), required=restrictions, excluded=policy.get("excluded", ()),
     ).public_dict()
     result["source"] = policy.get("source", "")
     result["reviewed_at"] = policy.get("reviewed_at", "")

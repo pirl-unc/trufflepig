@@ -1194,9 +1194,12 @@ def _priority_target_rows(
         elif hla_status == "unknown":
             score -= 0.35
             notes.append("HLA needed")
-        elif hla_status == "mismatched":
+        elif hla_status in {"unresolved", "conflicting"}:
+            score -= 0.35
+            notes.append("HLA reports conflict" if hla_status == "conflicting" else "HLA evidence unresolved")
+        elif hla_status in {"mismatched", "excluded"}:
             score -= 3.0
-            notes.append("HLA mismatch")
+            notes.append("HLA exclusion" if hla_status == "excluded" else "HLA mismatch")
 
         if expression_independent_indication(curated):
             supported = supplied_variant_supports_target_row(curated, analysis)
@@ -1285,7 +1288,7 @@ def _priority_target_rows(
         if (
             curated is not None
             and target_hla_eligibility(curated, analysis=analysis).get("status")
-            == "mismatched"
+            in {"mismatched", "excluded"}
         ):
             continue
 
