@@ -3,6 +3,7 @@
 """Tests for therapy target deep-dive and subtype signature plots."""
 
 import pandas as pd
+import pytest
 
 from trufflepig.reference import pan_cancer_expression
 from trufflepig.plot_target_deep_dive import (
@@ -332,7 +333,8 @@ def test_plot_priority_targets_saves_png(tmp_path):
     assert "healthy-tissue safety" in fig_texts  # the folded cue's caption
 
 
-def test_priority_targets_exclude_hla_mismatched_rows(tmp_path):
+@pytest.mark.parametrize('alleles', [('A*01:01',), ('A*02:01', 'A*02:05')])
+def test_priority_targets_exclude_hla_blocked_rows(tmp_path, clinical_hla_context, alleles):
     ranges_df = pd.DataFrame(
         [
             {
@@ -394,7 +396,7 @@ def test_priority_targets_exclude_hla_mismatched_rows(tmp_path):
         ranges_df,
         "SARC",
         target_panel=target_panel,
-        analysis={"analysis_constraints": {"hla_types": ["A*01:01"]}},
+        analysis={"clinical_context": clinical_hla_context(alleles)},
         save_to_filename=str(tmp_path / "priority-targets.png"),
     )
 

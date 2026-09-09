@@ -9,6 +9,16 @@ this treatment is excluded even when another supplied allele matches an allowed 
 {% if eligibility.source %}[HLA eligibility source]({{ eligibility.source }}).{% endif %}
 {% elif eligibility.status == 'mismatched' %}
 HLA mismatch: supplied {{ eligibility.supplied | join('/') }} does not match required {{ eligibility.required | join('/') }}.
+{% elif eligibility.status in ['conflicting', 'unresolved'] %}
+HLA {{ 'reports conflict' if eligibility.status == 'conflicting' else 'evidence unresolved' }}: {{ eligibility.reason }}
+{% for assay in eligibility.assays %}
+Supplied {{ assay.alleles | default([]) | join(', ') or assay.result }}{% if assay.source.title %} ({{ assay.source.title | literal }}){% endif %}.
+{% if assay.compatibility.status == 'mismatched' %}
+These reported alleles do not match {{ eligibility.required | join(', ') }}; reconcile this finding with the other supplied evidence and its limitations.
+{% elif assay.compatibility.status == 'excluded' %}
+The reported {{ assay.compatibility.matched_supplied }} matches excluded {{ assay.compatibility.matched_required }}; reconcile this finding with the other supplied evidence and its limitations.
+{% endif %}
+{% endfor %}
 {% else %}
 HLA typing is unavailable{% if agent %} for {{ agent }}{% endif %}; this treatment requires {{ eligibility.required | join('/') }}.
 {% endif %}

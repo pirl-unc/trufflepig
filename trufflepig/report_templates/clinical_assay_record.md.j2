@@ -3,8 +3,13 @@
 {% if assay.get('test_id') %}Test ID: {{ assay.test_id | literal }}.{% endif %}
 {% if assay.get('specimen_type') %}Specimen material: {{ assay.specimen_type | literal }}.{% endif %}
 Source: {{ (assay.source.title or assay.source.reference or 'not supplied') | literal }} ({{ assay.source.review_status }}).
+{% if assay.source.title and assay.source.reference and assay.source.title != assay.source.reference %}Reference: {{ assay.source.reference | literal }}.{% endif %}
 {% if assay.source.excerpt %}Recorded source excerpt: {{ assay.source.excerpt | literal }}{% endif %}
 {% if assay.collected_at %}Collected: {{ assay.collected_at }}.{% endif %}
 {% if assay.reported_at %}Reported: {{ assay.reported_at }}.{% endif %}
 {% if assay.protein_results %}Protein findings: {% for protein, result in assay.protein_results.items() %}{{ protein }} {{ result }}{% if not loop.last %}; {% else %}.{% endif %}{% endfor %}{% endif %}
 {% if assay.limitations %}Limitations: {{ assay.limitations | join('; ') }}.{% endif %}
+{% if assay.kind == 'hla' %}
+Reported alleles: {{ assay.alleles | default([]) | join(', ') or 'unavailable' }}.
+Complete loci: {{ assay.complete_loci | default([]) | join(', ') or 'not established' }}.
+{% endif %}

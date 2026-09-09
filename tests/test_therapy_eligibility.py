@@ -125,8 +125,8 @@ def test_unrelated_variant_file_never_satisfies_a_target_requirement():
 @pytest.mark.parametrize(
     "hla_types, status", [(["A*24:02"], "blocked"), (["A*02:05"], "blocked"), ([], "missing")]
 )
-def test_known_hla_exclusions_are_blockers_and_unknown_typing_is_a_request(hla_types, status):
-    analysis = {"cancer_type": "SARC_SYN", "analysis_constraints": {"hla_types": hla_types}}
+def test_known_hla_exclusions_are_blockers_and_unknown_typing_is_a_request(hla_types, status, clinical_hla_context):
+    analysis = {"cancer_type": "SARC_SYN", "clinical_context": clinical_hla_context(hla_types)}
     _, subtype, panel = cancer_therapy_panel_for_analysis("SARC_SYN", analysis)
     row = next(row for row in panel.to_dict("records") if row["agent"] == "afami-cel (Tecelra)")
     assessment = assess_therapy(row, analysis=analysis, panel_subtype=subtype)

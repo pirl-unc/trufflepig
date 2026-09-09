@@ -24,10 +24,11 @@
         </label>
         <label>HLA types (optional, comma-separated)
           <input type="text" name="hla_types" placeholder="A*02:01,B*07:02">
+          <small>A reported allele list is retained as supplied evidence. Include the clinical typing report and assay details below to establish eligibility.</small>
         </label>
         <label>Clinical assay results and specimen context (optional JSON)
           <input type="file" name="clinical_context" accept=".json,application/json">
-          <small>Include specimen ID, display label, clinical/research purpose, and any MSI/MMR or absolute TMB results with their assay method, validity and source. For TMB, include the measured value, units, test ID and specimen material. RNA-only analysis works without this file.</small>
+          <small>Include specimen ID, display label, clinical/research purpose, and clinical assay results with their method, validity and source. Keep MSI/MMR and TMB results separate; TMB needs its value, units, test ID and specimen material. For HLA, include reported alleles and complete loci. RNA-only analysis works without this file.</small>
         </label>
         <label>Sample selector (for a table containing multiple samples)
           <input type="text" name="sample_id_value" placeholder="Exact sample column or row value">

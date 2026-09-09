@@ -430,7 +430,7 @@ def build_report_content(
 
     request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
     for request in requests:
-        label = {"msi_high": "MSI/MMR", "tmb_high": "TMB"}.get(
+        label = {"msi_high": "MSI/MMR", "tmb_high": "TMB", "hla": "HLA"}.get(
             request["kind"], request["kind"].replace("_", " ").capitalize()
         )
         request_blocks.append(

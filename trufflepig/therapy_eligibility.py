@@ -227,6 +227,8 @@ def evaluate_therapy_eligibility(
             "mismatched": "blocked",
             "excluded": "blocked",
             "insufficient_resolution": "unresolved",
+            "conflicting": "unresolved",
+            "unresolved": "unresolved",
             "unknown": "missing",
         }[hla["status"]]
         requirements.append(
@@ -235,10 +237,13 @@ def evaluate_therapy_eligibility(
                 "hla",
                 status,
                 hla_eligibility_context(target_row, analysis=analysis),
-                "Supply or reconcile high-resolution HLA typing, including all reported allele fields and annotations.",
-                ("HLA typing report", "--hla-types"),
+                hla["reason"] + " Supply the clinical HLA typing report with alleles, complete loci, source, specimen and assay quality."
+                if hla["status"] in {"conflicting", "unresolved", "insufficient_resolution"} else
+                "Supply the clinical HLA typing report, including all allele fields and annotations, complete loci, source, specimen and assay quality.",
+                ("--clinical-context JSON: assays[kind=hla]", "clinical HLA typing report"),
                 hla.get("source", ""),
                 evidence=hla,
+                priority="high" if hla["status"] == "conflicting" else "routine",
             )
         )
 
