@@ -3880,6 +3880,13 @@ def _analyze_body(run: AnalyzeRun):
             met_site=_effective_met_site_for_background(analysis),
             expression_reference_type=expression_reference_cancer_code,
         )
+        # Attach shared sample context before any table, plot or report consumes
+        # these rows. A renderer must not mutate evidence for a later renderer.
+        from .confidence import sample_purity_is_low
+
+        ranges_df["sample_low_purity"] = bool(
+            sample_purity_is_low(report_view.purity.confidence)
+        )
         ranges_tsv = (
             "%s-tumor-expression-ranges.tsv" % prefix
             if prefix
@@ -9076,14 +9083,6 @@ def _generate_text_reports(
     # Purity / composition
     lines.append(f"## {_purity_metric_label(sample_mode).title()}\n")
     purity_tier = conclusion.confidence
-    # Sample-level low-purity flag rides along on ranges_df so every tumor-source TPM
-    # cell (via reporting.tumor_attribution_context) carries the caveat inline, not just
-    # the summary caveats block. ranges_df is not reassigned after it is built, so the
-    # column persists to every downstream renderer.
-    if ranges_df is not None and len(ranges_df) > 0:
-        from .confidence import sample_purity_is_low
-
-        ranges_df["sample_low_purity"] = bool(sample_purity_is_low(purity_tier))
     tier_note = str(getattr(purity_tier, "inline_note", "") or "")
     tier_note = tier_note.replace("purity CI", "purity range")
     tier_note = tier_note.replace("CI", "range")
