@@ -354,6 +354,10 @@ def _current_therapy_row_overrides(target_row) -> dict:
     if cancer_code in {"COAD", "READ"} and agent == "pembrolizumab":
         return {
             "requires_verified_alteration": True,
+            "clinical_setting_note": (
+                "Confirm unresectable or metastatic colorectal cancer and "
+                "reconcile prior checkpoint therapy and immune toxicity."
+            ),
             "eligibility_note": (
                 "requires validated MSI-H/dMMR status and unresectable or "
                 "metastatic colorectal cancer; reconcile prior checkpoint "

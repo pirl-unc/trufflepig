@@ -260,6 +260,7 @@ def test_both_detailed_tables_preserve_the_assay_decision(result, phrase):
     from trufflepig.report_view import build_report_view
 
     analysis = colorectal_analysis(context(assay(result)))
+    analysis["purity"] = {"overall_estimate": 0.5, "overall_lower": 0.3, "overall_upper": 0.7}
     ranges = pd.DataFrame(
         {
             "symbol": pd.Series(dtype=str),
@@ -306,6 +307,12 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert any(r["kind"] == "clinical_setting" for r in content.evidence_requests)
     prefix = "synthetic-clinical-assay"
     summary = render_report_summary(content)
+    if candidate["selected"]:
+        information = summary.split("## Information needed", 1)[1].split("## ", 1)[0]
+        assert "unresectable or metastatic colorectal cancer" in information
+        assert "requires validated MSI-H/dMMR" not in information
+    elif followup:
+        assert "MSI/MMR" in summary and "Msi high" not in summary
     (tmp_path / f"{prefix}-summary.md").write_text(summary)
     run = AnalyzeRun(
         AnalyzeConfig(input_path="synthetic.tsv", clinical_context=ctx),

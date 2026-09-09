@@ -136,7 +136,10 @@ def assess_therapy(
         else "—",
         "curation": {
             key: clean_therapy_value(row.get(key))
-            for key in ("eligibility_note", "line_of_therapy", "treatment_path_tier", "rationale")
+            for key in (
+                "eligibility_note", "clinical_setting_note", "line_of_therapy",
+                "treatment_path_tier", "rationale",
+            )
         },
         "source": clean_therapy_value(row.get("therapy_evidence_source")),
         "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
@@ -308,7 +311,10 @@ def build_report_content(
             for assessment in selected_assessments
         ]
         for assessment, clinical in zip(selected_assessments, clinical_requirements):
-            note = assessment["curation"]["eligibility_note"]
+            note = (
+                assessment["curation"]["clinical_setting_note"]
+                or assessment["curation"]["eligibility_note"]
+            )
             # A satisfied molecular gate does not establish treatment setting
             # or fitness. Preserve those curated criteria in the shared list.
             if note and not any(
@@ -398,7 +404,9 @@ def build_report_content(
 
     request_blocks = []
     for request in requests:
-        label = request["kind"].replace("_", " ").capitalize()
+        label = {"msi_high": "MSI/MMR"}.get(
+            request["kind"], request["kind"].replace("_", " ").capitalize()
+        )
         request_blocks.append(
             paragraph(render_report_paragraph("evidence_request", label=label, **request))
         )
