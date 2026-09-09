@@ -21,10 +21,12 @@ from trufflepig.therapeutic_agents import agent_identity
 
 
 @pytest.fixture
-def synovial_therapy_case(clinical_hla_context):
+def synovial_therapy_case(clinical_hla_context, clinical_magea4_assay):
+    context = clinical_hla_context(["A*02:01"])
+    context["assays"].append(clinical_magea4_assay().public_dict())
     analysis = {
         "cancer_type": "SARC_SYN",
-        "clinical_context": clinical_hla_context(["A*02:01"]),
+        "clinical_context": context,
     }
     _, _, panel = cancer_therapy_panel_for_analysis("SARC_SYN", analysis)
     expression = {

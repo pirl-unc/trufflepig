@@ -1,0 +1,12 @@
+{% if decision.status == 'conflicting' %}
+Reconcile the conflicting {{ decision.criterion.label | literal }} source reports and specimen identity.
+{% elif decision.status == 'unresolved' and pending %}
+The {{ decision.criterion.label | literal }} result is pending; supply the final report when available.
+{% elif decision.status == 'unresolved' %}
+Resolve the stated result, assay, quality or specimen limitations in the supplied {{ decision.criterion.label | literal }} report.
+{% else %}
+Supply the reported {{ decision.criterion.label | literal }} result with its test identity, specimen, assay quality and source.
+{% endif %}
+Required result: {{ decision.criterion.positive_results | join(' or ') | literal }};
+{{ decision.criterion.specimen_type | literal }}; accepted test IDs: {{ decision.criterion.accepted_test_ids | join(', ') | literal }}.
+{% if decision.specimen_id %}Required specimen: {{ decision.specimen_id | literal }}.{% endif %}

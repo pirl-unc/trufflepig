@@ -1,6 +1,6 @@
 # Clinical and specimen input
 
-Supply existing clinical MSI/MMR, absolute TMB or HLA results through the same versioned
+Supply existing clinical MSI/MMR, absolute TMB, HLA or IHC/ISH results through the same versioned
 `ClinicalContext` contract in Python, the CLI or the web upload form:
 
 ```sh
@@ -46,7 +46,7 @@ have `scope: "current"`. Dates are optional ISO dates; unknown dates stay unknow
 
 | Field | Accepted values or meaning |
 |---|---|
-| `kind` | `msi`, `mmr`, `tmb` or `hla` (TMB and HLA fields are described below) |
+| `kind` | `msi`, `mmr`, `tmb`, `hla`, `ihc` or `ish` (additional assay fields are described below) |
 | MSI `result` | `MSI-H`, `MSI-L`, `MSS`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | MMR `result` | `dMMR`, `pMMR`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | `method` | Clinical MSI: `PCR` or `NGS`; clinical MMR: `IHC` or `NGS`. Other/unknown methods are retained as unresolved. RNA expression and RNA-read evidence cannot satisfy this gate. |
@@ -291,3 +291,83 @@ The current context requires an explicit binding to the run specimen. It does
 not infer that a different blood/tumor specimen belongs to the same person;
 cross-assay identity binding remains part of #153. HLA input does not create an
 MSI/MMR result or request, and does not satisfy a separate antigen/protein assay.
+
+## Reported IHC and ISH results
+
+The same assay array accepts qualitative clinical companion-assay results.
+The tested `analyte` is independent of the therapy's drug-target gene. A
+pathologist-reported PTEN-deficient result, for example, concerns PTEN protein
+loss; it is not positive PTEN expression or a PTEN sequence variant.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "ihc",
+    "analyte": "PTEN",
+    "result": "deficient",
+    "method": "IHC",
+    "test_id": "FDA:P250031",
+    "specimen_type": "tissue",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "validity": "validated",
+    "reportability": "reportable",
+    "reported_at": "2026-08-01",
+    "source": {
+      "title": "Synthetic companion-assay report",
+      "reference": "page 2",
+      "excerpt": "PTEN-deficient by the specified companion assay"
+    }
+  }]
+}
+```
+
+Supply the actual reported endpoint and source. These fields record the report's
+assertions; their presence does not independently validate a laboratory test.
+
+| Kind | Reported result states | Additional fields |
+|---|---|---|
+| `ihc` | `positive`, `negative`, `lost`, `retained`, `deficient`, `not_deficient`, `indeterminate`, `pending`, `not_tested`, `unknown` | `analyte`, `test_id`, `specimen_type`; method `IHC` |
+| `ish` | `amplified`, `not_amplified`, `indeterminate`, `pending`, `not_tested`, `unknown` | `analyte`, `test_id`, `specimen_type`; method `ISH`, `FISH`, `CISH` or `SISH` |
+
+The result states are assay endpoints, not interchangeable synonyms. The PTEN
+criterion accepts `lost` or `deficient` and treats `retained` or `not_deficient`
+as negative for that pathway. A generic `positive` PTEN result does not establish
+PTEN deficiency. MAGE-A4 positivity uses the explicit `positive` endpoint.
+Target symbols normalize case and surrounding whitespace through the same
+public normalizer used by therapy and RNA tables: `MAGE-A4` becomes `MAGEA4`
+and `HER2` becomes `ERBB2`. Source excerpts preserve the original wording.
+
+A public `ClinicalAssayCriterion` declares kind, analyte, display label, positive
+and negative result sets, accepted test identifiers, specimen material and
+source. `evaluate_clinical_assay(context, criterion=...)` evaluates only matching
+assay/analyte records. `clinical_assay_requirements(row, analysis)` evaluates the
+criterion array declared in the normal therapy row's `clinical_assay_criteria`.
+All declared requirements must be addressed. Different assays retain distinct
+request keys, while repeated requests for the same analyte preserve each
+therapy's criterion and source in the shared request evidence.
+
+Current sourced declarations cover:
+
+- MAGE-A4 IHC positivity for the afami-cel synovial-sarcoma row, using the
+  [MAGE-A4 IHC 1F9 pharmDx assay](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P230016),
+  test ID `FDA:P230016`, on tissue. The separate HLA requirement remains.
+- PTEN deficiency for the prostate capivasertib/abiraterone/prednisone row, using
+  the [VENTANA PTEN SP218 assay](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P250031),
+  test ID `FDA:P250031`, on tissue. The [label-specific disease and treatment setting](https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-capivasertib-abiraterone-and-prednisone-pten-deficient-androgen-pathway-modulation)
+  remains a separate clinical requirement.
+
+Other qualitative IHC/ISH criteria require explicit sourced row declarations.
+An accepted assay result cannot satisfy a separate RAS wild-type requirement,
+resolve another protein assay, or establish diagnosis and treatment setting.
+The software does not calculate clinical positivity from raw staining scores,
+RNA expression, or a gene variant. Missing, pending and unavailable results stay
+unresolved; opposite usable current results require reconciliation. Older,
+failed, unreviewed or inadequately scoped reports remain visible with their
+limitations and cannot override a usable current result.
+
+These decisions populate the same therapy assessment, rationale, information
+list, detailed evidence and Markdown/JSON/PDF contract. MSI/MMR, TMB and HLA
+continue to evaluate their own assay kinds. No external model is required.

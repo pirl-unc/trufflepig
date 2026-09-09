@@ -174,7 +174,7 @@ def synthetic_analysis(ctx):
     ('matched', 'reviewable'), ('mismatched', 'clinical_blocker'),
     ('conflicting', 'eligibility_pending'), ('pending', 'eligibility_pending'),
 ])
-def test_answering_hla_request_updates_shared_report_and_preserves_sources(tmp_path, case, expected):
+def test_answering_hla_request_updates_shared_report_and_preserves_sources(tmp_path, case, expected, clinical_magea4_assay):
     from pypdf import PdfReader
     from trufflepig.analyze.models import AnalyzeConfig, AnalyzePaths, AnalyzeRun, InputResolution
     from trufflepig.analyze.flow import write_analysis_output_records
@@ -188,7 +188,8 @@ def test_answering_hla_request_updates_shared_report_and_preserves_sources(tmp_p
         attr_support_fraction=1.0, attr_top_compartment='tumor',
         tme_dominant=False, tme_explainable=False,
     )])
-    analysis = synthetic_analysis(context())
+    companion = clinical_magea4_assay('specimen-A')
+    analysis = synthetic_analysis(context(companion))
     view = build_report_view(analysis, sample_id='synthetic-hla')
     initial = build_report_content(analysis, ranges, 'SARC_SYN', '', report_view=view)
     request = next(r for r in initial.evidence_requests if r['kind'] == 'hla')
@@ -198,7 +199,7 @@ def test_answering_hla_request_updates_shared_report_and_preserves_sources(tmp_p
         'conflicting': (typing(), typing(('A*24:02',), source=ClinicalSource(title='Second HLA report [amended] *source*'))),
         'pending': (typing((), result='pending', complete_loci=()),),
     }[case]
-    ctx = context(*assays)
+    ctx = context(*assays, companion)
     analysis['clinical_context'] = ctx.public_dict()
     content = build_report_content(analysis, ranges, 'SARC_SYN', '', report_view=view)
     afami = next(a for a in content.therapy_assessments if a['agent'] == 'afami-cel (Tecelra)')

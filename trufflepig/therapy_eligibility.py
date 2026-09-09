@@ -189,6 +189,47 @@ def tmb_requirement(target_row, analysis=None) -> EvidenceRequirement:
     )
 
 
+def clinical_assay_requirements(target_row, analysis=None) -> tuple[EvidenceRequirement, ...]:
+    """Evaluate the qualitative companion criteria declared on the therapy row.
+
+    The analyte and clinical result are independent of the drug-target symbol.
+    Every declared criterion remains a separate requirement, so one assay cannot
+    establish another assay or a combined wild-type molecular requirement.
+    """
+    from .clinical_context import (
+        ClinicalAssayCriterion, clinical_context_for_analysis, evaluate_clinical_assay, validated_fields,
+    )
+    from .report_language import render_report_paragraph
+
+    declared = target_row.get("clinical_assay_criteria") if target_row is not None else None
+    if declared is None or (not isinstance(declared, (list, tuple)) and not clean_therapy_value(declared)):
+        return ()
+    if not isinstance(declared, (list, tuple)):
+        raise ValueError("Therapy clinical_assay_criteria must be an array")
+    context = clinical_context_for_analysis(analysis)
+    requirements = []
+    for item in declared:
+        criterion = item if isinstance(item, ClinicalAssayCriterion) else ClinicalAssayCriterion(
+            **validated_fields(ClinicalAssayCriterion, item)
+        )
+        decision = evaluate_clinical_assay(context, criterion=criterion)
+        status = {"positive": "satisfied", "negative": "blocked", "conflicting": "unresolved",
+                  "unresolved": "unresolved", "missing": "missing"}[decision.status]
+        evidence = {**decision.public_dict(), "criterion": criterion.public_dict()}
+        question = render_report_paragraph(
+            "clinical_assay_request", decision=evidence,
+            pending=bool(decision.assays) and all(a["result"] == "pending" for a in decision.assays),
+        )
+        requirements.append(EvidenceRequirement(
+            f"{criterion.kind}:{criterion.analyte}", "clinical_target_assay", status,
+            render_report_paragraph("clinical_assay_decision", decision=evidence), question,
+            (f"--clinical-context JSON: assays[kind={criterion.kind}, analyte={criterion.analyte}]",
+             "clinical companion-assay report"), criterion.source, evidence,
+            priority="high" if decision.status == "conflicting" else "routine",
+        ))
+    return tuple(requirements)
+
+
 def evaluate_therapy_eligibility(
     target_row, analysis=None, *, panel_subtype=None
 ) -> TherapyEligibility:
@@ -202,7 +243,13 @@ def evaluate_therapy_eligibility(
     supported_history = treatment_history_supports_review(target_row, analysis)
     variant_match = bool(supplied_variant_supports_target_row(target_row, analysis))
     biomarker = indication_biomarker(target_row)
-    direct_match = direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row)
+    assay_requirements = clinical_assay_requirements(target_row, analysis)
+    direct_match = (
+        all(r.status == "satisfied" for r in assay_requirements)
+        if assay_requirements and biomarker in {"clinical_target_assay", "target_expression"}
+        else direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row)
+    )
+    requirements.extend(assay_requirements)
     history_text = treatment_history_context(target_row, analysis)
     if treatment_history_blocks_row(target_row, analysis) or treatment_history_marks_current(
         target_row, analysis
@@ -251,7 +298,9 @@ def evaluate_therapy_eligibility(
         requirements.append(msi_mmr_requirement(analysis))
     elif biomarker == "tmb_high":
         requirements.append(tmb_requirement(target_row, analysis))
-    elif therapy_row_requires_confirmed_eligibility(target_row):
+    elif therapy_row_requires_confirmed_eligibility(target_row) and not (
+        assay_requirements and biomarker in {"clinical_target_assay", "target_expression"}
+    ):
         gene = canonical_target_symbol(target_row.get("symbol"))
         label = indication_biomarker_label(target_row)
         alleles = required_protein_changes_for_therapy(target_row)
@@ -464,6 +513,12 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 request["priority"] = "high"
     for request in groups:
         del request["question_signatures"]
+        labels = list(dict.fromkeys(
+            e["criterion"]["label"] for e in request["evidence"]
+            if e.get("criterion") and e["criterion"].get("label")
+        ))
+        if labels:
+            request["label"] = " / ".join(labels)
         details = request["details"]
         request["details"] = [
             {
