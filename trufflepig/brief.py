@@ -499,8 +499,12 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
         from .therapy_eligibility import msi_mmr_requirement
 
         return _with_proxy(msi_mmr_requirement(analysis).description)
+    if biomarker == "tmb_high":
+        from .therapy_eligibility import tmb_requirement
+
+        return _with_proxy(tmb_requirement(target_row, analysis).description)
     if biomarker == "histology_only":
-        if direct_eligibility_evidence_supported(analysis, biomarker):
+        if direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row):
             return _with_proxy("")
         return _with_proxy(
             "eligibility evidence not supplied to this run: confirm diagnosis/"
@@ -516,7 +520,7 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
             "target-specific supporting call was recognized for this row; "
             f"confirm {label} before treating as eligible"
         )
-    if biomarker != "mutation" and direct_eligibility_evidence_supported(analysis, biomarker):
+    if biomarker != "mutation" and direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row):
         return _with_proxy(
             f"required eligibility evidence was supplied to this run; verify the "
             f"{label} call matches the indication"

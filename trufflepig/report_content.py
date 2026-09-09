@@ -95,7 +95,7 @@ def assess_therapy(
     state, observed = observation["state"], observation["observed_tpm"]
     eligibility = review.eligibility
     rationale = []
-    rationale.extend(r.description for r in eligibility.requirements if r.kind == "msi_high")
+    rationale.extend(r.description for r in eligibility.requirements if r.kind in {"msi_high", "tmb_high"})
     if eligibility.supplied_variant_supported:
         from .reporting import supplied_variant_context_for_target_row
 
@@ -299,7 +299,7 @@ def build_report_content(
     clinical_mmr = evaluate_msi_mmr(clinical_context)
     rna_mmr = mismatch_repair_summary_context(analysis)
     rna_state = mismatch_repair_rna_state(analysis)
-    if clinical_context.assays:
+    if clinical_mmr.assays:
         conclusion.append(paragraph(
             "**Clinical MSI/MMR evidence:** " + msi_mmr_requirement(analysis).description
         ))
@@ -340,7 +340,7 @@ def build_report_content(
                 if research else ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
             )
         )
-    if rna_mmr or clinical_context.assays:
+    if rna_mmr or clinical_mmr.assays:
         report_requirements.append(msi_mmr_requirement(analysis, rna_triage=rna_state == "MSI-like"))
     clinical_requirements = []
     if selected_assessments and not research:
@@ -430,7 +430,7 @@ def build_report_content(
 
     request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
     for request in requests:
-        label = {"msi_high": "MSI/MMR"}.get(
+        label = {"msi_high": "MSI/MMR", "tmb_high": "TMB"}.get(
             request["kind"], request["kind"].replace("_", " ").capitalize()
         )
         request_blocks.append(
@@ -484,10 +484,12 @@ def build_report_content(
         detail.append({"kind": "heading", "text": "Supplied treatment history"})
         detail.extend({"kind": "bullet", "text": line.removeprefix("- ")} for line in history)
     if clinical_context.assays:
+        from .clinical_context import clinical_assay_records
+
         detail.append({"kind": "heading", "text": "Supplied clinical assays"})
         detail.extend(
             paragraph(render_report_paragraph("clinical_assay_record", assay=assay))
-            for assay in clinical_mmr.assays
+            for assay in clinical_assay_records(clinical_context)
         )
     for title, items, formatter in (
         (

@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass, field, fields
 from datetime import date
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Mapping
 
@@ -18,6 +19,7 @@ from typing import Mapping
 ASSAY_RESULTS = {
     "msi": ("MSI-H", "MSI-L", "MSS", "indeterminate", "pending", "not_tested", "unknown"),
     "mmr": ("dMMR", "pMMR", "indeterminate", "pending", "not_tested", "unknown"),
+    "tmb": ("measured", "indeterminate", "pending", "not_tested", "unknown"),
 }
 POSITIVE_RESULTS = frozenset({"MSI-H", "dMMR"})
 NEGATIVE_RESULTS = frozenset({"MSI-L", "MSS", "pMMR"})
@@ -87,8 +89,33 @@ class SpecimenMetadata:
 
 
 @dataclass(frozen=True)
+class ClinicalMeasurement:
+    """An absolute reported measurement, never a value derived from RNA.
+
+    Units are retained even when unsupported for a particular requirement.
+    Missing and measured zero are distinct; a qualitative result is not a value.
+    """
+
+    value: float | None = None
+    unit: str = ""
+
+    def __post_init__(self):
+        if self.value is not None and (
+            isinstance(self.value, bool) or not isinstance(self.value, (int, float))
+            or not math.isfinite(self.value) or self.value < 0
+        ):
+            raise ValueError("Clinical measurement must be a finite nonnegative number or null")
+        if not isinstance(self.unit, str):
+            raise ValueError("Clinical measurement unit must be a string")
+        unit = self.unit.strip()
+        if unit.casefold() in {"mut/mb", "mutations/mb", "mutations/megabase"}:
+            unit = "mut/Mb"
+        object.__setattr__(self, "unit", unit)
+
+
+@dataclass(frozen=True)
 class ClinicalAssay:
-    """One reported MSI or MMR assay; missing and negative are distinct results.
+    """One reported clinical assay; missing and negative are distinct results.
 
     ``scope=current`` explicitly binds the assay to the context's specimen.
     Older, unrelated and unresolved results are retained without opening a gate.
@@ -107,10 +134,13 @@ class ClinicalAssay:
     source: ClinicalSource = field(default_factory=ClinicalSource)
     protein_results: dict[str, str] = field(default_factory=dict)
     id: str = ""
+    measurement: ClinicalMeasurement | None = None
+    test_id: str = ""
+    specimen_type: str = ""
 
     def __post_init__(self):
         for f in fields(self):
-            if f.name not in {"source", "protein_results"} and not isinstance(
+            if f.name not in {"source", "protein_results", "measurement"} and not isinstance(
                 getattr(self, f.name), str
             ):
                 raise ValueError(f"Clinical assay {f.name} must be a string")
@@ -154,8 +184,15 @@ class ClinicalAssay:
             if state not in {"retained", "lost", "equivocal", "not_tested", "unknown"}:
                 raise ValueError(f"Invalid MMR protein result: {state!r}")
         object.__setattr__(self, "protein_results", dict(self.protein_results))
+        if self.measurement is not None:
+            if self.kind != "tmb":
+                raise ValueError("An absolute measurement currently belongs to a TMB assay")
+            if not isinstance(self.measurement, ClinicalMeasurement):
+                object.__setattr__(self, "measurement", ClinicalMeasurement(
+                    **validated_fields(ClinicalMeasurement, self.measurement)
+                ))
         if not self.id:
-            payload = {k: v for k, v in asdict(self).items() if k != "id"}
+            payload = {k: v for k, v in self.public_dict().items() if k != "id"}
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
             object.__setattr__(self, "id", f"{self.kind}-{digest}")
 
@@ -172,15 +209,21 @@ class ClinicalAssay:
             limits.append(f"assay validity is {self.validity}")
         if self.reportability != "reportable":
             limits.append(f"reportability is {self.reportability}")
-        methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}}
+        methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}, "tmb": {"NGS"}}
         if self.method not in methods[self.kind]:
             limits.append("a supported clinical assay method is required")
         if not self.source.title.strip() and not self.source.reference.strip():
             limits.append("clinical source is missing")
         if self.source.review_status not in {"supplied", "confirmed"}:
             limits.append(f"source assertion is {self.source.review_status}")
-        if self.result not in POSITIVE_RESULTS | NEGATIVE_RESULTS:
+        usable_results = {"measured"} if self.kind == "tmb" else POSITIVE_RESULTS | NEGATIVE_RESULTS
+        if self.result not in usable_results:
             limits.append(f"result is {self.result}")
+        if self.kind == "tmb":
+            if self.measurement is None or self.measurement.value is None:
+                limits.append("absolute TMB measurement is missing")
+            if self.measurement is None or self.measurement.unit != "mut/Mb":
+                limits.append("absolute TMB requires mutations per megabase")
         # An explicit overall result cannot silently override contradictory IHC.
         if self.result == "pMMR" and "lost" in self.protein_results.values():
             limits.append("pMMR conflicts with a reported lost MMR protein")
@@ -193,7 +236,12 @@ class ClinicalAssay:
         return tuple(limits)
 
     def public_dict(self) -> dict:
-        return asdict(self)
+        value = asdict(self)
+        # Preserve v1 MSI/MMR records and their content-derived IDs exactly.
+        for key in ("measurement", "test_id", "specimen_type"):
+            if value[key] is None or value[key] == "":
+                value.pop(key)
+        return value
 
 
 @dataclass(frozen=True)
@@ -307,10 +355,7 @@ def evaluate_msi_mmr(context: ClinicalContext) -> ClinicalAssayDecision:
     unreviewed assertions remain visible and cannot cancel a usable current
     result. A contradictory overall/per-protein result remains unresolved.
     """
-    records = tuple(
-        {**a.public_dict(), "limitations": list(a.limitations(context.specimen_id))}
-        for a in context.assays
-    )
+    records = clinical_assay_records(context, kinds=("msi", "mmr"))
     usable = [r for r in records if not r["limitations"]]
     states = {"positive" if r["result"] in POSITIVE_RESULTS else "negative" for r in usable}
     if len(states) > 1:
@@ -340,4 +385,89 @@ def evaluate_msi_mmr(context: ClinicalContext) -> ClinicalAssayDecision:
         )
     else:
         status, reason = "missing", "No clinical MSI/MMR assay result was supplied."
+    return ClinicalAssayDecision(status, context.specimen_id, reason, records)
+
+
+def clinical_assay_records(context: ClinicalContext, *, kinds=None) -> tuple[dict, ...]:
+    """All supplied assertions with limitations, optionally restricted by kind."""
+    return tuple(
+        {**a.public_dict(), "limitations": list(a.limitations(context.specimen_id))}
+        for a in context.assays if kinds is None or a.kind in kinds
+    )
+
+
+@dataclass(frozen=True)
+class TmbCriterion:
+    """A sourced treatment requirement, separate from a specimen measurement.
+
+    A threshold is not universal across therapies, assays or specimen materials.
+    Empty assay/material criteria are rejected rather than treated as wildcards.
+    """
+
+    minimum: float
+    unit: str
+    specimen_type: str
+    accepted_test_ids: tuple[str, ...]
+    source: str
+
+    def __post_init__(self):
+        measurement = ClinicalMeasurement(self.minimum, self.unit)
+        if measurement.value is None or measurement.value <= 0 or measurement.unit != "mut/Mb":
+            raise ValueError("TMB criterion requires a positive threshold in mut/Mb")
+        object.__setattr__(self, "unit", measurement.unit)
+        if not isinstance(self.specimen_type, str) or not self.specimen_type.strip():
+            raise ValueError("TMB criterion requires specimen material")
+        if not isinstance(self.source, str) or not self.source.strip():
+            raise ValueError("TMB criterion requires its clinical source")
+        if not isinstance(self.accepted_test_ids, (list, tuple)) or not self.accepted_test_ids:
+            raise ValueError("TMB criterion requires accepted assay identifiers")
+        if any(not isinstance(v, str) or not v.strip() for v in self.accepted_test_ids):
+            raise ValueError("TMB assay identifiers must be nonempty strings")
+        object.__setattr__(self, "accepted_test_ids", tuple(self.accepted_test_ids))
+
+    def public_dict(self) -> dict:
+        value = asdict(self)
+        value["accepted_test_ids"] = list(self.accepted_test_ids)
+        return value
+
+
+def evaluate_tmb(context: ClinicalContext, *, criterion: TmbCriterion | None) -> ClinicalAssayDecision:
+    """Compare usable absolute TMB results against one sourced assay criterion.
+
+    Clinical MSI/MMR, RNA scores, mutation counts and cohort percentiles never
+    participate. Conflicting usable results remain unresolved; older or failed
+    assays stay visible without overriding a usable current result.
+    """
+    records = clinical_assay_records(context, kinds=("tmb",))
+    if criterion is None:
+        return ClinicalAssayDecision(
+            "unresolved", context.specimen_id,
+            "The treatment's TMB threshold and accepted assay/material criteria need clinical curation.",
+            records,
+        )
+    if not isinstance(criterion, TmbCriterion):
+        raise ValueError("TMB evaluation requires a TmbCriterion")
+    for record in records:
+        if record.get("test_id") not in criterion.accepted_test_ids:
+            record["limitations"].append("test identity is not established for this TMB criterion")
+        if record.get("specimen_type") != criterion.specimen_type:
+            record["limitations"].append(f"this criterion requires {criterion.specimen_type} specimen material")
+    states = {
+        "positive" if r["measurement"]["value"] >= criterion.minimum else "negative"
+        for r in records if not r["limitations"]
+    }
+    threshold = f"{criterion.minimum:g} {criterion.unit}"
+    if len(states) > 1:
+        status, reason = "conflicting", "Reportable current TMB results fall on opposite sides of the required threshold; reconcile the clinical reports."
+    elif states:
+        status = next(iter(states))
+        reason = (
+            f"Validated, reportable clinical TMB meets the threshold of at least {threshold} using an accepted assay and specimen material."
+            if status == "positive" else
+            f"The supplied clinical TMB is below the required threshold of {threshold}."
+        )
+    elif records:
+        status, reason = "unresolved", "Supplied TMB evidence has unresolved measurement, quality, source, test or specimen limitations."
+    else:
+        status, reason = "missing", "No clinical TMB measurement was supplied."
     return ClinicalAssayDecision(status, context.specimen_id, reason, records)

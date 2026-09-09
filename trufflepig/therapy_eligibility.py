@@ -131,6 +131,64 @@ def msi_mmr_requirement(analysis, *, rna_triage: bool = False) -> EvidenceRequir
     )
 
 
+def tmb_criterion_for_therapy(target_row):
+    """Resolve a supplied criterion or the sourced pembrolizumab TMB criterion.
+
+    This does not assign the pembrolizumab threshold to other agents, regimens
+    or biomarker paths. Uncurated TMB criteria remain unresolved.
+    """
+    from .clinical_context import TmbCriterion, validated_fields
+    from .therapeutic_agents import resolve_therapy_identity
+
+    if indication_biomarker(target_row) != "tmb_high":
+        return None
+    supplied = target_row.get("tmb_criterion")
+    if isinstance(supplied, TmbCriterion):
+        return supplied
+    if clean_therapy_value(supplied):
+        return TmbCriterion(**validated_fields(TmbCriterion, supplied))
+    identity = resolve_therapy_identity(target_row.get("agent"))
+    if identity.registered and identity.canonical_name.casefold() == "pembrolizumab":
+        return TmbCriterion(
+            minimum=10, unit="mut/Mb", specimen_type="tissue",
+            accepted_test_ids=("FDA:P170019",),
+            source="https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P170019S016",
+        )
+    return None
+
+
+def tmb_requirement(target_row, analysis=None) -> EvidenceRequirement:
+    """One absolute-assay decision for TMB selection, rationale and requests."""
+    from .clinical_context import clinical_context_for_analysis, evaluate_tmb
+    from .report_language import render_report_paragraph
+
+    criterion = tmb_criterion_for_therapy(target_row)
+    decision = evaluate_tmb(clinical_context_for_analysis(analysis), criterion=criterion)
+    status = {"positive": "satisfied", "negative": "blocked", "conflicting": "unresolved",
+              "unresolved": "unresolved", "missing": "missing"}[decision.status]
+    evidence = {**decision.public_dict(), "criterion": criterion.public_dict() if criterion else None}
+    question = (
+        "Supply the clinical TMB result with its absolute value in mutations/Mb, test identifier, specimen material, validity, reportability and source."
+        if decision.status == "missing" else
+        "Reconcile the clinical TMB measurement, source, assay validity and reportability with the required test, specimen and threshold."
+    )
+    if criterion:
+        question += f" Required criterion: at least {criterion.minimum:g} {criterion.unit}; {criterion.specimen_type}; accepted test IDs: {', '.join(criterion.accepted_test_ids)}."
+    else:
+        question += " Supply a sourced treatment-specific TMB criterion; no threshold is assumed."
+    if decision.specimen_id:
+        question += f" Required specimen: {decision.specimen_id}."
+    # The requested fact is one TMB report. Per-path thresholds remain in the
+    # deduplicated request's evidence and affected-treatment details.
+    return EvidenceRequirement(
+        "tmb_high", "tmb_high", status,
+        render_report_paragraph("clinical_assay_decision", decision=evidence), question,
+        ("--clinical-context JSON: assays[kind=tmb]", "clinical TMB assay report with absolute value and units"),
+        source=criterion.source if criterion else "",
+        evidence=evidence, priority="high" if decision.status == "conflicting" else "routine",
+    )
+
+
 def evaluate_therapy_eligibility(
     target_row, analysis=None, *, panel_subtype=None
 ) -> TherapyEligibility:
@@ -144,7 +202,7 @@ def evaluate_therapy_eligibility(
     supported_history = treatment_history_supports_review(target_row, analysis)
     variant_match = bool(supplied_variant_supports_target_row(target_row, analysis))
     biomarker = indication_biomarker(target_row)
-    direct_match = direct_eligibility_evidence_supported(analysis, biomarker)
+    direct_match = direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row)
     history_text = treatment_history_context(target_row, analysis)
     if treatment_history_blocks_row(target_row, analysis) or treatment_history_marks_current(
         target_row, analysis
@@ -186,6 +244,8 @@ def evaluate_therapy_eligibility(
 
     if biomarker == "msi_high":
         requirements.append(msi_mmr_requirement(analysis))
+    elif biomarker == "tmb_high":
+        requirements.append(tmb_requirement(target_row, analysis))
     elif therapy_row_requires_confirmed_eligibility(target_row):
         gene = canonical_target_symbol(target_row.get("symbol"))
         label = indication_biomarker_label(target_row)
@@ -198,12 +258,11 @@ def evaluate_therapy_eligibility(
         accepted = {
             "mutation": ("clinical variant report", "normalized variant table", "--variants"),
             "wildtype": ("clinical molecular report with assay coverage and negative results",),
-            "tmb_high": ("clinical TMB result with absolute mutations/Mb and assay method",),
             "clinical_target_assay": ("validated protein or companion-assay report",),
             "imaging": ("required target-imaging report",),
             "histology_only": ("pathology report", "confirmed disease and treatment setting"),
         }.get(biomarker, ("indication-specific clinical report",))
-        key = biomarker if biomarker == "tmb_high" else f"{biomarker}:{gene}"
+        key = f"{biomarker}:{gene}"
         from .variants import variant_evidence_records
 
         supplied_gene_records = [

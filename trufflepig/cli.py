@@ -50,7 +50,7 @@ def _add_run_parser(sub):
     p.add_argument("--met-site", default=None)
     p.add_argument("--hla-types", default=None)
     p.add_argument("--clinical-context", default=None,
-                   help="Clinical-context JSON with specimen identity/purpose, MSI/MMR results and provenance.")
+                   help="Clinical-context JSON with specimen identity/purpose, MSI/MMR and absolute TMB results, and provenance.")
     p.add_argument("--fusions", default=None)
     variant_group = p.add_mutually_exclusive_group()
     variant_group.add_argument(
