@@ -50,6 +50,43 @@ class ClinicalSource:
 
 
 @dataclass(frozen=True)
+class SpecimenMetadata:
+    """Explicit display and purpose metadata for the context's bound specimen.
+
+    These assertions never change sample selection or disease evidence. A cell
+    line identifier, file name or display label does not establish purpose.
+    """
+
+    display_label: str = ""
+    purpose: str = "unknown"
+    cell_line_id: str = ""
+    collected_at: str = ""
+    site: str = ""
+    source: ClinicalSource = field(default_factory=ClinicalSource)
+
+    def __post_init__(self):
+        for f in fields(self):
+            if f.name != "source" and not isinstance(getattr(self, f.name), str):
+                raise ValueError(f"Specimen {f.name} must be a string")
+        if self.purpose not in {"clinical", "research", "unknown"}:
+            raise ValueError(f"Invalid specimen purpose: {self.purpose!r}")
+        if self.collected_at:
+            try:
+                valid_date = date.fromisoformat(self.collected_at).isoformat() == self.collected_at
+            except ValueError:
+                valid_date = False
+            if not valid_date:
+                raise ValueError("Specimen collection date must be an ISO date (YYYY-MM-DD)")
+        if not isinstance(self.source, ClinicalSource):
+            object.__setattr__(self, "source", ClinicalSource(**validated_fields(ClinicalSource, self.source)))
+
+    @property
+    def report_purpose(self) -> str:
+        """Unreviewed assertions remain visible without establishing purpose."""
+        return self.purpose if self.source.review_status in {"supplied", "confirmed"} else "unknown"
+
+
+@dataclass(frozen=True)
 class ClinicalAssay:
     """One reported MSI or MMR assay; missing and negative are distinct results.
 
@@ -170,12 +207,15 @@ class ClinicalContext:
     schema_version: int = 1
     specimen_id: str = ""
     assays: tuple[ClinicalAssay, ...] = ()
+    specimen: SpecimenMetadata = field(default_factory=SpecimenMetadata)
 
     def __post_init__(self):
         if type(self.schema_version) is not int or self.schema_version != 1:
             raise ValueError(f"Unsupported clinical-context version: {self.schema_version!r}")
         if not isinstance(self.specimen_id, str):
             raise ValueError("Clinical specimen ID must be a string")
+        if not isinstance(self.specimen, SpecimenMetadata):
+            object.__setattr__(self, "specimen", SpecimenMetadata(**validated_fields(SpecimenMetadata, self.specimen)))
         if not isinstance(self.assays, (tuple, list)):
             raise ValueError("Clinical assays must be an array")
         assays = tuple(
@@ -214,6 +254,33 @@ def clinical_context_for_analysis(analysis) -> ClinicalContext:
         if isinstance(analysis, Mapping)
         else ClinicalContext()
     )
+
+
+def report_identity(
+    context: ClinicalContext, *, source_path: str = "", sample_selector: str = "",
+    selector_column: str = "", output_prefix: str = "", fallback_label: str = "",
+) -> dict:
+    """Resolve a visible identity without interpreting an input filename.
+
+    The document identifier distinguishes source/selector combinations; it is
+    not a biological specimen identifier or a cross-assay identity claim.
+    """
+    origin = {
+        "source_path": str(source_path),
+        "sample_selector": str(sample_selector),
+        "selector_column": str(selector_column),
+        "output_prefix": str(output_prefix),
+    }
+    digest = hashlib.sha256(json.dumps(origin, sort_keys=True).encode()).hexdigest()[:12]
+    document_id = "RPT-" + digest
+    metadata = context.specimen
+    label = metadata.display_label.strip() or context.specimen_id.strip() or metadata.cell_line_id.strip()
+    title = label or (fallback_label.strip() or "RNA evidence report") + " · " + document_id
+    return {
+        **origin, "document_id": document_id, "title": title,
+        "specimen_id": context.specimen_id, "purpose": metadata.report_purpose,
+        "explicit_display_identity": bool(label),
+    }
 
 
 @dataclass(frozen=True)

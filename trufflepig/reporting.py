@@ -1077,11 +1077,11 @@ def context_expression_band_cell(row):
 def tpm_semantics_note() -> str:
     """One reader-facing explanation of bulk vs modeled TPM columns."""
     return (
-        "**Expression provenance:** Patient bulk TPM is measured RNA abundance in "
+        "**Expression provenance:** Sample bulk TPM is measured RNA abundance in "
         "the mixed specimen. Estimated tumor TPM is the RNA model's estimate of the "
         "tumor share of that measured bulk signal; it is not a purified tumor assay. "
         "Healthy-tissue, stromal, and immune components are fitted from external "
-        "reference panels; no separate normal sample from this patient was analyzed. "
+        "reference panels; no separate matched normal sample was analyzed. "
         "Estimated tumor context TPM is a broader RNA model estimate used only for "
         "pathway and relative-expression comparisons. Reference percentiles and "
         "medians come from external cancer/healthy-tissue panels. Do not treat "

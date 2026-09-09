@@ -473,10 +473,10 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     ax_range = fig.axes[0]
     assert ax_range.get_xscale() == "linear"
     assert "log10(TPM+1)" in ax_range.get_xlabel()
-    assert "patient bulk TPM (measured)" in ax_range.get_xlabel()
+    assert "sample bulk TPM (measured)" in ax_range.get_xlabel()
     assert (
         ax_range.get_title()
-        == "Estimated patient tumor attribution vs measured bulk expression"
+        == "Estimated tumor attribution vs measured bulk expression"
     )
     assert fig._suptitle is not None
     assert fig._suptitle.get_text() == "Target Expression and Priority Score — PRAD"

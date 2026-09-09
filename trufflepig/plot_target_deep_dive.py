@@ -688,12 +688,12 @@ def plot_tumor_attribution(
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(symbols, fontsize=9)
-    ax.set_xlabel("TPM (estimated attribution of measured patient bulk RNA)")
+    ax.set_xlabel("TPM (estimated attribution of measured sample bulk RNA)")
     ax.invert_yaxis()
     ax.legend(loc="lower right", fontsize=8)
     cat_label = "CTAs" if category == "CTA" else "Actionable Targets"
     ax.set_title(
-        f"Estimated Patient RNA Attribution — {cat_label} — "
+        f"Estimated Sample RNA Attribution — {cat_label} — "
         f"{cancer_code} (purity={purity:.0%})"
     )
 
@@ -915,7 +915,7 @@ def plot_curated_target_evidence(
     ax_expr.invert_yaxis()
     ax_expr.set_xscale("symlog", linthresh=1.0)
     ax_expr.set_xlabel(
-        "Estimated tumor TPM range (RNA model); black tick = patient bulk TPM (measured)"
+        "Estimated tumor TPM range (RNA model); black tick = sample bulk TPM (measured)"
     )
     ax_expr.set_title("Expression Evidence", fontsize=12, fontweight="bold")
     ax_expr.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
@@ -958,7 +958,7 @@ def plot_curated_target_evidence(
             linestyle="none",
             markersize=12,
             markeredgewidth=1.5,
-            label="patient bulk TPM (measured)",
+            label="sample bulk TPM (measured)",
         ),
     ]
     fig.legend(
@@ -1618,10 +1618,10 @@ def plot_priority_target_context(
     ax_range.set_ylim(max(y_pos) + 0.7, -1.15)
     ax_range.set_xlabel(
         "Expression, log10(TPM+1): range/diamond = estimated tumor TPM "
-        "(RNA model estimate); black tick = patient bulk TPM (measured); right number = priority score"
+        "(RNA model estimate); black tick = sample bulk TPM (measured); right number = priority score"
     )
     ax_range.set_title(
-        "Estimated patient tumor attribution vs measured bulk expression",
+        "Estimated tumor attribution vs measured bulk expression",
         fontsize=12,
         fontweight="bold",
     )
@@ -1646,7 +1646,7 @@ def plot_priority_target_context(
     constant_notes = []
     if len(source_labels) == 1:
         constant_notes.append(
-            f"estimated patient tumor source: {next(iter(source_labels))}"
+            f"estimated tumor source: {next(iter(source_labels))}"
         )
     if len(normal_labels) == 1:
         constant_notes.append(
@@ -1732,7 +1732,7 @@ def plot_priority_target_context(
     fig.text(
         0.5,
         0.955,
-        "Rows are split by approval/readiness tier; colors show external healthy-tissue reference context, marker shapes show estimated patient tumor support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
+        "Rows are split by approval/readiness tier; colors show external healthy-tissue reference context, marker shapes show estimated tumor support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
         ha="center",
         va="top",
         fontsize=9,

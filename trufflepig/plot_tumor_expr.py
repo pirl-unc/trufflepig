@@ -2014,7 +2014,7 @@ def plot_matched_normal_attribution(
                 )
 
     ax.set_xlabel(
-        "Estimated attribution of patient bulk TPM (stacked)",
+        "Estimated attribution of sample bulk TPM (stacked)",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)

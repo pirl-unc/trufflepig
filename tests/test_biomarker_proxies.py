@@ -141,7 +141,7 @@ def test_her2_proxy_separates_patient_coverage_from_reference_availability(
     result = score_her2_rna_proxy(_high_sample(), "CRC")
 
     assert result.status == "indeterminate"
-    assert "All 5 panel genes were measured in patient bulk RNA" in result.decision_basis
+    assert "All 5 panel genes were measured in sample bulk RNA" in result.decision_basis
     assert "external observed cancer-cohort reference" in result.decision_basis
 
 

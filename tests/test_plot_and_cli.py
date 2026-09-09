@@ -1180,7 +1180,7 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
     assert "Retained alternatives" in text
     assert "downstream target and biomarker interpretation below uses the working label" in text
     assert "colon healthy-tissue reference" in text
-    assert "no separate normal sample from this patient was analyzed" in text
+    assert "no separate matched normal sample was analyzed" in text
     assert "CEACAM5" in text
     assert "MAGEA4" in text
     assert "WT1" in text

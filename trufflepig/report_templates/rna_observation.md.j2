@@ -1,9 +1,9 @@
 {% if state == 'measured' %}
 {% if context_only %}
-Target RNA is context only (patient bulk {{ '%.1f' | format(observed_tpm) }} TPM,
+Target RNA is context only (sample bulk {{ '%.1f' | format(observed_tpm) }} TPM,
 measured).
 {% else %}
-Patient bulk target RNA is {{ '%.1f' | format(observed_tpm) }} TPM (measured).
+Sample bulk target RNA is {{ '%.1f' | format(observed_tpm) }} TPM (measured).
 A tumor-expression interval is unavailable; RNA abundance alone does not confirm
 clinical target positivity.
 {% endif %}

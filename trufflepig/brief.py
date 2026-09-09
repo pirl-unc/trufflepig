@@ -926,7 +926,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
         "is a caveat, not an automatic exclusion; supplied patient evidence, "
         "clinical outcomes, eligibility, and maturity set priority before RNA.*",
         "",
-        "| Gene | Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
+        "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
     ]
     for row in rows:
@@ -2217,7 +2217,7 @@ def _notable_cta_outliers(ranges_df, *, top_n: int = 3):
     CTAs are flagged on each ``ranges_df`` row via ``is_cta`` from
     ``estimate_tumor_expression_ranges``; the row already incorporates
     a tumor-attribution context. Require a measurable bulk signal, then rank
-    by the estimated patient tumor contribution so abundant background does
+    by the estimated tumor contribution so abundant background does
     not outrank a smaller but more consistently tumor-attributed signal.
     """
     if ranges_df is None or len(ranges_df) == 0:
@@ -2258,8 +2258,8 @@ def _format_cta_outlier_bullet(row: dict) -> str:
     tumor_high = row["tumor_tpm_high"]
     pct = row["tcga_percentile"]
     parts: list[str] = [
-        f"{obs:.0f} patient bulk TPM",
-        f"{tumor:.0f} estimated patient tumor TPM "
+        f"{obs:.0f} sample bulk TPM",
+        f"{tumor:.0f} estimated tumor TPM "
         f"(RNA model interval {tumor_low:.0f}-{tumor_high:.0f})",
     ]
     if pct >= _OUTLIER_HIGH_PERCENTILE:
@@ -2770,7 +2770,7 @@ def build_actionable(
     if history_lines:
         lines.append("## Supplied treatment history\n")
         lines.append(
-            "Clinical input for this patient takes priority over RNA-based target "
+            "Supplied clinical history takes priority over RNA-based target "
             "attribution. It still does not establish current eligibility or make "
             "retreatment appropriate."
         )
@@ -2808,7 +2808,7 @@ def build_actionable(
                 "Supplied patient treatment evidence is considered first, then "
                 "sourced clinical outcomes, treatment-path maturity, eligibility, "
                 "and RNA support. Interpretation separates "
-                "estimated patient tumor support from external healthy-tissue reference context so "
+                "estimated tumor support from external healthy-tissue reference context so "
                 "lineage markers are not confused with tumor-exclusive "
                 "targets. Treatment-path context flags standard options, "
                 "later-line requirements, trial follow-ups, and possible "
@@ -3029,7 +3029,7 @@ def build_actionable(
             def _render_therapy_records(records):
                 lines.append(
                     "| Target | Agent | Class | Phase | Indication | "
-                    "Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Interpretation |"
+                    "Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Interpretation |"
                 )
                 lines.append(
                     "|--------|-------|-------|-------|------------|"
@@ -3068,7 +3068,7 @@ def build_actionable(
                 lines.append(
                     "These rows remain visible for prioritization and audit. Some "
                     "lack the required clinical eligibility assay; others lack "
-                    "estimated patient tumor support. Read the row-level "
+                    "estimated tumor support. Read the row-level "
                     "interpretation before carrying a target or therapy forward.\n"
                 )
                 _render_therapy_records(audit_records)

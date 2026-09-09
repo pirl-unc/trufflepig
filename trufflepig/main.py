@@ -2404,6 +2404,11 @@ def _analyze_body(run: AnalyzeRun):
     analysis["fusion_inputs_supplied"] = bool(fusion_paths)
     analysis["fusion_input_paths"] = list(fusion_paths)
     analysis["clinical_context"] = config.clinical_context.public_dict()
+    analysis["report_input"] = {
+        "source_path": str(config.input_path),
+        "sample_selector": config.sample_id_value or "",
+        "selector_column": config.sample_id_col or "",
+    }
     analysis["variant_inputs_supplied"] = bool(variant_inputs)
     analysis["variant_inputs"] = list(variant_inputs)
     analysis["expression_scale_qc"] = expression_scale_qc
@@ -4225,6 +4230,15 @@ def _analyze_body(run: AnalyzeRun):
 
     disease_state_for_summary = compose_disease_state_narrative(analysis)
     sample_id = sample_display_id or None
+    report_content = build_report_content(
+        analysis,
+        ranges_df,
+        cancer_code=report_cancer_type,
+        disease_state=disease_state_for_summary,
+        sample_id=sample_id,
+        report_view=report_view,
+        prefix=Path(prefix).name,
+    )
     _generate_text_reports(
         analysis,
         report_view,
@@ -4235,15 +4249,7 @@ def _analyze_body(run: AnalyzeRun):
         ranges_df=ranges_df,
         sample_id=sample_id,
         df_expr=df_expr,
-    )
-    report_content = build_report_content(
-        analysis,
-        ranges_df,
-        cancer_code=report_cancer_type,
-        disease_state=disease_state_for_summary,
-        sample_id=sample_id,
-        report_view=report_view,
-        prefix=Path(prefix).name,
+        report_content=report_content,
     )
     summary_md = render_report_summary(report_content)
     evidence_md = _build_evidence_report(
@@ -4254,6 +4260,7 @@ def _analyze_body(run: AnalyzeRun):
         cancer_code=report_cancer_type,
         sample_id=sample_id,
         target_report_md=target_report_md,
+        report_content=report_content,
     )
     summary_path = "%s-summary.md" % prefix if prefix else "summary.md"
     evidence_path = "%s-evidence.md" % prefix if prefix else "evidence.md"
@@ -4370,7 +4377,7 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 | `*-sample-context.png` | Patient | Compact library and expression QC |
 | `*-degradation-index.png` | Patient | RNA degradation check used to qualify uncertainty |
 | `*-background-tissues.png` | Audit only | Raw healthy-tissue correlation context; can be nonspecific and is not a final label |
-| `*-decomposition-composition.png` | Patient | Estimated patient tumor attribution plus external stromal/immune reference components for the selected final-call model |
+| `*-decomposition-composition.png` | Patient | Estimated tumor attribution plus external stromal/immune reference components for the selected final-call model |
 | `*-decomposition-components.png` | Patient | Estimated external stromal/immune reference-component breakdown for the selected final-call model |
 | `*-purity-methods.png` | Patient | Purity estimate and estimator agreement |
 | `*-mhc-expression.png` | Audit only | Antigen-presentation RNA context; not HLA typing or therapy eligibility |
@@ -4386,7 +4393,7 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 | `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the patient PDF |
 | `*-treatments.png` | Audit only | Raw target-expression survey retained for technical review |
 | `*-actionable-targets.png` | Audit only | Broad actionable-target screen retained for provenance |
-| `*-priority-target-context.png` | Audit only | Detailed estimated patient tumor attribution and external healthy-tissue reference context |
+| `*-priority-target-context.png` | Audit only | Detailed estimated tumor attribution and external healthy-tissue reference context |
 | `*-target-tissues.pdf` | Audit only | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
 | `*-reference-mds.png` | Audit only | Raw reference comparison; not the final fused selection |
 | `*-reference-neighborhood.png` | Audit only | Raw reference distances; not the final fused selection |
@@ -4394,7 +4401,7 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 Optional deprecated comparison figures are only emitted with
 `--deprecated-figures` and are written under `figures/deprecated/`. They are
 kept out of the main figure packet because the canonical target figures above
-carry the integrated target, disease-context, estimated patient tumor attribution, eligibility, and
+carry the integrated target, disease-context, estimated tumor attribution, eligibility, and
 uncertainty story.
 When curated agent-level `benefit_tier` / `toxicity_tier` fields are present,
 priority ranking can use them; otherwise survival benefit and toxicity are not
@@ -4646,7 +4653,7 @@ def _matched_normal_split_summary(ranges_df):
         return None
     tissue_label = mn_tissue.replace("_", " ")
     return (
-        f"the RNA model estimates that a {tissue_label} healthy-tissue reference accounts for **{mn_frac:.0%}** of the sample; no separate normal sample from this patient was analyzed. "
+        f"the RNA model estimates that a {tissue_label} healthy-tissue reference accounts for **{mn_frac:.0%}** of the sample; no separate matched normal sample was analyzed. "
         "Per-gene estimates subtract external stromal, immune, and healthy-tissue "
         "reference signals before dividing by the estimated tumor fraction."
     )
@@ -7092,7 +7099,7 @@ def _report_expression_source_label(value):
         "tumor_inferred": "estimated tumor or context expression (RNA model)",
         "tumor_source": "estimated tumor expression (RNA model)",
         "tumor_attributed": "estimated tumor expression (RNA model)",
-        "bulk": "patient bulk TPM (measured)",
+        "bulk": "sample bulk TPM (measured)",
         "mixed": "mixed estimated source",
         "unavailable": "unavailable",
         "expression": "expression",
@@ -7954,7 +7961,7 @@ def _variant_effect_markdown(
         return "\n".join(lines)
     lines.append(
         "Curated mutation/CNV expression-effect rules are interpreted as uncertain "
-        "biology hypotheses. They use estimated patient tumor attribution and RNA-model context TPM "
+        "biology hypotheses. They use estimated tumor attribution and RNA-model context TPM "
         "when available, and bulk TPM otherwise; they should prompt confirmatory "
         "DNA/RNA testing rather than replace it.\n"
     )
@@ -8141,10 +8148,14 @@ def _build_evidence_report(
     cancer_code,
     sample_id,
     target_report_md,
+    report_content=None,
 ):
     from .provenance import build_provenance_md
 
-    header_id = f": {sample_id}" if sample_id else ""
+    from .report_language import report_literal
+
+    display_title = report_content.identity.get("title") if report_content else sample_id
+    header_id = f": {report_literal(display_title)}" if display_title else ""
     provenance_md = build_provenance_md(
         analysis,
         ranges_df,
@@ -8163,6 +8174,8 @@ def _build_evidence_report(
     )
 
     lines = [f"# Evidence{header_id}\n"]
+    if report_content:
+        lines.append(report_content.sections[0]["blocks"][0]["text"] + "\n")
     lines.append(
         "This appendix keeps the stepwise and table-heavy support behind the "
         "distilled reports. Use it to audit how the call was assembled, inspect "
@@ -8271,6 +8284,7 @@ def _generate_text_reports(
     ranges_df=None,
     sample_id=None,
     df_expr=None,
+    report_content=None,
 ):
     """Write the detailed ``*-analysis.md`` report."""
     cancer_code = analysis["cancer_type"]
@@ -8320,6 +8334,11 @@ def _generate_text_reports(
 
     # --- Detailed report ---
     lines = ["# Detailed Sample Analysis\n"]
+    if report_content:
+        from .report_language import report_literal
+
+        lines[0] = "# Detailed Sample Analysis: " + report_literal(report_content.identity["title"]) + "\n"
+        lines.append(report_content.sections[0]["blocks"][0]["text"] + "\n")
     if input_path:
         # Input path at the top so the file is self-identifying even
         # without sample_context downstream. Propagated from
@@ -9542,7 +9561,7 @@ def _generate_text_reports(
                 if str(comp).startswith("matched_normal_") and (
                     not top_markers_cell or str(top_markers_cell).strip() == ""
                 ):
-                    top_markers_cell = "*external healthy-tissue reference component — no separate normal sample from this patient; the fraction comes from the RNA model, not discriminative markers*"
+                    top_markers_cell = "*external healthy-tissue reference component — no separate matched normal sample; the fraction comes from the RNA model, not discriminative markers*"
                     if score_cell in ("—", "", "0.000", "0.0"):
                         score_cell = "n/a"
                 lines.append(
@@ -9954,13 +9973,13 @@ def _build_target_report(
         lines_out = [
             "### Low-purity cap audit\n",
             "When estimated tumor fraction is low, the RNA attribution model caps "
-            "estimated tumor TPM at `patient bulk TPM (measured) × "
+            "estimated tumor TPM at `sample bulk TPM (measured) × "
             "estimated tumor fraction × headroom`. Cap status is "
             "tracked across the purity interval: a row can have cap activity in "
             "a low-purity scenario even when the median post-cap value is unchanged. "
             "The full audit is in `*-tumor-expression-ranges.tsv`.\n",
             f"*Shown for therapy-panel genes; {capped_n} of {len(sub)} shown rows have cap activity in at least one purity scenario.*\n",
-            "| Gene | Patient bulk TPM (measured) | Estimated tumor TPM before cap (RNA model) | Estimated tumor TPM after cap (RNA model) | Cap ceiling range | Status |",
+            "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM before cap (RNA model) | Estimated tumor TPM after cap (RNA model) | Cap ceiling range | Status |",
             "|------|---------:|-------------------------------:|--------------------------------:|------------------:|--------|",
         ]
         for _, row in sub.iterrows():
@@ -10028,7 +10047,7 @@ def _build_target_report(
             "STEAP1 tumor expression estimate should not be collapsed into the "
             "STEAP2 result, and a capped STEAP2 estimate should be read as an "
             "upper-bound expression anchor rather than a precise fitted value.\n",
-            "| Target | Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Cap status | Curated option |",
+            "| Target | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Cap status | Curated option |",
             "|--------|---------:|----------------------:|------------:|--------------|------------|----------------|",
         ]
         for sym in ("STEAP1", "STEAP2"):
@@ -10048,7 +10067,7 @@ def _build_target_report(
             )
         lines_out.append(
             "\nPractical reading: prioritize the therapy row by both clinical "
-            "maturity and estimated patient tumor support. A more mature STEAP1 therapy "
+            "maturity and estimated tumor support. A more mature STEAP1 therapy "
             "can still be less sample-supported than STEAP2 if STEAP1 is "
             "mostly background or de-differentiated in this specimen.\n"
         )
@@ -10154,7 +10173,7 @@ def _build_target_report(
             biomarker_syms = biomarker_syms_for_lookup
             if biomarker_syms:
                 lines.append(
-                    "| Gene | Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source |"
+                    "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source |"
                 )
                 lines.append(
                     "|------|---------------------|-------------------------------|---------------------|-------------|"
@@ -10208,7 +10227,7 @@ def _build_target_report(
                 "curated cancer-specific therapy landscape by supplied patient "
                 "treatment evidence, sourced clinical outcomes, indication fit, "
                 "required variant or HLA evidence, clinical maturity, and "
-                "estimated patient tumor attribution. A target such as HER3/ERBB3 or "
+                "estimated tumor attribution. A target such as HER3/ERBB3 or "
                 "ADAM9 can therefore appear in the expression screen without "
                 "being a priority recommendation for this sample.\n"
             )
@@ -10360,7 +10379,7 @@ def _build_target_report(
                 def _render_target_records(records):
                     lines.append(
                         "| Target | Agent | Class | Phase | Indication | "
-                        "Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Interpretation |"
+                        "Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Interpretation |"
                     )
                     lines.append(
                         "|--------|-------|-------|-------|------------|"
@@ -10396,7 +10415,7 @@ def _build_target_report(
                     )
                     lines.append(
                         "These rows remain visible for prioritization and audit. Some lack the required "
-                        "clinical eligibility assay; others lack estimated patient tumor support. Read the "
+                        "clinical eligibility assay; others lack estimated tumor support. Read the "
                         "row-level interpretation before carrying a target or therapy forward.\n"
                     )
                     _render_target_records(audit_records)
@@ -10832,7 +10851,7 @@ def _build_target_report(
     )
     if len(ctas):
         lines.append(
-            f"| Gene | {value_label} | Model interval | Patient bulk TPM (measured) | Estimated patient tumor RNA | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Surface | Therapies |"
+            f"| Gene | {value_label} | Model interval | Sample bulk TPM (measured) | Estimated tumor RNA | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Surface | Therapies |"
         )
         lines.append(
             "|------|-----------|----------------|---------------------|-----------------------------|---------|-----------|-----|---------|-----------|"
@@ -10883,7 +10902,7 @@ def _build_target_report(
     )
     if len(surface_targets):
         lines.append(
-            f"| Gene | {value_label} | Model interval | Patient bulk TPM (measured) | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Estimated attribution | Therapies |"
+            f"| Gene | {value_label} | Model interval | Sample bulk TPM (measured) | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Estimated attribution | Therapies |"
         )
         lines.append(
             "|------|-----------|----------------|---------------------|---------|-----------|-----|-------------|-----------|"
@@ -11091,7 +11110,7 @@ def _build_target_report(
                 )
             lines.append(
                 f"- **{row['symbol']}** ({tumor_attribution_band_text(row)}, "
-                f"patient bulk {row['observed_tpm']:.0f} TPM, "
+                f"sample bulk {row['observed_tpm']:.0f} TPM, "
                 f"external cancer-reference percentile {row['tcga_percentile']:.0%})"
                 f"{caveat}"
             )
