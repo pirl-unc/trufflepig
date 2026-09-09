@@ -1482,7 +1482,7 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
-def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
+def direct_eligibility_evidence_supported(analysis, biomarker: str, *, target_row=None) -> bool:
     """Whether supplied evidence satisfies a typed clinical eligibility gate."""
     if not isinstance(analysis, dict):
         return False
@@ -1496,9 +1496,11 @@ def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
 
         return evaluate_msi_mmr(clinical_context_for_analysis(analysis)).satisfied
     if biomarker == "tmb_high":
-        # TMB does not yet have a validated structured assay input.
-        # Unvalidated dictionary values and RNA surrogates cannot open a gate.
-        return False
+        from .clinical_context import clinical_context_for_analysis, evaluate_tmb
+        from .therapy_eligibility import tmb_criterion_for_therapy
+
+        criterion = tmb_criterion_for_therapy(target_row) if target_row is not None else None
+        return evaluate_tmb(clinical_context_for_analysis(analysis), criterion=criterion).satisfied
     if biomarker == "histology_only":
         return bool(constraints.get("cancer_type")) or str(
             analysis.get("cancer_type_source") or ""

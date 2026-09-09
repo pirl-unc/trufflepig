@@ -1,6 +1,6 @@
 # Clinical and specimen input
 
-Supply an existing clinical MSI/MMR result through the same versioned
+Supply existing clinical MSI/MMR or absolute TMB results through the same versioned
 `ClinicalContext` contract in Python, the CLI or the web upload form:
 
 ```sh
@@ -96,7 +96,7 @@ decision = evaluate_msi_mmr(context)
 analyze("gene_tpm.tsv", output_dir="output/specimen-A", clinical_context=context)
 ```
 
-`ClinicalContext`, `ClinicalAssay` and `ClinicalSource` also accept direct Python
+`ClinicalContext`, `ClinicalAssay`, `ClinicalMeasurement` and `ClinicalSource` also accept direct Python
 construction. `load_clinical_context` accepts these contexts, JSON mappings or
 JSON paths and rejects unknown fields. `AnalyzeConfig` validates and captures the
 input once; manifests contain the normalized values rather than relying on a
@@ -110,9 +110,73 @@ cannot be interpreted as a server-side file path. No clinical data is sent to an
 external model by this input path.
 
 RNA-only operation remains complete without this input. Other clinical facts,
-TMB, integration of existing variant/HLA/history inputs into this context and
+integration of existing variant/HLA/history inputs into this context and
 optional model extraction/editing remain in #163. Existing variant, fusion, HLA
 and treatment-history inputs continue to use their current contracts.
+
+## Absolute TMB measurements
+
+TMB uses the same `assays` array, source and specimen rules:
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "tmb",
+    "result": "measured",
+    "measurement": {"value": 18, "unit": "mut/Mb"},
+    "method": "NGS",
+    "test_id": "FDA:P170019",
+    "specimen_type": "tissue",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "reported_at": "2026-08-01",
+    "validity": "validated",
+    "reportability": "reportable",
+    "source": {"title": "Synthetic molecular pathology report"}
+  }]
+}
+```
+
+`measurement.value` is a finite nonnegative number or null. Zero is measured
+zero; null is missing. The result states are `measured`, `indeterminate`,
+`pending`, `not_tested` and `unknown`. A high/low designation depends on the
+treatment criterion and is not inferred from a qualitative claim. Invalid
+numbers are rejected. Unsupported units, missing measurements, proposed
+assertions, historical results and quality limitations remain visible without
+satisfying a requirement. `mutations/Mb` and `mutations/megabase` normalize to
+`mut/Mb`; percentiles and raw mutation counts are never converted to TMB.
+
+`TmbCriterion` records a treatment's minimum, units, specimen material, accepted
+test identifiers and source. `evaluate_tmb(context, criterion=...)` evaluates
+only TMB assays, while `evaluate_msi_mmr` evaluates only MSI/MMR assays.
+`clinical_assay_records(context)` preserves all assay kinds for detailed reporting.
+Concordant usable results resolve the threshold comparison; usable results on
+opposite sides stay conflicting. Older, failed or unreviewed assertions do not
+override a usable current assay. Existing MSI/MMR record shapes and generated
+IDs are preserved when the optional measurement/test/material fields are absent.
+
+The public `tmb_criterion_for_therapy(row)` and `tmb_requirement(row, analysis)`
+APIs use one decision for recommendation eligibility, rationale and the
+deduplicated information list. A curated row may carry an explicit
+`tmb_criterion` mapping. Otherwise, the covered pembrolizumab TMB-specific path
+uses the [FDA FoundationOne CDx criterion](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P170019S016):
+at least 10 mut/Mb from tissue using test ID `FDA:P170019`. This is the tissue
+test, not FoundationOne Liquid CDx. The
+[FDA companion-diagnostic table](https://www.fda.gov/medical-devices/in-vitro-diagnostics/list-fda-authorized-companion-diagnostic-devices-in-vitro-and-imaging-tools)
+is the reference for test/biomarker/therapy scope. Uncurated treatments, combined
+regimens or missing criterion metadata remain unresolved instead of borrowing
+that threshold. This input does not create a new therapy row outside the report's
+curated panel.
+
+The [FDA TMB indication](https://www.fda.gov/drugs/drug-approvals-and-databases/fda-approves-pembrolizumab-adults-and-children-tmb-h-solid-tumors)
+also specifies unresectable/metastatic disease, prior progression and no
+satisfactory alternatives. Satisfying the assay requirement does not establish
+those conditions; the separate clinical-setting request remains. Negative or
+conflicting results and supplied treatment contraindications retain their
+blockers. RNA scores, POLE variants and cohort TMB reference values cannot
+substitute for the specimen's absolute clinical measurement.
 
 ## Specimen identity and purpose
 
