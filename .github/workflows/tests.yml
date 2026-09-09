@@ -93,4 +93,4 @@ jobs:
         # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
         # (Linux branch reads /proc/meminfo), so it stays within the runner's
         # memory budget without a hand-tuned -n.
-        run: bash test.sh -q
+        run: bash test.sh -q -x

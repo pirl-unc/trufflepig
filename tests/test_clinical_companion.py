@@ -251,8 +251,10 @@ def test_afami_requires_the_companion_assay_independently_of_hla(clinical_hla_co
     assert decision.permits_review is (expected == 'satisfied')
     if result == 'positive':
         from trufflepig.report_content import build_report_content
+        from trufflepig.report_view import build_report_view
 
-        content = build_report_content(value, pd.DataFrame(), 'SARC_SYN', '')
+        view = build_report_view(value, sample_id='synthetic-companion')
+        content = build_report_content(value, pd.DataFrame(), 'SARC_SYN', '', report_view=view)
         setting = next(r for r in content.evidence_requests if r['key'] == 'clinical_setting')
         setting_text = json.dumps(setting)
         assert 'prior chemotherapy' in setting_text and 'synovial-sarcoma' in setting_text
