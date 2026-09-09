@@ -1,4 +1,4 @@
-# Clinical assay input
+# Clinical and specimen input
 
 Supply an existing clinical MSI/MMR result through the same versioned
 `ClinicalContext` contract in Python, the CLI or the web upload form:
@@ -11,7 +11,7 @@ trufflepig run --sample gene_tpm.tsv --workspace output/specimen-A \
 ```json
 {
   "schema_version": 1,
-  "specimen_id": "specimen-A",
+    "specimen_id": "specimen-A",
   "assays": [
     {
       "kind": "msi",
@@ -97,7 +97,7 @@ mutable source file. The normal report JSON carries `clinical_context`, assay
 evidence on eligibility requirements, and consolidated `evidence_requests` with
 priority and retained evidence. Markdown and PDF render the same authored facts.
 
-The web form accepts the same JSON as “Clinical assay results”. It validates
+The web form accepts the same JSON as “Clinical assay results and specimen context”. It validates
 the upload before launching a run. Uploads are limited to 1 MB; a JSON scalar
 cannot be interpreted as a server-side file path. No clinical data is sent to an
 external model by this input path.
@@ -106,3 +106,52 @@ RNA-only operation remains complete without this input. Other clinical facts,
 TMB, integration of existing variant/HLA/history inputs into this context and
 optional model extraction/editing remain in #163. Existing variant, fusion, HLA
 and treatment-history inputs continue to use their current contracts.
+
+## Specimen identity and purpose
+
+The same context accepts optional `specimen` metadata for its top-level
+`specimen_id`. This does not select a row or column from the expression table:
+keep using `--sample-id-col` and `--sample-id-value` for that purpose.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "reference-001",
+  "specimen": {
+    "display_label": "Reference culture α — replicate 1",
+    "purpose": "research",
+    "cell_line_id": "synthetic-reference-line",
+    "collected_at": "2026-07-29",
+    "site": "supplied tissue of origin",
+    "source": {
+      "title": "Research sample manifest",
+      "reference": "manifest-row-1",
+      "review_status": "supplied"
+    }
+  }
+}
+```
+
+`purpose` is `clinical`, `research` or `unknown` (the default). Filenames, cell-line
+labels, RNA similarities and missing clinical metadata do not establish purpose.
+Proposed or rejected source assertions remain in the context; their purpose is
+not applied until a supplied or confirmed assertion replaces them. Collection
+date is optional and must use `YYYY-MM-DD`; site and dates are never inferred.
+Python callers can construct `SpecimenMetadata` directly.
+
+Research reports prominently identify their purpose and describe therapy
+candidates as research hypotheses and reference assay context. Molecular facts,
+curated clinical requirements, assay status and ranked candidate identities stay
+the same. The information section retains characterization questions and omits
+the personal treatment-fitness request. Clinical treatment-setting criteria stay
+in each assessment's curation for interpreting the reference pathway.
+
+Display labels and specimen identity are preserved in the normal report JSON,
+Markdown and PDF. The opening states the specimen context concisely; complete
+metadata sources and excerpts remain in the detailed evidence section. The public `report_identity` API keeps the original source path
+and sample selector separate from the display title. Each document has a stable
+`RPT-…` identifier based on its source, selector and output prefix. The PDF footer
+uses this concise identifier on every page; the complete Unicode title wraps at
+the start. When no explicit identity is supplied, the title includes that
+document identifier, so files with the same basename remain distinguishable.
+This identifier is not a verified biological specimen identity.

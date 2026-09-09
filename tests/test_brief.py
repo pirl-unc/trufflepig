@@ -94,8 +94,8 @@ def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
     rows = _notable_cta_outliers(ranges)
     assert [row["symbol"] for row in rows] == ["TUMOR_CTA", "BACKGROUND_CTA"]
     bullet = _format_cta_outlier_bullet(rows[0])
-    assert "100 patient bulk TPM" in bullet
-    assert "60 estimated patient tumor TPM" in bullet
+    assert "100 sample bulk TPM" in bullet
+    assert "60 estimated tumor TPM" in bullet
     assert "RNA model interval 30-100" in bullet
     assert "protein/peptide presentation and treatment eligibility are not established" in bullet
 
@@ -2249,7 +2249,7 @@ def test_brief_normalizes_path_like_sample_id():
         disease_state="",
         sample_id="/tmp/run-123/rs",
     )
-    assert md.splitlines()[0] == "# Summary: rs"
+    assert md.splitlines()[0].startswith("# Summary: rs · RPT-")
 
 
 def test_brief_does_not_promote_psma_rna_without_required_imaging():

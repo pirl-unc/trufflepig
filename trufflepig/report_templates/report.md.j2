@@ -1,4 +1,4 @@
-# Summary{% if sample_id %}: {{ sample_id }}{% endif %}
+# Summary{% if sample_id %}: {{ sample_id | literal }}{% endif %}
 
 {% for section in sections %}
 ## {{ section.title }}

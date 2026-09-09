@@ -1,7 +1,17 @@
+{% if purpose == 'research' %}
+These research hypotheses come from the curated {{ scope }} clinical therapy panel.
+{% else %}
 These candidates come from the curated {{ scope }} panel.
+{% endif %}
 Ranking considers supplied treatment benefit, matched eligibility evidence,
 population outcomes, treatment-path maturity and RNA support.
+{% if purpose == 'research' %}
+Clinical indication and assay requirements describe the reference pathway;
+they do not establish efficacy in this research model or recommend patient treatment.
+The consolidated Information needed section identifies characterization gaps.
+{% else %}
 The shortlist requires clinical review of disease setting, prior treatment and
 safety; it does not establish current trial recruitment or constitute a complete
 treatment plan. The consolidated Information needed section lists the unresolved
 requirements and affected treatments.
+{% endif %}

@@ -54,7 +54,7 @@ FIGURE_REGISTRY = [
     (
         "decomposition-composition.png",
         "Estimated RNA composition",
-        "Conditional RNA-mixture model weights for the estimated patient tumor "
+        "Conditional RNA-mixture model weights for the estimated tumor "
         "contribution and fitted external normal, immune, and stromal references. "
         "These are not per-gene subtraction percentages.",
     ),

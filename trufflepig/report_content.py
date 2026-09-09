@@ -42,6 +42,15 @@ class ReportContent:
     therapy: dict[str, Any] | None
     treatment_history: list[dict[str, Any]]
     clinical_context: dict[str, Any] = field(default_factory=dict)
+    identity: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def specimen_blocks(self) -> list[dict[str, Any]]:
+        """Reuse authored specimen context and provenance in detailed documents."""
+        return [
+            block for section in self.sections for block in section["blocks"]
+            if block.get("id") in {"specimen_context", "specimen_provenance"}
+        ]
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -212,11 +221,18 @@ def build_report_content(
         _format_trace_tpm,
     )
     from .common import ranges_by_symbol, ranges_by_gene_id, panel_symbols_to_gene_ids
+    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr, report_identity
 
     cancer_code = report_view.cancer_type
     analysis = {**analysis, "cancer_type": cancer_code, "cancer_name": report_view.cancer_type_name}
     sample_id = _display_sample_id(sample_id) or report_view.sample_id or ""
     prefix = prefix or sample_id or "report"
+    clinical_context = clinical_context_for_analysis(analysis)
+    identity = report_identity(
+        clinical_context, **(analysis.get("report_input") or {}),
+        output_prefix=prefix, fallback_label=sample_id,
+    )
+    research = identity["purpose"] == "research"
     conclusion = [
         paragraph(text)
         for text in summary_conclusion_paragraphs(
@@ -229,6 +245,10 @@ def build_report_content(
         )
         if text.strip()
     ]
+    conclusion.insert(0, {
+        **paragraph(render_report_paragraph("specimen_context", context=clinical_context, identity=identity)),
+        "id": "specimen_context",
+    })
     panel_code, panel_subtype, panel = _curated_target_panel_for_sample(
         cancer_code,
         analysis,
@@ -276,9 +296,6 @@ def build_report_content(
 
     # Report-level questions join therapy requirements before deduplication.
     from .brief import mismatch_repair_summary_context, mismatch_repair_rna_state
-    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
-
-    clinical_context = clinical_context_for_analysis(analysis)
     clinical_mmr = evaluate_msi_mmr(clinical_context)
     rna_mmr = mismatch_repair_summary_context(analysis)
     rna_state = mismatch_repair_rna_state(analysis)
@@ -317,14 +334,16 @@ def build_report_content(
                 "diagnosis",
                 "unresolved",
                 "The disease call is based on RNA evidence and needs clinical reconciliation.",
-                "Reconcile the proposed disease and subtype with pathology, clinical history and any disease-defining molecular assay.",
-                ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
+                "Reconcile the RNA disease context with the sample's documented origin and disease-defining molecular evidence."
+                if research else "Reconcile the proposed disease and subtype with pathology, clinical history and any disease-defining molecular assay.",
+                ("sample provenance", "reference-material characterization", "disease-defining molecular result")
+                if research else ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
             )
         )
     if rna_mmr or clinical_context.assays:
         report_requirements.append(msi_mmr_requirement(analysis, rna_triage=rna_state == "MSI-like"))
     clinical_requirements = []
-    if selected_assessments:
+    if selected_assessments and not research:
         clinical_requirement = EvidenceRequirement(
             "clinical_setting",
             "clinical_setting",
@@ -370,7 +389,9 @@ def build_report_content(
     )
 
     therapies = [
-        paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))
+        paragraph(render_report_paragraph(
+            "therapy_scope", scope=panel_code or cancer_code, purpose=identity["purpose"],
+        ))
     ] if assessments else []
 
     if spindle_guidance:
@@ -407,7 +428,7 @@ def build_report_content(
                 for a in excluded
             )
 
-    request_blocks = []
+    request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
     for request in requests:
         label = {"msi_high": "MSI/MMR"}.get(
             request["kind"], request["kind"].replace("_", " ").capitalize()
@@ -435,6 +456,11 @@ def build_report_content(
             f"[Full interpreted analysis]({prefix}-analysis.md) · [Detailed evidence tables]({prefix}-evidence.md)"
         )
     ]
+    detail.append({"kind": "heading", "text": "Specimen provenance"})
+    detail.append({
+        **paragraph(render_report_paragraph("specimen_provenance", context=clinical_context, identity=identity)),
+        "id": "specimen_provenance",
+    })
     source_rows = source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})
@@ -500,7 +526,7 @@ def build_report_content(
         therapy_table = {
             "columns": [
                 ["Target", 15],
-                ["Recommendation", 38],
+                ["Research candidate" if research else "Recommendation", 38],
                 ["Estimated tumor TPM (RNA model)", 25],
                 ["Eligibility / RNA provenance", 39],
             ],
@@ -536,9 +562,13 @@ def build_report_content(
         therapy_table,
         [record.public_dict() for record in treatment_records(analysis)],
         clinical_context.public_dict(),
+        identity,
     )
 
 
 def render_report_summary(content: ReportContent) -> str:
     """Render the same authored sections retained in the structured report."""
-    return render_report_template("report", sample_id=content.sample_id, sections=content.sections)
+    return render_report_template(
+        "report", sample_id=content.identity.get("title") or content.sample_id,
+        sections=content.sections,
+    )

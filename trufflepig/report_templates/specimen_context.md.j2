@@ -1,0 +1,17 @@
+**Specimen context:**
+{% if identity.purpose == 'research' %}
+Research-only sample. Therapy candidates are research hypotheses and clinical-assay
+reference context; this report does not recommend treatment for an individual.
+{% elif identity.purpose == 'clinical' %}
+Supplied clinical specimen.
+{% else %}
+Specimen purpose is unknown.
+{% endif %}
+{% if context.specimen_id %}Specimen ID: {{ context.specimen_id | literal }}.{% endif %}
+{% if context.specimen.cell_line_id %}Supplied cell-line ID: {{ context.specimen.cell_line_id | literal }}.{% endif %}
+{% if context.specimen.collected_at %}Collected: {{ context.specimen.collected_at | literal }}.{% endif %}
+{% if context.specimen.site %}Supplied site: {{ context.specimen.site | literal }}.{% endif %}
+{% if context.specimen.source.review_status in ['proposed', 'rejected'] %}
+Supplied metadata is {{ context.specimen.source.review_status | literal }};
+its stated purpose ({{ context.specimen.purpose | literal }}) is not applied.
+{% endif %}
