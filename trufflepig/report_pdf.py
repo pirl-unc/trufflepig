@@ -14,7 +14,6 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    CondPageBreak,
     Image,
     KeepTogether,
     LongTable,
@@ -103,7 +102,7 @@ def report_pdf_styles() -> dict:
             leading=19,
             spaceBefore=14,
             spaceAfter=9,
-            keepWithNext=False,
+            keepWithNext=True,
             textColor=colors.HexColor("#245b80"),
         ),
         "heading": ParagraphStyle(
@@ -114,7 +113,7 @@ def report_pdf_styles() -> dict:
             leading=15,
             spaceBefore=9,
             spaceAfter=6,
-            keepWithNext=False,
+            keepWithNext=True,
         ),
         "caption": ParagraphStyle(
             "Caption", parent=body, fontSize=9, leading=12, textColor=colors.HexColor("#536471")
@@ -135,14 +134,10 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
     title = document.get("sample_id") or document["prefix"]
     story = [Paragraph(report_inline_html(str(title)), styles["title"])]
     for section in document["sections"]:
-        story.extend(
-            [CondPageBreak(72), Paragraph(report_inline_html(section["title"]), styles["section"])]
-        )
+        story.append(Paragraph(report_inline_html(section["title"]), styles["section"]))
         for block in section["blocks"]:
             kind = block["kind"]
             if kind in {"paragraph", "heading", "bullet"}:
-                if kind == "heading":
-                    story.append(CondPageBreak(60))
                 style = styles["body"] if kind == "paragraph" else styles[kind]
                 story.append(
                     Paragraph(
