@@ -7,7 +7,6 @@ from trufflepig.brief import (
     build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
     _expression_independent_evidence_gap,
-    _empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
     _format_cta_outlier_bullet,
@@ -54,22 +53,17 @@ def _lineage_panel_evidence(top_panel, *, promoted=False, code="", blockers=()):
 
 
 def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
-    targets = pd.DataFrame([{"symbol": "CDK4", "agent": "palbociclib"}])
-    ranges = pd.DataFrame(
-        [
-            {
-                "symbol": "CDK4",
-                "observed_tpm": 63.0,
-                "attr_tumor_tpm": 53.0,
-                "attr_tumor_fraction": 0.84,
-            }
-        ]
-    )
+    from trufflepig.report_content import assess_therapy, empty_shortlist_summary
 
-    message = _empty_therapy_shortlist_message(targets, ranges)
+    row = {
+        "symbol": "ERBB2", "agent": "trastuzumab", "phase": "approved",
+        "indication": "HER2-positive breast cancer", "requires_verified_alteration": True,
+    }
+    expression = {"observed_tpm": 63.0, "attr_tumor_tpm": 53.0, "attr_tumor_fraction": 0.84}
+    message = empty_shortlist_summary([assess_therapy(row, expression)])
 
-    assert "did not meet the shortlist's" in message
-    assert "clinical eligibility" in message
+    assert "awaiting clinical eligibility evidence" in message
+    assert "tumor-source RNA support" not in message
     assert "non-tumor-supported" not in message
 
 
@@ -2176,7 +2170,7 @@ def test_brief_handles_uncurated_cancer_type():
         cancer_code="ZZUNCURATED",
         disease_state="",
     )
-    assert "not yet in the curated key-genes panel" in md
+    assert "No applicable named therapies are available in the curated panel" in md
 
 
 def test_actionable_is_longer_but_structured():

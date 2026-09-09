@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import hashlib
+import math
 import re
 from typing import Any
 
@@ -197,17 +198,12 @@ def evaluate_therapy_eligibility(
         accepted = {
             "mutation": ("clinical variant report", "normalized variant table", "--variants"),
             "wildtype": ("clinical molecular report with assay coverage and negative results",),
-            "msi_high": (
-                "MSI-PCR result",
-                "MMR IHC report",
-                "validated clinical sequencing result",
-            ),
             "tmb_high": ("clinical TMB result with absolute mutations/Mb and assay method",),
             "clinical_target_assay": ("validated protein or companion-assay report",),
             "imaging": ("required target-imaging report",),
             "histology_only": ("pathology report", "confirmed disease and treatment setting"),
         }.get(biomarker, ("indication-specific clinical report",))
-        key = biomarker if biomarker in {"msi_high", "tmb_high"} else f"{biomarker}:{gene}"
+        key = biomarker if biomarker == "tmb_high" else f"{biomarker}:{gene}"
         from .variants import variant_evidence_records
 
         supplied_gene_records = [
@@ -251,6 +247,85 @@ def evaluate_therapy_eligibility(
             )
         )
     return TherapyEligibility(tuple(requirements), supported_history, variant_match, direct_match)
+
+
+@dataclass(frozen=True)
+class TherapyReviewDecision:
+    """Clinical and RNA review outcome before ranking or shortlist truncation.
+
+    ``status`` and ``reason`` identify the first unmet selection criterion.
+    Complete clinical requirements and the independent RNA observation remain
+    available even when that criterion prevents review.
+    """
+
+    status: str
+    reason: str
+    eligibility: TherapyEligibility
+    observation: dict[str, Any]
+    reliability_status: str
+
+    @property
+    def permits_review(self) -> bool:
+        return self.status == "reviewable"
+
+
+def evaluate_therapy_review(
+    target_row, expression=None, *, analysis=None, panel_subtype=None,
+    ranges_df=None, disease_state=None,
+) -> TherapyReviewDecision:
+    """Apply the shortlist's clinical, disease-state and RNA criteria once.
+
+    Ranking and authored reports consume this same decision. RNA-independent
+    indications and supplied prior benefit retain the established RNA exceptions;
+    neither exception overrides a clinical exclusion or conflicting evidence.
+    """
+    from .reporting import (
+        expression_independent_indication,
+        interval_material_target_candidate,
+        same_lineage_material_target_candidate,
+        target_reliability_status,
+        target_rna_observation,
+        therapy_row_rna_context_inactive,
+    )
+
+    eligibility = evaluate_therapy_eligibility(target_row, analysis, panel_subtype=panel_subtype)
+    observation = target_rna_observation(
+        expression, symbol=canonical_target_symbol(target_row.get("symbol")), ranges_df=ranges_df
+    )
+    evidence = expression if expression is not None else {}
+    reliability = target_reliability_status(evidence, target_row=target_row)
+    independent = expression_independent_indication(target_row)
+    history = eligibility.history_supported
+    status, reason = "reviewable", "The row meets the criteria for ranked clinical review."
+    if not eligibility.permits_review:
+        status = "clinical_blocker" if eligibility.has_known_blocker else "eligibility_pending"
+        unmet = [r for r in eligibility.requirements if r.status == "blocked"]
+        if not unmet:
+            unmet = [r for r in eligibility.requirements if r.status in {"missing", "unresolved"}]
+        reason = " ".join(dict.fromkeys(r.description for r in unmet))
+    elif therapy_row_rna_context_inactive(
+        target_row, analysis=analysis, disease_state=disease_state
+    ) and not history:
+        status, reason = "inactive_disease_context", "The RNA disease-state context does not support this pathway."
+    elif not (independent or history):
+        if observation["state"] in {"invalid", "unknown", "not_in_input"}:
+            status, reason = "rna_unavailable", "Usable target RNA evidence is unavailable for this RNA-dependent pathway."
+        elif (observation["observed_tpm"] or 0.0) < 1.0:
+            status, reason = "rna_below_threshold", "Target RNA is below the 1 TPM discovery threshold; this is not a clinical contraindication."
+        else:
+            try:
+                fraction = float(evidence.get("attr_tumor_fraction", 0.0))
+            except (TypeError, ValueError):
+                fraction = 0.0
+            if not math.isfinite(fraction):
+                fraction = 0.0
+            lineage = same_lineage_material_target_candidate(evidence, target_row=target_row)
+            interval = interval_material_target_candidate(evidence, target_row=target_row)
+            if (fraction < 0.30 and not lineage and not interval) or (
+                reliability == "unsupported" and not interval
+            ):
+                status, reason = "rna_source_unsupported", "Target RNA does not meet the shortlist's tumor-source support criteria."
+    return TherapyReviewDecision(status, reason, eligibility, observation, reliability)
 
 
 def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
