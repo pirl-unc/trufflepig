@@ -27,7 +27,7 @@ from .reporting import (
     candidate_winning_subtype_for_analysis,
     clinical_maturity_summary,
     context_expression_band_cell,
-    direct_eligibility_input_supplied,
+    direct_eligibility_evidence_supported,
     indication_biomarker,
     indication_biomarker_label,
     expression_independent_indication,
@@ -495,8 +495,12 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
     if scope_context:
         return _with_proxy(scope_context)
     biomarker = indication_biomarker(target_row)
+    if biomarker == "msi_high":
+        from .therapy_eligibility import msi_mmr_requirement
+
+        return _with_proxy(msi_mmr_requirement(analysis).description)
     if biomarker == "histology_only":
-        if direct_eligibility_input_supplied(analysis, biomarker):
+        if direct_eligibility_evidence_supported(analysis, biomarker):
             return _with_proxy("")
         return _with_proxy(
             "eligibility evidence not supplied to this run: confirm diagnosis/"
@@ -512,7 +516,7 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
             "target-specific supporting call was recognized for this row; "
             f"confirm {label} before treating as eligible"
         )
-    if biomarker != "mutation" and direct_eligibility_input_supplied(analysis, biomarker):
+    if biomarker != "mutation" and direct_eligibility_evidence_supported(analysis, biomarker):
         return _with_proxy(
             f"required eligibility evidence was supplied to this run; verify the "
             f"{label} call matches the indication"
@@ -1950,6 +1954,21 @@ def mismatch_repair_summary_context(analysis: dict) -> dict:
     return select_mismatch_repair_channel_for_report(graph.get("channels") or [], final_code)
 
 
+def mismatch_repair_rna_state(analysis: dict) -> str:
+    """Reported RNA proxy state; it never supplies clinical assay eligibility."""
+    import math
+
+    channel = mismatch_repair_summary_context(analysis)
+    mmr = (channel.get("details") or {}).get("mismatch_repair") or {}
+    probability = mmr.get("msi_probability")
+    threshold = mmr.get("decision_threshold", 0.5)
+    if not isinstance(probability, (int, float)) or not math.isfinite(probability):
+        return ""
+    if not isinstance(threshold, (int, float)):
+        threshold = 0.5
+    return "MSI-like" if probability >= threshold else "MSS-like"
+
+
 # MLH1 at/above this fraction of the cohort-typical (median tumor) MLH1 counts as
 # "retained" (not promoter-silenced): sporadic-MSI silencing collapses MLH1 to a small
 # fraction of the cohort median (measured ~0.2-0.3x in COAD/READ MSI), so half-of-median
@@ -2000,11 +2019,10 @@ def mismatch_repair_summary_line(
     p_msi = mmr.get("msi_probability")
     if not isinstance(p_msi, (int, float)):
         return ""
-    threshold = mmr.get("decision_threshold")
-    if not isinstance(threshold, (int, float)):
-        threshold = 0.5
-    state = "MSI" if p_msi >= threshold else "MSS"
-    state_label = "MSI-like" if state == "MSI" else "MSS-like"
+    state_label = mismatch_repair_rna_state(analysis)
+    if not state_label:
+        return ""
+    state = "MSI" if state_label == "MSI-like" else "MSS"
     tension_clause = _mlh1_msi_tension_clause(mmr) if state == "MSI" else ""
     context = str(mmr.get("context_group") or "").strip()
     context_clause = f"{context} " if context else ""

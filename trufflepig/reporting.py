@@ -1402,6 +1402,9 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     """
     from .variants import classify_variant_type, normalize_protein_substitution
 
+    if indication_biomarker(target_row) in {"msi_high", "tmb_high"}:
+        return []
+
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
     records = supplied_variants_for_gene(analysis, sym)
     if not records:
@@ -1475,8 +1478,8 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
-def direct_eligibility_input_supplied(analysis, biomarker: str) -> bool:
-    """Whether this run received an orthogonal input for a typed eligibility gate."""
+def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
+    """Whether supplied evidence satisfies a typed clinical eligibility gate."""
     if not isinstance(analysis, dict):
         return False
     constraints = analysis.get("analysis_constraints") or {}
@@ -1484,8 +1487,12 @@ def direct_eligibility_input_supplied(analysis, biomarker: str) -> bool:
         # A file can contain an unrelated or negative result. Only the row's
         # target-specific variant matcher can satisfy a molecular requirement.
         return False
-    if biomarker in {"msi_high", "tmb_high"}:
-        # These have no validated structured assay input in the current API.
+    if biomarker == "msi_high":
+        from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
+
+        return evaluate_msi_mmr(clinical_context_for_analysis(analysis)).satisfied
+    if biomarker == "tmb_high":
+        # TMB does not yet have a validated structured assay input.
         # Unvalidated dictionary values and RNA surrogates cannot open a gate.
         return False
     if biomarker == "histology_only":

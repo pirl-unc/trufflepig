@@ -92,14 +92,19 @@ generated `*-interpretive-report.pdf`: it includes the clinical summary, full
 treatment rationales and requirements, and figures supporting the final call.
 
 Common pass-through flags: `--hla-types`, `--fusions`, `--variants`,
-`--treatment-history`,
+`--treatment-history`, `--clinical-context`,
 `--alignment-qc`, `--sample-mode`, `--tumor-context`, `--site-hint`,
 `--met-site`, `--decomposition-templates`, `--output-image-prefix`,
 `--sample-id-col`, `--sample-id-value`, `--gene-id-col`, `--gene-name-col`,
 `--label-genes`, `--genes`, `--transcripts`,
 `--aggregate-gene-expression`, `--expression-qc-rescue`,
 `--therapy-target-top-k`, `--therapy-target-tpm-threshold`, `--force`.
-All have the same meaning as in the old `pirlygenes analyze`.
+See the input contracts below for the accepted evidence and its interpretation.
+
+`--clinical-context` accepts a versioned JSON input with specimen-scoped clinical
+MSI/MMR assays, results, quality and provenance. A usable positive assay can
+satisfy the MSI-H/dMMR biomarker requirement; an RNA proxy cannot. Python and the
+web form use the same [clinical-context contract](docs/clinical-context.md).
 
 HLA inputs use mhcgnomes nomenclature and retain typing resolution and
 annotations. Registered therapy requirements include explicit exclusions;

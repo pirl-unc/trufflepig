@@ -25,6 +25,10 @@
         <label>HLA types (optional, comma-separated)
           <input type="text" name="hla_types" placeholder="A*02:01,B*07:02">
         </label>
+        <label>Clinical assay results (optional JSON)
+          <input type="file" name="clinical_context" accept=".json,application/json">
+          <small>Include MSI/MMR result, assay method, specimen identity, validity and clinical source. RNA-only analysis works without this file.</small>
+        </label>
         <label>Sample label
           <input type="text" name="sample_id_value" placeholder="patient_X_baseline">
         </label>

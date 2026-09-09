@@ -145,8 +145,6 @@ from .reporting import (
     component_display_label,
     cancer_therapy_panel_for_analysis,
     context_expression_band_cell,
-    direct_eligibility_input_supplied,
-    indication_biomarker,
     expression_independent_indication,
     expression_independent_interpretation,
     expression_independent_rna_context,
@@ -158,11 +156,9 @@ from .reporting import (
     resolved_subtype_code_for_analysis,
     select_mismatch_repair_channel_for_report,
     subtype_curation_scope_note,
-    supplied_variant_supports_target_row,
     target_observation_state,
     therapy_path_context,
     therapy_path_rank,
-    therapy_row_requires_confirmed_eligibility,
     therapy_rna_context_conflict,
     therapy_row_rna_context_inactive,
     therapy_state_caution,
@@ -1743,6 +1739,7 @@ def analyze(
     variants: Optional[str] = None,
     variant_genome_build: Optional[str] = None,
     treatment_history: Optional[str] = None,
+    clinical_context=None,
     # Deprecated Python compatibility; use ``variants``.
     alterations: Optional[str] = None,
     alignment_qc: Optional[str] = None,
@@ -1792,6 +1789,7 @@ def analyze(
         variants=variants,
         variant_genome_build=variant_genome_build,
         treatment_history=treatment_history,
+        clinical_context=clinical_context,
         alterations=alterations,
         alignment_qc=alignment_qc,
         expression_qc_rescue=expression_qc_rescue,
@@ -2111,6 +2109,7 @@ def _analyze_body(run: AnalyzeRun):
             "variant_records": len(variant_records),
             "variant_genome_build": config.variant_genome_build,
             "treatment_history_records": len(treatment_records),
+            "clinical_context": config.clinical_context.public_dict(),
             "treatment_history": [
                 record.public_dict() for record in treatment_records
             ],
@@ -2404,6 +2403,7 @@ def _analyze_body(run: AnalyzeRun):
     fusion_scope_inference = None
     analysis["fusion_inputs_supplied"] = bool(fusion_paths)
     analysis["fusion_input_paths"] = list(fusion_paths)
+    analysis["clinical_context"] = config.clinical_context.public_dict()
     analysis["variant_inputs_supplied"] = bool(variant_inputs)
     analysis["variant_inputs"] = list(variant_inputs)
     analysis["expression_scale_qc"] = expression_scale_qc
@@ -9611,8 +9611,6 @@ def _build_target_report(
     """Return tumor-expression range report using purity/decomposition bounds."""
     import pandas as pd
     from .treatment_history import (
-        treatment_history_blocks_row,
-        treatment_history_marks_current,
         treatment_history_rank,
         treatment_history_supports_review,
     )
@@ -10282,11 +10280,10 @@ def _build_target_report(
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
                     expr = None if sym == "—" else sym_to_row.get(sym)
-                    history_supported = treatment_history_supports_review(
-                        trow, analysis
-                    )
-                    history_blocked = treatment_history_blocks_row(trow, analysis)
-                    history_current = treatment_history_marks_current(trow, analysis)
+                    from .therapy_eligibility import evaluate_therapy_eligibility
+
+                    eligibility = evaluate_therapy_eligibility(trow, analysis, panel_subtype=panel_subtype)
+                    history_supported = eligibility.history_supported
                     reliability = "provisional"
                     source_reliability = reliability
                     if expr is None:
@@ -10326,39 +10323,14 @@ def _build_target_report(
                             target_row=trow,
                         )
                         source_reliability = target_reliability_status(expr)
-                    biomarker = indication_biomarker(trow)
-                    eligibility_missing = (
-                        expression_independent_indication(trow)
-                        and (
-                            therapy_row_requires_confirmed_eligibility(trow)
-                            or biomarker == "mutation"
-                        )
-                        and not supplied_variant_supports_target_row(trow, analysis)
-                        and not (
-                            biomarker != "mutation"
-                            and direct_eligibility_input_supplied(analysis, biomarker)
-                        )
-                    )
                     audit_only = (
                         source_reliability == "unsupported"
                         and not expression_independent_indication(trow)
                         and not history_supported
-                    ) or (eligibility_missing and not history_supported) or history_blocked or history_current
-                    if history_blocked:
-                        interpretation_cell = (
-                            "not prioritized because supplied treatment history "
-                            "reports a negative outcome; " + interpretation_cell
-                        )
-                    elif history_current:
-                        interpretation_cell = (
-                            "listed as current treatment rather than a new candidate; "
-                            + interpretation_cell
-                        )
-                    elif eligibility_missing:
-                        interpretation_cell = (
-                            "clinical eligibility not supplied; RNA context is shown "
-                            "to prioritize confirmatory review; " + interpretation_cell
-                        )
+                    ) or not eligibility.permits_review
+                    reasons = list(dict.fromkeys(r.description for r in eligibility.requirements))
+                    if reasons:
+                        interpretation_cell = " ".join(reasons) + " " + interpretation_cell
                     elif audit_only:
                         interpretation_cell = (
                             "not sample-supported; negative/background evidence; "

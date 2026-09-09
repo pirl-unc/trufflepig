@@ -13,7 +13,7 @@ from typing import Any
 
 from .reporting import (
     canonical_target_symbol,
-    direct_eligibility_input_supplied,
+    direct_eligibility_evidence_supported,
     hla_eligibility_context,
     indication_biomarker,
     indication_biomarker_label,
@@ -43,6 +43,7 @@ class EvidenceRequirement:
     accepted_inputs: tuple[str, ...] = ()
     source: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
+    priority: str = "routine"
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -104,6 +105,31 @@ def clean_therapy_value(value) -> str:
     return "" if text.lower() in {"nan", "none", "<na>", "nat"} else text
 
 
+def msi_mmr_requirement(analysis, *, rna_triage: bool = False) -> EvidenceRequirement:
+    """One clinical-assay decision shared by therapy gates and report requests."""
+    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
+    from .report_language import render_report_paragraph
+
+    decision = evaluate_msi_mmr(clinical_context_for_analysis(analysis))
+    status = {"positive": "satisfied", "negative": "blocked", "conflicting": "unresolved",
+              "unresolved": "unresolved", "missing": "missing"}[decision.status]
+    question = (
+        "Supply the existing clinical MSI-PCR, MMR IHC or validated clinical sequencing result, with assay validity, reportability, source and specimen identity."
+        if decision.status == "missing" else
+        "Reconcile the supplied MSI/MMR reports and their result, validity, reportability and specimen limitations."
+    )
+    if decision.specimen_id:
+        question += f" Required specimen: {decision.specimen_id}."
+    return EvidenceRequirement(
+        "msi_high", "msi_high", status,
+        render_report_paragraph("clinical_assay_decision", decision=decision.public_dict()),
+        question,
+        ("--clinical-context JSON: assays", "MSI-PCR result", "MMR IHC report", "validated clinical sequencing result"),
+        evidence=decision.public_dict(),
+        priority="high" if rna_triage or decision.status == "conflicting" else "routine",
+    )
+
+
 def evaluate_therapy_eligibility(
     target_row, analysis=None, *, panel_subtype=None
 ) -> TherapyEligibility:
@@ -117,7 +143,7 @@ def evaluate_therapy_eligibility(
     supported_history = treatment_history_supports_review(target_row, analysis)
     variant_match = bool(supplied_variant_supports_target_row(target_row, analysis))
     biomarker = indication_biomarker(target_row)
-    direct_match = direct_eligibility_input_supplied(analysis, biomarker)
+    direct_match = direct_eligibility_evidence_supported(analysis, biomarker)
     history_text = treatment_history_context(target_row, analysis)
     if treatment_history_blocks_row(target_row, analysis) or treatment_history_marks_current(
         target_row, analysis
@@ -157,7 +183,9 @@ def evaluate_therapy_eligibility(
             )
         )
 
-    if therapy_row_requires_confirmed_eligibility(target_row):
+    if biomarker == "msi_high":
+        requirements.append(msi_mmr_requirement(analysis))
+    elif therapy_row_requires_confirmed_eligibility(target_row):
         gene = canonical_target_symbol(target_row.get("symbol"))
         label = indication_biomarker_label(target_row)
         alleles = required_protein_changes_for_therapy(target_row)
@@ -233,7 +261,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
     distinct assay specification and reason.
     """
     groups = []
-    list_fields = ("keys", "accepted_inputs", "affects", "reasons", "requirements", "details")
+    list_fields = ("keys", "accepted_inputs", "affects", "reasons", "requirements", "details", "evidence")
     for assessment in assessments:
         requirements = assessment.get("eligibility", {}).get("requirements", [])
         if any(r["status"] == "blocked" for r in requirements):
@@ -262,6 +290,8 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                     request["question_signatures"].update(other["question_signatures"])
                     if other["status"] == "unresolved":
                         request["status"] = "unresolved"
+                    if other["priority"] == "high":
+                        request["priority"] = "high"
                     groups.remove(other)
             else:
                 request = {
@@ -270,6 +300,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                     "kind": requirement["kind"],
                     "status": requirement["status"],
                     "question": requirement["question"],
+                    "priority": requirement.get("priority", "routine"),
                     "question_signatures": set(),
                     **{field: [] for field in list_fields},
                 }
@@ -282,6 +313,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 "reasons": [requirement["description"]],
                 "requirements": [requirement["question"]],
                 "details": [{"question": requirement["question"], "agent": assessment["agent"]}],
+                "evidence": [requirement["evidence"]] if requirement.get("evidence") else [],
             }
             for field in list_fields:
                 request[field].extend(
@@ -289,6 +321,8 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 )
             if requirement["status"] == "unresolved":
                 request["status"] = "unresolved"
+            if requirement.get("priority") == "high":
+                request["priority"] = "high"
     for request in groups:
         del request["question_signatures"]
         details = request["details"]
@@ -301,4 +335,4 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
             }
             for question in request["requirements"]
         ]
-    return groups
+    return sorted(groups, key=lambda request: request["priority"] != "high")
