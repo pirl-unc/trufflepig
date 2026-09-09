@@ -798,15 +798,18 @@ def filter_current_therapy_targets(targets_df):
     """Apply current clinical curation; invalid corrections must fail visibly."""
     if targets_df is None:
         return None
+    import pandas as pd
+
     keep = [
         not therapy_filter_note(row)
         for row in targets_df.to_dict("records")
     ]
-    current = targets_df.loc[keep].copy().reset_index(drop=True)
+    # Curation can replace text placeholders with booleans or assay records.
+    current = targets_df.loc[keep].astype(object).reset_index(drop=True)
     for index, row in current.iterrows():
         for column, value in _current_therapy_row_overrides(row).items():
             if column not in current.columns:
-                current[column] = ""
+                current[column] = pd.Series("", index=current.index, dtype=object)
             current.at[index, column] = value
     return current
 
