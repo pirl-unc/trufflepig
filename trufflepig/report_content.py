@@ -95,7 +95,8 @@ def assess_therapy(
     state, observed = observation["state"], observation["observed_tpm"]
     eligibility = review.eligibility
     rationale = []
-    rationale.extend(r.description for r in eligibility.requirements if r.kind in {"msi_high", "tmb_high"})
+    rationale.extend(r.description for r in eligibility.requirements
+                     if r.kind in {"msi_high", "tmb_high", "clinical_target_assay"})
     if eligibility.supplied_variant_supported:
         from .reporting import supplied_variant_context_for_target_row
 
@@ -430,11 +431,11 @@ def build_report_content(
 
     request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
     for request in requests:
-        label = {"msi_high": "MSI/MMR", "tmb_high": "TMB", "hla": "HLA"}.get(
+        label = request.get("label") or {"msi_high": "MSI/MMR", "tmb_high": "TMB", "hla": "HLA"}.get(
             request["kind"], request["kind"].replace("_", " ").capitalize()
         )
         request_blocks.append(
-            paragraph(render_report_paragraph("evidence_request", label=label, **request))
+            paragraph(render_report_paragraph("evidence_request", **{**request, "label": label}))
         )
         # Different therapies can require distinct tests for one evidence kind.
         # Keep those specifications visible even when the request is deduplicated.

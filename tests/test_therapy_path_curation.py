@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from trufflepig._data import DATA_DIR as _DATA_DIR
 from trufflepig.reporting import (
@@ -159,6 +160,39 @@ def test_diagnostic_fapi_tracer_does_not_replace_therapeutic_lutetium_agent():
 
     assert list(filtered["agent"]) == ["[177Lu]FAPI-46"]
     assert therapy_withdrawal_note(targets.iloc[0]) == ""
+
+
+@pytest.mark.parametrize("existing_metadata", [False, True])
+@pytest.mark.parametrize("string_storage", ["python", "pyarrow"])
+def test_curation_preserves_structured_values_with_string_inference(existing_metadata, string_storage):
+    if string_storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    with pd.option_context("future.infer_string", True, "mode.string_storage", string_storage):
+        targets = pd.DataFrame([
+            {"cancer_code": "SARC", "subtype": "synovial_sarcoma", "symbol": "MAGE-A4",
+             "agent": "afami-cel (Tecelra)", "indication": "synovial sarcoma"},
+            {"cancer_code": "COAD", "subtype": "", "symbol": "KRAS",
+             "agent": "sotorasib", "indication": "colorectal cancer"},
+            {"cancer_code": "UNLISTED", "subtype": "", "symbol": "OTHER",
+             "agent": "unchanged agent", "indication": "unchanged indication"},
+        ], index=[9, 4, 2])
+        if existing_metadata:
+            targets["clinical_assay_criteria"] = ""
+            targets["requires_verified_alteration"] = ""
+        original = targets.copy(deep=True)
+
+        filtered = filter_current_therapy_targets(targets)
+
+        pd.testing.assert_frame_equal(targets, original)
+        assert list(filtered.index) == [0, 1, 2]
+        criterion, = filtered.iloc[0]["clinical_assay_criteria"]
+        assert criterion["analyte"] == "MAGEA4"
+        assert criterion["accepted_test_ids"] == ["FDA:P230016"]
+        assert filtered.iloc[1]["requires_verified_alteration"] is True
+        assert filtered.iloc[1]["agent"] == "sotorasib + panitumumab"
+        assert filtered.iloc[2]["agent"] == "unchanged agent"
+        assert filtered.iloc[2]["clinical_assay_criteria"] == ""
+        assert filtered.iloc[2]["requires_verified_alteration"] == ""
 
 
 def test_withdrawn_disease_specific_rows_are_filtered_from_reports():

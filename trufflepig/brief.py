@@ -503,6 +503,12 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
         from .therapy_eligibility import tmb_requirement
 
         return _with_proxy(tmb_requirement(target_row, analysis).description)
+    if biomarker in {"clinical_target_assay", "target_expression"}:
+        from .therapy_eligibility import clinical_assay_requirements
+
+        requirements = clinical_assay_requirements(target_row, analysis)
+        if requirements:
+            return _with_proxy(" ".join(r.description for r in requirements))
     if biomarker == "histology_only":
         if direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row):
             return _with_proxy("")

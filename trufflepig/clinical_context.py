@@ -24,6 +24,9 @@ ASSAY_RESULTS = {
     "mmr": ("dMMR", "pMMR", "indeterminate", "pending", "not_tested", "unknown"),
     "tmb": ("measured", "indeterminate", "pending", "not_tested", "unknown"),
     "hla": ("typed", "indeterminate", "pending", "not_tested", "unknown"),
+    "ihc": ("positive", "negative", "lost", "retained", "deficient", "not_deficient",
+            "indeterminate", "pending", "not_tested", "unknown"),
+    "ish": ("amplified", "not_amplified", "indeterminate", "pending", "not_tested", "unknown"),
 }
 POSITIVE_RESULTS = frozenset({"MSI-H", "dMMR"})
 NEGATIVE_RESULTS = frozenset({"MSI-L", "MSS", "pMMR"})
@@ -143,6 +146,7 @@ class ClinicalAssay:
     specimen_type: str = ""
     alleles: tuple[str, ...] = ()
     complete_loci: tuple[str, ...] = ()
+    analyte: str = ""
 
     def __post_init__(self):
         for f in fields(self):
@@ -152,6 +156,11 @@ class ClinicalAssay:
                 raise ValueError(f"Clinical assay {f.name} must be a string")
         if self.kind not in ASSAY_RESULTS:
             raise ValueError(f"Unsupported clinical assay: {self.kind!r}")
+        if self.analyte and self.kind not in {"ihc", "ish"}:
+            raise ValueError("A separate analyte currently belongs to an IHC or ISH assay")
+        from .therapeutic_agents import canonical_target_symbol
+
+        object.__setattr__(self, "analyte", canonical_target_symbol(self.analyte))
         # Canonicalize case and punctuation only, never extract a result from prose.
         canonical = {
             v.casefold().replace("-", "").replace("_", ""): v for v in ASSAY_RESULTS[self.kind]
@@ -230,14 +239,19 @@ class ClinicalAssay:
         if self.reportability != "reportable":
             limits.append(f"reportability is {self.reportability}")
         methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}, "tmb": {"NGS"},
-                   "hla": {"NGS", "SBT", "PCR", "SSP", "SSO"}}
+                   "hla": {"NGS", "SBT", "PCR", "SSP", "SSO"},
+                   "ihc": {"IHC"}, "ish": {"ISH", "FISH", "CISH", "SISH"}}
         if self.method not in methods[self.kind]:
             limits.append("a supported clinical assay method is required")
         if not self.source.title.strip() and not self.source.reference.strip():
             limits.append("clinical source is missing")
         if self.source.review_status not in {"supplied", "confirmed"}:
             limits.append(f"source assertion is {self.source.review_status}")
-        usable_results = {"tmb": {"measured"}, "hla": {"typed"}}.get(self.kind, POSITIVE_RESULTS | NEGATIVE_RESULTS)
+        usable_results = {
+            "tmb": {"measured"}, "hla": {"typed"},
+            "ihc": {"positive", "negative", "lost", "retained", "deficient", "not_deficient"},
+            "ish": {"amplified", "not_amplified"},
+        }.get(self.kind, POSITIVE_RESULTS | NEGATIVE_RESULTS)
         if self.result not in usable_results:
             limits.append(f"result is {self.result}")
         if self.kind == "tmb":
@@ -247,6 +261,8 @@ class ClinicalAssay:
                 limits.append("absolute TMB requires mutations per megabase")
         if self.kind == "hla" and not self.alleles:
             limits.append("reported HLA alleles are missing")
+        if self.kind in {"ihc", "ish"} and not self.analyte:
+            limits.append("assay analyte is missing")
         # An explicit overall result cannot silently override contradictory IHC.
         if self.result == "pMMR" and "lost" in self.protein_results.values():
             limits.append("pMMR conflicts with a reported lost MMR protein")
@@ -261,7 +277,7 @@ class ClinicalAssay:
     def public_dict(self) -> dict:
         value = asdict(self)
         # Preserve v1 MSI/MMR records and their content-derived IDs exactly.
-        for key in ("measurement", "test_id", "specimen_type", "alleles", "complete_loci"):
+        for key in ("measurement", "test_id", "specimen_type", "alleles", "complete_loci", "analyte"):
             if value[key] is None or value[key] == "" or value[key] == ():
                 value.pop(key)
             elif key in {"alleles", "complete_loci"}:
@@ -450,6 +466,87 @@ def clinical_assay_records(context: ClinicalContext, *, kinds=None) -> tuple[dic
         {**a.public_dict(), "limitations": list(a.limitations(context.specimen_id))}
         for a in context.assays if kinds is None or a.kind in kinds
     )
+
+
+@dataclass(frozen=True)
+class ClinicalAssayCriterion:
+    """A sourced qualitative companion-assay requirement on a therapy row.
+
+    Reported endpoints are explicit: PTEN deficiency and MAGE-A4 positivity
+    are different clinical findings. This contract never derives a result
+    from raw staining scores, gene alterations or RNA abundance.
+    """
+
+    kind: str
+    analyte: str
+    label: str
+    positive_results: tuple[str, ...]
+    negative_results: tuple[str, ...]
+    accepted_test_ids: tuple[str, ...]
+    specimen_type: str
+    source: str
+
+    def __post_init__(self):
+        from .therapeutic_agents import canonical_target_symbol
+
+        if not isinstance(self.kind, str) or self.kind not in {"ihc", "ish"}:
+            raise ValueError("A qualitative companion criterion requires IHC or ISH")
+        for name in ("analyte", "label", "specimen_type", "source"):
+            if not isinstance(getattr(self, name), str) or not getattr(self, name).strip():
+                raise ValueError(f"Clinical assay criterion requires {name}")
+        object.__setattr__(self, "analyte", canonical_target_symbol(self.analyte))
+        for name in ("positive_results", "negative_results", "accepted_test_ids"):
+            values = getattr(self, name)
+            if not isinstance(values, (list, tuple)) or not values or any(
+                not isinstance(v, str) or not v.strip() for v in values
+            ):
+                raise ValueError(f"Clinical assay criterion requires a nonempty {name} array")
+            object.__setattr__(self, name, tuple(dict.fromkeys(values)))
+        if not self.analyte:
+            raise ValueError("Clinical assay criterion requires analyte")
+        uncertain = {"indeterminate", "pending", "not_tested", "unknown"}
+        outcomes = set(self.positive_results) | set(self.negative_results)
+        if outcomes - (set(ASSAY_RESULTS[self.kind]) - uncertain):
+            raise ValueError("A clinical criterion must use explicit reportable assay results")
+        if set(self.positive_results) & set(self.negative_results):
+            raise ValueError("Positive and negative clinical criterion results must be disjoint")
+
+    def public_dict(self) -> dict:
+        value = asdict(self)
+        for name in ("positive_results", "negative_results", "accepted_test_ids"):
+            value[name] = list(value[name])
+        return value
+
+
+def evaluate_clinical_assay(
+    context: ClinicalContext, *, criterion: ClinicalAssayCriterion,
+) -> ClinicalAssayDecision:
+    """Evaluate the stated qualitative result under a sourced assay criterion."""
+    if not isinstance(criterion, ClinicalAssayCriterion):
+        raise ValueError("Qualitative assay evaluation requires a ClinicalAssayCriterion")
+    records = tuple(r for r in clinical_assay_records(context, kinds=(criterion.kind,))
+                    if r.get("analyte") == criterion.analyte)
+    for record in records:
+        if record.get("test_id") not in criterion.accepted_test_ids:
+            record["limitations"].append("test identity is not established for this companion-assay criterion")
+        if record.get("specimen_type") != criterion.specimen_type:
+            record["limitations"].append(f"this criterion requires {criterion.specimen_type} specimen material")
+        if record["result"] not in criterion.positive_results + criterion.negative_results:
+            record["limitations"].append("the reported endpoint does not resolve this companion-assay criterion")
+    states = {"positive" if r["result"] in criterion.positive_results else "negative"
+              for r in records if not r["limitations"]}
+    if len(states) > 1:
+        status, reason = "conflicting", f"Reportable current {criterion.label} results disagree; reconcile the source reports."
+    elif states:
+        status = next(iter(states))
+        reason = (f"The supplied clinical {criterion.label} result satisfies this assay requirement."
+                  if status == "positive" else
+                  f"The supplied clinical {criterion.label} result does not satisfy this assay requirement.")
+    elif records:
+        status, reason = "unresolved", f"Supplied {criterion.label} evidence has unresolved result, assay, quality, source or specimen limitations."
+    else:
+        status, reason = "missing", f"No clinical {criterion.label} result was supplied."
+    return ClinicalAssayDecision(status, context.specimen_id, reason, records)
 
 
 def evaluate_clinical_hla(

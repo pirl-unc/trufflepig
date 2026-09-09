@@ -47,6 +47,12 @@ MODALITY_LABELS = {
 MODALITIES = frozenset(MODALITY_LABELS)
 
 
+def canonical_target_symbol(value) -> str:
+    """One target identity for clinical input, therapy rows and RNA tables."""
+    text = _clean(value).upper()
+    return {"MAGE-A4": "MAGEA4", "HER2": "ERBB2"}.get(text, text)
+
+
 @dataclass(frozen=True)
 class TherapeuticAgent:
     agent: str

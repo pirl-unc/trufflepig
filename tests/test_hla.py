@@ -63,11 +63,13 @@ def test_prose_restrictions_use_the_same_nomenclature():
     (["A*24:02"], "mismatched"),
     ([], "unknown"),
 ])
-def test_real_afami_panel_enforces_hla_policy(supplied, status, clinical_hla_context):
+def test_real_afami_panel_enforces_hla_policy(supplied, status, clinical_hla_context, clinical_magea4_assay):
+    context = clinical_hla_context(supplied)
+    context["assays"].append(clinical_magea4_assay().public_dict())
     analysis = {
         "cancer_type": "SARC_SYN",
         "cancer_type_source": "user-specified",
-        "clinical_context": clinical_hla_context(supplied),
+        "clinical_context": context,
     }
     _, subtype, panel = cancer_therapy_panel_for_analysis("SARC_SYN", analysis)
     ranges = pd.DataFrame([{

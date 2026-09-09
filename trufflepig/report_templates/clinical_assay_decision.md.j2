@@ -1,5 +1,5 @@
 {{ decision.reason }}
 {% if decision.assays %}Supplied results:
-{% for assay in decision.assays %}{{ assay.kind | upper }} {{ assay.result }}{% if assay.get('measurement') and assay.measurement.value is not none %} {{ assay.measurement.value }} {{ assay.measurement.unit | literal }}{% endif %} (specimen {{ (assay.specimen_id or 'unknown') | literal }}{% if assay.limitations %}; {{ assay.limitations | join('; ') }}{% endif %}){% if not loop.last %}; {% else %}.{% endif %}{% endfor %}
+{% for assay in decision.assays %}{{ assay.kind | upper }}{% if assay.get('analyte') %} {{ assay.analyte | literal }}{% endif %} {{ assay.result }}{% if assay.get('measurement') and assay.measurement.value is not none %} {{ assay.measurement.value }} {{ assay.measurement.unit | literal }}{% endif %} (specimen {{ (assay.specimen_id or 'unknown') | literal }}{% if assay.limitations %}; {{ assay.limitations | join('; ') }}{% endif %}){% if not loop.last %}; {% else %}.{% endif %}{% endfor %}
 {% endif %}
-{% if decision.get('criterion') %}This comparison addresses the TMB biomarker criterion; disease setting, prior treatment and other clinical requirements remain separate. Criterion source: {{ decision.criterion.source | literal }}.{% endif %}
+{% if decision.get('criterion') %}This comparison addresses the {{ decision.criterion.get('label', 'TMB biomarker') | literal }} criterion; disease setting, prior treatment and other clinical requirements remain separate. Criterion source: {{ decision.criterion.source | literal }}.{% endif %}

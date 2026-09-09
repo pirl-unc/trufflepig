@@ -1,10 +1,11 @@
 **{{ assay.kind | upper }}: {{ assay.result }}.** Method: {{ (assay.method or 'unknown') | literal }}; specimen: {{ (assay.specimen_id or 'unknown') | literal }}; scope: {{ assay.scope }}; validity: {{ assay.validity }}; reportability: {{ assay.reportability }}.
+{% if assay.get('analyte') %}Analyte: {{ assay.analyte | literal }}.{% endif %}
 {% if assay.get('measurement') %}Absolute measurement: {% if assay.measurement.value is not none %}{{ assay.measurement.value }} {{ assay.measurement.unit | literal }}{% else %}not supplied{% endif %}.{% endif %}
 {% if assay.get('test_id') %}Test ID: {{ assay.test_id | literal }}.{% endif %}
 {% if assay.get('specimen_type') %}Specimen material: {{ assay.specimen_type | literal }}.{% endif %}
 Source: {{ (assay.source.title or assay.source.reference or 'not supplied') | literal }} ({{ assay.source.review_status }}).
 {% if assay.source.title and assay.source.reference and assay.source.title != assay.source.reference %}Reference: {{ assay.source.reference | literal }}.{% endif %}
-{% if assay.source.excerpt %}Recorded source excerpt: {{ assay.source.excerpt | literal }}{% endif %}
+{% if assay.source.excerpt %}Recorded source excerpt: “{{ assay.source.excerpt | literal }}”.{% endif %}
 {% if assay.collected_at %}Collected: {{ assay.collected_at }}.{% endif %}
 {% if assay.reported_at %}Reported: {{ assay.reported_at }}.{% endif %}
 {% if assay.protein_results %}Protein findings: {% for protein, result in assay.protein_results.items() %}{{ protein }} {{ result }}{% if not loop.last %}; {% else %}.{% endif %}{% endfor %}{% endif %}
