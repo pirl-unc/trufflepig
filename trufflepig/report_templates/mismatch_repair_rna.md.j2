@@ -1,0 +1,4 @@
+**Mismatch-repair RNA context:** {% if context %}{{ context | literal }} {% endif %}MMR ensemble favors {{ state_label }} expression state (MSI-like probability {{ probability }}).
+{% if mlh1_tpm %}MLH1 bulk RNA measures {{ mlh1_tpm }} TPM{% if mlh1_cohort_percent %} ({{ mlh1_cohort_percent }}% of the cohort-typical level){% endif %}. This RNA measurement does not establish MLH1 protein retention, functional mismatch repair, promoter methylation or the mechanism of the expression pattern; background RNA and expression-preserving defects can affect interpretation.{% endif %}
+{% if subtype %}This {% if subtype_agrees %}agrees{% else %}conflicts{% endif %} with the candidate-trace subtype {{ subtype | literal }}{% if subtype_agrees %}.{% else %}; treat MSI/MSS as unresolved RNA context.{% endif %}{% endif %}
+RNA expression does not establish clinical MSI/MMR status or immunotherapy eligibility.

@@ -78,6 +78,13 @@ unresolved clinical-assay request without opening eligibility. A usable clinical
 result resolves that request. If the clinical result and RNA proxy differ, the
 report shows the disagreement and retains the clinical decision.
 
+The RNA paragraph preserves measured MLH1 bulk TPM and its cohort comparison
+without assigning protein retention, promoter methylation or a mutation
+mechanism. POLE-associated hypermutation can occur in microsatellite-stable
+tumors ([primary sequencing study](https://pubmed.ncbi.nlm.nih.gov/31857678/));
+a POLE variant, absolute TMB and clinical MSI/MMR are distinct evidence.
+Supplying a POLE variant alone does not satisfy the MSI-H/dMMR requirement.
+
 ## Python and report contracts
 
 ```python
