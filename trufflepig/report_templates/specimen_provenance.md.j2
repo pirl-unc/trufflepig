@@ -1,0 +1,13 @@
+Document ID: {{ identity.document_id | literal }}.
+{% if context.specimen.source.title or context.specimen.source.reference %}
+Metadata source: {{ (context.specimen.source.title or context.specimen.source.reference) | literal }}
+{% if context.specimen.source.title and context.specimen.source.reference %}
+({{ context.specimen.source.reference | literal }})
+{% endif %}
+({{ context.specimen.source.review_status | literal }}).
+{% else %}
+No specimen metadata source was supplied.
+{% endif %}
+{% if context.specimen.source.excerpt %}
+Source excerpt: {{ context.specimen.source.excerpt | literal }}
+{% endif %}

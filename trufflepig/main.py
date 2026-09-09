@@ -4374,15 +4374,15 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 
 | Figure | Reader role | Description |
 |--------|-------------|-------------|
-| `*-sample-context.png` | Patient | Compact library and expression QC |
-| `*-degradation-index.png` | Patient | RNA degradation check used to qualify uncertainty |
+| `*-sample-context.png` | Reader | Compact library and expression QC |
+| `*-degradation-index.png` | Reader | RNA degradation check used to qualify uncertainty |
 | `*-background-tissues.png` | Audit only | Raw healthy-tissue correlation context; can be nonspecific and is not a final label |
-| `*-decomposition-composition.png` | Patient | Estimated tumor attribution plus external stromal/immune reference components for the selected final-call model |
-| `*-decomposition-components.png` | Patient | Estimated external stromal/immune reference-component breakdown for the selected final-call model |
-| `*-purity-methods.png` | Patient | Purity estimate and estimator agreement |
+| `*-decomposition-composition.png` | Reader | Estimated tumor attribution plus external stromal/immune reference components for the selected final-call model |
+| `*-decomposition-components.png` | Reader | Estimated external stromal/immune reference-component breakdown for the selected final-call model |
+| `*-purity-methods.png` | Reader | Purity estimate and estimator agreement |
 | `*-mhc-expression.png` | Audit only | Antigen-presentation RNA context; not HLA typing or therapy eligibility |
-| `*-therapy-pathway-state.png` | Patient | Therapy-relevant pathway context, when supported |
-| `*-subtype-signature.png` | Patient | Final-call subtype analysis, when supported |
+| `*-therapy-pathway-state.png` | Reader | Therapy-relevant pathway context, when supported |
+| `*-subtype-signature.png` | Reader | Final-call subtype analysis, when supported |
 | `*-purity-ctas.png` | Audit only | Tumor-adjusted cancer-testis antigen discovery screen; not a clinical recommendation |
 | `*-purity-surface.png` | Audit only | Tumor-adjusted surface-protein discovery screen; not a clinical recommendation |
 | `*-priority-targets.png` | Audit only | Broad target scoring retained for technical review; not a clinical recommendation or eligibility result |
@@ -4390,7 +4390,7 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 | `*-decomposition-candidates.png` | Audit only | Competing decomposition fits, including rejected preliminary labels |
 | `*-cancer-hypotheses.png` | Audit only | Pre-adjudication bulk-RNA candidate ranking |
 | `*-cancer-type-signal-matrix.png` | Audit only | Full evidence trace, including preliminary and conflicting signals |
-| `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the patient PDF |
+| `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the reader PDF |
 | `*-treatments.png` | Audit only | Raw target-expression survey retained for technical review |
 | `*-actionable-targets.png` | Audit only | Broad actionable-target screen retained for provenance |
 | `*-priority-target-context.png` | Audit only | Detailed estimated tumor attribution and external healthy-tissue reference context |
@@ -8175,7 +8175,7 @@ def _build_evidence_report(
 
     lines = [f"# Evidence{header_id}\n"]
     if report_content:
-        lines.append(report_content.sections[0]["blocks"][0]["text"] + "\n")
+        lines.extend(block["text"] + "\n" for block in report_content.specimen_blocks)
     lines.append(
         "This appendix keeps the stepwise and table-heavy support behind the "
         "distilled reports. Use it to audit how the call was assembled, inspect "
@@ -8338,7 +8338,7 @@ def _generate_text_reports(
         from .report_language import report_literal
 
         lines[0] = "# Detailed Sample Analysis: " + report_literal(report_content.identity["title"]) + "\n"
-        lines.append(report_content.sections[0]["blocks"][0]["text"] + "\n")
+        lines.extend(block["text"] + "\n" for block in report_content.specimen_blocks)
     if input_path:
         # Input path at the top so the file is self-identifying even
         # without sample_context downstream. Propagated from
@@ -10884,7 +10884,7 @@ def _build_target_report(
                 "\n`could come from healthy tissue` means the sample signal could be entirely explained by one external healthy-tissue "
                 "reference panel. For CTAs this is usually benign (cohort-median "
                 "≈ 0 is normal for CTAs), but verify the flagged gene is not a germline "
-                "/ germ-cell lineage marker in this patient's context."
+                "/ germ-cell lineage marker in this sample’s context."
             )
     else:
         lines.append("No CTAs detected above threshold.\n")

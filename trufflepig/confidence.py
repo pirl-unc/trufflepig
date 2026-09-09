@@ -542,7 +542,7 @@ def compute_target_confidence(
             tier = "moderate"
         reasons.append(
             "the external tissue reference predicts more RNA than measured for this gene — "
-            "the RNA model's patient tumor attribution hit the zero floor; patient "
+            "the RNA model's tumor attribution hit the zero floor; sample "
             "bulk TPM (measured) is the better read than the attributed fraction"
         )
 

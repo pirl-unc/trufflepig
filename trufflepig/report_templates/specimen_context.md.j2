@@ -3,24 +3,15 @@
 Research-only sample. Therapy candidates are research hypotheses and clinical-assay
 reference context; this report does not recommend treatment for an individual.
 {% elif identity.purpose == 'clinical' %}
-Supplied clinical specimen. The report supports evidence review; treatment fitness
-requires a clinical assessment.
+Supplied clinical specimen.
 {% else %}
-Specimen purpose is unknown. Clinical versus research use has not been established.
+Specimen purpose is unknown.
 {% endif %}
 {% if context.specimen_id %}Specimen ID: {{ context.specimen_id | literal }}.{% endif %}
 {% if context.specimen.cell_line_id %}Supplied cell-line ID: {{ context.specimen.cell_line_id | literal }}.{% endif %}
 {% if context.specimen.collected_at %}Collected: {{ context.specimen.collected_at | literal }}.{% endif %}
 {% if context.specimen.site %}Supplied site: {{ context.specimen.site | literal }}.{% endif %}
-{% if context.specimen.source.title or context.specimen.source.reference %}
-Metadata source: {{ (context.specimen.source.title or context.specimen.source.reference) | literal }}
-{% if context.specimen.source.title and context.specimen.source.reference %}
-({{ context.specimen.source.reference | literal }})
-{% endif %}
-({{ context.specimen.source.review_status | literal }}).
-{% endif %}
 {% if context.specimen.source.review_status in ['proposed', 'rejected'] %}
 Supplied metadata is {{ context.specimen.source.review_status | literal }};
 its stated purpose ({{ context.specimen.purpose | literal }}) is not applied.
 {% endif %}
-Document ID: {{ identity.document_id | literal }}.

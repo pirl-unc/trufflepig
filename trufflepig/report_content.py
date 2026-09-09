@@ -44,6 +44,14 @@ class ReportContent:
     clinical_context: dict[str, Any] = field(default_factory=dict)
     identity: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def specimen_blocks(self) -> list[dict[str, Any]]:
+        """Reuse authored specimen context and provenance in detailed documents."""
+        return [
+            block for section in self.sections for block in section["blocks"]
+            if block.get("id") in {"specimen_context", "specimen_provenance"}
+        ]
+
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
 
@@ -237,9 +245,10 @@ def build_report_content(
         )
         if text.strip()
     ]
-    conclusion.insert(0, paragraph(render_report_paragraph(
-        "specimen_context", context=clinical_context, identity=identity,
-    )))
+    conclusion.insert(0, {
+        **paragraph(render_report_paragraph("specimen_context", context=clinical_context, identity=identity)),
+        "id": "specimen_context",
+    })
     panel_code, panel_subtype, panel = _curated_target_panel_for_sample(
         cancer_code,
         analysis,
@@ -447,6 +456,11 @@ def build_report_content(
             f"[Full interpreted analysis]({prefix}-analysis.md) · [Detailed evidence tables]({prefix}-evidence.md)"
         )
     ]
+    detail.append({"kind": "heading", "text": "Specimen provenance"})
+    detail.append({
+        **paragraph(render_report_paragraph("specimen_provenance", context=clinical_context, identity=identity)),
+        "id": "specimen_provenance",
+    })
     source_rows = source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})

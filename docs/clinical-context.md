@@ -147,7 +147,8 @@ the personal treatment-fitness request. Clinical treatment-setting criteria stay
 in each assessment's curation for interpreting the reference pathway.
 
 Display labels and specimen identity are preserved in the normal report JSON,
-Markdown and PDF. The public `report_identity` API keeps the original source path
+Markdown and PDF. The opening states the specimen context concisely; complete
+metadata sources and excerpts remain in the detailed evidence section. The public `report_identity` API keeps the original source path
 and sample selector separate from the display title. Each document has a stable
 `RPT-…` identifier based on its source, selector and output prefix. The PDF footer
 uses this concise identifier on every page; the complete Unicode title wraps at

@@ -516,6 +516,11 @@ def test_specimen_purpose_changes_framing_without_changing_molecular_facts(tmp_p
     assert content.clinical_context["assays"] == before.clinical_context["assays"]
     assert content.identity["sample_selector"] == "table-column-A"
     assert content.identity["purpose"] == purpose
+    conclusion = next(s for s in content.sections if s["id"] == "conclusion")
+    evidence = next(s for s in content.sections if s["id"] == "evidence")
+    assert not any("Specimen metadata source" in b.get("text", "") for b in conclusion["blocks"])
+    assert any("Specimen metadata source" in b.get("text", "") for b in evidence["blocks"])
+    assert len(content.specimen_blocks) == 2
     assert any(r["kind"] == "clinical_setting" for r in content.evidence_requests) is (purpose != "research")
     assert [r for r in content.evidence_requests if r["kind"] != "clinical_setting"] == [
         r for r in before.evidence_requests if r["kind"] != "clinical_setting"

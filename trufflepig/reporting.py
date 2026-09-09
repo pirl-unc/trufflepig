@@ -90,7 +90,7 @@ def component_display_label(value, *, include_model_role: bool = False) -> str:
     if lowered.startswith("matched normal "):
         tissue = text[len("matched normal ") :].strip()
         suffix = (
-            " reference (external panel; RNA model; not patient matched)"
+            " reference (external panel; RNA model; not specimen matched)"
             if include_model_role
             else " reference (external panel)"
         )
