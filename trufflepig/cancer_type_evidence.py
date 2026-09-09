@@ -4492,13 +4492,10 @@ def _enrich_mmr_vote_mlh1_cohort_context(
 ) -> dict[str, Any]:
     """Add MLH1's cohort-relative level to an MMR vote's details.
 
-    The classifier surfaces only the sample's raw (bulk) MLH1 clean-TPM; "retained vs
-    promoter-silenced" is a cohort-relative call, so we divide by the cohort-typical
-    (bulk median) MLH1 here — where the reference cohort is in scope, and in the same
-    bulk space as the numerator. Silenced MLH1 collapses to a small fraction of the
-    cohort median (measured ~0.2-0.3x), so the ratio cleanly separates retained (~1x)
-    from silenced. Absent reference → unchanged (the report's tension clause does not
-    fire).
+    Divide the sample's bulk MLH1 clean-TPM by the bulk reference median where
+    that cohort is in scope. This is an expression comparison, not a call of
+    protein retention, functional MMR or promoter methylation. Without a usable
+    reference, preserve the sample measurement without inventing a comparison.
     """
     vote_dict = dict(vote_dict)
     # The release vote's details are flat here (``mlh1_expression`` is a direct key);

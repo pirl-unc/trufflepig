@@ -1,6 +1,7 @@
 """Tests for the two-tier brief / actionable handoff (#111)."""
 
 import pandas as pd
+import pytest
 
 from trufflepig.brief import (
     build_actionable as _build_actionable,
@@ -979,7 +980,7 @@ def test_summary_mmr_release_vote_overrides_conflicting_mss_subtype_text():
 
     assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
     assert "MSI-like probability 0.81" in md
-    assert "conflicts with the candidate-trace subtype READ_MSS" in md
+    assert "conflicts with the candidate-trace subtype READ\\_MSS" in md
     assert "MSS Rectum Adenocarcinoma-consistent" not in md
     assert "RNA subtype signal is" not in md
 
@@ -1105,47 +1106,46 @@ def _mmr_analysis(msi_probability, *, mlh1_expression=None, code="COAD"):
     }
 
 
-def test_mmr_summary_flags_mlh1_retained_msi_tension():
+@pytest.mark.parametrize("probability,state", [(0.81, "MSI-like"), (0.20, "MSS-like")])
+@pytest.mark.parametrize("tpm,ratio", [(18.0, 1.01), (4.0, 0.24), (0.0, 0.0)])
+def test_mmr_summary_reports_mlh1_measurements_without_inventing_mechanism(probability, state, tpm, ratio):
     line = mismatch_repair_summary_line(
-        _mmr_analysis(0.81, mlh1_expression={"tpm": 18.0, "cohort_ratio": 1.01})
+        _mmr_analysis(probability, mlh1_expression={"tpm": tpm, "cohort_ratio": ratio})
     )
-    assert "favors MSI-like" in line
-    assert "MLH1 mRNA is retained (18 TPM, 101% of the cohort-typical level)" in line
-    assert "does not exclude MSI" in line
+    assert f"favors {state}" in line
+    assert f"MLH1 bulk RNA measures {tpm:.3g} TPM ({round(ratio * 100)}% of the cohort-typical level)" in line
+    assert "does not establish MLH1 protein retention" in line
+    assert "RNA expression does not establish clinical MSI/MMR status or immunotherapy eligibility" in line
+    assert "promoter silencing" not in line
+    assert "POLE" not in line
+    assert "mRNA is retained" not in line
 
 
-def test_mmr_summary_omits_tension_when_mlh1_silenced():
-    line = mismatch_repair_summary_line(
-        _mmr_analysis(0.81, mlh1_expression={"tpm": 4.0, "cohort_ratio": 0.24})
-    )
-    assert "favors MSI-like" in line
-    assert "MLH1 mRNA is retained" not in line
-
-
-def test_mmr_summary_omits_tension_when_no_cohort_ratio():
-    # Classifier surfaced the raw TPM but no reference cohort was in scope, so retention
-    # is unknown — the clause must not fire off the sample TPM alone.
+def test_mmr_summary_preserves_measured_tpm_without_inventing_reference():
     line = mismatch_repair_summary_line(
         _mmr_analysis(0.81, mlh1_expression={"tpm": 18.0})
     )
     assert "favors MSI-like" in line
-    assert "MLH1 mRNA is retained" not in line
+    assert "MLH1 bulk RNA measures 18 TPM." in line
+    assert "cohort-typical" not in line
 
 
-def test_mmr_summary_omits_tension_when_mss():
+@pytest.mark.parametrize("measurement", [None, {}, {"cohort_ratio": 1.01}, {"tpm": -1}, {"tpm": float("nan")}, {"tpm": True}])
+def test_mmr_summary_does_not_report_absent_or_invalid_mlh1_as_zero(measurement):
     line = mismatch_repair_summary_line(
-        _mmr_analysis(0.20, mlh1_expression={"tpm": 18.0, "cohort_ratio": 1.01})
+        _mmr_analysis(0.81, mlh1_expression=measurement)
     )
-    assert "favors MSS-like" in line
-    assert "MLH1 mRNA is retained" not in line
+    assert "favors MSI-like" in line
+    assert "MLH1 bulk RNA measures" not in line
+    assert "clinical MSI/MMR status" in line
 
 
-def test_mmr_summary_tension_survives_flat_to_nested_renesting(monkeypatch):
+def test_mmr_summary_observation_survives_flat_to_nested_renesting(monkeypatch):
     # Cross the real seam: the release MMR classifier emits FLAT vote details;
     # cancer_type_evidence enriches them (adds cohort_ratio) while still flat; the
     # channel builder re-nests the flat details verbatim under "mismatch_repair"
     # (cancer_type_evidence.py ~983); brief reads the nested channel. Assert the
-    # tension clause survives that round-trip.
+    # sample measurement and reference comparison survive that round-trip.
     import trufflepig.cancer_type_evidence as cte
 
     monkeypatch.setattr(cte, "_cohort_bulk_gene_median", lambda code, gene: 18.0)
@@ -1182,8 +1182,8 @@ def test_mmr_summary_tension_survives_flat_to_nested_renesting(monkeypatch):
         },
     }
     line = mismatch_repair_summary_line(analysis)
-    assert "MLH1 mRNA is retained (18 TPM, 100% of the cohort-typical level)" in line
-    assert "does not exclude MSI" in line
+    assert "MLH1 bulk RNA measures 18 TPM (100% of the cohort-typical level)" in line
+    assert "does not establish MLH1 protein retention" in line
 
 
 def test_summary_rna_alternatives_use_post_gate_support_fraction():

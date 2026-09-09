@@ -416,6 +416,57 @@ def test_rna_triage_changes_request_priority_without_opening_gate(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("result", [None, "MSI-H", "MSS", "pending"])
+def test_pole_and_mlh1_rna_preserve_independent_clinical_msi_decision(tmp_path, monkeypatch, result):
+    from pypdf import PdfReader
+    import trufflepig.brief as brief
+    from trufflepig.analyze.models import AnalyzeConfig, AnalyzeRun, AnalyzePaths, InputResolution
+    from trufflepig.analyze.flow import write_analysis_output_records
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_view import build_report_view
+    from trufflepig.variants import VariantRecord, variant_evidence_records
+
+    ctx = context(assay(result)) if result else context()
+    analysis = colorectal_analysis(ctx)
+    variant = VariantRecord(gene="POLE", variant="p.P286R", variant_type="missense",
+                            result_status="positive", source_path="synthetic-clinical-variant.tsv")
+    analysis["variant_records"] = [variant.public_dict()]
+    assert variant_evidence_records(analysis)[0]["gene"] == "POLE"
+    channel = {"details": {"mismatch_repair": {
+        "context_group": "CRC", "msi_probability": 0.81,
+        "mlh1_expression": {"tpm": 18.0, "cohort_ratio": 1.01},
+    }}}
+    monkeypatch.setattr(brief, "mismatch_repair_summary_context", lambda analysis: channel)
+    view = build_report_view(analysis, sample_id="synthetic-mlh1-observation")
+    content = build_report_content(analysis, pd.DataFrame(), "COAD", "", report_view=view)
+    candidate = next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")
+    assert candidate["selected"] is (result == "MSI-H")
+    requirement = next(r for r in candidate["eligibility"]["requirements"] if r["kind"] == "msi_high")
+    assert requirement["status"] == {None: "missing", "MSI-H": "satisfied", "MSS": "blocked", "pending": "unresolved"}[result]
+    assert any(r["key"] == "msi_high" for r in content.evidence_requests) is (result in {None, "pending"})
+
+    prefix = "synthetic-mlh1-observation"
+    summary = render_report_summary(content)
+    (tmp_path / f"{prefix}-summary.md").write_text(summary)
+    run = AnalyzeRun(AnalyzeConfig(input_path="synthetic.tsv", clinical_context=ctx),
+                     InputResolution("synthetic.tsv", None, False, "gene"),
+                     AnalyzePaths(tmp_path, prefix, prefix))
+    write_analysis_output_records(run, view, content=content)
+    document = json.loads((tmp_path / f"{prefix}-report.json").read_text())
+    paragraph = next(b["text"] for s in document["sections"] for b in s["blocks"]
+                     if "Mismatch-repair RNA context:" in b.get("text", ""))
+    pdf = PdfReader(tmp_path / f"{prefix}-interpretive-report.pdf")
+    pdf_text = " ".join(" ".join(p.extract_text() for p in pdf.pages).split())
+    for phrase in ["MSI-like probability 0.81", "MLH1 bulk RNA measures 18 TPM (101% of the cohort-typical level)",
+                   "does not establish MLH1 protein retention", "clinical MSI/MMR status or immunotherapy eligibility"]:
+        assert phrase in summary and phrase in paragraph and phrase in pdf_text
+    assert "POLE proofreading mutation" not in paragraph
+    assert "mRNA is retained" not in paragraph
+    assert document["clinical_context"] == ctx.public_dict()
+    if result == "MSS":
+        assert "Clinical/RNA discordance" in summary and "Clinical/RNA discordance" in pdf_text
+
+
 def test_cli_context_round_trip(tmp_path, monkeypatch):
     from trufflepig import cli, main
     from trufflepig.analyze.models import AnalyzeConfig
