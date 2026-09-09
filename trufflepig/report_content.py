@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from collections import Counter
 from typing import Any
 import hashlib
 import json
@@ -14,7 +15,6 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_rna_context,
     normal_expression_context,
-    target_rna_observation,
     therapy_state_caution,
     tumor_attribution_context,
     tumor_band_available,
@@ -25,7 +25,7 @@ from .therapy_eligibility import (
     EvidenceRequirement,
     clean_therapy_value,
     collect_evidence_requests,
-    evaluate_therapy_eligibility,
+    evaluate_therapy_review,
     msi_mmr_requirement,
 )
 from .treatment_history import treatment_history_summary_lines, treatment_records
@@ -78,9 +78,13 @@ def assess_therapy(
     agent = _therapy_agent_label(row)
     identity = resolve_therapy_identity(row.get("agent"))
     gene = canonical_target_symbol(row.get("symbol"))
-    observation = target_rna_observation(expr, symbol=gene, ranges_df=ranges_df)
+    review = evaluate_therapy_review(
+        row, expr, analysis=analysis, panel_subtype=panel_subtype,
+        ranges_df=ranges_df, disease_state=disease_state,
+    )
+    observation = review.observation
     state, observed = observation["state"], observation["observed_tpm"]
-    eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
+    eligibility = review.eligibility
     rationale = []
     rationale.extend(r.description for r in eligibility.requirements if r.kind == "msi_high")
     if eligibility.supplied_variant_supported:
@@ -127,6 +131,11 @@ def assess_therapy(
         "indication": clean_therapy_value(row.get("indication")),
         "maturity": clinical_maturity_summary(row, target_panel=target_panel),
         "eligibility": eligibility.public_dict(),
+        "selection": {
+            "status": review.status,
+            "reason": review.reason,
+            "permits_review": review.permits_review,
+        },
         "rationale": rationale,
         "observation": observation,
         "tumor_band": tumor_band_cell(expr)
@@ -144,6 +153,32 @@ def assess_therapy(
         "source": clean_therapy_value(row.get("therapy_evidence_source")),
         "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
     }
+
+
+def empty_shortlist_summary(assessments: list[dict]) -> str:
+    """Explain an empty shortlist from its recorded selection decisions.
+
+    Counts concern curated therapy rows, which can share an agent or target.
+    This formatter never reevaluates eligibility, reads RNA tables, or infers
+    an exclusion from an observation alone.
+    """
+    if any(a["selected"] for a in assessments):
+        raise ValueError("An empty-shortlist explanation requires no selected therapies")
+    descriptions = {
+        "clinical_blocker": "blocked by known clinical or disease-scope exclusions",
+        "eligibility_pending": "awaiting clinical eligibility evidence",
+        "inactive_disease_context": "not supported by the RNA disease-state context",
+        "rna_unavailable": "missing usable target RNA for an RNA-dependent pathway",
+        "rna_below_threshold": "below the target-RNA discovery threshold",
+        "rna_source_unsupported": "without sufficient tumor-source RNA support",
+        "reviewable": "reviewable but outside the reported shortlist",
+    }
+    counts = Counter(a["selection"]["status"] for a in assessments)
+    groups = [
+        {"count": counts[status], "description": description}
+        for status, description in descriptions.items() if counts[status]
+    ]
+    return render_report_paragraph("empty_shortlist", total=len(assessments), groups=groups)
 
 
 def build_report_content(
@@ -166,7 +201,6 @@ def build_report_content(
         _caveats_from_purity_tier,
         _curated_target_panel_for_sample,
         _display_sample_id,
-        _empty_therapy_shortlist_message,
         _format_biomarker_outlier_bullet,
         _format_cta_outlier_bullet,
         _notable_biomarker_outliers,
@@ -337,13 +371,7 @@ def build_report_content(
 
     therapies = [
         paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))
-    ]
-    if panel is None or len(panel) == 0:
-        therapies = [
-            paragraph(
-                f"{cancer_code} is not yet in the curated key-genes panel; no disease-specific therapy shortlist is available."
-            )
-        ]
+    ] if assessments else []
 
     if spindle_guidance:
         therapies.append(paragraph(spindle_guidance["therapy"]))
@@ -363,43 +391,20 @@ def build_report_content(
         )
         therapies.extend(paragraph(text) for text in assessment["rationale"])
     if not selected_assessments:
-        therapies.append(paragraph(_empty_therapy_shortlist_message(panel, ranges_df)))
-    blocked = [
-        a
-        for a in assessments
-        if any(r["status"] == "blocked" for r in a["eligibility"]["requirements"])
-    ]
-    if blocked:
-        therapies.append({"kind": "heading", "text": "Known blockers and current treatments"})
-        for assessment in blocked:
-            descriptions = [
-                r["description"]
-                for r in assessment["eligibility"]["requirements"]
-                if r["status"] == "blocked"
-            ]
-            therapies.append(
-                {"kind": "bullet", "text": f"**{assessment['agent']}:** " + " ".join(descriptions)}
-            )
-
-    pending = [
-        a
-        for a in assessments
-        if not a["selected"]
-        and not any(r["status"] == "blocked" for r in a["eligibility"]["requirements"])
-        and any(r["status"] in {"missing", "unresolved"} for r in a["eligibility"]["requirements"])
-    ]
-    if pending:
-        therapies.append({"kind": "heading", "text": "Eligibility pending"})
-        for assessment in pending:
-            descriptions = list(
-                dict.fromkeys(
-                    r["description"]
-                    for r in assessment["eligibility"]["requirements"]
-                    if r["status"] in {"missing", "unresolved"}
-                )
-            )
-            therapies.append(
-                {"kind": "bullet", "text": f"**{assessment['agent']}:** " + " ".join(descriptions)}
+        therapies.append(paragraph(empty_shortlist_summary(assessments)))
+    for title, statuses in (
+        ("Known blockers and current treatments", {"clinical_blocker"}),
+        ("Eligibility pending", {"eligibility_pending"}),
+        ("Sample support not established", {
+            "inactive_disease_context", "rna_unavailable", "rna_below_threshold", "rna_source_unsupported",
+        }),
+    ):
+        excluded = [a for a in assessments if a["selection"]["status"] in statuses]
+        if excluded:
+            therapies.append({"kind": "heading", "text": title})
+            therapies.extend(
+                {"kind": "bullet", "text": f"**{a['agent']}:** {a['selection']['reason']}"}
+                for a in excluded
             )
 
     request_blocks = []

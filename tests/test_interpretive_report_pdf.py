@@ -149,6 +149,34 @@ def test_figure_caption_and_image_are_rendered_with_authored_evidence(tmp_path):
     assert sum(len(page.images) for page in pdf.pages) == 1
 
 
+@pytest.mark.parametrize("filler_lines", [32, 35, 38, 41])
+@pytest.mark.parametrize("long_body", [False, True])
+def test_section_and_therapy_headings_stay_with_their_first_content(tmp_path, filler_lines, long_body):
+    doc = document()
+    doc["sections"] = [
+        {"id": "conclusion", "title": "Conclusion", "blocks": [
+            {"kind": "paragraph", "text": "\n".join(f"Evidence line {i}." for i in range(filler_lines))},
+        ]},
+        {"id": "therapies", "title": "Therapy rationale", "blocks": [
+            {"kind": "heading", "text": "A conditional candidate"},
+            {"kind": "paragraph", "text": "RATIONALE-START. " + "Supporting evidence. " * (300 if long_body else 20)},
+        ]},
+        {"id": "information", "title": "Information needed", "blocks": [
+            {"kind": "paragraph", "text": "REQUEST-START. " + "Reconcile the supplied assay with the clinical report. " * 8},
+        ]},
+    ]
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pages = [page.extract_text() for page in pdf.pages]
+    for heading, start in [
+        ("Therapy rationale", "RATIONALE-START"),
+        ("A conditional candidate", "RATIONALE-START"),
+        ("Information needed", "REQUEST-START"),
+    ]:
+        page = next(text for text in pages if heading in text)
+        assert start in page, f"Orphaned heading: {heading}"
+
+
 def test_declared_figure_cannot_disappear_silently(tmp_path):
     doc = document()
     doc["sections"][-1]["blocks"] = [

@@ -587,8 +587,7 @@ def recommend_therapies(
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)
 
-    from .therapy_eligibility import evaluate_therapy_eligibility
-    from .reporting import target_rna_observation
+    from .therapy_eligibility import evaluate_therapy_review
 
     phase_priority = {
         "approved": 0,
@@ -607,60 +606,19 @@ def recommend_therapies(
         if expr is None:
             expr = sym_to_row.get(sym)
         expr_independent = expression_independent_indication(t)
-        eligibility = evaluate_therapy_eligibility(t, analysis, panel_subtype=panel_subtype)
-        history_supported = eligibility.history_supported
-        if not eligibility.permits_review:
+        review = evaluate_therapy_review(
+            t, expr, analysis=analysis, panel_subtype=panel_subtype,
+            ranges_df=ranges_df, disease_state=disease_state,
+        )
+        if not review.permits_review:
             continue
-        if therapy_row_rna_context_inactive(
-            t,
-            analysis=analysis,
-            disease_state=disease_state,
-        ) and not history_supported:
-            continue
-        supplied_variant_match = eligibility.supplied_variant_supported
-        direct_eligibility_match = eligibility.direct_evidence_supported
+        eligibility = review.eligibility
         supplied_variant_rank = (
-            0 if supplied_variant_match or direct_eligibility_match else 1
+            0 if eligibility.supplied_variant_supported or eligibility.direct_evidence_supported else 1
         )
-        if expr is None and not (expr_independent or history_supported):
-            continue
         expression = expr if expr is not None else {}
-        observation = target_rna_observation(expr, symbol=sym, ranges_df=ranges_df)
-        if observation["state"] in {"invalid", "unknown"} and not (expr_independent or history_supported):
-            continue
-        observed = observation["observed_tpm"] or 0.0
-        if observed < 1.0 and not expr_independent and not history_supported:
-            # Low RNA abundance does not meet this discovery threshold.
-            # The full landscape in targets.md has the absence noted.
-            continue
         attr_tumor = float(expression.get("attr_tumor_tpm") or 0.0)
-        attr_fraction = _brief_float(expression.get("attr_tumor_fraction"), 0.0)
-        lineage_material = same_lineage_material_target_candidate(
-            expression,
-            target_row=t,
-        )
-        interval_material = interval_material_target_candidate(expression, target_row=t)
-        # Drop rows that are mostly non-tumor from the top-3 — they
-        # don't belong in the clinician handoff per #79 semantics.
-        # Same-lineage clinical targets are a special case: a prostate
-        # lineage marker assigned partly to matched-normal prostate is
-        # source-ambiguous, not equivalent to an immune/stromal target.
-        if (
-            attr_fraction < 0.30
-            and not expr_independent
-            and not history_supported
-            and not lineage_material
-            and not interval_material
-        ):
-            continue
-        reliability_status = target_reliability_status(expression, target_row=t)
-        if (
-            reliability_status == "unsupported"
-            and not interval_material
-            and not history_supported
-            and not expr_independent
-        ):
-            continue
+        reliability_status = review.reliability_status
         # Note (#128): we deliberately do NOT filter on
         # ``broadly_expressed`` here. The caller's ``targets_df`` is
         # the **curated** cancer-key-genes panel (#110) — every row
@@ -2310,104 +2268,6 @@ def _format_cta_outlier_bullet(row: dict) -> str:
         f"- **{sym}** — "
         + "; ".join(parts)
         + " (exploratory CTA RNA signal; protein/peptide presentation and treatment eligibility are not established)"
-    )
-
-
-def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
-    """Differentiated message when the top-therapy block is empty.
-
-    The original single line ("No approved or trialed agents with a
-    measured, tumor-supported target") collapsed three clinically
-    distinct situations into one wording:
-
-      (a) most curated targets are in the input but expression-suppressed
-          (real biological negative — e.g. ERBB2 = 0 TPM on a TNBC line);
-      (b) curated targets are not present in the input file at all
-          (RNA-seq coverage gap — symbol-mapping / pipeline issue, not
-          biology);
-      (c) curated targets are HLA-restricted or subtype-locked out.
-
-    Surface the actual distribution so the clinician knows which kind
-    of "no shortlist" they're reading.
-    """
-    if (
-        targets_df is None
-        or len(targets_df) == 0
-        or ranges_df is None
-    ):
-        return (
-            "*No curated agents available for this cancer type — see the "
-            "full Therapy Landscape table for raw expression rankings.*\n"
-        )
-    from .common import (
-        ranges_by_gene_id,
-        ranges_by_symbol,
-        panel_symbols_to_gene_ids,
-    )
-    target_records = targets_df.to_dict("records")
-    sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
-    )
-    id_to_row = ranges_by_gene_id(ranges_df)
-    sym_to_row = ranges_by_symbol(ranges_df)  # fallback for ID-less frames
-    from collections import Counter
-    from .reporting import target_rna_observation
-
-    counts = Counter()
-    for target in target_records:
-        symbol = canonical_target_symbol(target.get("symbol"))
-        if not symbol:
-            if expression_independent_indication(target):
-                counts["agent_only"] += 1
-            continue
-        expression = id_to_row.get(sym_to_id.get(symbol))
-        if expression is None:
-            expression = sym_to_row.get(symbol)
-        observation = target_rna_observation(expression, symbol=symbol, ranges_df=ranges_df)
-        state = observation["state"]
-        if state == "measured" and observation["observed_tpm"] < 1.0:
-            state = "below_detection"  # shortlist discovery floor is 1 TPM
-        counts[state] += 1
-    n_total = sum(counts.values())
-    n_in_input_present = counts["measured"]
-    n_in_input_low = counts["below_detection"]
-    n_not_in_input = counts["not_in_input"]
-    n_agent_only = counts["agent_only"]
-    if n_total == 0:
-        return (
-            "*No curated agents available for this cancer type — see the "
-            "full Therapy Landscape table for raw expression rankings.*\n"
-        )
-    parts: list[str] = []
-    if n_in_input_present:
-        parts.append(
-            f"{n_in_input_present} measured and present but did not meet the "
-            "shortlist's clinical eligibility, treatment-history, subtype, HLA, "
-            "disease-state, or RNA-support criteria"
-        )
-    if n_in_input_low:
-        parts.append(
-            f"{n_in_input_low} below 1 TPM (low target RNA does not by itself "
-            "establish clinical ineligibility)"
-        )
-    if n_not_in_input:
-        parts.append(
-            f"{n_not_in_input} not present in input file (coverage gap, "
-            "investigate symbol mapping)"
-        )
-    if n_agent_only:
-        parts.append(
-            f"{n_agent_only} agent-only / histology-indication rows without "
-            "a direct RNA target"
-        )
-    if counts["invalid"]:
-        parts.append(f"{counts['invalid']} with invalid or unresolved RNA values")
-    if counts["unknown"]:
-        parts.append(f"{counts['unknown']} with unavailable RNA observation state")
-    body = "; ".join(parts) if parts else "no qualifying rows"
-    return (
-        f"*Therapy shortlist is empty: of {n_total} curated agents, "
-        f"{body}. See the full Therapy Landscape table for details.*\n"
     )
 
 

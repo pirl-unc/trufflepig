@@ -19,9 +19,11 @@ The main APIs are:
 |---|---|
 | `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
 | `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `therapy_eligibility.evaluate_therapy_review` | Apply clinical and sample-support criteria before ranking; retain the exclusion reason |
 | `clinical_context.evaluate_msi_mmr` | Evaluate specimen-scoped clinical assay results and preserve conflicts |
 | `reporting.target_rna_observation` | Preserve measured, below-detection, missing and invalid RNA states |
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
+| `report_content.empty_shortlist_summary` | Explain an empty shortlist from recorded selection decisions |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
 | `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
 | `report_language.render_report_template` | Render the complete Markdown layout |
@@ -33,6 +35,14 @@ Python owns matching, status, ranking and request deduplication. Packaged Jinja
 facts raise an error. Supplied text is a value; it is never executed as template
 code. The PDF escapes HTML and preserves HLA tokens using the same mhcgnomes
 nomenclature boundary as other HLA operations.
+
+Each therapy assessment retains a `selection` status, reason and `permits_review`
+flag from the same review decision used by ranking. Clinical eligibility remains
+separate from RNA observation. Empty-shortlist counts describe actual clinical
+exclusions, pending evidence, disease-state context or RNA discovery/support
+limits; missing RNA on an expression-independent pathway is not an exclusion.
+The `empty_shortlist` template consumes those recorded decisions without another
+eligibility evaluation. Counts refer to curated rows, which may share an agent.
 
 Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
 `blocked`. Prior benefit can support review while an assay remains missing; it

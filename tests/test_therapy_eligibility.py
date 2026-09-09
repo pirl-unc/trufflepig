@@ -6,7 +6,9 @@ import pytest
 from trufflepig.brief import recommend_therapies
 from trufflepig.report_content import assess_therapy
 from trufflepig.reporting import cancer_therapy_panel_for_analysis, target_observation_state
-from trufflepig.therapy_eligibility import collect_evidence_requests, evaluate_therapy_eligibility
+from trufflepig.therapy_eligibility import (
+    collect_evidence_requests, evaluate_therapy_eligibility, evaluate_therapy_review,
+)
 from trufflepig.variants import normalize_protein_substitution
 
 
@@ -24,6 +26,64 @@ def mutation_context(gene, variant):
             },
         ],
     }
+
+
+@pytest.mark.parametrize(
+    "expression, expected",
+    [
+        (None, "rna_unavailable"),
+        ({"observed_tpm": 0.0}, "rna_below_threshold"),
+        ({"observed_tpm": 0.2}, "rna_below_threshold"),
+        ({"observed_tpm": 35.0, "attr_tumor_tpm": 3.5, "attr_tumor_fraction": 0.1,
+          "tme_dominant": True, "tme_explainable": True}, "rna_source_unsupported"),
+        ({"observed_tpm": 35.0, "attr_tumor_tpm": 33.0, "attr_tumor_fraction": 0.95,
+          "attr_support_fraction": 0.95, "tme_dominant": False, "tme_explainable": False}, "reviewable"),
+    ],
+)
+def test_one_review_decision_drives_rna_selection_and_empty_explanation(expression, expected):
+    from trufflepig.report_content import empty_shortlist_summary
+
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2",
+           "indication": "FAP-directed investigational therapy"}
+    ranges = pd.DataFrame([{**expression, "symbol": "FAP"}]) if expression else pd.DataFrame()
+    review = evaluate_therapy_review(row, expression, ranges_df=ranges)
+    assert review.status == expected
+    selected = recommend_therapies(pd.DataFrame([row]), ranges)
+    assert bool(selected) is (expected == "reviewable")
+    assessment = assess_therapy(row, expression, ranges_df=ranges, selected=bool(selected))
+    assert assessment["selection"]["status"] == expected
+    if not selected:
+        text = empty_shortlist_summary([assessment])
+        assert "clinical eligibility evidence" not in text
+        assert "No therapy was shortlisted" in text
+    else:
+        with pytest.raises(ValueError, match="no selected therapies"):
+            empty_shortlist_summary([assessment])
+
+
+def test_clinical_exclusion_precedes_missing_rna_but_prior_benefit_preserves_review():
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2"}
+    for status, expected in [("contraindicated", "clinical_blocker"), ("major_benefit", "reviewable")]:
+        analysis = {"treatment_history": [{"therapy": "177Lu-FAP-2286", "status": status}]}
+        decision = evaluate_therapy_review(row, analysis=analysis)
+        assert decision.status == expected
+        assert bool(recommend_therapies(pd.DataFrame([row]), pd.DataFrame(), analysis=analysis)) is (
+            expected == "reviewable"
+        )
+
+
+@pytest.mark.parametrize(
+    "input_symbols, expected",
+    [({"FAP"}, "rna_below_threshold"), ({"ACTB"}, "rna_unavailable")],
+)
+def test_absent_range_row_preserves_low_expression_versus_missing_input(input_symbols, expected):
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2"}
+    ranges = pd.DataFrame()
+    ranges.attrs["sample_input_symbols"] = input_symbols
+    review = evaluate_therapy_review(row, ranges_df=ranges)
+    assert review.status == expected
+    assert not recommend_therapies(pd.DataFrame([row]), ranges)
+    assert assess_therapy(row, ranges_df=ranges)["selection"]["status"] == expected
 
 
 @pytest.mark.parametrize(

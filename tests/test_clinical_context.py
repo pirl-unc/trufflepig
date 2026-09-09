@@ -303,6 +303,9 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert followup[0]["evidence"][0]["assays"][0]["result"] == result
     candidate = next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")
     assert candidate["selected"] is (result == "MSI-H")
+    assert candidate["selection"]["status"] == {
+        "MSI-H": "reviewable", "MSS": "clinical_blocker", "pending": "eligibility_pending",
+    }[result]
     if candidate["selected"]:
         assert any(r["kind"] == "clinical_setting" for r in content.evidence_requests)
     prefix = "synthetic-clinical-assay"
@@ -329,6 +332,10 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert phrase in summary and phrase in pdf_text
     if result == "MSS":
         assert "does not satisfy an MSI-H/dMMR indication" in summary
+        assert "1 is blocked by known clinical or disease-scope exclusions" in summary
+    if result != "MSI-H":
+        assert "No therapy was shortlisted" in summary and "No therapy was shortlisted" in pdf_text
+        assert "missing usable target RNA" not in summary
 
 
 def test_rna_triage_changes_request_priority_without_opening_gate(monkeypatch):
