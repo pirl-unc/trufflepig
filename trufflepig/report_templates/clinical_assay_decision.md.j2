@@ -1,0 +1,4 @@
+{{ decision.reason }}
+{% if decision.assays %}Supplied results:
+{% for assay in decision.assays %}{{ assay.kind | upper }} {{ assay.result }} (specimen {{ (assay.specimen_id or 'unknown') | literal }}{% if assay.limitations %}; {{ assay.limitations | join('; ') }}{% endif %}){% if not loop.last %}; {% else %}.{% endif %}{% endfor %}
+{% endif %}

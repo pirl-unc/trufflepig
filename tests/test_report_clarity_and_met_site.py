@@ -1164,8 +1164,9 @@ def test_background_dominant_curated_therapy_row_is_audit_only(tmp_path):
     assert "erdafitinib" not in active_block
     assert "FGFR3" in audit_block
     assert "erdafitinib" in audit_block
-    assert "clinical eligibility not supplied" in audit_block
-    assert "RNA context is shown to prioritize confirmatory review" in audit_block
+    erdafitinib_row = next(line for line in audit_block.splitlines() if "| erdafitinib |" in line)
+    assert "FGFR3" in erdafitinib_row and "evidence has not been confirmed" in erdafitinib_row
+    assert "target expression is not the eligibility criterion" in erdafitinib_row
 
 
 def test_ci_confidence_tier_buckets():

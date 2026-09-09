@@ -19,6 +19,7 @@ The main APIs are:
 |---|---|
 | `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
 | `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `clinical_context.evaluate_msi_mmr` | Evaluate specimen-scoped clinical assay results and preserve conflicts |
 | `reporting.target_rna_observation` | Preserve measured, below-detection, missing and invalid RNA states |
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
@@ -48,8 +49,8 @@ RNA abundance does not establish a mutation. Exact protein requirements on the
 covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,
 a nucleotide-only assertion and an unrelated variant file. These rules do not
 constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
-remains context for confirmation; a validated structured clinical-assay input is
-tracked separately in #168. VCF/MAF adapters remain tracked in #140/#141. The
+remains context for confirmation. [Clinical MSI/MMR input](clinical-context.md)
+can satisfy the corresponding biomarker gate; RNA alone cannot. VCF/MAF adapters remain tracked in #140/#141. The
 current accepted variant input is a normalized table or an explicit symbolic
 call; requests can also name the clinical report needed for reconciliation.
 

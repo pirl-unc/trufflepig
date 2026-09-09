@@ -49,6 +49,8 @@ def _add_run_parser(sub):
     p.add_argument("--site-hint", default=None)
     p.add_argument("--met-site", default=None)
     p.add_argument("--hla-types", default=None)
+    p.add_argument("--clinical-context", default=None,
+                   help="Clinical-context JSON with specimen-scoped MSI/MMR results and provenance.")
     p.add_argument("--fusions", default=None)
     variant_group = p.add_mutually_exclusive_group()
     variant_group.add_argument(
@@ -161,6 +163,7 @@ def cmd_run(args) -> int:
         "variants": args.variants,
         "variant_genome_build": args.variant_genome_build,
         "treatment_history": args.treatment_history,
+        "clinical_context": args.clinical_context,
         "alignment_qc": args.alignment_qc,
         "decomposition_templates": args.decomposition_templates,
         "output_image_prefix": args.output_image_prefix,

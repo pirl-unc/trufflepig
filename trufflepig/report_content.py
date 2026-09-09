@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 import hashlib
 import json
@@ -26,6 +26,7 @@ from .therapy_eligibility import (
     clean_therapy_value,
     collect_evidence_requests,
     evaluate_therapy_eligibility,
+    msi_mmr_requirement,
 )
 from .treatment_history import treatment_history_summary_lines, treatment_records
 
@@ -40,6 +41,7 @@ class ReportContent:
     evidence_requests: list[dict[str, Any]]
     therapy: dict[str, Any] | None
     treatment_history: list[dict[str, Any]]
+    clinical_context: dict[str, Any] = field(default_factory=dict)
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,6 +82,7 @@ def assess_therapy(
     state, observed = observation["state"], observation["observed_tpm"]
     eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
     rationale = []
+    rationale.extend(r.description for r in eligibility.requirements if r.kind == "msi_high")
     if eligibility.supplied_variant_supported:
         from .reporting import supplied_variant_context_for_target_row
 
@@ -133,7 +136,10 @@ def assess_therapy(
         else "—",
         "curation": {
             key: clean_therapy_value(row.get(key))
-            for key in ("eligibility_note", "line_of_therapy", "treatment_path_tier", "rationale")
+            for key in (
+                "eligibility_note", "clinical_setting_note", "line_of_therapy",
+                "treatment_path_tier", "rationale",
+            )
         },
         "source": clean_therapy_value(row.get("therapy_evidence_source")),
         "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
@@ -235,7 +241,21 @@ def build_report_content(
             selected_assessments.append(match)
 
     # Report-level questions join therapy requirements before deduplication.
-    from .brief import mismatch_repair_summary_context
+    from .brief import mismatch_repair_summary_context, mismatch_repair_rna_state
+    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
+
+    clinical_context = clinical_context_for_analysis(analysis)
+    clinical_mmr = evaluate_msi_mmr(clinical_context)
+    rna_mmr = mismatch_repair_summary_context(analysis)
+    rna_state = mismatch_repair_rna_state(analysis)
+    if clinical_context.assays:
+        conclusion.append(paragraph(
+            "**Clinical MSI/MMR evidence:** " + msi_mmr_requirement(analysis).description
+        ))
+        if (clinical_mmr.status, rna_state) in {("positive", "MSS-like"), ("negative", "MSI-like")}:
+            conclusion.append(paragraph(render_report_paragraph(
+                "clinical_rna_discordance", rna_state=rna_state
+            )))
 
     from .infantile_spindle import infantile_spindle_guidance
 
@@ -267,17 +287,8 @@ def build_report_content(
                 ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
             )
         )
-    if mismatch_repair_summary_context(analysis):
-        report_requirements.append(
-            EvidenceRequirement(
-                "msi_high",
-                "msi_high",
-                "unresolved",
-                "The MMR expression signal is an RNA surrogate, not a clinical MSI/MMR assay.",
-                "Confirm MSI/MMR status using MSI-PCR, MMR IHC or validated clinical sequencing before using it for treatment eligibility.",
-                ("MSI-PCR result", "MMR IHC report", "validated clinical sequencing result"),
-            )
-        )
+    if rna_mmr or clinical_context.assays:
+        report_requirements.append(msi_mmr_requirement(analysis, rna_triage=rna_state == "MSI-like"))
     clinical_requirements = []
     if selected_assessments:
         clinical_requirement = EvidenceRequirement(
@@ -300,7 +311,10 @@ def build_report_content(
             for assessment in selected_assessments
         ]
         for assessment, clinical in zip(selected_assessments, clinical_requirements):
-            note = assessment["curation"]["eligibility_note"]
+            note = (
+                assessment["curation"]["clinical_setting_note"]
+                or assessment["curation"]["eligibility_note"]
+            )
             # A satisfied molecular gate does not establish treatment setting
             # or fitness. Preserve those curated criteria in the shared list.
             if note and not any(
@@ -314,10 +328,10 @@ def build_report_content(
         [
             *assessments,
             *clinical_requirements,
-            {
+            *({
                 "agent": "report conclusion",
-                "eligibility": {"requirements": [r.public_dict() for r in report_requirements]},
-            },
+                "eligibility": {"requirements": [requirement.public_dict()]},
+            } for requirement in report_requirements),
         ]
     )
 
@@ -390,7 +404,9 @@ def build_report_content(
 
     request_blocks = []
     for request in requests:
-        label = request["kind"].replace("_", " ").capitalize()
+        label = {"msi_high": "MSI/MMR"}.get(
+            request["kind"], request["kind"].replace("_", " ").capitalize()
+        )
         request_blocks.append(
             paragraph(render_report_paragraph("evidence_request", label=label, **request))
         )
@@ -436,6 +452,12 @@ def build_report_content(
     if history:
         detail.append({"kind": "heading", "text": "Supplied treatment history"})
         detail.extend({"kind": "bullet", "text": line.removeprefix("- ")} for line in history)
+    if clinical_context.assays:
+        detail.append({"kind": "heading", "text": "Supplied clinical assays"})
+        detail.extend(
+            paragraph(render_report_paragraph("clinical_assay_record", assay=assay))
+            for assay in clinical_mmr.assays
+        )
     for title, items, formatter in (
         (
             "Notable biomarker outliers",
@@ -508,6 +530,7 @@ def build_report_content(
         requests,
         therapy_table,
         [record.public_dict() for record in treatment_records(analysis)],
+        clinical_context.public_dict(),
     )
 
 
