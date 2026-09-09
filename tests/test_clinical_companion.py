@@ -249,6 +249,14 @@ def test_afami_requires_the_companion_assay_independently_of_hla(clinical_hla_co
     assert next(r for r in decision.eligibility.requirements if r.kind == 'hla').status == 'satisfied'
     assert next(r for r in decision.eligibility.requirements if r.key == 'ihc:MAGEA4').status == expected
     assert decision.permits_review is (expected == 'satisfied')
+    if result == 'positive':
+        from trufflepig.report_content import build_report_content
+
+        content = build_report_content(value, pd.DataFrame(), 'SARC_SYN', '')
+        setting = next(r for r in content.evidence_requests if r['key'] == 'clinical_setting')
+        setting_text = json.dumps(setting)
+        assert 'prior chemotherapy' in setting_text and 'synovial-sarcoma' in setting_text
+        assert 'MAGE-A4' not in setting_text and 'HLA' not in setting_text
 
 
 @pytest.mark.parametrize('history', [
@@ -310,3 +318,9 @@ def test_answering_pten_request_updates_the_real_panel_and_shared_documents(tmp_
         assert phrase in summary and phrase in text
     if selected:
         assert 'hormone-sensitive' in summary
+        setting = next(r for r in content.evidence_requests if r['key'] == 'clinical_setting')
+        setting_text = json.dumps(setting)
+        assert 'hormone-sensitive' in setting_text
+        assert 'PTEN' not in setting_text and 'SP218' not in setting_text
+    assert f'“PTEN: {result}; reported clinical result”. Reported:' in summary
+    assert f'“PTEN: {result}; reported clinical result”. Reported:' in text

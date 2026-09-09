@@ -310,6 +310,11 @@ def _current_therapy_row_overrides(target_row) -> dict:
                     "source": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P230016",
                 }],
                 "eligibility_note": "requires MAGE-A4 positivity by the approved tissue companion assay, compatible clinical HLA typing, and the labeled synovial-sarcoma setting after prior chemotherapy",
+                "clinical_setting_note": (
+                    "confirm the labeled age and unresectable or metastatic "
+                    "synovial-sarcoma setting, prior chemotherapy, and fitness "
+                    "for lymphodepletion and cell therapy"
+                ),
             }
 
     if cancer_code == "COAD" and agent == "sotorasib":
@@ -708,6 +713,11 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
                     "requires PTEN deficiency by the authorized VENTANA PTEN "
                     "SP218 tissue IHC assay plus the label-specific metastatic "
                     "hormone-sensitive setting; PTEN RNA is not the assay"
+                ),
+                "clinical_setting_note": (
+                    "confirm the label-specific metastatic hormone-sensitive "
+                    "setting, prior androgen-pathway treatment and response, "
+                    "and fitness for the capivasertib combination"
                 ),
             },
             {
