@@ -2976,7 +2976,7 @@ def plot_purity_method_comparison(
 
     fig, ax = plt.subplots(figsize=figsize)
 
-    # TCGA cohort median as reference line, labelled on the right edge.
+    # Keep the cohort reference key outside the quantitative rows.
     if bulk_reference and tcga_median is not None:
         ax.axvline(
             float(tcga_median) * 100,
@@ -3084,7 +3084,10 @@ def plot_purity_method_comparison(
     ax.set_title(title, fontsize=11, fontweight="bold", loc="left")
     handles, _labels = ax.get_legend_handles_labels()
     if handles:
-        ax.legend(loc="lower right", fontsize=8, frameon=False)
+        ax.legend(
+            loc="upper right", bbox_to_anchor=(1, -0.16),
+            fontsize=9, frameon=False,
+        )
 
     fig.tight_layout()
     if save_to_filename:
