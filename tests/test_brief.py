@@ -340,8 +340,8 @@ def test_actionable_purity_reads_frozen_snapshot_not_stale_live_dict():
     assert "78%" not in md  # the stale candidate purity never reaches the actionable review
 
 
-def test_actionable_purity_degrades_to_bare_point_when_interval_missing():
-    """A purity estimate without bounds renders as a bare point."""
+def test_actionable_purity_names_missing_interval_without_inventing_bounds():
+    """A point estimate states that uncertainty is unavailable."""
     from trufflepig.report_view import build_report_view
 
     analysis = _make_analysis()
@@ -355,8 +355,9 @@ def test_actionable_purity_degrades_to_bare_point_when_interval_missing():
         sample_id="sample_X",
         report_view=report_view,
     )
-    assert "**Estimated tumor fraction (RNA model):** 30%." in md
-    assert "model interval" not in md  # no interval clause when a bound is missing
+    assert "**Estimated tumor fraction (RNA model):** 30% (model interval unavailable; unknown confidence)." in md
+    assert report_view.purity.lower is None and report_view.purity.upper is None
+    assert "deterministic input" not in md and "0%–0%" not in md
 
 
 def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
