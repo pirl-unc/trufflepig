@@ -336,7 +336,7 @@ def test_actionable_purity_reads_frozen_snapshot_not_stale_live_dict():
         sample_id="sample_X",
         report_view=report_view,
     )
-    assert "Purity point estimate: **10%** (model interval 6%–16%" in md
+    assert "**Estimated tumor fraction (RNA model):** 10% (model interval 6%–16%" in md
     assert "78%" not in md  # the stale candidate purity never reaches the actionable review
 
 
@@ -355,7 +355,7 @@ def test_actionable_purity_degrades_to_bare_point_when_interval_missing():
         sample_id="sample_X",
         report_view=report_view,
     )
-    assert "Purity point estimate: **30%**." in md
+    assert "**Estimated tumor fraction (RNA model):** 30%." in md
     assert "model interval" not in md  # no interval clause when a bound is missing
 
 
@@ -417,12 +417,39 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
     )
 
     assert "**Estimated tumor fraction (RNA model):** quantitatively unresolved" in summary
-    assert "selected operational model uses 5% [1%–12%]" in summary
+    assert "selected model uses 5% (within-model interval 1%–12%) as an operating estimate" in summary
     assert "healthy-tissue lineage reference model: 5% [1%–12%]" in summary
     assert "upstream expression model: 43% [32%–55%]" in summary
-    assert "Purity is **quantitatively unresolved**" in actionable
-    assert "not a consensus tumor-purity estimate" in actionable
+    assert "**Estimated tumor fraction (RNA model):** quantitatively unresolved" in actionable
+    assert "not a consensus estimate" in actionable
     assert "model interval 1%–43%" not in summary + actionable
+
+
+def test_unresolved_purity_never_recommends_unconditional_tumor_attribution():
+    from trufflepig.report_language import render_report_paragraph
+
+    analysis = _make_analysis(purity_point=0.11, ci_low=0.06, ci_high=0.34)
+    analysis["purity"].update(
+        quantitative_status="discordant_estimators",
+        quantitative_unresolved_reason="same_lineage_not_identifiable",
+    )
+    view = build_report_view(analysis)
+    # The formatter must retain the frozen uncertainty even if analysis changes.
+    analysis["purity"]["quantitative_status"] = "resolved"
+    summary = build_summary(analysis, _make_ranges_df(), cancer_code="PRAD", disease_state="", report_view=view)
+    guidance = render_report_paragraph("purity_attribution", purity=view.purity)
+    assert summary.count(guidance) == 1
+    assert "tumor/background separation is unresolved" in summary
+    assert "Prefer the tumor-attributed values" not in summary
+
+
+def test_purity_ceiling_limit_is_with_the_conclusion():
+    analysis = _make_analysis(purity_point=1.0, ci_low=0.83, ci_high=1.0)
+    summary = build_summary(analysis, _make_ranges_df(), cancer_code="PRAD", disease_state="")
+    conclusion = summary.split("## Therapy rationale and blockers")[0]
+    assert "100% (model interval 83%–100%" in conclusion
+    assert "model's upper boundary" in conclusion
+    assert "does not establish literal 100% tumor cellularity" in conclusion
 
 
 def test_summary_has_four_complete_sections():

@@ -3602,14 +3602,12 @@ def _analyze_body(run: AnalyzeRun):
     # immune / ESTIMATE combined / decomposition / adopted overall on
     # one purity axis with CI bars, plus TCGA cohort median reference.
     methods_png = "%s-purity-methods.png" % prefix if prefix else "purity-methods.png"
-    best_for_methods = decomp_results[0] if decomp_results else None
     if plot_ctx.enabled:
         print("[plot] Generating purity-method comparison plot...")
         plot_purity_method_comparison(
             analysis["purity"],
             save_to_filename=methods_png,
             save_dpi=output_dpi,
-            decomposition_result=best_for_methods,
             report_view=report_view,
         )
         _plt.close("all")
@@ -9082,61 +9080,11 @@ def _generate_text_reports(
 
     # Purity / composition
     lines.append(f"## {_purity_metric_label(sample_mode).title()}\n")
-    purity_tier = conclusion.confidence
-    tier_note = str(getattr(purity_tier, "inline_note", "") or "")
-    tier_note = tier_note.replace("purity CI", "purity range")
-    tier_note = tier_note.replace("CI", "range")
-    if purity_tier.tier == "degenerate":
-        tier_suffix = f" — **degenerate range**: {tier_note}"
-    elif purity_tier.tier in {"low", "moderate"} and purity_tier.reasons:
-        tier_suffix = f" — **{purity_tier.tier} confidence** ({tier_note})"
-    else:
-        tier_suffix = ""
-    purity_interval_text = _format_purity_interval(
-        conclusion.estimate,
-        conclusion.lower,
-        conclusion.upper,
-    )
-    if conclusion.status == "discordant_estimators":
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
-            lines.append(
-                "- **Quantitative conclusion**: **unresolved** — tumor and benign "
-                "bone/mesenchymal cells share the RNA programs used for subtraction."
-            )
-        else:
-            lines.append(
-                "- **Quantitative conclusion**: **unresolved** — independent purity "
-                "estimators support incompatible scenarios."
-            )
-        lines.append(
-            "- **Operational model**: "
-            f"{purity_interval_text}; retained for downstream calculations, not "
-            "reported as a consensus purity estimate."
-        )
-        source_labels = {
-            "background_residual": "background-residual decomposition",
-            "lineage_panel": "healthy-tissue lineage reference model",
-            "signature": "upstream expression model",
-        }
-        scenario_text = []
-        for source, estimate, lower, upper in conclusion.scenarios:
-            if not isinstance(estimate, (int, float)):
-                continue
-            value = _format_purity_interval(
-                estimate,
-                lower,
-                upper,
-            )
-            scenario_text.append(
-                f"{source_labels.get(source, source.replace('_', ' '))}: {value}"
-            )
-        if scenario_text:
-            lines.append("- **Estimator scenarios**: " + "; ".join(scenario_text) + ".")
-    else:
-        lines.append(
-            "- **Overall estimate**: "
-            f"{purity_interval_text}{tier_suffix}"
-        )
+    from .report_language import render_report_paragraph
+
+    lines.append(render_report_paragraph(
+        "purity_summary", purity=conclusion, show_confidence_reasons=True,
+    ))
     purity_source = conclusion.method or ""
     if purity_source == "background_residual":
         residual_fraction = (

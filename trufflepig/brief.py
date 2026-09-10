@@ -61,7 +61,8 @@ from .analyze import (
 from .decomposition import CancerTypeDecision
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
-from .report_view import ReportView
+from .report_view import Purity, ReportView
+from .report_language import render_report_paragraph
 from .sample_context import (
     heuristic_support_label,
     library_prep_clause,
@@ -1032,35 +1033,18 @@ def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 
 
-def _caveats_from_purity_tier(
-    purity_tier,
+def report_interpretation_limits(
+    purity: Purity,
     sample_context,
     analysis=None,
 ) -> List[str]:
-    """User-facing caveat lines for the brief.
-
-    Converts the ``purity_tier.reasons`` (which are short internal
-    strings) into full sentences without internal jargon.
-    """
-    if purity_tier is None:
-        return []
-    reasons = getattr(purity_tier, "reasons", []) or []
-    out = []
+    """Render interpretation limits from frozen purity and sample-QC evidence."""
+    reasons = purity.confidence.reasons
+    attribution = render_report_paragraph("purity_attribution", purity=purity)
+    out = [attribution] if attribution else []
     for reason in reasons:
         r = str(reason)
-        if "wide purity CI" in r:
-            out.append(
-                "Purity range is wide — target TPMs "
-                "could be over- or under-stated depending on the true "
-                "purity."
-            )
-        elif "low-purity regime" in r:
-            out.append(
-                "Sample is in a low-purity regime — raw target TPMs "
-                "tend to overstate tumor presence. Prefer the tumor-"
-                "attributed values."
-            )
-        elif "severe RNA degradation" in r:
+        if "severe RNA degradation" in r:
             out.append(
                 "RNA is severely degraded — long-transcript targets "
                 "are systematically under-counted; interpret "
@@ -1077,24 +1061,6 @@ def _caveats_from_purity_tier(
                 "whole-transcriptome — relative expression estimates "
                 "should be interpreted within the panel only."
             )
-        elif "single-method purity reading uncorroborated" in r:
-            out.append(
-                "One purity method read much higher than the others "
-                "with no independent support, so the reported purity "
-                "reflects the agreement of the remaining methods rather "
-                "than that single high reading."
-            )
-    purity = (analysis or {}).get("purity") or {}
-    try:
-        purity_point = float(purity.get("overall_estimate"))
-    except (TypeError, ValueError):
-        purity_point = None
-    if purity_point is not None and purity_point >= 0.995:
-        out.append(
-            "The RNA model reached its purity ceiling because it did not resolve "
-            "a separable non-tumor fraction. Do not interpret this as literal 100% "
-            "tumor cellularity."
-        )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", None)
@@ -1964,7 +1930,6 @@ def mismatch_repair_summary_line(
         and math.isfinite(value) and value >= 0
     }
     subtype_state = _mismatch_repair_state_from_code(winning_subtype)
-    from .report_language import render_report_paragraph
 
     return render_report_paragraph(
         "mismatch_repair_rna",
@@ -2247,31 +2212,6 @@ def _format_cta_outlier_bullet(row: dict) -> str:
     )
 
 
-def purity_estimator_scenario_text(scenarios) -> str:
-    """Render source-preserving purity scenarios without implying one CI.
-
-    Different decomposition templates can invoke different quantitative
-    estimators. This formatter deliberately names each estimator and keeps its
-    own interval, rather than presenting their union as uncertainty around one
-    point estimate.
-    """
-    labels = {
-        "background_residual": "background-residual decomposition",
-        "lineage_panel": "healthy-tissue lineage reference model",
-        "signature": "upstream expression model",
-    }
-    rendered = []
-    for source, estimate, lower, upper in scenarios or ():
-        source = str(source or "unspecified")
-        if not isinstance(estimate, (int, float)):
-            continue
-        value = f"{float(estimate):.0%}"
-        if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-            value += f" [{float(lower):.0%}–{float(upper):.0%}]"
-        rendered.append(f"{labels.get(source, source.replace('_', ' '))}: {value}")
-    return "; ".join(rendered)
-
-
 def summary_conclusion_paragraphs(
     analysis,
     ranges_df,
@@ -2411,7 +2351,6 @@ def summary_conclusion_paragraphs(
     if variant_line:
         lines.append(variant_line)
     from .infantile_spindle import infantile_spindle_guidance
-    from .report_language import render_report_paragraph
 
     spindle_guidance = infantile_spindle_guidance(cancer_code, analysis)
     if spindle_guidance:
@@ -2469,38 +2408,7 @@ def summary_conclusion_paragraphs(
     if subtype_line:
         lines.append(subtype_line)
 
-    # Purity is one frozen value: estimate, interval, status, and scenarios can
-    # never be mixed with mutable analysis state.
-    overall, lower, upper = conclusion.estimate, conclusion.lower, conclusion.upper
-    if conclusion.status == "discordant_estimators" and overall is not None:
-        operational_range = (
-            f" [{lower:.0%}–{upper:.0%}]"
-            if lower is not None and upper is not None
-            else ""
-        )
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
-            lines.append(
-                "**Estimated tumor fraction (RNA model):** quantitatively unresolved; "
-                f"the selected model uses {overall:.0%}{operational_range} as an "
-                "operating estimate. Tumor and benign bone/mesenchymal cells share "
-                "the RNA programs used for subtraction, so one bulk sample cannot "
-                "cleanly separate them."
-            )
-        else:
-            scenarios = purity_estimator_scenario_text(conclusion.scenarios)
-            scenario_clause = f" Scenarios: {scenarios}." if scenarios else ""
-            lines.append(
-                "**Estimated tumor fraction (RNA model):** quantitatively unresolved; "
-                "the selected operational "
-                f"model uses {overall:.0%}{operational_range}, not a consensus estimate."
-                f"{scenario_clause}"
-            )
-    elif overall is not None and lower is not None and upper is not None:
-        lines.append(
-            f"**Estimated tumor fraction (RNA model):** {overall:.0%} "
-            f"(model interval {lower:.0%}–{upper:.0%}, "
-            f"{conclusion.confidence.tier} confidence)."
-        )
+    lines.append(render_report_paragraph("purity_summary", purity=conclusion))
     rescue_line = _cancer_call_rescue_summary_line(analysis)
     if rescue_line:
         lines.append(rescue_line)
@@ -2598,7 +2506,6 @@ def build_actionable(
     internal jargon.
     """
     conclusion = report_view.purity
-    purity_tier = conclusion.confidence
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code
 
@@ -2638,49 +2545,7 @@ def build_actionable(
     if rescue_line:
         lines.append("\n" + rescue_line)
 
-    overall = conclusion.estimate
-    lower = conclusion.lower
-    upper = conclusion.upper
-    tier_label = conclusion.confidence.tier
-    tier_reasons = getattr(purity_tier, "reasons", []) if purity_tier else []
-    if conclusion.status == "discordant_estimators" and overall is not None:
-        operational_range = (
-            f" (within-estimator interval {lower:.0%}–{upper:.0%})"
-            if lower is not None and upper is not None
-            else ""
-        )
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
-            lines.append(
-                "\nEstimated tumor fraction is **quantitatively unresolved**. The "
-                f"selected model uses {overall:.0%}{operational_range} as an "
-                "operating estimate because tumor and benign bone/mesenchymal cells "
-                "share the RNA programs used for subtraction."
-            )
-        else:
-            scenarios = purity_estimator_scenario_text(conclusion.scenarios)
-            scenario_clause = (
-                f" The incompatible scenarios are {scenarios}." if scenarios else ""
-            )
-            lines.append(
-                "\nPurity is **quantitatively unresolved**. The selected model uses "
-                f"{overall:.0%}{operational_range} for downstream calculations only; "
-                "it is not a consensus tumor-purity estimate."
-                f"{scenario_clause}"
-            )
-    elif overall is not None:
-        confidence_clause = f"**{tier_label}** confidence"
-        if tier_reasons and tier_label in {"low", "moderate"}:
-            confidence_clause += " (" + "; ".join(tier_reasons) + ")"
-        # Render a bare point when this estimator did not produce both bounds.
-        interval_clause = (
-            f" (model interval {lower:.0%}–{upper:.0%})"
-            if lower is not None and upper is not None
-            else ""
-        )
-        lines.append(
-            f"\nPurity point estimate: **{overall:.0%}**{interval_clause}. "
-            f"{confidence_clause.capitalize()}."
-        )
+    lines.append("\n" + render_report_paragraph("purity_summary", purity=conclusion))
 
     lines.append("")
 
@@ -3128,7 +2993,7 @@ def build_actionable(
         lines.append(trace + "\n")
 
     # Interpretation limits
-    caveats = _caveats_from_purity_tier(purity_tier, sample_context, analysis)
+    caveats = report_interpretation_limits(conclusion, sample_context, analysis)
     if caveats:
         lines.append("## Caveats\n")
         for c in caveats:

@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
-    from .report_view import ReportView
+    from .report_view import Purity, ReportView
 
 SCHEMA_VERSION = 2
 
-# Reader-facing figure manifest: (filename-suffix, title, interpretation sentence).
+# Reader-facing figure manifest: (filename-suffix, title, static caption or None).
+# A None caption is authored from the frozen evidence when the manifest is built.
 # The interpretation is what the figure *means* for the decision — it replaces
 # captioning a figure with its PNG filename. Figures are gated on existence at
 # emit time (a belief that never fired never wrote its plot), so a manifest entry's
@@ -67,10 +68,8 @@ FIGURE_REGISTRY = [
     ),
     (
         "purity-methods.png",
-        "Purity method agreement",
-        "Several RNA-derived tumor-fraction estimates and their agreement. Some methods "
-        "share inputs, so this is a consistency check rather than an independent "
-        "measurement; the reported interval widens when they disagree.",
+        "Purity estimates and uncertainty",
+        None,  # The named caption uses the same frozen methods as the figure.
     ),
     (
         "therapy-pathway-state.png",
@@ -128,8 +127,7 @@ def build_figure_manifest(
     analyze_dir: Path,
     prefix: str,
     *,
-    purity_status: str = "resolved",
-    purity_unresolved_reason: Optional[str] = None,
+    purity: "Purity",
 ) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
@@ -144,12 +142,8 @@ def build_figure_manifest(
             "Components from the selected operational model; not a resolved "
             "sample-composition measurement."
         ),
-        "purity-methods.png": (
-            "Independent purity estimators support incompatible scenarios; the "
-            "operational value is not a fused consensus estimate."
-        ),
     }
-    if purity_unresolved_reason == "same_lineage_not_identifiable":
+    if purity.unresolved_reason == "same_lineage_not_identifiable":
         unresolved_captions = {
             "decomposition-composition.png": (
                 "Selected operating model for target attribution. Tumor and benign "
@@ -159,14 +153,14 @@ def build_figure_manifest(
                 "External reference weights from the selected operating model; not "
                 "a resolved malignant-versus-benign cell composition."
             ),
-            "purity-methods.png": (
-                "RNA tumor-fraction methods are structurally limited because tumor "
-                "and benign same-lineage cells share the modeled programs."
-            ),
         }
     for suffix, title, caption in FIGURE_REGISTRY:
-        if purity_status == "discordant_estimators":
+        if purity.is_unresolved:
             caption = unresolved_captions.get(suffix, caption)
+        if suffix == "purity-methods.png":
+            from .report_language import render_report_paragraph
+
+            caption = render_report_paragraph("purity_methods", purity=purity)
         figure = find_figure(analyze_dir, prefix, suffix)
         present = figure is not None
         manifest.append(
@@ -206,8 +200,7 @@ def build_report_document(
         "figures": build_figure_manifest(
             analyze_dir,
             prefix,
-            purity_status=report_view.purity.status,
-            purity_unresolved_reason=report_view.purity.unresolved_reason,
+            purity=report_view.purity,
         ),
     }
     detail = next(section for section in document["sections"] if section["id"] == "evidence")

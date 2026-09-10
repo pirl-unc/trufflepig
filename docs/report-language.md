@@ -25,6 +25,8 @@ The main APIs are:
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
 | `report_content.empty_shortlist_summary` | Explain an empty shortlist from recorded selection decisions |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
+| `report_view.purity_method_estimates` | Collect method estimates with source families and their own intervals |
+| `brief.report_interpretation_limits` | Render limits from frozen purity evidence and sample quality |
 | `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
 | `report_language.render_report_template` | Render the complete Markdown layout |
 | `report_document.write_report_document` | Serialize authored content, headline and figure provenance |
@@ -75,6 +77,22 @@ The detailed analysis and evidence tables retain broader curation and source
 attribution. They refer to the summary's consolidated information list. Figures
 must describe measured or modeled RNA patterns and their uncertainty; they must
 not assert treatment exposure, receptor-assay status or a mutation from expression.
+
+Purity is frozen once in `ReportView.purity`, including the method estimates used
+by the comparison figure. The adopted value is distinct from the method rows;
+it must not count as another method. The public `purity_method_estimates` collector
+retains the existing enrichment-to-purity calibration without fitting a model.
+Missing or invalid fractions stay unavailable, and measured zero stays zero.
+
+The named `purity_summary`, `purity_methods` and `purity_attribution` paragraphs
+use that snapshot across the summary, actionable report, full analysis and figure
+captions. They distinguish a selected model interval from disagreement between
+methods, identify a lone estimate, place the model-ceiling qualification beside
+the headline and make unresolved tumor/background separation explicit before
+presenting tumor-attributed expression. Missing estimates or intervals do not
+establish deterministic input or agreement. The JSON headline retains method
+estimates, method families, individual intervals and confidence reasons so a
+consumer does not have to recover these facts from prose.
 
 An optional LLM language editor remains a separate feature. It may eventually
 improve phrasing over these fixed facts, with review and deterministic output
