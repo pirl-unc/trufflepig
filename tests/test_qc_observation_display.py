@@ -3,6 +3,7 @@ from copy import deepcopy
 import math
 
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pytest
 
 from trufflepig.sample_context import SampleContext, length_pair_display_label, length_pair_index_available, plot_sample_context
@@ -43,8 +44,9 @@ def test_unavailable_diagnostic_fractions_are_not_numeric_or_in_range(rendered_c
     assert labels.count("unavailable") == 3
     assert not any("0.000" in text or " ok" in text or "near zero" in text for text in labels)
     assert not chart.patches  # Neither observed bars nor expected-range verdicts exist.
-    chart.figure.canvas.draw()
-    renderer = chart.figure.canvas.get_renderer()
+    canvas = FigureCanvasAgg(chart.figure)
+    canvas.draw()
+    renderer = canvas.get_renderer()
     for label in chart.texts:
         if label.get_text() == "unavailable":
             bounds = label.get_window_extent(renderer)
