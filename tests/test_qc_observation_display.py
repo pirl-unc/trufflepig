@@ -89,6 +89,29 @@ def test_an_undefined_ratio_is_not_an_observed_zero(rendered_context):
     assert "near zero" not in text
 
 
+@pytest.mark.parametrize("prep", ["unknown", "exome_capture"])
+@pytest.mark.parametrize("concentration", [0.068, 0.25, 0.95])
+def test_low_fraction_explanation_does_not_obscure_measurements_or_labels(
+    rendered_context, prep, concentration,
+):
+    _, chart = rendered_context({
+        "histone_fraction": 0.005,
+        "mt_fraction": 0.002,
+        "mt_rrna_fraction_of_mt": 0.0,
+        "top_10_share_of_total_tpm": concentration,
+    }, library_prep=prep)
+    canvas = FigureCanvasAgg(chart.figure)
+    canvas.draw()
+    renderer = canvas.get_renderer()
+    note, = [label for label in chart.texts if label.get_text().startswith("Observed diagnostic")]
+    bounds = note.get_bbox_patch().get_window_extent(renderer)
+    for artist in [*chart.texts, *chart.patches, *chart.get_xticklabels(), chart.xaxis.label]:
+        if artist is not note:
+            assert not bounds.overlaps(artist.get_window_extent(renderer)), artist
+    assert chart.figure.bbox.contains(bounds.x0, bounds.y0)
+    assert chart.figure.bbox.contains(bounds.x1, bounds.y1)
+
+
 @pytest.mark.parametrize("index", [None, math.nan, math.inf, -1.0, True, "1.0"])
 def test_no_evaluable_length_pair_index_is_not_no_degradation(index):
     context = SampleContext(degradation_index=index)

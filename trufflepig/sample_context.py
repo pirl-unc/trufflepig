@@ -1352,13 +1352,13 @@ def plot_sample_context(
         )
         ax_bars.text(
             0.98,
-            0.05,
+            -0.30,
             explanation,
             transform=ax_bars.transAxes,
             fontsize=8,
             color="#444444",
             ha="right",
-            va="bottom",
+            va="top",
             bbox=dict(
                 boxstyle="round,pad=0.4",
                 facecolor="#f5f5dc",
