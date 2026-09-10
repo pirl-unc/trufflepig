@@ -213,7 +213,7 @@ def compute_purity_confidence(
             )
         else:
             reasons.append(
-                "purity is quantitatively unresolved because independent estimators "
+                "purity is quantitatively unresolved because reported estimators "
                 "support incompatible scenarios"
             )
 
@@ -221,11 +221,7 @@ def compute_purity_confidence(
     # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method
     # consensus because nothing corroborated it, say so and cap the tier — a desaturated estimate is
     # never "high confidence". See main.py best_purity_estimate wiring.
-    best_integration = None
-    try:
-        best_integration = purity.get("best_integration")
-    except AttributeError:
-        best_integration = None
+    best_integration = purity.get("best_integration")
     if isinstance(best_integration, dict) and best_integration.get("point_source") == "desaturated_fusion":
         if tier == "high":
             tier = "moderate"

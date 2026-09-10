@@ -78,6 +78,8 @@ def test_discordant_estimators_force_low_confidence_without_fake_wide_interval()
 
     assert tier.tier == "low"
     assert any("quantitatively unresolved" in reason for reason in tier.reasons)
+    assert "reported estimators support incompatible scenarios" in tier.inline_note
+    assert "independent" not in tier.inline_note
 
 
 def test_concise_call_confidence_reasons_keep_summary_skimmable():
