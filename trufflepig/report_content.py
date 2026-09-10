@@ -208,7 +208,7 @@ def build_report_content(
     no clinical meaning is recovered from generated Markdown.
     """
     from .brief import (
-        _caveats_from_purity_tier,
+        report_interpretation_limits,
         _curated_target_panel_for_sample,
         _display_sample_id,
         _format_biomarker_outlier_bullet,
@@ -465,6 +465,9 @@ def build_report_content(
     source_rows = source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})
+        attribution = render_report_paragraph("purity_attribution", purity=report_view.purity)
+        if attribution:
+            detail.append(paragraph(attribution))
         for row in source_rows:
             detail.append(
                 paragraph(
@@ -510,16 +513,17 @@ def build_report_content(
             detail.extend(
                 {"kind": "bullet", "text": formatter(item).removeprefix("- ")} for item in items
             )
-    caveats = _caveats_from_purity_tier(
-        report_view.purity.confidence, analysis.get("sample_context"), analysis
+    caveats = report_interpretation_limits(
+        report_view.purity, analysis.get("sample_context"), analysis
     )
     from .report_language import report_plain_text
 
-    conclusion_text = " ".join(report_plain_text(block["text"]) for block in conclusion).casefold()
+    existing_text = " ".join(report_plain_text(block["text"]) for block in [*conclusion, *detail]
+                             if "text" in block).casefold()
     caveats = [
         text
         for text in caveats
-        if report_plain_text(text).split(": ", 1)[-1].rstrip(". ").casefold() not in conclusion_text
+        if report_plain_text(text).split(": ", 1)[-1].rstrip(". ").casefold() not in existing_text
     ]
     if caveats:
         detail.append({"kind": "heading", "text": "Interpretation limits"})

@@ -27,9 +27,28 @@ Two computed tiers:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+import math
+from numbers import Real
 import re
-from typing import List
+from typing import List, Optional
+
+
+BULK_PURITY_REFERENCE_SOURCES = frozenset(
+    {"pan_cancer", "parent_pan_cancer", "member_union_pan_cancer"}
+)
+
+
+def purity_fraction(value) -> Optional[float]:
+    """Normalize a reported fraction, preserving zero and rejecting unavailable values."""
+    if isinstance(value, bool) or not isinstance(value, (Real, str)):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) and 0 <= result <= 1 else None
 
 
 @dataclass(frozen=True)
@@ -65,8 +84,8 @@ def sample_purity_is_low(purity_tier) -> bool:
     """True when the sample is in a low-purity regime that distorts tumor-source TPM.
 
     Keyed off the pipeline's explicit ``"low-purity regime"`` purity-confidence reason —
-    the same trigger as the summary caveat that steers readers to tumor-attributed values
-    — so the inline tumor-source caveat fires exactly when that regime is flagged.
+    so the inline tumor-source caveat and shared attribution guidance apply to
+    the same reported uncertainty. It does not establish reliable separation.
     """
     if purity_tier is None:
         return False
@@ -141,19 +160,21 @@ def compute_purity_confidence(
     ``overall_upper``).
     """
     reasons: List[str] = []
-    quantitative_status = str(
-        (purity or {}).get("quantitative_status") or "resolved"
-    )
-    try:
-        overall = float(purity.get("overall_estimate") or 0.0)
-        lower = float(purity.get("overall_lower") or 0.0)
-        upper = float(purity.get("overall_upper") or 0.0)
-    except (TypeError, AttributeError, ValueError):
+    if not isinstance(purity, Mapping):
+        return ConfidenceTier(tier="unknown", reasons=["no purity estimate available"])
+    quantitative_status = str(purity.get("quantitative_status") or "resolved")
+    overall = purity_fraction(purity.get("overall_estimate"))
+    lower = purity_fraction(purity.get("overall_lower"))
+    upper = purity_fraction(purity.get("overall_upper"))
+    if overall is None:
         return ConfidenceTier(tier="unknown", reasons=["no purity estimate available"])
 
     tier = "high"
-    span = upper - lower
-    if span <= 1e-9 and quantitative_status != "discordant_estimators":
+    span = upper - lower if lower is not None and upper is not None else None
+    if span is None or span < 0:
+        tier = "unknown"
+        reasons.append("purity model interval is unavailable or invalid")
+    elif span <= 1e-9 and quantitative_status != "discordant_estimators":
         # Zero-width CI means the estimator saw no per-gene variation
         # (synthetic / cohort-median / deterministic input). Surfacing
         # that as "high confidence" is misleading — the estimator
@@ -167,7 +188,7 @@ def compute_purity_confidence(
                 "deterministic input (no per-gene variation) — purity CI not estimated"
             ],
         )
-    if span >= 0.35:
+    elif span >= 0.35:
         tier = "low"
         reasons.append(f"wide purity CI ({lower:.0%}–{upper:.0%})")
     elif span >= 0.15:
@@ -192,7 +213,7 @@ def compute_purity_confidence(
             )
         else:
             reasons.append(
-                "purity is quantitatively unresolved because independent estimators "
+                "purity is quantitatively unresolved because reported estimators "
                 "support incompatible scenarios"
             )
 
@@ -200,11 +221,7 @@ def compute_purity_confidence(
     # reading (typically ESTIMATE, which the mixture benchmark shows saturates high) with the method
     # consensus because nothing corroborated it, say so and cap the tier — a desaturated estimate is
     # never "high confidence". See main.py best_purity_estimate wiring.
-    best_integration = None
-    try:
-        best_integration = purity.get("best_integration")
-    except AttributeError:
-        best_integration = None
+    best_integration = purity.get("best_integration")
     if isinstance(best_integration, dict) and best_integration.get("point_source") == "desaturated_fusion":
         if tier == "high":
             tier = "moderate"

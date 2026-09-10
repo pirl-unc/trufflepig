@@ -10,15 +10,20 @@ from trufflepig import report_document as rd
 from trufflepig.report_pdf import build_interpretive_report_pdf, report_inline_html
 
 
-def test_figure_registry_entries_are_suffix_title_interpretation_triples():
+def test_figure_registry_entries_render_complete_interpretations(tmp_path):
+    from trufflepig.report_view import build_report_view
+
+    view = build_report_view({"cancer_type": "SARC", "sample_mode": "solid", "purity": {}})
     for entry in rd.FIGURE_REGISTRY:
         assert len(entry) == 3, f"expected (suffix, title, interpretation): {entry!r}"
         suffix, title, interpretation = entry
         assert suffix.endswith(".png")
         assert title and not title.endswith(".png")  # a title, never a filename
-        assert (
-            interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
-        )
+        if interpretation is None:
+            assert suffix == "purity-methods.png"
+    for figure in rd.build_figure_manifest(tmp_path, "synthetic", purity=view.purity):
+        interpretation = figure["caption"]
+        assert interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
 
 
 def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():

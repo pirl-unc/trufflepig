@@ -1,0 +1,11 @@
+{% if purity.is_unresolved %}
+Tumor-attributed RNA values are conditional on the selected operating model. Because tumor/background separation is unresolved, neither a high modeled target value nor a narrow within-model interval establishes tumor-specific expression. Review the measured bulk value alongside the model and seek independent tumor/protein evidence before using expression to prioritize treatment.
+{% elif purity.is_low %}
+With a low estimated tumor fraction, background RNA can dominate the bulk signal and tumor-specific expression estimates are sensitive to the assumed fraction. Compare bulk and tumor-attributed values together, with the available model uncertainty and source attribution; neither substitutes for a clinical target assay.
+{% elif purity.methods_exceed_interval %}
+Tumor-attributed RNA values depend on the selected model. Its interval does not include the full spread between displayed purity methods; retain that additional uncertainty when interpreting target expression.
+{% elif purity.has_wide_interval %}
+The tumor-fraction model interval is wide. Tumor-attributed target RNA values depend on that uncertain fraction; compare the measured bulk value with the model's range before interpreting target expression.
+{% elif purity.estimate is not none and (purity.lower is none or purity.upper is none) %}
+The model has a tumor-fraction point estimate without a complete uncertainty interval. Tumor-attributed target RNA values remain conditional on that estimate; their precision has not been established.
+{% endif %}

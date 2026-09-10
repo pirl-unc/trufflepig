@@ -45,6 +45,7 @@ from trufflepig.reference import (
 from .common import _build_sample_tpm_by_symbol as _common_build_sample_tpm
 from .common import build_sample_tpm_by_gene_id as _build_sample_tpm_by_gene_id
 from .format import render_fold
+from .confidence import BULK_PURITY_REFERENCE_SOURCES, purity_fraction
 from .reference import estimate_signatures
 
 
@@ -1754,9 +1755,6 @@ _BROAD_PURITY_REFERENCE_FALLBACKS = {
     # cohort; keep the direct Python API aligned with that behavior.
     "SARC_OS": "SARC",
 }
-_BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES = frozenset(
-    {"pan_cancer", "parent_pan_cancer", "member_union_pan_cancer"}
-)
 
 
 def _broad_purity_fallback_code(code):
@@ -1777,7 +1775,7 @@ def _has_direct_purity_markers(cancer_code):
 def _use_estimate_component(reference_expression_source, stromal_genes) -> bool:
     """Whether ESTIMATE is compatible with the active expression reference."""
     return bool(stromal_genes) and (
-        reference_expression_source in _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES
+        reference_expression_source in BULK_PURITY_REFERENCE_SOURCES
     )
 
 
@@ -2410,7 +2408,7 @@ def plot_tumor_purity(
     comp = result["components"]
     tcga_median = result.get("tcga_median_purity")
     reference_source = str(result.get("reference_expression_source") or "")
-    bulk_reference = reference_source in _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES
+    bulk_reference = reference_source in BULK_PURITY_REFERENCE_SOURCES
     tcga_median_text = (
         f"{float(tcga_median):.0%}"
         if tcga_median is not None
@@ -2777,159 +2775,24 @@ def plot_purity_method_comparison(
         if cancer_code and report_cancer_code != cancer_code
         else ""
     )
-    tcga_median = purity_result.get("tcga_median_purity")
+    tcga_median = purity_fraction(purity_result.get("tcga_median_purity"))
     reference_source = str(purity_result.get("reference_expression_source") or "")
-    bulk_reference = reference_source in _BULK_PAN_CANCER_PURITY_REFERENCE_SOURCES
+    bulk_reference = reference_source in BULK_PURITY_REFERENCE_SOURCES
     # The finalized top-level source is authoritative. Reconciliation may
     # replace the candidate purity object after its original integration
     # metadata was written, so preferring the nested value can label a
     # residual-only estimate as "lineage" even when no lineage row is plotted.
     integration_source = (
-        purity_result.get("purity_source")
-        or (comp.get("integration") or {}).get("source")
-        or ""
+        report_view.purity.method if report_view is not None else
+        purity_result.get("purity_source") or (comp.get("integration") or {}).get("source") or ""
     )
-    signature_deprioritized = (comp.get("integration") or {}).get(
-        "signature_deprioritized", False
-    )
+    from .report_view import PurityMethodEstimate, purity_method_estimates
 
-    # Re-derive stromal_purity / immune_purity from their enrichment
-    # values using the same odds-model conversion estimate_tumor_purity
-    # uses internally. Otherwise these two methods land on a different
-    # axis than the others.
-    stromal_purity = None
-    immune_purity = None
-    if bulk_reference and tcga_median and tcga_median > 0:
-        odds_nontumor = (1.0 - tcga_median) / max(tcga_median, 1e-6)
-        stromal_enr = (comp.get("stromal") or {}).get("enrichment")
-        immune_enr = (comp.get("immune") or {}).get("enrichment")
-        if stromal_enr is not None:
-            stromal_purity = 1.0 / (1.0 + odds_nontumor * max(float(stromal_enr), 0.0))
-        if immune_enr is not None:
-            immune_purity = 1.0 / (1.0 + odds_nontumor * max(float(immune_enr), 0.0))
-
-    sig_comp = comp.get("signature") or {}
-    lin_comp = comp.get("lineage") or {}
-
-    # Row schema: (label, point, lower, upper, family, n_genes, note)
-    rows = []
-
-    # Row ordering (#159 polish): group calibrated purity estimates first
-    # (signature / bulk-calibrated lineage / decomposition), then
-    # enrichment-derived (ESTIMATE
-    # stromal / immune / combined — these are odds-model conversions of
-    # TME-enrichment scores, not independent tumor-fraction measurements),
-    # then the adopted overall at the bottom so the reader's eye lands
-    # on the final call last.
-    if sig_comp.get("purity") is not None:
-        n = len(sig_comp.get("genes") or [])
-        rows.append(
-            (
-                "Tumor-specific signature",
-                float(sig_comp["purity"]),
-                _safe_float(sig_comp.get("lower")),
-                _safe_float(sig_comp.get("upper")),
-                "signature",
-                n,
-                " (deprioritized)" if signature_deprioritized else "",
-            )
-        )
-
-    # A lineage ratio against a tumor-only/deconvolved reference supports
-    # identity but cannot measure admixture. Only bulk-cohort-calibrated
-    # lineage estimates belong on this quantitative purity axis.
-    if bulk_reference and lin_comp.get("purity") is not None:
-        n = len(lin_comp.get("genes") or [])
-        rows.append(
-            (
-                "Lineage panel",
-                float(lin_comp["purity"]),
-                _safe_float(lin_comp.get("lower")),
-                _safe_float(lin_comp.get("upper")),
-                "lineage",
-                n,
-                "",
-            )
-        )
-
-    decomposition_component = comp.get("decomposition") or {}
-    residual_fraction = decomposition_component.get("residual_fraction")
-    if isinstance(residual_fraction, (int, float)):
-        rows.append(
-            (
-                "Background-residual fraction",
-                float(residual_fraction),
-                None,
-                None,
-                "decomposition",
-                0,
-                f" [{decomposition_component.get('mode', 'lineage-routed')}]",
-            )
-        )
-    elif decomposition_result is not None:
-        decomp_purity = getattr(decomposition_result, "purity", None)
-        warnings = list(getattr(decomposition_result, "warnings", None) or [])
-        if decomp_purity is not None and not any(
-            "No non-tumor" in str(warning) for warning in warnings
-        ):
-            rows.append(
-                (
-                    "Decomposition (NNLS)",
-                    float(decomp_purity),
-                    None,
-                    None,
-                    "decomposition",
-                    0,
-                    f" [{getattr(decomposition_result, 'cancer_type', '')} / "
-                    f"{getattr(decomposition_result, 'template', '')}]",
-                )
-            )
-
-    # Sentinel row used only as a visual separator between the direct-
-    # estimate block above and the enrichment-derived block below.
-    n_direct = len(rows)
-
-    if stromal_purity is not None:
-        n = (comp.get("stromal") or {}).get("n_genes", 0)
-        rows.append(
-            (
-                "ESTIMATE stromal (derived)",
-                stromal_purity,
-                None,
-                None,
-                "estimate",
-                n,
-                "",
-            )
-        )
-
-    if immune_purity is not None:
-        n = (comp.get("immune") or {}).get("n_genes", 0)
-        rows.append(
-            (
-                "ESTIMATE immune (derived)",
-                immune_purity,
-                None,
-                None,
-                "estimate",
-                n,
-                "",
-            )
-        )
-
-    if comp.get("estimate_purity") is not None:
-        rows.append(
-            (
-                "ESTIMATE combined (derived)",
-                float(comp["estimate_purity"]),
-                None,
-                None,
-                "estimate",
-                0,
-                "",
-            )
-        )
-
+    # Captions and this figure use the same frozen method evidence. The public
+    # standalone plot collects those rows from its explicit analytical input.
+    rows = list(report_view.purity.methods if report_view is not None else
+                purity_method_estimates(purity_result, decomposition_result))
+    n_direct = sum(row.family != "estimate" for row in rows)
     n_before_adopted = len(rows)
 
     # The final reference row is the sample's finalized headline —
@@ -2945,25 +2808,14 @@ def plot_purity_method_comparison(
         # This public plot also supports a standalone analytical mode. In that
         # mode all three values come from the same explicit purity result; they
         # are never mixed field-by-field with a partial ReportView.
-        overall = purity_result.get("overall_estimate")
-        overall_lower = purity_result.get("overall_lower")
-        overall_upper = purity_result.get("overall_upper")
+        overall = purity_fraction(purity_result.get("overall_estimate"))
+        overall_lower = purity_fraction(purity_result.get("overall_lower"))
+        overall_upper = purity_fraction(purity_result.get("overall_upper"))
     if overall is not None:
-        rows.append(
-            (
-                (
-                    "Operational scenario (not consensus)"
-                    if purity_is_unresolved
-                    else "Final estimate"
-                ),
-                float(overall),
-                _safe_float(overall_lower),
-                _safe_float(overall_upper),
-                "final",
-                0,
-                "",
-            )
-        )
+        rows.append(PurityMethodEstimate(
+            "Operational scenario (not consensus)" if purity_is_unresolved else "Final estimate",
+            float(overall), overall_lower, overall_upper, "final",
+        ))
 
     # Family → color
     family_color = {
@@ -3008,11 +2860,10 @@ def plot_purity_method_comparison(
 
     y_positions = list(range(len(rows)))
     y_labels = []
-    for y, (label, point, lower, upper, family, n_genes, note) in zip(
-        y_positions, rows
-    ):
-        color = family_color.get(family, "#555555")
-        point_pct = point * 100
+    for y, method in zip(y_positions, rows):
+        color = family_color.get(method.family, "#555555")
+        point_pct = method.estimate * 100
+        lower, upper = method.lower, method.upper
         # Error bar (if CI available)
         if lower is not None and upper is not None:
             ax.plot(
@@ -3045,8 +2896,8 @@ def plot_purity_method_comparison(
             color=color,
         )
         # Row label
-        gene_note = f" ({n_genes} genes)" if n_genes else ""
-        y_labels.append(f"{label}{gene_note}{note}")
+        gene_note = f" ({method.genes} genes)" if method.genes else ""
+        y_labels.append(f"{method.label}{gene_note}{method.note}")
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(y_labels, fontsize=10)
@@ -3094,13 +2945,6 @@ def plot_purity_method_comparison(
         fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
         print(f"Saved {save_to_filename}")
     return fig
-
-
-def _safe_float(x):
-    try:
-        return float(x) if x is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 # -------------------- tissue scoring --------------------

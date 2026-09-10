@@ -1,0 +1,33 @@
+{% macro pct(value) -%}{{ '%.0f%%' | format(value * 100) }}{%- endmacro %}
+**Estimated tumor fraction (RNA model):**
+{% if purity.estimate is none %}
+unavailable; no quantitative estimate was produced.
+{% elif purity.is_unresolved %}
+quantitatively unresolved; the selected model uses {{ pct(purity.estimate) }}{% if purity.lower is not none and purity.upper is not none %} (within-model interval {{ pct(purity.lower) }}–{{ pct(purity.upper) }}){% endif %} as an operating estimate.
+{% if purity.unresolved_reason == 'same_lineage_not_identifiable' %}
+Tumor and benign bone/mesenchymal cells share the modeled RNA programs, so their contributions cannot be cleanly separated from this bulk sample.
+{% else %}
+This is not a consensus estimate.
+{% set labels = {'background_residual': 'background-residual decomposition', 'lineage_panel': 'healthy-tissue lineage reference model', 'signature': 'upstream expression model'} %}
+{% if purity.scenarios %}Named scenarios:{% endif %}
+{% for source, estimate, lower, upper in purity.scenarios if estimate is not none %}
+{{ labels.get(source, source.replace('_', ' ')) | literal }}: {{ pct(estimate) }}{% if lower is not none and upper is not none %} [{{ pct(lower) }}–{{ pct(upper) }}]{% endif %}{% if not loop.last %};{% else %}.{% endif %}
+{% endfor %}
+{% endif %}
+{% else %}
+{{ pct(purity.estimate) }}{% if purity.lower is not none and purity.upper is not none %} (model interval {{ pct(purity.lower) }}–{{ pct(purity.upper) }}, {{ purity.confidence.tier }} confidence){% else %} (model interval unavailable; {{ purity.confidence.tier }} confidence){% endif %}.
+{% endif %}
+{% if purity.at_ceiling %}
+The estimate is at the model's upper boundary; it does not establish literal 100% tumor cellularity.
+{% endif %}
+{% if purity.methods | length == 1 %}
+Only one method estimate is available; agreement between methods cannot be assessed.
+{% elif purity.methods_exceed_interval %}
+Displayed method estimates span {{ pct(purity.method_range[0]) }}–{{ pct(purity.method_range[1]) }}; the selected model's interval does not cover that spread.
+{% endif %}
+{% if purity.confidence.tier == 'degenerate' and purity.estimate is not none and purity.lower is not none and purity.upper is not none %}
+The reported interval has no estimated spread; this does not establish precise tumor cellularity.
+{% endif %}
+{% if show_confidence_reasons | default(false) and purity.confidence.reasons %}
+Confidence basis: {{ purity.confidence.reasons | join('; ') | literal }}.
+{% endif %}

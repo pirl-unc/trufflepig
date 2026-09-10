@@ -1,0 +1,21 @@
+{% macro pct(value) -%}{{ '%.0f%%' | format(value * 100) }}{%- endmacro %}
+{% if not purity.methods %}
+No method-level estimates are available for comparison. The final value, when present, is the adopted report value and does not supply an additional method.
+{% elif purity.methods | length == 1 %}
+One RNA-derived method estimate is available; agreement between methods cannot be assessed.{% if purity.estimate is not none %} The final value is the adopted report estimate, not an additional method.{% endif %}
+{% else %}
+The {{ purity.methods | length }} displayed RNA-derived method estimates span {{ pct(purity.method_range[0]) }}–{{ pct(purity.method_range[1]) }}. These methods can share inputs; enrichment-derived estimates and the final adopted value are not independent measurements.
+{% endif %}
+{% if purity.is_unresolved %}
+{% if purity.unresolved_reason == 'same_lineage_not_identifiable' %}
+Tumor and benign same-lineage cells share the modeled RNA programs, leaving their separation quantitatively unresolved.
+{% else %}
+The supplied estimator scenarios are incompatible; the operating value is not a fused consensus estimate.
+{% endif %}
+{% endif %}
+{% if purity.methods_exceed_interval %}
+The interval attached to the selected model does not encompass the full spread between displayed methods.
+{% endif %}
+{% if purity.at_ceiling %}
+The final estimate reaches the model's upper boundary; this does not establish 100% tumor cellularity.
+{% endif %}
