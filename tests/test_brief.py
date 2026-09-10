@@ -444,15 +444,6 @@ def test_unresolved_purity_never_recommends_unconditional_tumor_attribution():
     assert "Prefer the tumor-attributed values" not in summary
 
 
-def test_purity_ceiling_limit_is_with_the_conclusion():
-    analysis = _make_analysis(purity_point=1.0, ci_low=0.83, ci_high=1.0)
-    summary = build_summary(analysis, _make_ranges_df(), cancer_code="PRAD", disease_state="")
-    conclusion = summary.split("## Therapy rationale and blockers")[0]
-    assert "100% (model interval 83%–100%" in conclusion
-    assert "model's upper boundary" in conclusion
-    assert "does not establish literal 100% tumor cellularity" in conclusion
-
-
 def test_summary_has_four_complete_sections():
     analysis = _make_analysis()
     ranges_df = _make_ranges_df()
@@ -507,7 +498,7 @@ def test_summary_surfaces_rna_qc_and_prad_stromal_pitfall():
     assert "RNA-inferred PRAD context rescue" in md
 
 
-def test_summary_explains_a_ceiling_purity_estimate():
+def test_summary_explains_a_ceiling_purity_estimate_in_the_conclusion():
     analysis = _make_analysis()
     analysis["purity"] = {
         "overall_estimate": 1.0,
@@ -523,8 +514,10 @@ def test_summary_explains_a_ceiling_purity_estimate():
         sample_id="sample_X",
     )
 
-    assert "**Estimated tumor fraction (RNA model):** 100%" in md
-    assert "Do not interpret this as literal 100% tumor cellularity" in md
+    conclusion = md.split("## Therapy rationale and blockers")[0]
+    assert "**Estimated tumor fraction (RNA model):** 100% (model interval 83%–100%" in conclusion
+    assert "model's upper boundary" in conclusion
+    assert "does not establish literal 100% tumor cellularity" in conclusion
 
 
 def test_summary_uses_generic_text_for_orphan_context_rescue():
