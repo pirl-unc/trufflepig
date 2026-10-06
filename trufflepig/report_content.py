@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 import hashlib
 import json
+import re
 
 from .report_language import markdown_url, report_literal, render_report_paragraph, render_report_template
 from .reporting import (
@@ -53,6 +54,40 @@ def therapy_assessment_id(row) -> str:
     """Stable identity for one complete curated row, including disease scope."""
     facts = {str(key): clean_therapy_value(value) for key, value in row.items()}
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def therapy_evidence_sources(row) -> list[dict[str, str]]:
+    """Retain curated citations, linking only recognized complete identifiers."""
+    label = clean_therapy_value(row.get("therapy_evidence_source"))
+    url = clean_therapy_value(row.get("therapy_evidence_url"))
+    if label or url:
+        return [{"label": label or "Source", "url": url}]
+    sources = []
+    for item in clean_therapy_value(row.get("source")).split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        pmid = re.fullmatch(r"PMID:\s*(\d+)", item, re.IGNORECASE)
+        if pmid:
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid.group(1)}/"
+        elif re.fullmatch(r"NCT\d{8}", item, re.IGNORECASE):
+            url = f"https://clinicaltrials.gov/study/{item.upper()}"
+        elif item.startswith(("https://", "http://")):
+            url = item
+        else:
+            url = ""
+        source = {"label": item, "url": url}
+        if source not in sources:
+            sources.append(source)
+    return sources
+
+
+def _evidence_source_cell(assessment) -> str:
+    return " · ".join(
+        f"[{report_literal(source['label'])}]({markdown_url(source['url'])})"
+        if source["url"] else report_literal(source["label"])
+        for source in assessment["sources"]
+    ) or "Not supplied"
 
 
 def assess_therapy(
@@ -113,6 +148,7 @@ def assess_therapy(
     caution = therapy_state_caution(row, analysis=analysis, disease_state=disease_state)
     if caution:
         rationale.append("Current-treatment context: " + caution.rstrip(". ") + ".")
+    sources = therapy_evidence_sources(row)
     return {
         "id": therapy_assessment_id(row),
         "identity": asdict(identity),
@@ -135,8 +171,9 @@ def assess_therapy(
             key: clean_therapy_value(row.get(key))
             for key in ("eligibility_note", "line_of_therapy", "treatment_path_tier", "rationale")
         },
-        "source": clean_therapy_value(row.get("therapy_evidence_source")),
-        "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
+        "sources": sources,
+        "source": "; ".join(source["label"] for source in sources),
+        "source_url": sources[0]["url"] if len(sources) == 1 else "",
     }
 
 
@@ -343,8 +380,7 @@ def build_report_content(
                     report_literal(a["target"]),
                     report_literal(a["agent"] + " · " + a["phase"]),
                     a["tumor_band"],
-                    f"[{report_literal(a['source'] or 'Source')}]({markdown_url(a['source_url'])})"
-                    if a["source_url"] else report_literal(a["source"] or "Not supplied"),
+                    _evidence_source_cell(a),
                 ]
                 for a in selected_assessments
             ],
@@ -512,9 +548,10 @@ def build_report_content(
                 for a in selected_assessments
             ],
             "sources": [
-                {"label": a["source"], "url": a["source_url"]}
+                source
                 for a in selected_assessments
-                if a["source_url"]
+                for source in a["sources"]
+                if source["url"]
             ],
         }
     return ReportContent(

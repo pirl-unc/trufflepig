@@ -484,6 +484,8 @@ def _current_therapy_row_overrides(target_row) -> dict:
     if cancer_code == "PRAD" and "ifinatamab deruxtecan" in agent:
         return {
             "phase": "phase_3",
+            "therapy_evidence_source": "IDeate-Prostate01 (NCT06925737)",
+            "therapy_evidence_url": "https://clinicaltrials.gov/study/NCT06925737",
             "treatment_path_tier": "late_clinical",
             "eligibility_note": (
                 "active phase 3 mCRPC program; trial eligibility, prior therapy, "
@@ -493,10 +495,14 @@ def _current_therapy_row_overrides(target_row) -> dict:
     if cancer_code == "PRAD" and "xaluritamig" in agent:
         return {
             "phase": "phase_3",
+            "therapy_evidence_source": "XALute (NCT06691984)",
+            "therapy_evidence_url": "https://clinicaltrials.gov/study/NCT06691984",
             "treatment_path_tier": "late_clinical",
             "eligibility_note": (
-                "phase 3 mCRPC program; verify cohort status, prior therapy, "
-                "and recruiting availability"
+                "phase 3 XALute (NCT06691984) was active but not recruiting "
+                "when checked on 2026-10-06; this is a development-program "
+                "direction, not an available enrollment slot; verify other "
+                "cohorts, prior therapy, and current site availability"
             ),
         }
     if cancer_code == "PRAD" and "bpx-601" in agent:
@@ -596,6 +602,7 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
                 "symbol": "",
                 "agent": "ZEN003694 + abemaciclib",
                 "phase": "phase_1",
+                "source": "NCT05372640",
                 "indication": "metastatic or unresectable NUT carcinoma",
                 "rationale": (
                     "recruiting NUT-carcinoma cohort in NCT05372640; dual BET "
