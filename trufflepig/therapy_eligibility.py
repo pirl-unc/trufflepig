@@ -201,8 +201,11 @@ def evaluate_therapy_eligibility(
         alleles = required_protein_changes_for_therapy(target_row)
         if alleles:
             label = gene + " " + " or ".join(alleles)
-        elif gene and biomarker in {"mutation", "wildtype", "clinical_target_assay"}:
+        elif gene and biomarker == "mutation":
             label = gene + " " + label
+        # A drug's expression target is not necessarily its eligibility marker:
+        # anti-EGFR therapy needs RAS wild-type status, and a TROP2-directed ADC
+        # can require clinical ER/HER2 context without a TROP2 companion assay.
         note = clean_therapy_value(target_row.get("eligibility_note"))
         accepted = {
             "mutation": ("clinical variant report", "normalized variant table", "--variants"),
