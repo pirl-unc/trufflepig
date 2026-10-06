@@ -1970,9 +1970,9 @@ def mismatch_repair_rna_state(analysis: dict) -> str:
 
 
 # MLH1 at/above this fraction of the cohort-typical (median tumor) MLH1 counts as
-# "retained" (not promoter-silenced): sporadic-MSI silencing collapses MLH1 to a small
-# fraction of the cohort median (measured ~0.2-0.3x in COAD/READ MSI), so half-of-median
-# cleanly separates retained (~1x) from silenced. Within-sample rank cannot see this —
+# "retained" RNA. This is an expression-context threshold, not a methylation or
+# protein-function assay; background cells can contribute bulk MLH1 RNA.
+# Within-sample rank cannot see cohort-relative expression loss —
 # MLH1 is moderately expressed, so a silenced MLH1 still sits above the sample median.
 _MLH1_RETAINED_COHORT_RATIO = 0.5
 
@@ -1980,9 +1980,10 @@ _MLH1_RETAINED_COHORT_RATIO = 0.5
 def _mlh1_msi_tension_clause(mmr: dict) -> str:
     """Flag the tension when the ensemble calls MSI-like yet MLH1 mRNA is retained.
 
-    MLH1-promoter silencing (the dominant sporadic-MSI mechanism) depresses MLH1
-    mRNA; retained MLH1 therefore argues against that mechanism but does not exclude
-    MSI arising from MSH2/MSH6/PMS2 loss or POLE proofreading mutation. Retention is
+    Retained bulk MLH1 does not establish tumor MMR function: other MMR defects
+    need not lower MLH1 RNA, and non-tumor cells may contribute the signal.
+    POLE proofreading defects can cause hypermutation without MSI (PMID:28404093)
+    and must not be narrated as an inferred MSI mechanism. Retention is
     judged against the cohort-typical MLH1 (``cohort_ratio``, added in
     ``cancer_type_evidence``); absent that ratio the clause does not fire.
     """
@@ -1997,10 +1998,11 @@ def _mlh1_msi_tension_clause(mmr: dict) -> str:
     tpm = mlh1.get("tpm")
     tpm_clause = f"{tpm:.0f} TPM, " if isinstance(tpm, (int, float)) else ""
     return (
-        f" However, MLH1 mRNA is retained ({tpm_clause}{round(ratio * 100)}% of the "
-        "cohort-typical level), which argues against MLH1-promoter silencing as the "
-        "mechanism; MSI driven by MSH2/MSH6/PMS2 loss or POLE proofreading mutation "
-        "would not depress MLH1, so retained MLH1 does not exclude MSI."
+        f" However, bulk MLH1 mRNA is retained ({tpm_clause}{round(ratio * 100)}% of the "
+        "cohort-typical level), so this profile does not show an MLH1-low RNA pattern. "
+        "Other MMR defects can leave MLH1 expression intact, and background cells "
+        "can contribute MLH1 RNA; retained bulk expression does not exclude MSI "
+        "or tumor-specific MLH1 loss."
     )
 
 
