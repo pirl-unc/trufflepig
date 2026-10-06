@@ -671,10 +671,10 @@ def _mlh1_retention_context(
 ) -> dict[str, float] | None:
     """The sample's raw MLH1 clean-TPM (retention is judged cohort-relative downstream).
 
-    MLH1 promoter hypermethylation — the dominant sporadic-MSI mechanism — silences
-    MLH1 to a small fraction of its normal level, so retained MLH1 argues *against* that
-    mechanism (MSI driven by MSH2/MSH6/PMS2 loss or POLE proofreading mutation leaves
-    MLH1 expressed). MLH1 is a moderately-expressed gene, so *within-sample* rank cannot
+    MLH1 promoter hypermethylation can reduce tumor MLH1 expression, but retained
+    bulk RNA does not exclude tumor-specific loss or other MMR defects. POLE-related
+    hypermutation is distinct from MSI. MLH1 is a moderately-expressed gene, so
+    *within-sample* rank cannot
     see the silencing (a silenced MLH1 still sits above the sample median); whether it is
     retained or silenced is only visible relative to the cohort-typical MLH1, which is
     added where the reference cohort is in scope (``cancer_type_evidence``). Here we only
