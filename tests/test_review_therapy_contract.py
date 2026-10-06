@@ -139,6 +139,18 @@ def test_updated_trial_source_takes_precedence_over_older_phase_citation():
     }]
 
 
+def test_therapy_curation_error_cannot_restore_unfiltered_rows(monkeypatch):
+    from trufflepig import reporting
+
+    def invalid_correction(row):
+        raise ValueError("invalid curation")
+
+    monkeypatch.setattr(reporting, "_current_therapy_row_overrides", invalid_correction)
+    rows = pd.DataFrame([{"cancer_code": "COAD", "symbol": "KRAS", "agent": "sotorasib"}])
+    with pytest.raises(ValueError, match="invalid curation"):
+        reporting.filter_current_therapy_targets(rows)
+
+
 @pytest.mark.parametrize("code,extra", [
     ("SARC_OS", {}),
     ("NUTM", {}),

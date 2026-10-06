@@ -41,6 +41,8 @@ does not confirm that assay or override conflicting molecular evidence. A known 
 a request for new typing. A missing disease subtype remains an information
 request and prevents selection; it is not a known clinical exclusion. A matching
 drug-target variant does not establish the required histologic subtype.
+Curation errors stop therapy filtering instead of restoring withdrawn or
+diagnostic-only rows. Mixed text and boolean corrections retain their types.
 An explicitly contraindicated component blocks its
 containing regimen. Requests on an already excluded treatment remain in the audit
 assessment without generating a new testing task. Sharing a request does not
