@@ -766,24 +766,26 @@ def therapy_withdrawal_note(target_row) -> str:
 
 def filter_current_therapy_targets(targets_df):
     """Drop stale rows and apply verified current-status report corrections."""
+    import pandas as pd
+
     if targets_df is None:
         return None
-    try:
-        if len(targets_df) == 0:
-            return targets_df.reset_index(drop=True)
-        keep = [
-            not therapy_filter_note(row)
-            for row in targets_df.to_dict("records")
-        ]
-        current = targets_df.loc[keep].copy().reset_index(drop=True)
-        for index, row in current.iterrows():
-            for column, value in _current_therapy_row_overrides(row).items():
-                if column not in current.columns:
-                    current[column] = ""
-                current.at[index, column] = value
-        return current
-    except Exception:
-        return targets_df
+    if len(targets_df) == 0:
+        return targets_df.reset_index(drop=True)
+    keep = [
+        not therapy_filter_note(row)
+        for row in targets_df.to_dict("records")
+    ]
+    current = targets_df.loc[keep].copy().reset_index(drop=True)
+    for index, row in current.iterrows():
+        for column, value in _current_therapy_row_overrides(row).items():
+            if column not in current.columns:
+                # Corrections contain both text and boolean clinical gates.
+                current[column] = pd.Series(None, index=current.index, dtype=object)
+            elif not pd.api.types.is_object_dtype(current[column].dtype):
+                current[column] = current[column].astype(object)
+            current.at[index, column] = value
+    return current
 
 
 @lru_cache(maxsize=1)
