@@ -286,7 +286,7 @@ def _training_matrices():
         return None
 
     try:
-        frames, labels, base = [], [], None
+        frames, label_by_column, base = [], {}, None
         for code in sorted(available_representative_cohorts()):
             d = (
                 representative_cohort_samples(code)
@@ -297,13 +297,18 @@ def _training_matrices():
             if base is None:
                 base = d[["Symbol"]].copy()
             frames.append(d[cols])
-            labels += [code] * len(cols)
-        expr = pd.concat(frames, axis=1).dropna(how="any")
+            label_by_column.update({str(column): code for column in cols})
+        expr = pd.concat(frames, axis=1)
         gt = pd.DataFrame(
             {"Ensembl_Gene_ID": expr.index, "Symbol": base["Symbol"].reindex(expr.index).values}
         )
         clean = clean_tpm(expr.astype(float), gene_table=gt)
-        clean.index = base["Symbol"].reindex(expr.index).values
+        # Normalize each sample on its complete measured gene universe before
+        # intersecting cohorts. Dropping cross-cohort missing rows first changes
+        # each column's denominator and makes a representative differ from the
+        # same sample normalized on its own.
+        clean = clean.dropna(how="any")
+        clean.index = base["Symbol"].reindex(clean.index).values
         clean = clean[~clean.index.duplicated(keep="first")]
         logc = np.log1p(clean.clip(lower=0))
         raw_variance = logc.var(axis=1)
@@ -333,7 +338,9 @@ def _training_matrices():
             neginf=0.0,
         )
         rank_universe = list(ranked.index)
-        y = np.asarray(labels)
+        # Normalization may reorder sample columns. Bind the class to each
+        # named column instead of assuming the cohort-loop order survived.
+        y = np.asarray([label_by_column[str(column)] for column in clean.columns])
         return (raw_x, y, raw_genes), (
             rank_x,
             y,
@@ -370,7 +377,7 @@ def _mismatch_repair_training_matrix():
         return None
 
     try:
-        frames, labels, cohort_labels, base = [], [], [], None
+        frames, state_by_column, cohort_by_column, base = [], {}, {}, None
         cohorts_by_state: dict[str, list[str]] = {"MSI": [], "MSS": []}
         for code in sorted(available_representative_cohorts()):
             state = _mismatch_repair_state_for_code(code)
@@ -387,12 +394,12 @@ def _mismatch_repair_training_matrix():
             if base is None:
                 base = d[["Symbol"]].copy()
             frames.append(d[cols])
-            labels += [state] * len(cols)
-            cohort_labels += [code] * len(cols)
+            state_by_column.update({str(column): state for column in cols})
+            cohort_by_column.update({str(column): code for column in cols})
             cohorts_by_state[state].append(code)
-        if not frames or len(set(labels)) < 2 or base is None:
+        if not frames or len(set(state_by_column.values())) < 2 or base is None:
             return None
-        expr = pd.concat(frames, axis=1).dropna(how="any")
+        expr = pd.concat(frames, axis=1)
         if expr.empty:
             return None
         gt = pd.DataFrame(
@@ -402,7 +409,10 @@ def _mismatch_repair_training_matrix():
             }
         )
         clean = clean_tpm(expr.astype(float), gene_table=gt)
-        clean.index = base["Symbol"].reindex(expr.index).values
+        # Preserve the per-sample clean-TPM denominator; intersect cohort gene
+        # universes only after normalization (see `_training_matrices`).
+        clean = clean.dropna(how="any")
+        clean.index = base["Symbol"].reindex(clean.index).values
         clean = clean[~clean.index.duplicated(keep="first")]
         logc = np.log1p(clean.clip(lower=0))
         var = logc.var(axis=1)
@@ -413,11 +423,17 @@ def _mismatch_repair_training_matrix():
             posinf=0.0,
             neginf=0.0,
         )
-        y = np.asarray(labels)
+        # ``clean_tpm`` is free to reorder columns. Rebuild labels from the
+        # normalized column names so every feature row keeps its true state
+        # and source-cohort identity.
+        y = np.asarray([state_by_column[str(column)] for column in clean.columns])
+        cohort_labels = tuple(
+            cohort_by_column[str(column)] for column in clean.columns
+        )
         cohorts = tuple(
             sorted({code for codes in cohorts_by_state.values() for code in codes})
         )
-        return X, y, genes, cohorts, tuple(cohort_labels)
+        return X, y, genes, cohorts, cohort_labels
     except _EXPECTED_OPTIONAL_MODEL_ERRORS:
         return None
 
