@@ -68,6 +68,10 @@ requirements, treatment history and figures. It does not recover clinical meanin
 from generated Markdown. Older schema-1 reports must be regenerated before using
 the new PDF renderer. PDFs use native text, clickable source links, automatic
 pagination and packaged Unicode fonts; no fixed line count truncates a rationale.
+The therapy table preserves upstream PMID and trial citations when no newer
+report-layer source is supplied. Each citation keeps its own link. Current trial
+references support development phase without implying an available enrollment
+slot; recruitment and protocol eligibility remain explicit follow-up questions.
 
 The detailed analysis and evidence tables retain broader curation and source
 attribution. They refer to the summary's consolidated information list. Figures

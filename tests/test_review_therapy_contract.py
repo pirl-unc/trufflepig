@@ -4,7 +4,9 @@ import pandas as pd
 import pytest
 
 from trufflepig.brief import recommend_therapies
-from trufflepig.report_content import assess_therapy, build_report_content, render_report_summary
+from trufflepig.report_content import (
+    assess_therapy, build_report_content, render_report_summary, therapy_evidence_sources,
+)
 from trufflepig.report_language import report_literal, report_plain_text, render_report_template
 from trufflepig.report_view import build_report_view
 from trufflepig.reporting import cancer_therapy_panel_for_analysis, supplied_variant_supports_target_row
@@ -14,7 +16,7 @@ from trufflepig.variants import parse_variant_file
 
 def panel_row(code, agent, analysis=None):
     _, subtype, panel = cancer_therapy_panel_for_analysis(code, analysis or {"cancer_type": code})
-    return subtype, next(row for row in panel.to_dict("records") if agent in row["agent"])
+    return subtype, next(row for row in panel.to_dict("records") if agent in str(row["agent"]))
 
 
 def test_parsed_protein_substitutions_satisfy_their_exact_therapy_gate(tmp_path):
@@ -99,23 +101,55 @@ def test_table_blocks_are_contiguous_markdown():
     assert lines[header + 1:header + 4] == ["| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"]
 
 
-def test_selected_therapy_table_and_sources_are_in_the_authored_report(tmp_path):
+def test_curated_sources_keep_each_citation_and_unknown_provenance():
+    row = {"source": "PMID:26286086; PMID:30255937; NCT05372640; source & note"}
+    sources = therapy_evidence_sources(row)
+    assert [s["url"] for s in sources] == [
+        "https://pubmed.ncbi.nlm.nih.gov/26286086/",
+        "https://pubmed.ncbi.nlm.nih.gov/30255937/",
+        "https://clinicaltrials.gov/study/NCT05372640", "",
+    ]
+    assessment = assess_therapy(row)
+    assert assessment["sources"] == sources
+    assert assessment["source_url"] == ""
+    assert "source & note" in assessment["source"]
+
+
+def test_updated_trial_source_takes_precedence_over_older_phase_citation():
+    _, row = panel_row("PRAD", "ifinatamab deruxtecan")
+    assert therapy_evidence_sources(row) == [{
+        "label": "IDeate-Prostate01 (NCT06925737)",
+        "url": "https://clinicaltrials.gov/study/NCT06925737",
+    }]
+
+
+@pytest.mark.parametrize("code,extra", [
+    ("SARC_OS", {}),
+    ("NUTM", {}),
+    ("SARC", {"variant_records": [
+        {"gene": "EGFR", "variant": "EGFR kinase domain duplication", "variant_type": "mutation"},
+    ]}),
+])
+def test_selected_therapy_table_and_sources_are_in_the_authored_report(tmp_path, code, extra):
     from pypdf import PdfReader
     from trufflepig.report_document import write_report_document
     from trufflepig.report_pdf import build_interpretive_report_pdf
 
-    analysis = {"cancer_type": "SARC_OS", "sample_mode": "solid", "purity": {}}
+    analysis = {"cancer_type": code, "sample_mode": "solid", "purity": {}, **extra}
     view = build_report_view(analysis, sample_id="cited-therapies")
-    content = build_report_content(analysis, pd.DataFrame(), "SARC_OS", "", report_view=view)
+    content = build_report_content(analysis, pd.DataFrame(), code, "", report_view=view)
     selected = [a for a in content.therapy_assessments if a["selected"]]
     assert selected
     summary = render_report_summary(content)
     assert "| Target | Recommendation |" in summary
     for assessment in selected:
-        assert assessment["source_url"] in summary
+        assert assessment["sources"]
+        for source in assessment["sources"]:
+            assert source["url"] in summary
     write_report_document(tmp_path, "cited-therapies", report_view=view, content=content)
     (tmp_path / "cited-therapies-summary.md").write_text(summary)
     pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
     text = " ".join(page.extract_text() for page in pdf.pages)
     assert "Evidence source" in text
     assert all(a["agent"] in text for a in selected)
+    assert all(source["label"] in text for a in selected for source in a["sources"])
