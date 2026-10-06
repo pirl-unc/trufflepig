@@ -12,6 +12,17 @@ import re
 from jinja2 import Environment, PackageLoader, StrictUndefined
 
 
+def report_literal(value: object) -> str:
+    """Quote supplied text as literal inline Markdown, including table pipes."""
+    text = " ".join(str(value).split())
+    return re.sub(r"([\\`*_{}\[\]()#+!|<>&])", r"\\\1", text)
+
+
+def markdown_url(url: object) -> str:
+    """A URL safe to place in a Markdown link target."""
+    return str(url or "").strip().replace(" ", "%20").replace("(", "%28").replace(")", "%29")
+
+
 _ENVIRONMENT = Environment(
     loader=PackageLoader("trufflepig", "report_templates"),
     undefined=StrictUndefined,
@@ -19,6 +30,7 @@ _ENVIRONMENT = Environment(
     trim_blocks=False,
     lstrip_blocks=True,
 )
+_ENVIRONMENT.filters["literal"] = report_literal
 
 
 def render_report_template(name: str, **facts: object) -> str:
