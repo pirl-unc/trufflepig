@@ -774,3 +774,41 @@ def test_legacy_alteration_parser_is_a_narrow_variant_alias():
     assert record.variant_type == "kdd"
     assert record.alteration == record.variant
     assert record.alteration_type == record.variant_type
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("KRAS p.G12C", "mutation"),
+        ("BRAF V600E", "mutation"),
+        ("KRAS G12C", "mutation"),
+        ("TP53 R175H", "mutation"),
+        ("missense mutation", "mutation"),
+        ("BRCA2 c.5946delT", "mutation"),
+        ("BRCA1 p.S1982fs", "mutation"),
+        ("C4A", "unknown"),
+        ("B2M", "unknown"),
+        ("NKX2-1", "unknown"),
+        ("MSI-H / dMMR", "unknown"),
+    ],
+)
+def test_real_allele_strings_classify_as_mutations_but_gene_symbols_do_not(text, expected):
+    assert classify_variant_type(text) == expected
+
+
+@pytest.mark.parametrize(
+    "value, gene, expected",
+    [
+        ("KRAS-G12C", "KRAS", "G12C"),
+        ("KRAS_G12C", "KRAS", "G12C"),
+        ("P.G12C", "KRAS", "G12C"),
+        ("g12c", "KRAS", "G12C"),
+        ("p.Arg213Ter", "", "R213*"),
+        ("p.Ter600Gly", "", ""),
+        ("p.*600G", "", ""),
+    ],
+)
+def test_protein_substitution_spellings_and_stop_codons(value, gene, expected):
+    from trufflepig.variants import normalize_protein_substitution
+
+    assert normalize_protein_substitution(value, gene=gene) == expected

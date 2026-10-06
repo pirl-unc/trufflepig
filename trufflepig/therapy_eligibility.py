@@ -94,7 +94,14 @@ def therapy_row_in_scope(target_row, analysis, panel_subtype=None) -> bool:
     indication = clean_therapy_value(target_row.get("indication"))
     if re.search(r"\bSTS\b|\bsoft[- ]tissue sarcomas?\b", indication, re.I):
         return True
-    return bool(supplied_variant_supports_target_row(target_row, analysis))
+    # A matching drug-target alteration cannot establish GIST, liposarcoma or
+    # another histologic subtype. Curated tumor-agnostic and kinase-driven
+    # sarcoma paths can instead be supported by their molecular requirement.
+    molecular_scope = (
+        re.search(r"tumou?r[- ]agnostic|\bsolid tumou?rs?\b", indication, re.I)
+        or subtype == "kinase_driven_sarcoma"
+    )
+    return bool(molecular_scope and supplied_variant_supports_target_row(target_row, analysis))
 
 
 def clean_therapy_value(value) -> str:
@@ -156,8 +163,11 @@ def evaluate_therapy_eligibility(
             EvidenceRequirement(
                 "disease_scope",
                 "scope",
-                "blocked",
+                "missing",
                 "The required disease subtype has not been established for this report.",
+                "Establish the disease subtype required by this indication: "
+                + clean_therapy_value(target_row.get("indication")) + ".",
+                ("pathology report", "disease-defining molecular result"),
             )
         )
 

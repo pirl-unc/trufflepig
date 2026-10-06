@@ -1124,6 +1124,26 @@ _WILDTYPE_INDICATION = re.compile(
     r"\b(?:wild[- ]?type|ras[- ]?wt|ras\s+wt)\b",
     re.IGNORECASE,
 )
+# Supplied alteration classes a molecular therapy requirement can accept.
+_SEQUENCE_VARIANT_TYPES = frozenset({"mutation", "loss", "kdd", "internal_tandem_duplication"})
+_MOLECULAR_VARIANT_TYPES = _SEQUENCE_VARIANT_TYPES | {"fusion", "amplification"}
+_STRUCTURAL_VARIANT_TYPES = _MOLECULAR_VARIANT_TYPES - {"mutation"}
+# An indication naming a mutation rather than any alteration of the gene.
+_MUTATION_SPECIFIC_ROW_TEXT = re.compile(
+    r"\bmut(?:ant|ated|ation|ations)?\b|\bexon\s*\d+\b|\b[a-z]\d{2,4}[a-z]\b|\bv600[a-z]?\b",
+    re.IGNORECASE,
+)
+_NAMED_EXON_EVENT = re.compile(r"\bexon\s*(\d+)\b", re.IGNORECASE)
+_NAMED_PROTEIN_CHANGE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][a-z]{2}|[A-Za-z])[1-9]\d+"
+    r"(?:[A-Z][a-z]{2}|[A-Za-z*])(?![A-Za-z0-9])"
+)
+_NAMED_EXON_QUALIFIERS = {
+    "skipping": re.compile(r"\bskip(?:ping|ped)?\b", re.IGNORECASE),
+    "insertion": re.compile(r"\bins(?:ert(?:ion|ed)?)?\b", re.IGNORECASE),
+    "deletion": re.compile(r"\bdel(?:et(?:ion|ed)?)?\b", re.IGNORECASE),
+}
+_BROAD_ALTERATION_TEXT = re.compile(r"\b(?:alteration|altered)\b", re.IGNORECASE)
 _MSI_HIGH_INDICATION = re.compile(
     r"\b(msi[- ]?h|msi[- ]?high|dmmr|deficient\s+mmr|mismatch\s+repair\s+deficien)",
     re.IGNORECASE,
@@ -1396,6 +1416,58 @@ def required_protein_changes_for_therapy(target_row) -> tuple[str, ...]:
     return ()
 
 
+def _protein_changes_in_text(text: str, gene: str) -> set[str]:
+    """Exact protein substitutions named in curated or observed event text."""
+    from .variants import normalize_protein_substitution
+
+    return {
+        normalized
+        for match in _NAMED_PROTEIN_CHANGE.finditer(text)
+        if (normalized := normalize_protein_substitution(match.group(0), gene=gene))
+    }
+
+
+def _matching_named_mutation_events(
+    requirement_text: str, records: list[dict], gene: str
+) -> list[dict] | None:
+    """Match a named exon/protein event, or return ``None`` when none is named.
+
+    A same-gene coarse variant class cannot establish a specifically named
+    event. Exact genomic splice variants that do not state the resulting exon
+    event therefore remain unresolved, which is safer than inferring it here.
+    """
+    required_exons = set(_NAMED_EXON_EVENT.findall(requirement_text))
+    required_proteins = _protein_changes_in_text(requirement_text, gene)
+    if not required_exons and not required_proteins:
+        return None
+    required_qualifiers = {
+        name
+        for name, pattern in _NAMED_EXON_QUALIFIERS.items()
+        if pattern.search(requirement_text)
+    }
+    matched = []
+    for record in records:
+        observed = " ".join(
+            _clean_text(record.get(key))
+            for key in ("variant", "raw_name")
+        )
+        if required_exons and not required_exons.intersection(
+            _NAMED_EXON_EVENT.findall(observed)
+        ):
+            continue
+        if required_qualifiers and not all(
+            _NAMED_EXON_QUALIFIERS[name].search(observed)
+            for name in required_qualifiers
+        ):
+            continue
+        if required_proteins and not required_proteins.intersection(
+            _protein_changes_in_text(observed, gene)
+        ):
+            continue
+        matched.append(record)
+    return matched
+
+
 def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     """Return supplied variants compatible with a therapy row.
 
@@ -1439,7 +1511,17 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
     elif indication_biomarker(target_row) == "mutation":
-        required_types.add("mutation")
+        named_matches = _matching_named_mutation_events(text, records, sym)
+        if named_matches is not None:
+            return [record for record in named_matches
+                    if (_clean_text(record.get("variant_type")).lower() == "mutation"
+                        or classify_variant_type(record.get("variant")) == "mutation"
+                        and _clean_text(record.get("variant_type")).lower() in {"", "unknown"})]
+        required_types.update(
+            {"mutation", "fusion", "amplification"}
+            if _BROAD_ALTERATION_TEXT.search(text)
+            else {"mutation"}
+        )
     if not required_types:
         return []
     supported: list[dict] = []
@@ -1470,6 +1552,13 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     if not hasattr(target_row, "get"):
         return False
     if required_protein_changes_for_therapy(target_row):
+        return True
+    indication = _clean_text(target_row.get("indication"))
+    if indication_biomarker(target_row) == "mutation" and (
+        _MUTATION_INDICATION.search(indication) or _MUTATION_SPECIFIC_ROW_TEXT.search(indication)
+    ):
+        # The named molecular indication needs evidence even when the upstream
+        # row omits its gate flag. RNA abundance cannot establish the alteration.
         return True
     if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
         # Pirlygenes therapy tables retain this legacy column.

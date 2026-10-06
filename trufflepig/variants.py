@@ -107,28 +107,38 @@ _AMINO_ACID_CODES = dict(zip(
 ))
 
 
+def _residue_code(token: str) -> str:
+    """One-letter residue code for a one- or three-letter token, or empty."""
+    if len(token) == 3:
+        return _AMINO_ACID_CODES.get(token.capitalize(), "")
+    code = token.upper()
+    return code if code in _AMINO_ACID_CODES.values() else ""
+
+
 def normalize_protein_substitution(value: object, *, gene: str = "") -> str:
     """Canonical one-letter substitution, or empty for imprecise/non-protein input.
 
-    Accept an exact HGVS protein substitution (optionally prefixed by the
-    stated gene). Do not extract an allele from prose,
-    a nucleotide coordinate, an ambiguity list, or another gene's assertion.
+    Accept an exact HGVS protein substitution in one- or three-letter codes,
+    case-insensitively, optionally prefixed by the stated gene and a space,
+    ``:``, ``-`` or ``_``. Do not extract an allele from prose, a nucleotide
+    coordinate, an ambiguity list, or another gene's assertion. A stop codon is
+    accepted only as the new residue; a stop-loss call is not a substitution.
     """
     text = str(value or "").strip()
     if gene:
-        text = re.sub(rf"^{re.escape(gene)}(?:\s+|:)", "", text, flags=re.I).strip()
-    text = re.sub(r"^p\.", "", text)
+        text = re.sub(rf"^{re.escape(gene)}[\s:_-]+", "", text, flags=re.I).strip()
+    text = re.sub(r"^p\.", "", text, flags=re.I)
     if text.startswith("(") or text.endswith(")"):
         if not (text.startswith("(") and text.endswith(")")):
             return ""
         text = text[1:-1]
-    match = re.fullmatch(r"([A-Z][a-z]{2}|[A-Z*])([1-9]\d*)([A-Z][a-z]{2}|[A-Z*])", text)
+    match = re.fullmatch(r"([A-Za-z]{3}|[A-Za-z])([1-9]\d*)([A-Za-z]{3}|[A-Za-z*])", text)
     if match is None:
         return ""
-    before, position, after = match.groups()
-    before = _AMINO_ACID_CODES.get(before, before)
-    after = _AMINO_ACID_CODES.get(after, after)
-    if before not in _AMINO_ACID_CODES.values() or after not in _AMINO_ACID_CODES.values():
+    before_token, position, after_token = match.groups()
+    before = _residue_code(before_token)
+    after = _residue_code(after_token)
+    if not before or before == "*" or not after:
         return ""
     return f"{before}{position}{after}"
 
@@ -1199,6 +1209,15 @@ def _support_from_row(row) -> dict[str, float]:
     return support
 
 
+# HGVS coding, genomic or protein notation such as c.34G>T, p.(G12C) or p.S1982fs.
+_HGVS_VARIANT_RE = re.compile(r"(?:^|[\s:(\[,;])[cgp]\.\(?[A-Za-z*]*\d", re.IGNORECASE)
+# A bare protein substitution token such as G12C or Val600Glu. The multi-digit
+# position keeps gene symbols such as C4A or B2M from reading as substitutions.
+_BARE_PROTEIN_SUBSTITUTION_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][a-z]{2}|[A-Za-z])[1-9]\d+(?:[A-Z][a-z]{2}|[A-Za-z*])(?![A-Za-z0-9])"
+)
+
+
 def classify_variant_type(text: object) -> str:
     """Return a coarse variant class from loose text."""
     low = str(text or "").lower()
@@ -1212,7 +1231,15 @@ def classify_variant_type(text: object) -> str:
         return "amplification"
     if re.search(r"\b(loss|deletion|deleted|homozygous\s+del|copy\s*number\s*loss)\b", low):
         return "loss"
-    if re.search(r"\b(v600|g12|g13|q61|l858r|t790m|exon\s*\d+|mutat|snv|indel|variant)\b", low):
+    if re.search(r"\b(?:mutat\w*|mutant|snv|indel|variant|missense|nonsense|frameshift)\b", low):
+        return "mutation"
+    if re.search(r"\b(?:v600|g12|g13|q61)[a-z]?\b|\b(?:l858r|t790m)\b|\bexon\s*\d+\b", low):
+        return "mutation"
+    raw = str(text or "")
+    if _HGVS_VARIANT_RE.search(raw) or any(
+        normalize_protein_substitution(match.group(0))
+        for match in _BARE_PROTEIN_SUBSTITUTION_RE.finditer(raw)
+    ):
         return "mutation"
     return "unknown"
 

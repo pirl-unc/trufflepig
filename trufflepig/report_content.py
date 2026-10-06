@@ -7,7 +7,7 @@ from typing import Any
 import hashlib
 import json
 
-from .report_language import render_report_paragraph, render_report_template
+from .report_language import markdown_url, report_literal, render_report_paragraph, render_report_template
 from .reporting import (
     canonical_target_symbol,
     clinical_maturity_summary,
@@ -348,6 +348,22 @@ def build_report_content(
     if spindle_guidance:
         therapies.append(paragraph(spindle_guidance["therapy"]))
 
+    if selected_assessments:
+        therapies.append({
+            "kind": "table",
+            "headers": ["Target", "Recommendation", "Estimated tumor TPM (RNA model)", "Evidence source"],
+            "rows": [
+                [
+                    report_literal(a["target"]),
+                    report_literal(a["agent"] + " · " + a["phase"]),
+                    a["tumor_band"],
+                    f"[{report_literal(a['source'] or 'Source')}]({markdown_url(a['source_url'])})"
+                    if a["source_url"] else report_literal(a["source"] or "Not supplied"),
+                ]
+                for a in selected_assessments
+            ],
+        })
+
     for index, assessment in enumerate(selected_assessments, 1):
         therapies.append(
             {"kind": "heading", "text": f"{index}. {assessment['agent']} · {assessment['phase']}"}
@@ -363,7 +379,16 @@ def build_report_content(
         )
         therapies.extend(paragraph(text) for text in assessment["rationale"])
     if not selected_assessments:
-        therapies.append(paragraph(_empty_therapy_shortlist_message(panel, ranges_df)))
+        unmet = any(
+            r["status"] in {"blocked", "missing", "unresolved"}
+            for a in assessments for r in a["eligibility"]["requirements"]
+        )
+        therapies.append(paragraph(
+            "No therapy meets the current shortlisting criteria. Clinical blockers and "
+            "unresolved eligibility requirements are detailed below; RNA evidence alone "
+            "cannot resolve those requirements."
+            if unmet else _empty_therapy_shortlist_message(panel, ranges_df)
+        ))
     blocked = [
         a
         for a in assessments

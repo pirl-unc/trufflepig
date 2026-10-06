@@ -6,8 +6,9 @@ its sections in the same order:
 
 1. **Conclusion and supporting evidence:** disease call, confidence, competing
    evidence, tumor-fraction uncertainty and specimen context.
-2. **Therapy rationale and blockers:** ranked candidates with patient and
-   population evidence; known exclusions and treatments awaiting eligibility.
+2. **Therapy rationale and blockers:** a cited table of ranked candidates,
+   followed by patient and population evidence, known exclusions and treatments
+   awaiting eligibility.
 3. **Information needed:** one list grouped by evidence requirement, retaining
    every affected therapy and the specific results needed.
 4. **Detailed evidence and figures:** supplied history, attribution explanations,
@@ -37,7 +38,10 @@ nomenclature boundary as other HLA operations.
 Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
 `blocked`. Prior benefit can support review while an assay remains missing; it
 does not confirm that assay or override conflicting molecular evidence. A known HLA mismatch or exclusion remains a blocker; it does not become
-a request for new typing. An explicitly contraindicated component blocks its
+a request for new typing. A missing disease subtype remains an information
+request and prevents selection; it is not a known clinical exclusion. A matching
+drug-target variant does not establish the required histologic subtype.
+An explicitly contraindicated component blocks its
 containing regimen. Requests on an already excluded treatment remain in the audit
 assessment without generating a new testing task. Sharing a request does not
 merge different treatments or erase different assay requirements. Overlapping
@@ -47,7 +51,12 @@ use this same collector.
 
 RNA abundance does not establish a mutation. Exact protein requirements on the
 covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,
-a nucleotide-only assertion and an unrelated variant file. These rules do not
+a nucleotide-only assertion and an unrelated variant file. Parsed protein
+substitutions retain their sequence-variant identity. A named molecular
+indication requires that evidence even when upstream curation omits its gate
+flag; MET exon 14 skipping, for example, cannot be satisfied by another MET
+mutation or amplification. Broad altered-gene indications can accept compatible
+fusions. These rules do not
 constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
 remains context for confirmation. [Clinical MSI/MMR input](clinical-context.md)
 can satisfy the corresponding biomarker gate; RNA alone cannot. VCF/MAF adapters remain tracked in #140/#141. The
