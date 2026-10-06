@@ -63,6 +63,22 @@ def test_mutation_specific_indication_requires_evidence_even_without_upstream_ga
     assert not recommend_therapies(pd.DataFrame([row]), pd.DataFrame(), analysis=analysis)
 
 
+@pytest.mark.parametrize("code,agent,target,required_context", [
+    ("COAD", "cetuximab", "EGFR", "RAS"),
+    ("BRCA", "sacituzumab govitecan", "TACSTD2", "ER/PR/HER2"),
+])
+def test_assay_request_does_not_substitute_the_drug_target_for_its_biomarker(
+    code, agent, target, required_context,
+):
+    analysis = {"cancer_type": code}
+    _, subtype, panel = cancer_therapy_panel_for_analysis(code, analysis)
+    row = next(row for row in panel.to_dict("records") if row["agent"] == agent)
+    requirements = evaluate_therapy_eligibility(row, analysis, panel_subtype=subtype).requirements
+    assay = next(r for r in requirements if r.kind in {"wildtype", "clinical_target_assay"})
+    assert target not in assay.description
+    assert required_context in assay.question
+
+
 def test_unestablished_subtype_remains_an_information_request():
     row = {"symbol": "KIT", "agent": "imatinib", "cancer_code": "SARC",
            "subtype": "SARC_GIST", "indication": "gastrointestinal stromal tumor", "phase": "approved"}
