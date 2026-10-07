@@ -41,6 +41,11 @@ tumor-attributed expression, or therapy relevance:
    rare-marker/fusion evidence, exact local references, and registry
    relationships into one cancer-type call. Outputs: inferred cancer type,
    expression reference used for cohort math, and alternate hypotheses.
+   Sarcoma-family RNA matches are context only: muscle and stromal programs
+   cannot establish sarcoma or its subtype. A supplied diagnosis or defining
+   molecular result is required; otherwise the report retains an independently
+   supported alternative or returns `UNRESOLVED` and withholds disease-specific
+   therapy selection.
 5. **Tumor Purity and Coarse Composition** estimates tumor fraction and broad
    non-tumor compartments such as immune, stromal, epithelial matched normal,
    and other background components. Outputs: purity interval and fitted

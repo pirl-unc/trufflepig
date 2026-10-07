@@ -6236,6 +6236,10 @@ def _persistent_report_label_blockers(
 
     if hypothesis.direct_fusion_support > 0:
         return ()
+    from .cancer_type_policy import (
+        SARCOMA_IDENTITY_REASON,
+        requires_independent_sarcoma_identity,
+    )
     details = hypothesis.details
     registry_row = _registry_row_for_code(hypothesis.cancer_type)
     declared_blockers = details.get("hard_report_label_blockers") or ()
@@ -6246,6 +6250,8 @@ def _persistent_report_label_blockers(
         for reason in declared_blockers
         if _clean(reason)
     ]
+    if requires_independent_sarcoma_identity(hypothesis.cancer_type):
+        blockers.append(SARCOMA_IDENTITY_REASON)
     if registry_row and not _safe_bool(
         registry_row.get("is_classification_target"),
         default=True,
@@ -6508,7 +6514,10 @@ def _adjudicate_selection_with_learned_hierarchy(
     selected.details["entity_evidence_consensus"] = dict(consensus)
     candidate.details["entity_evidence_consensus"] = dict(consensus)
     if hard_blockers:
-        return selected
+        # A blocked learned leader must not suppress an independently
+        # supported alternative elsewhere in the existing candidate beam.
+        beam_candidate = consensus_beam()
+        return beam_candidate if beam_candidate is not None else selected
     selected_consensus_majority = bool(
         _safe_int(consensus.get("selected_votes")) * 2
         > _safe_int(consensus.get("available_axis_count"))
@@ -9343,6 +9352,11 @@ def _build_staged_evidence_graph(
 ) -> dict[str, Any]:
     """Return the serializable lineage graph plus orthogonal subtype axes."""
     selected_code = selected.cancer_type if selected is not None else _top_code(analysis)
+    if selected is None:
+        from .cancer_type_policy import requires_independent_sarcoma_identity
+
+        if requires_independent_sarcoma_identity(selected_code):
+            selected_code = ""
     selected_by = selected.selected_by if selected is not None else ""
     selected_stage = _decision_stage_for_hypothesis(selected)
     selected_family = _registry_family_for_code(selected_code)
@@ -11005,6 +11019,23 @@ def select_report_scope_from_evidence(
         centroid_confident=_cen_confident,
         cancer_type_decision=cancer_type_decision,
     )
+    # The fallback context and hierarchy can create rows after fused scoring.
+    # Apply persistent identity constraints at the public selection boundary,
+    # including the legacy context-only fallback. Keep raw scores for audit.
+    from .cancer_type_policy import (
+        SARCOMA_IDENTITY_REASON,
+        requires_independent_sarcoma_identity,
+    )
+
+    for row in hypotheses.values():
+        if requires_independent_sarcoma_identity(row.cancer_type) and row.direct_fusion_support <= 0:
+            row.can_select_report_label = False
+            row.selection_offers.clear()
+            row.label_status = "blocked"
+            row.blocking_reasons = tuple(dict.fromkeys((*row.blocking_reasons, SARCOMA_IDENTITY_REASON)))
+            row.details["independent_sarcoma_identity_required"] = True
+            if selected is row:
+                selected = None
     rows = list(hypotheses.values())
 
     primary_context = _top_code(analysis)

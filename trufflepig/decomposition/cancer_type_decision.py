@@ -69,6 +69,20 @@ class CancerTypeDecision:
     selected_by_consensus: bool = False
     consensus_required_background_separation: bool = False
 
+    def __post_init__(self) -> None:
+        from ..cancer_type_policy import (
+            SARCOMA_IDENTITY_REASON,
+            requires_independent_sarcoma_identity,
+        )
+
+        if requires_independent_sarcoma_identity(self.supported_code):
+            object.__setattr__(self, "selection_allowed", False)
+            if SARCOMA_IDENTITY_REASON not in self.block_reason:
+                object.__setattr__(
+                    self, "block_reason",
+                    " ".join(filter(None, (self.block_reason, SARCOMA_IDENTITY_REASON))),
+                )
+
     @classmethod
     def from_dict(
         cls,
