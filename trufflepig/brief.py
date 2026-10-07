@@ -2580,10 +2580,12 @@ def summary_conclusion_paragraphs(
         or analysis.get("rare_report_scope_inference")
         or analysis.get("cancer_type_source") == "user-specified"
     )
+    from .cancer_type_policy import reportable_rare_marker_hypotheses
+
     rare_marker_hypotheses = (
         [
             finding
-            for finding in (analysis.get("rare_marker_hypotheses") or [])
+            for finding in reportable_rare_marker_hypotheses(analysis)
             if str(finding.get("cancer_type") or "").strip()
             != str(cancer_code).strip()
         ]

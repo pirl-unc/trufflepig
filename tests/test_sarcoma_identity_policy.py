@@ -144,3 +144,33 @@ def test_public_sample_analysis_cannot_return_the_sarcoma_ranker_fallback(monkey
     assert result["cancer_type"] == "UNRESOLVED"
     assert result["reference_cancer_type"] == "SARC"
     assert result["purity"]["quantitative_unresolved_reason"] == "cancer_type_unresolved"
+
+
+def test_unresolved_report_cannot_reintroduce_sarcoma_via_markers_or_narrative():
+    from trufflepig.main import _integrated_evidence_bullets, _rare_marker_hypotheses_markdown, _tumor_type_sanity_markdown
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_view import build_report_view
+
+    analysis = unresolved_analysis()
+    analysis.update(
+        rare_marker_hypotheses=[{"cancer_type": "SARC_DFSP", "surrogate": "COL1A1", "surrogate_tpm": 900}],
+        tumor_type_sanity={"code": "SARC", "name": "Sarcoma"},
+        candidate_trace=[{"code": "SARC", "support_fraction_of_top": 1},
+                         {"code": "SARC_LMS", "support_fraction_of_top": .2}],
+    )
+    finalize_sarcoma_identity(analysis)
+    mark_unresolved_identity_purity(analysis)
+    view = build_report_view(analysis)
+    content = build_report_content(analysis, pd.DataFrame(), "UNRESOLVED", "", report_view=view)
+    summary = render_report_summary(content)
+    assert "Disease-specific therapies are withheld" in summary
+    assert "not yet in the curated" not in summary
+    assert "Rare-marker prompt" not in summary
+    assert "SARC_DFSP" not in summary
+    assert "do not establish tumor-cell origin" in summary
+    assert not _rare_marker_hypotheses_markdown(analysis)
+    assert "Report label name" not in _tumor_type_sanity_markdown(analysis)
+    bullets = "\n".join(_integrated_evidence_bullets(analysis))
+    assert "Cancer identity**: unresolved" in bullets
+    assert "integrated evidence selected UNRESOLVED" not in bullets
+    assert "ahead of" not in bullets

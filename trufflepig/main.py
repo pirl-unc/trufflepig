@@ -6895,9 +6895,11 @@ def _retained_cancer_type_differential_markdown(
         decomp_results,
         selected_code,
     )
+    from .cancer_type_policy import reportable_rare_marker_hypotheses
+
     rare_marker_hypotheses = [
         finding
-        for finding in (analysis.get("rare_marker_hypotheses") or [])
+        for finding in reportable_rare_marker_hypotheses(analysis)
         if str(finding.get("cancer_type") or "").strip() != selected_code
     ]
     if not (retained_labels or candidate_alts or decomp_alts or rare_marker_hypotheses):
@@ -6964,6 +6966,9 @@ def _retained_cancer_type_differential_markdown(
 
 
 def _tumor_type_sanity_markdown(analysis, *, max_rows: int = 6) -> str:
+    abstention = analysis.get("cancer_type_abstention") or {}
+    if abstention:
+        return "### Tumor identity remains unresolved\n\n" + str(abstention["reason"]) + "\n"
     sanity = analysis.get("tumor_type_sanity") or {}
     if not sanity:
         return ""
@@ -7324,7 +7329,8 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             cancer_code,
         )
         decomposition_selected_scope = decomposition_decision.is_selection_basis
-        ranker_detail_applicable = not decomposition_selected_scope
+        identity_abstention = analysis.get("cancer_type_abstention") or {}
+        ranker_detail_applicable = not decomposition_selected_scope and not identity_abstention
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         supplied_discordant = (
             analysis.get("cancer_type_source") == "user-specified"
@@ -7335,7 +7341,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             and best_code != str(cancer_code).strip()
             and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
         )
-        if evidence_selected_discordant and decomposition_selected_scope:
+        if identity_abstention:
+            sentence = "- **Cancer identity**: unresolved. " + str(identity_abstention["reason"]).rstrip(".")
+        elif evidence_selected_discordant and decomposition_selected_scope:
             bulk_pattern = (
                 "a sarcoma-like pattern"
                 if best_code.startswith("SARC")
@@ -7898,10 +7906,12 @@ def _rare_marker_hypotheses_markdown(
     *,
     heading: str = "## Rare-marker hypotheses",
 ) -> str:
+    from .cancer_type_policy import reportable_rare_marker_hypotheses
+
     current_code = str(analysis.get("cancer_type") or "").strip()
     hypotheses = [
         finding
-        for finding in (analysis.get("rare_marker_hypotheses") or [])
+        for finding in reportable_rare_marker_hypotheses(analysis)
         if str(finding.get("cancer_type") or "").strip() != current_code
     ]
     if not hypotheses:
@@ -8419,7 +8429,12 @@ def _generate_text_reports(
             )
     purity_heading = _purity_metric_label(sample_mode).title()
     if conclusion.status == "discordant_estimators":
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "- **Quantitative conclusion**: **unresolved** — tumor identity "
+                "is unestablished; the modeled residual may include benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 f"- **{purity_heading}**: **quantitatively unresolved** because "
                 "tumor and benign bone/mesenchymal cells share the modeled RNA "
@@ -9147,7 +9162,12 @@ def _generate_text_reports(
             f"{purity_interval_text}{tier_suffix}"
         )
     purity_source = conclusion.method or ""
-    if purity_source == "background_residual":
+    if conclusion.unresolved_reason == "cancer_type_unresolved":
+        lines.append(
+            "- **Quantitative basis**: exploratory background subtraction. Neither "
+            "the residual fraction nor the shared lineage markers establish tumor identity."
+        )
+    elif purity_source == "background_residual":
         residual_fraction = (
             (purity.get("components") or {})
             .get("decomposition", {})
@@ -9260,7 +9280,14 @@ def _generate_text_reports(
     lineage_genes = lineage.get("per_gene", [])
     if lineage_genes:
         lines.append("")
-        if bulk_purity_reference:
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append("### Exploratory Lineage Reference Ratios\n")
+            lines.append(
+                "These ratios compare sample RNA with the exploratory cohort reference. "
+                "The genes can also be expressed by benign muscle or stroma; they "
+                "establish neither sarcoma identity nor a malignant-cell fraction.\n"
+            )
+        elif bulk_purity_reference:
             lines.append("### Lineage Gene Calibration\n")
             lines.append(
                 "Purity was refined using cancer-type lineage genes — genes with "

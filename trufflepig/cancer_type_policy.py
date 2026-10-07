@@ -93,3 +93,12 @@ def mark_unresolved_identity_purity(analysis: dict) -> None:
     purity = analysis["purity"]
     purity["quantitative_status"] = "discordant_estimators"
     purity["quantitative_unresolved_reason"] = "cancer_type_unresolved"
+
+
+def reportable_rare_marker_hypotheses(analysis: Mapping) -> list:
+    """Do not turn shared structural RNA into sarcoma-specific testing prompts."""
+    return [
+        finding for finding in (analysis.get("rare_marker_hypotheses") or [])
+        if not requires_independent_sarcoma_identity(finding.get("cancer_type"))
+        or sarcoma_identity_is_supplied(analysis, finding.get("cancer_type"))
+    ]
