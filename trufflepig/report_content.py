@@ -375,7 +375,13 @@ def build_report_content(
     therapies = [
         paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))
     ]
-    if panel is None or len(panel) == 0:
+    identity_unresolved = bool(analysis.get("cancer_type_abstention"))
+    if identity_unresolved:
+        therapies = [paragraph(
+            "Cancer type remains unresolved. Disease-specific therapies are withheld "
+            "until pathology or a disease-defining molecular result establishes their scope."
+        )]
+    elif panel is None or len(panel) == 0:
         therapies = [
             paragraph(
                 f"{cancer_code} is not yet in the curated key-genes panel; no disease-specific therapy shortlist is available."
@@ -414,7 +420,7 @@ def build_report_content(
             )
         )
         therapies.extend(paragraph(text) for text in assessment["rationale"])
-    if not selected_assessments:
+    if not selected_assessments and not identity_unresolved:
         unmet = any(
             r["status"] in {"blocked", "missing", "unresolved"}
             for a in assessments for r in a["eligibility"]["requirements"]
@@ -519,6 +525,12 @@ def build_report_content(
             paragraph(render_report_paragraph("clinical_assay_record", assay=assay))
             for assay in clinical_mmr.assays
         )
+    if identity_unresolved:
+        detail.append(paragraph(
+            "Tumor-attributed TPM and cohort-relative pathway results are conditional "
+            "on an exploratory reference model. They do not establish tumor-cell origin; "
+            "the observed bulk RNA measurements remain available for review."
+        ))
     for title, items, formatter in (
         (
             "Notable biomarker outliers",
