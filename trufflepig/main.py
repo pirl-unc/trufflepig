@@ -2385,6 +2385,7 @@ def _analyze_body(run: AnalyzeRun):
         df_expr,
         cancer_type=analysis_cancer_type,
         tissue_signal=healthy_vs_tumor,
+        _exploratory_context=True,
     )
     rna_inferred_cancer_type = analysis.get("cancer_type")
     rna_inferred_cancer_name = analysis.get("cancer_name")
@@ -2578,7 +2579,14 @@ def _analyze_body(run: AnalyzeRun):
         supplied_label_diverges = bool(cancer_type) and (
             top_code_for_print != str(cancer_code or "").strip()
         )
-        if report_scope_cancer_type or supplied_label_diverges:
+        from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+        if requires_independent_sarcoma_identity(cancer_code) and not sarcoma_identity_is_supplied(analysis, cancer_code):
+            print(
+                f"[analysis] Exploratory reference: {cancer_code}; sarcoma identity "
+                "is unestablished. Continuing background-separated adjudication."
+            )
+        elif report_scope_cancer_type or supplied_label_diverges:
             print(
                 f"[analysis] Cancer label context: {analysis['cancer_name']} ({cancer_code}); "
                 f"RNA top candidate: {top_code_for_print or rna_inferred_cancer_type}, "
@@ -3143,6 +3151,22 @@ def _analyze_body(run: AnalyzeRun):
                         ),
                     },
                 )
+    # Exploratory references remain available to decomposition, but the final
+    # report must not turn an unsupported muscle/stromal match into sarcoma.
+    from .cancer_type_policy import finalize_sarcoma_identity
+
+    if finalize_sarcoma_identity(analysis):
+        cancer_type_context = _synchronize_cancer_type_context(
+            analysis, supplied_cancer_type=cancer_type,
+        )
+        cancer_code = cancer_type_context.code_for("report")
+        reference_cancer_code = cancer_type_context.code_for("cohort")
+        report_scope_cancer_type = cancer_code
+        selected_scope = None
+        rare_scope_inference = None
+        fine_scope_inference = None
+        print("[analysis] Cancer type unresolved: sarcoma-like RNA is context only")
+
     # ``cancer_call`` is first recorded before decomposition. The decomposition
     # decision may replace it, so refresh the canonical step
     # before any machine-readable artifacts are emitted while preserving the
@@ -3494,6 +3518,9 @@ def _analyze_body(run: AnalyzeRun):
             degradation_caveat["widened_lower"] = round(float(lower), 4)
             degradation_caveat["widened_upper"] = round(float(upper), 4)
 
+    from .cancer_type_policy import mark_unresolved_identity_purity
+
+    mark_unresolved_identity_purity(analysis)
     final_purity = analysis.get("purity") or {}
     final_purity_text = _format_purity_interval(
         final_purity.get("overall_estimate"),

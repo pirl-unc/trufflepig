@@ -149,7 +149,13 @@ def build_figure_manifest(
             "operational value is not a fused consensus estimate."
         ),
     }
-    if purity_unresolved_reason == "same_lineage_not_identifiable":
+    if purity_unresolved_reason == "cancer_type_unresolved":
+        unresolved_captions = dict.fromkeys(
+            unresolved_captions,
+            "Exploratory subtraction model only. Tumor identity is unresolved; "
+            "the modeled fraction may include benign muscle or stroma.",
+        )
+    elif purity_unresolved_reason == "same_lineage_not_identifiable":
         unresolved_captions = {
             "decomposition-composition.png": (
                 "Selected operating model for target attribution. Tumor and benign "

@@ -3062,7 +3062,7 @@ def test_nutm_rna_surrogate_blocks_from_mesenchymal_top_context():
         rare_marker_hypotheses=[finding],
     )
 
-    assert result["selected"]["cancer_type"] == "SARC"
+    assert result["selected"] is None
     nutm = next(row for row in result["evidence"] if row["cancer_type"] == "NUTM")
     assert nutm["label_decision"]["status"] == "blocked"
     assert any(
@@ -4255,8 +4255,9 @@ def test_background_like_top_label_does_not_yield_to_weak_tumor_label():
         ),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC"
-    assert result["selected"]["selected_by"] == "pan_cancer_signature_ranker"
+    assert result["selected"] is None
+    sarcoma = next(row for row in result["evidence"] if row["cancer_type"] == "SARC")
+    assert sarcoma["can_select_report_label"] is False
 
 
 def test_local_expression_reference_can_select_future_exact_cohort(monkeypatch):
@@ -5059,7 +5060,7 @@ def test_nonclassification_local_reference_cannot_replace_broad_ranker(monkeypat
 
     result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
 
-    assert result["selected"]["cancer_type"] == "SARC"
+    assert result["selected"] is None
     rms = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_RMS_ERMS")
     assert rms["evidence_sources"] == ["pan_cancer_signature_subtype"]
     assert rms["can_select_report_label"] is False
@@ -5169,8 +5170,8 @@ def test_learned_expression_classifier_can_rescue_context_supported_type(monkeyp
     )
 
 
-def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(monkeypatch):
-    """A very strong learned hierarchy can beat an unsupported primary-expression attractor."""
+def test_learned_sarcoma_hierarchy_cannot_supply_independent_identity(monkeypatch):
+    """Even near-unanimous learned RNA votes cannot establish sarcoma."""
     import trufflepig.cancer_type_evidence as evidence
     import trufflepig.expression_classifier as classifier
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
@@ -5237,9 +5238,11 @@ def test_learned_expression_classifier_can_admit_context_free_hierarchical_vote(
         ),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC_ASPS"
-    assert result["selected"]["selected_by"] == "learned_expression_classifier"
-    assert result["selected"]["learned_expression_hierarchical_rescue"] is True
+    assert result["selected"]["cancer_type"] == "HNSC"
+    asps = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_ASPS")
+    assert asps["can_select_report_label"] is False
+    assert asps["learned_expression_hierarchical_rescue"] is True
+    assert any("does not establish sarcoma" in r for r in asps["blocking_reasons"])
 
 
 def test_learned_expression_classifier_blocks_background_compartment_flip(monkeypatch):
@@ -5672,7 +5675,7 @@ def test_local_reference_does_not_override_broad_coarse_consensus(monkeypatch):
     )
 
 
-def test_signature_anchored_exact_reference_can_escape_wrong_broad_context(monkeypatch):
+def test_signature_anchored_sarcoma_reference_requires_independent_identity(monkeypatch):
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
@@ -5729,9 +5732,11 @@ def test_signature_anchored_exact_reference_can_escape_wrong_broad_context(monke
 
     result = select_report_scope_from_evidence(_expression_frame(expression), analysis)
 
-    assert result["selected"]["cancer_type"] == "SARC_GIST"
-    assert result["selected"]["reference_cancer_type"] == "SARC"
-    assert result["selected"]["local_reference_signature_anchored"] is True
+    assert result["selected"]["cancer_type"] == "LIHC"
+    gist = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_GIST")
+    assert gist["local_reference_signature_anchored"] is True
+    assert gist["can_select_report_label"] is False
+    assert any("does not establish sarcoma" in r for r in gist["blocking_reasons"])
     assert all(row["cancer_type"] != "HEPB" for row in result["evidence"])
 
 
@@ -5779,7 +5784,7 @@ def test_mixed_marker_program_cannot_become_a_signature_anchor(monkeypatch):
         _analysis(("SARC_LPS_UNSPEC", 1.0), ("GBM", 0.62)),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC_LPS_UNSPEC"
+    assert result["selected"] is None
     mbl = next(row for row in result["evidence"] if row["cancer_type"] == "MBL")
     assert mbl["local_reference_signature_anchored"] is False
     assert mbl["can_select_report_label"] is False
@@ -6529,7 +6534,7 @@ def test_direct_cml_reference_beats_aml_status_child_parent(monkeypatch):
     assert laml["local_reference_status_child_code"] == "LAML_ELNadv"
 
 
-def test_fusion_driven_subtype_does_not_require_the_subtype_fusion(
+def test_fusion_associated_expression_subtype_does_not_establish_sarcoma(
     monkeypatch,
 ):
     import trufflepig.cancer_type_evidence as evidence
@@ -6559,8 +6564,10 @@ def test_fusion_driven_subtype_does_not_require_the_subtype_fusion(
 
     no_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
     no_fusion = select_report_scope_from_evidence(expression, no_fusion_analysis)
-    assert no_fusion["selected"]["cancer_type"] == "SARC_PEC"
-    assert no_fusion["selected"]["local_reference_requires_fusion_confirmation"] is False
+    assert no_fusion["selected"] is None
+    pec = next(row for row in no_fusion["evidence"] if row["cancer_type"] == "SARC_PEC")
+    assert pec["local_reference_requires_fusion_confirmation"] is False
+    assert pec["can_select_report_label"] is False
 
     matching_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
     matching_fusion_analysis["fusion_inputs_supplied"] = True
@@ -6571,11 +6578,10 @@ def test_fusion_driven_subtype_does_not_require_the_subtype_fusion(
         expression,
         matching_fusion_analysis,
     )
-    assert matching_fusion["selected"]["cancer_type"] == "SARC_PEC"
-    assert (
-        matching_fusion["selected"]["local_reference_explicit_negative_fusion"]
-        is False
-    )
+    assert matching_fusion["selected"] is None
+    pec = next(row for row in matching_fusion["evidence"] if row["cancer_type"] == "SARC_PEC")
+    assert pec["local_reference_explicit_negative_fusion"] is False
+    assert pec["can_select_report_label"] is False
 
     negative_fusion_analysis = _analysis(("SARC", 1.0), ("READ", 0.7))
     negative_fusion_analysis["fusion_inputs_supplied"] = True
@@ -6587,12 +6593,12 @@ def test_fusion_driven_subtype_does_not_require_the_subtype_fusion(
         negative_fusion_analysis,
     )
 
-    assert negative_fusion["selected"]["cancer_type"] == "SARC_PEC"
+    assert negative_fusion["selected"] is None
     pec = next(
         row for row in negative_fusion["evidence"]
         if row["cancer_type"] == "SARC_PEC"
     )
-    assert pec["can_select_report_label"] is True
+    assert pec["can_select_report_label"] is False
     assert pec["local_reference_explicit_negative_fusion"] is False
     assert not any("SFPQ-TFE3" in reason for reason in pec["blocking_reasons"])
 
@@ -6604,8 +6610,8 @@ def test_mixed_lineage_local_child_reference_abstains_at_established_parent(
 
     This models the Alvin failure generically: a sarcoma child reference has a
     plausible positive program, but epithelial expected-low genes contradict
-    that precision. The broad sarcoma call remains; the local reference stays
-    available as differential evidence.
+    that precision. Neither the broad sarcoma nor its child establishes
+    identity; the local reference stays available as differential evidence.
     """
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
@@ -6653,7 +6659,7 @@ def test_mixed_lineage_local_child_reference_abstains_at_established_parent(
         _analysis(("SARC", 1.0), ("LUSC", 0.15)),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC"
+    assert result["selected"] is None
     pec = next(
         row for row in result["evidence"] if row["cancer_type"] == "SARC_PEC"
     )
@@ -7692,13 +7698,13 @@ def test_marker_prompt_only_rules_never_set_report_scope():
         rare_marker_hypotheses=[finding],
     )
 
-    assert result["selected"]["cancer_type"] == "SARC"
+    assert result["selected"] is None
     chor = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_CHOR")
     assert chor["rule_promotes_report_scope"] is False
     assert chor["can_select_report_label"] is False
 
 
-def test_osteogenic_reference_evidence_promotes_os_over_broad_sarc():
+def test_osteogenic_reference_stays_context_without_independent_identity():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     df = _expression_frame(
@@ -7723,15 +7729,17 @@ def test_osteogenic_reference_evidence_promotes_os_over_broad_sarc():
         _analysis(("SARC", 1.0), ("UCS", 0.3)),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC_OS"
-    assert result["selected"]["reference_cancer_type"] == "SARC"
-    assert result["selected"]["expression_reference_cancer_type"] == "SARC_OS"
-    assert result["selected"]["evidence_sources"] == ["fine_reference"]
-    assert result["selected"]["metrics"]["related_context_support"] == 1.0
-    assert result["selected"]["metrics"]["fine_reference_support"] >= 0.7
+    assert result["selected"] is None
+    os = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_OS")
+    assert os["reference_cancer_type"] == "SARC"
+    assert os["expression_reference_cancer_type"] == "SARC_OS"
+    assert os["evidence_sources"] == ["fine_reference"]
+    assert os["metrics"]["related_context_support"] == 1.0
+    assert os["metrics"]["fine_reference_support"] >= 0.7
+    assert os["can_select_report_label"] is False
 
 
-def test_mdm2_amp_without_osteogenic_program_stays_broad_sarc():
+def test_mdm2_expression_without_osteogenic_program_does_not_select_sarcoma():
     from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 
     df = _expression_frame(
@@ -7753,7 +7761,7 @@ def test_mdm2_amp_without_osteogenic_program_stays_broad_sarc():
         _analysis(("SARC", 1.0), ("UCS", 0.3)),
     )
 
-    assert result["selected"]["cancer_type"] == "SARC"
+    assert result["selected"] is None
     os_evidence = next(row for row in result["evidence"] if row["cancer_type"] == "SARC_OS")
     assert os_evidence["cancer_type"] == "SARC_OS"
     assert os_evidence["can_select_report_label"] is False

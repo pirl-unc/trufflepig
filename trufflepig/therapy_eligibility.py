@@ -86,6 +86,12 @@ class TherapyEligibility:
 
 def therapy_row_in_scope(target_row, analysis, panel_subtype=None) -> bool:
     """Require subtype context for subtype-only rows in an unresolved SARC panel."""
+    if analysis and analysis.get("cancer_type_abstention"):
+        # A reference cohort cannot provide the disease scope of an indication.
+        # Keep target and variant observations available without selecting a
+        # disease-specific treatment from an unresolved diagnosis.
+        indication = clean_therapy_value(target_row.get("indication"))
+        return bool(re.search(r"tumou?r[- ]agnostic|\bsolid tumou?rs?\b", indication, re.I))
     if not analysis or str(analysis.get("cancer_type") or "").strip() != "SARC":
         return True
     subtype = clean_therapy_value(target_row.get("subtype"))

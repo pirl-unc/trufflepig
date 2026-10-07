@@ -352,6 +352,24 @@ that bulk RNA expression alone cannot break:
 | testis | CTA panel saturation | CTAs are *defined* as testis-expressed; the CTA tumor-evidence channel correctly fires on testis. The CTA-normal-tissue guard zeros the count, but other panels still match. |
 | rectum | Proliferation panel | High-turnover epithelium scores like tumor on the proliferation channel. |
 
+Sarcoma report selection now treats this structural limitation as a hard
+identity constraint. RNA-only sarcoma-family hypotheses remain exploratory
+reference comparisons, regardless of signature, centroid, learned-classifier,
+marker or decomposition agreement. A supplied diagnosis or a disease-defining
+fusion is required to establish the report scope. Without an independently
+admitted alternative, the final call is `UNRESOLVED`; the report withholds
+disease-specific therapy selection and labels the decomposition fraction as
+conditional on an unestablished tumor identity. A supplied broad `SARC` label
+does not authorize an RNA-derived child subtype. This policy deliberately also
+abstains on true sarcomas when the independent evidence is withheld: abstention
+is not a negative sarcoma diagnosis.
+
+Re-enabling an RNA sarcoma selector requires validation against benign muscle,
+stroma and mixed epithelial/structural samples. Agreement among transformations
+of the same lineage signal is not that validation. The clinical diagnosis uses
+histology and appropriate ancillary testing; see the
+[NCI classification discussion](https://www.cancer.gov/types/soft-tissue-sarcoma/hp/adult-soft-tissue-treatment-pdq).
+
 These are documented as **expected limitations** rather than
 calibration targets to drive down at this layer. The structural
 ceiling is well-understood; the fixes require orthogonal data

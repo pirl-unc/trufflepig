@@ -1160,6 +1160,9 @@ def _caveats_from_purity_tier(
 
 
 def _cancer_type_basis_line(analysis, cancer_code: str) -> str:
+    abstention = analysis.get("cancer_type_abstention") or {}
+    if abstention:
+        return "**Cancer-type basis:** unresolved. " + str(abstention["reason"])
     constraints = analysis.get("analysis_constraints") or {}
     constrained_code = str(constraints.get("cancer_type") or "").strip()
     source = str(analysis.get("cancer_type_source") or "").strip()
@@ -2644,7 +2647,14 @@ def summary_conclusion_paragraphs(
             if lower is not None and upper is not None
             else ""
         )
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "**Estimated tumor fraction (RNA model):** unresolved because tumor "
+                "identity has not been established. The exploratory subtraction "
+                f"model uses {overall:.0%}{operational_range}; this fraction may "
+                "include benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 "**Estimated tumor fraction (RNA model):** quantitatively unresolved; "
                 f"the selected model uses {overall:.0%}{operational_range} as an "
@@ -2815,7 +2825,14 @@ def build_actionable(
             if lower is not None and upper is not None
             else ""
         )
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "\nTumor fraction is **unresolved** because tumor identity has not "
+                "been established. The exploratory subtraction model uses "
+                f"{overall:.0%}{operational_range}; this fraction may include "
+                "benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 "\nEstimated tumor fraction is **quantitatively unresolved**. The "
                 f"selected model uses {overall:.0%}{operational_range} as an "

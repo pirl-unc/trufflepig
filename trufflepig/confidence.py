@@ -295,6 +295,9 @@ def compute_call_confidence(analysis) -> ConfidenceTier:
     classified as THYM with concordance=0.000 at 4.35.0, and the
     report emitted a clean "Cancer call: THYM" with no caveat.
     """
+    abstention = analysis.get("cancer_type_abstention") or {}
+    if abstention:
+        return ConfidenceTier("unknown", [str(abstention["reason"])])
     reasons: List[str] = []
     tier = "high"
     call_rescue = analysis.get("cancer_call_rescue") or {}

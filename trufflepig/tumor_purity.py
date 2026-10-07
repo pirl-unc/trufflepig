@@ -5065,11 +5065,15 @@ def finalize_winner_purity(
 # -------------------- comprehensive summary --------------------
 
 
-def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
+def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None, *, _exploratory_context=False):
     """Comprehensive sample composition analysis.
 
     Returns a dict with all analysis results: cancer type, purity,
     background signatures, MHC status, and narrative interpretation.
+
+    RNA-only sarcoma matches abstain. The integrated pipeline may privately
+    retain the exploratory reference until background-separated identity
+    adjudication finishes; it must finalize that identity before reporting.
     """
     from .plot import (
         _compute_cancer_type_signature_stats,
@@ -5149,7 +5153,7 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         (row["code"], row.get("support_geomean", 0.0)) for row in candidate_trace[:5]
     ]
 
-    return {
+    result = {
         "cancer_type": cancer_code,
         "cancer_name": cancer_name,
         "cancer_score": cancer_score,
@@ -5166,6 +5170,13 @@ def analyze_sample(df_gene_expr, cancer_type=None, tissue_signal=None):
         "mhc1": mhc1,
         "mhc2": mhc2,
     }
+    if not cancer_type and not _exploratory_context:
+        from .cancer_type_policy import finalize_sarcoma_identity, mark_unresolved_identity_purity
+
+        result["cancer_type_source"] = "auto-detected"
+        finalize_sarcoma_identity(result)
+        mark_unresolved_identity_purity(result)
+    return result
 
 
 def plot_sample_summary(

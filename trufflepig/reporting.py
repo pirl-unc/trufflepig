@@ -2932,6 +2932,9 @@ def subtype_resolution_for_analysis(analysis, ranges_df=None):
     clinical scope (notably therapy lookup) must inspect ``status`` rather than
     treating every ``final_subtype`` as established.
     """
+    if analysis.get("cancer_type_abstention"):
+        return {"final_subtype": None, "status": "unresolved",
+                "reason": analysis["cancer_type_abstention"]["reason"]}
     try:
         from .analyze import cancer_type_context_from_analysis
 
@@ -3115,6 +3118,16 @@ def candidate_winning_subtype_for_analysis(analysis):
     winning_subtype = _clean_text(row.get("winning_subtype"))
     if not winning_subtype:
         return None
+    from .cancer_type_policy import (
+        requires_independent_sarcoma_identity,
+        sarcoma_identity_is_supplied,
+    )
+
+    if (
+        requires_independent_sarcoma_identity(winning_subtype)
+        and not sarcoma_identity_is_supplied(analysis, winning_subtype)
+    ):
+        return None
     subtype_evidence = next(
         (
             evidence_row
@@ -3291,6 +3304,11 @@ def cancer_therapy_panel_for_analysis(
             or _clean_text(analysis.get("cancer_type"))
             or active_cancer_code
         )
+
+    if analysis and analysis.get("cancer_type_abstention"):
+        # Do not fall back from an unresolved diagnosis to its exploratory
+        # sarcoma reference, even when a loader has parent-panel defaults.
+        return active_cancer_code, None, pd.DataFrame()
 
     # Histology-specific treatment evidence follows the report entity, not an
     # expression-only child carried for reference/marker interpretation.  A
