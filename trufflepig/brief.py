@@ -1842,6 +1842,13 @@ def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     if decomposition_decision.is_selection_basis:
         return ""
     candidate_trace = analysis.get("candidate_trace") or []
+    from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+    candidate_trace = [
+        row for row in candidate_trace
+        if not requires_independent_sarcoma_identity(row.get("code"))
+        or sarcoma_identity_is_supplied(analysis, row.get("code"))
+    ]
     if not candidate_trace:
         return ""
 

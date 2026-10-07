@@ -1205,13 +1205,13 @@ def test_summary_rna_alternatives_use_post_gate_support_fraction():
     # not report a rank-2 candidate as >1x the top call.
     analysis["candidate_trace"] = [
         {
-            "code": "SARC",
+            "code": "PRAD",
             "support_geomean": 0.42,
             "support_fraction_of_top": 1.0,
             "signature_score": 0.64,
         },
         {
-            "code": "UCS",
+            "code": "BLCA",
             "support_geomean": 0.44,
             "support_fraction_of_top": 0.51,
             "signature_score": 0.54,
@@ -1222,11 +1222,11 @@ def test_summary_rna_alternatives_use_post_gate_support_fraction():
     md = build_summary(
         analysis,
         ranges_df,
-        cancer_code="SARC",
+        cancer_code="PRAD",
         disease_state="",
     )
 
-    assert "UCS (rank 2, 0.51x top support)" in md
+    assert "BLCA (rank 2, 0.51x top support)" in md
     assert "1.03x top support" not in md
 
 

@@ -217,11 +217,10 @@ def build_report_view(
             raise TypeError("Finalized analysis candidate support must be numeric")
         if code in excluded:
             continue
-        if analysis.get("cancer_type_abstention"):
-            from .cancer_type_policy import requires_independent_sarcoma_identity
+        from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
 
-            if requires_independent_sarcoma_identity(code):
-                continue
+        if requires_independent_sarcoma_identity(code) and not sarcoma_identity_is_supplied(analysis, code):
+            continue
         alternatives.append((code, float(frac)))
 
     return ReportView(

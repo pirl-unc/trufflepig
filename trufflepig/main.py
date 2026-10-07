@@ -6893,8 +6893,14 @@ def _retained_cancer_type_differential_markdown(
         for label in (call_summary.get("label_options") or [])
         if str(label or "").strip()
     ]
-    retained_labels = [label for label in label_options[1:] if label != selected_code]
+    from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+    def reportable(code):
+        return not requires_independent_sarcoma_identity(code) or sarcoma_identity_is_supplied(analysis, code)
+
+    retained_labels = [label for label in label_options[1:] if label != selected_code and reportable(label)]
     candidate_trace = analysis.get("candidate_trace") or []
+    candidate_trace = [row for row in candidate_trace if reportable(row.get("code"))]
     candidate_alts = _format_candidate_trace_alternatives(
         candidate_trace,
         selected_code,
@@ -9134,7 +9140,12 @@ def _generate_text_reports(
         conclusion.upper,
     )
     if conclusion.status == "discordant_estimators":
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "- **Quantitative conclusion**: **unresolved** — tumor identity "
+                "is unestablished; the modeled residual may include benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 "- **Quantitative conclusion**: **unresolved** — tumor and benign "
                 "bone/mesenchymal cells share the RNA programs used for subtraction."
@@ -9290,16 +9301,15 @@ def _generate_text_reports(
     # Lineage gene narrative
     lineage = components.get("lineage", {})
     lineage_genes = lineage.get("per_gene", [])
-    if lineage_genes:
+    if lineage_genes and conclusion.unresolved_reason == "cancer_type_unresolved":
+        lines.append(
+            "\nPer-gene lineage ratios are withheld as purity estimates because "
+            "shared muscle or stromal expression establishes neither sarcoma "
+            "identity nor a malignant-cell fraction.\n"
+        )
+    elif lineage_genes:
         lines.append("")
-        if conclusion.unresolved_reason == "cancer_type_unresolved":
-            lines.append("### Exploratory Lineage Reference Ratios\n")
-            lines.append(
-                "These ratios compare sample RNA with the exploratory cohort reference. "
-                "The genes can also be expressed by benign muscle or stroma; they "
-                "establish neither sarcoma identity nor a malignant-cell fraction.\n"
-            )
-        elif bulk_purity_reference:
+        if bulk_purity_reference:
             lines.append("### Lineage Gene Calibration\n")
             lines.append(
                 "Purity was refined using cancer-type lineage genes — genes with "
