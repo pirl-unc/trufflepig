@@ -1824,6 +1824,8 @@ def _rna_crosscheck_line(analysis, cancer_code: str, call_tier=None) -> str:
 
 def _rna_alternatives_line(analysis, cancer_code: str) -> str:
     """Concise ordered alternatives for RNA-inferred, non-rare report scopes."""
+    if analysis.get("cancer_type_abstention"):
+        return ""
     constraints = analysis.get("analysis_constraints") or {}
     source = str(analysis.get("cancer_type_source") or "").strip()
     if constraints.get("cancer_type") or source == "user-specified":
@@ -3243,9 +3245,13 @@ def build_actionable(
     else:
         lines.append(
             "## Therapy Prioritization\n"
-            f"*Cancer type {cancer_code} is not yet in the curated "
-            "key-genes panel — see `evidence.md` for the generic "
-            "expression-ranked tables.*\n"
+            + (
+                "Disease-specific therapies are withheld because tumor identity remains unresolved.\n"
+                if analysis.get("cancer_type_abstention")
+                else f"*Cancer type {cancer_code} is not yet in the curated "
+                "key-genes panel — see `evidence.md` for the generic "
+                "expression-ranked tables.*\n"
+            )
         )
 
     # Off-context expressed targets (#47): genes highly expressed in this

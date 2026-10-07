@@ -102,3 +102,19 @@ def reportable_rare_marker_hypotheses(analysis: Mapping) -> list:
         if not requires_independent_sarcoma_identity(finding.get("cancer_type"))
         or sarcoma_identity_is_supplied(analysis, finding.get("cancer_type"))
     ]
+
+
+def reportable_fusion_expression_hypotheses(analysis: Mapping) -> list:
+    """Sarcoma RNA programs cannot supply their own diagnostic context."""
+    from .fusion_effects import _RNA_ONLY_HYPOTHESIS_CONTEXTS
+
+    code = str(analysis.get("cancer_type") or "")
+    independent_sarcoma = (
+        requires_independent_sarcoma_identity(code)
+        and sarcoma_identity_is_supplied(analysis, code)
+    )
+    return [
+        finding for finding in (analysis.get("fusion_expression_hypotheses") or [])
+        if "SARC" not in _RNA_ONLY_HYPOTHESIS_CONTEXTS.get(finding.get("rule_id"), set())
+        or independent_sarcoma
+    ]
