@@ -581,6 +581,7 @@ def build_analysis_parameters(
             "variants": config.variant_input_list(),
             "variant_genome_build": config.variant_genome_build,
             "treatment_history": config.treatment_history,
+            "clinical_context": config.clinical_context.public_dict(),
             "expression_qc_rescue": config.expression_qc_rescue,
         },
         "tumor_purity": tumor_purity_parameters,

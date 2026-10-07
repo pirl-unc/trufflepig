@@ -46,6 +46,7 @@ class AnalyzeConfig:
     variants: str | None = None
     variant_genome_build: str | None = None
     treatment_history: str | None = None
+    clinical_context: Any = None
     # Deprecated constructor compatibility. It is omitted from public output.
     alterations: str | None = None
     alignment_qc: str | None = None
@@ -56,6 +57,11 @@ class AnalyzeConfig:
     deprecated_figures: bool = False
     no_figures: bool = False
     force: bool = False
+
+    def __post_init__(self):
+        from ..clinical_context import load_clinical_context
+
+        object.__setattr__(self, "clinical_context", load_clinical_context(self.clinical_context))
 
     def template_overrides(self) -> list[str]:
         if self.decomposition_templates is None:
@@ -95,6 +101,7 @@ class AnalyzeConfig:
         payload = asdict(self)
         payload.pop("alterations", None)
         payload["variants"] = self.variants or self.alterations
+        payload["clinical_context"] = self.clinical_context.public_dict()
         payload["hla_type_list"] = self.hla_type_list()
         payload["fusion_path_list"] = self.fusion_path_list()
         payload["variant_input_list"] = self.variant_input_list()

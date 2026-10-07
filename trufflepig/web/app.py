@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import html
+import json
 import os
 import re
 from pathlib import Path
@@ -227,11 +228,27 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
         sample: UploadFile = File(...),
         cancer_type: Optional[str] = Form(None),
         hla_types: Optional[str] = Form(None),
+        clinical_context: Optional[UploadFile] = File(None),
         sample_id_value: Optional[str] = Form(None),
         title: Optional[str] = Form(None),
     ):
         if not sample.filename:
             raise HTTPException(400, "Sample file is required")
+
+        clinical_payload = None
+        if clinical_context is not None and clinical_context.filename:
+            from ..clinical_context import load_clinical_context
+
+            raw = clinical_context.file.read(1024 * 1024 + 1)
+            if len(raw) > 1024 * 1024:
+                raise HTTPException(413, "Clinical-context JSON exceeds 1 MB")
+            try:
+                payload = json.loads(raw)
+                if not isinstance(payload, dict):
+                    raise ValueError("Clinical context must be a JSON object")
+                clinical_payload = load_clinical_context(payload).public_dict()
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(400, f"Invalid clinical context: {exc}") from exc
 
         # Form values that would parse as CLI flags inside the analyze
         # subprocess get rejected before we shell them out.
@@ -266,6 +283,10 @@ def create_app(settings: Optional[WebSettings] = None) -> FastAPI:
                 f.write(chunk)
 
         extra: list[str] = []
+        if clinical_payload is not None:
+            context_path = settings.uploads_root / f"{os.urandom(6).hex()}_clinical-context.json"
+            context_path.write_text(json.dumps(clinical_payload, indent=2))
+            extra += ["--clinical-context", str(context_path)]
         if hla_types:
             extra += ["--hla-types", hla_types]
         if sample_id_value:

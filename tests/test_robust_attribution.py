@@ -812,7 +812,24 @@ def test_expression_independent_indication_is_not_demoted_by_target_tpm():
         ]
     )
 
-    top = recommend_therapies(targets_df, ranges_df, limit=3)
+    # RNA independence does not waive the clinical MSI/MMR requirement.
+    assert recommend_therapies(targets_df, ranges_df, limit=3) == []
+    analysis = {
+        "clinical_context": {
+            "specimen_id": "synthetic-low-pdcd1",
+            "assays": [{
+                "kind": "msi",
+                "result": "MSI-H",
+                "method": "PCR",
+                "specimen_id": "synthetic-low-pdcd1",
+                "scope": "current",
+                "validity": "validated",
+                "reportability": "reportable",
+                "source": {"title": "Synthetic clinical MSI report"},
+            }],
+        },
+    }
+    top = recommend_therapies(targets_df, ranges_df, limit=3, analysis=analysis)
     assert [t["symbol"] for t, _ in top] == ["PDCD1"]
     assert indication_biomarker(targets_df.iloc[0]) == "msi_high"
     assert (
