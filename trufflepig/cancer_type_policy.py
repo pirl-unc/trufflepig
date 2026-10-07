@@ -20,6 +20,18 @@ SARCOMA_IDENTITY_REASON = (
 )
 
 
+def _canonical_identity_code(value: object) -> str:
+    from .cancer_ontology import resolve_cancer_type
+
+    code = str(value or "").strip()
+    if not code:
+        return ""
+    try:
+        return str(resolve_cancer_type(code))
+    except (KeyError, ValueError):
+        return code
+
+
 def requires_independent_sarcoma_identity(code: str) -> bool:
     """Cover the entire registry family, including future non-prefixed codes."""
     code = str(code or "").strip()
@@ -29,19 +41,20 @@ def requires_independent_sarcoma_identity(code: str) -> bool:
         return False
     from .cancer_ontology import cancer_family
 
-    return cancer_family(code).lower() == "sarcoma"
+    return cancer_family(_canonical_identity_code(code)).lower() == "sarcoma"
 
 
 def sarcoma_identity_is_supplied(analysis: Mapping, code: str) -> bool:
     """Accept scoped input context or the existing defining-fusion selector."""
-    supplied = str((analysis.get("analysis_constraints") or {}).get("cancer_type") or "")
+    code = _canonical_identity_code(code)
+    supplied = _canonical_identity_code((analysis.get("analysis_constraints") or {}).get("cancer_type"))
     if supplied:
         return supplied == code
     if analysis.get("cancer_type_source") == "user-specified":
-        return str(analysis.get("cancer_type") or "") == code
+        return _canonical_identity_code(analysis.get("cancer_type")) == code
     selected = (analysis.get("cancer_type_evidence") or {}).get("selected") or {}
     return bool(
-        selected.get("cancer_type") == code
+        _canonical_identity_code(selected.get("cancer_type")) == code
         and selected.get("selected_by") == "direct_fusion"
         and selected.get("can_select_report_label")
         and (selected.get("metrics") or {}).get("direct_fusion_support", 0) > 0
