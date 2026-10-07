@@ -191,3 +191,37 @@ def test_shared_rna_cannot_prompt_sarcoma_fusion_testing_without_independent_con
     assert "Synovial sarcoma" not in "\n".join(_integrated_evidence_bullets(analysis))
     analysis.update(cancer_type="SARC", cancer_type_source="user-specified")
     assert reportable_fusion_expression_hypotheses(analysis) == [finding]
+
+
+def test_full_unresolved_analysis_withholds_muscle_gene_purity_claims(tmp_path):
+    from trufflepig.main import _generate_text_reports
+    from trufflepig.report_view import build_report_view
+
+    analysis = unresolved_analysis()
+    analysis.update(mhc1={}, tissue_scores=[], cancer_score=1.0)
+    analysis["purity"]["components"] = {
+        "lineage": {"purity": 1.0, "per_gene": [{"gene": "MYH11", "purity": 1.0}]}
+    }
+    finalize_sarcoma_identity(analysis)
+    mark_unresolved_identity_purity(analysis)
+    embedding = {"n_genes": 0, "n_types": 0, "n_genes_per_type": 0, "per_type": {}}
+    _generate_text_reports(analysis, build_report_view(analysis), embedding, str(tmp_path / "sample"))
+    text = (tmp_path / "sample-analysis.md").read_text()
+    assert "Per-gene lineage ratios are withheld as purity estimates" in text
+    assert "retained — reliable" not in text
+    assert "independent purity estimators support incompatible scenarios" not in text
+
+
+def test_resolved_epithelial_call_does_not_offer_sarcoma_as_an_rna_alternative():
+    from trufflepig.brief import _rna_alternatives_line
+    from trufflepig.main import _retained_cancer_type_differential_markdown
+    from trufflepig.report_view import build_report_view
+
+    analysis = {**unresolved_analysis(), "cancer_type": "PRAD", "cancer_name": "Prostate cancer",
+                "top_cancers": [("SARC", 1.0), ("SARC_LMS", .8), ("PRAD", .6)],
+                "candidate_trace": [{"code": "SARC", "support_score": 1},
+                                    {"code": "SARC_LMS", "support_score": .8},
+                                    {"code": "PRAD", "support_score": .6}]}
+    assert not build_report_view(analysis).cancer_type_alternatives
+    assert "SARC" not in _rna_alternatives_line(analysis, "PRAD")
+    assert "SARC" not in _retained_cancer_type_differential_markdown(analysis)
