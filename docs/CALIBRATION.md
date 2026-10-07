@@ -364,6 +364,11 @@ does not authorize an RNA-derived child subtype. This policy deliberately also
 abstains on true sarcomas when the independent evidence is withheld: abstention
 is not a negative sarcoma diagnosis.
 
+The same constraint applies to displayed RNA alternatives and sarcoma-specific
+marker/fusion-testing prompts. When identity is unresolved, per-gene muscle or
+stromal ratios are not presented as reliable purity estimates; raw model
+comparisons remain available for auditing the confound.
+
 Re-enabling an RNA sarcoma selector requires validation against benign muscle,
 stroma and mixed epithelial/structural samples. Agreement among transformations
 of the same lineage signal is not that validation. The clinical diagnosis uses
