@@ -97,4 +97,9 @@ jobs:
         run: bash test.sh -v -n 0 tests/test_cancer_type_evidence.py
 
       - name: Run remaining unit tests
-        run: bash test.sh -v -n 0 tests --ignore=tests/test_cancer_type_evidence.py
+        run: bash test.sh -v -n 0 tests --ignore=tests/test_cancer_type_evidence.py --ignore=tests/test_sarcoma_identity_policy.py
+
+      - name: Run sarcoma identity regression tests
+        # These exercise the complete reference-backed selector again. Run in
+        # a fresh process instead of retaining the rest of the suite's caches.
+        run: bash test.sh -v -n 0 tests/test_sarcoma_identity_policy.py
