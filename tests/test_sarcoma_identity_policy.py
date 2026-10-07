@@ -167,6 +167,7 @@ def test_unresolved_report_cannot_reintroduce_sarcoma_via_markers_or_narrative()
     assert "not yet in the curated" not in summary
     assert "Rare-marker prompt" not in summary
     assert "SARC_DFSP" not in summary
+    assert "Retained RNA differential" not in summary
     assert "do not establish tumor-cell origin" in summary
     assert not _rare_marker_hypotheses_markdown(analysis)
     assert "Report label name" not in _tumor_type_sanity_markdown(analysis)
@@ -174,3 +175,19 @@ def test_unresolved_report_cannot_reintroduce_sarcoma_via_markers_or_narrative()
     assert "Cancer identity**: unresolved" in bullets
     assert "integrated evidence selected UNRESOLVED" not in bullets
     assert "ahead of" not in bullets
+
+
+def test_shared_rna_cannot_prompt_sarcoma_fusion_testing_without_independent_context():
+    from trufflepig.main import _fusion_evidence_markdown, _integrated_evidence_bullets
+    from trufflepig.cancer_type_policy import reportable_fusion_expression_hypotheses
+
+    analysis = unresolved_analysis()
+    finding = {"rule_id": "ss18_ssx_tle1_program", "label": "Synovial sarcoma program",
+               "observed_genes": ["TLE1", "BCL2"], "expected_pair": "SS18--SSX1"}
+    analysis["fusion_expression_hypotheses"] = [finding]
+    assert not reportable_fusion_expression_hypotheses(analysis)
+    finalize_sarcoma_identity(analysis)
+    assert not _fusion_evidence_markdown(analysis)
+    assert "Synovial sarcoma" not in "\n".join(_integrated_evidence_bullets(analysis))
+    analysis.update(cancer_type="SARC", cancer_type_source="user-specified")
+    assert reportable_fusion_expression_hypotheses(analysis) == [finding]

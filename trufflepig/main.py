@@ -6585,6 +6585,12 @@ def _cancer_type_context_line(cancer_type_context):
     expression = cancer_type_context.label_for("expression")
     if not report:
         return ""
+    if cancer_type_context.report_code == "UNRESOLVED":
+        return (
+            "- **Cancer label roles**: tumor identity is unresolved. "
+            f"{reference} supplies an exploratory RNA reference only; shared muscle "
+            "or stromal expression cannot establish malignancy or sarcoma identity."
+        )
     source_kind = str(
         getattr(cancer_type_context, "best_expression_source_kind", "") or ""
     )
@@ -6874,6 +6880,8 @@ def _retained_cancer_type_differential_markdown(
     call_summary=None,
     decomp_results=None,
 ):
+    if analysis.get("cancer_type_abstention"):
+        return ""
     call_summary = call_summary or {}
     decomp_results = decomp_results or []
     selected_code = _report_label_code(analysis, call_summary)
@@ -7668,7 +7676,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         active_biology.append(
             f"{finding.get('label')}: {status} downstream program ({genes}; {source})"
         )
-    for finding in (analysis.get("fusion_expression_hypotheses") or [])[:2]:
+    from .cancer_type_policy import reportable_fusion_expression_hypotheses
+
+    for finding in reportable_fusion_expression_hypotheses(analysis)[:2]:
         genes = ", ".join(finding.get("observed_genes") or [])
         source = _report_expression_source_label(finding.get("expression_source"))
         active_biology.append(
@@ -7796,7 +7806,9 @@ def _fusion_evidence_markdown(analysis, *, heading: str = "## Fusion evidence") 
     findings = analysis.get("fusion_findings") or []
     rare_inference = analysis.get("rare_report_scope_inference") or {}
     fusion_effects = analysis.get("fusion_expression_effects") or []
-    fusion_hypotheses = analysis.get("fusion_expression_hypotheses") or []
+    from .cancer_type_policy import reportable_fusion_expression_hypotheses
+
+    fusion_hypotheses = reportable_fusion_expression_hypotheses(analysis)
     fusion_inputs_supplied = bool(analysis.get("fusion_inputs_supplied"))
     if (
         not records
@@ -9529,7 +9541,11 @@ def _generate_text_reports(
             lines.append(call_summary["site_note"] + "\n")
         if len(call_summary.get("hypothesis_display", [])) == 2:
             lines.append(
-                "Decomposition model comparison: selected report-compatible fit is **"
+                (
+                    "Exploratory decomposition: best-fitting reference model is **"
+                    if analysis.get("cancer_type_abstention")
+                    else "Decomposition model comparison: selected report-compatible fit is **"
+                )
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][0],
                     primary_code=cancer_code,
@@ -9541,12 +9557,17 @@ def _generate_text_reports(
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "**. The alternative is context, not a second report label.\n"
+                + (
+                    "**. Neither fit establishes tumor identity or a malignant-cell fraction.\n"
+                    if analysis.get("cancer_type_abstention")
+                    else "**. The alternative is context, not a second report label.\n"
+                )
             )
         if decomp_results:
             lines.append(
-                "| Hypothesis | Use | Score | Estimated tumor fraction | "
-                "Tissue score | Warnings |"
+                "| Hypothesis | Use | Score | "
+                + ("Conditional residual fraction" if analysis.get("cancer_type_abstention") else "Estimated tumor fraction")
+                + " | Tissue score | Warnings |"
             )
             lines.append("|------------|-----|-------|----------------|--------------|----------|")
             for row in decomp_results[:6]:
