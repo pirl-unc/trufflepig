@@ -103,7 +103,7 @@ def report_pdf_styles() -> dict:
             leading=19,
             spaceBefore=14,
             spaceAfter=9,
-            keepWithNext=False,
+            keepWithNext=True,
             textColor=colors.HexColor("#245b80"),
         ),
         "heading": ParagraphStyle(
@@ -114,7 +114,7 @@ def report_pdf_styles() -> dict:
             leading=15,
             spaceBefore=9,
             spaceAfter=6,
-            keepWithNext=False,
+            keepWithNext=True,
         ),
         "caption": ParagraphStyle(
             "Caption", parent=body, fontSize=9, leading=12, textColor=colors.HexColor("#536471")
