@@ -10,8 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     # Force a headless matplotlib backend so figure-rendering tests never try to
-    # open a display on the runner. TEST_SH_MAX caps pytest-xdist at one worker so
-    # the multi-GB/worker reference matrices can't OOM-kill the runner.
+    # open a display. Keep the wrapper's worker cap as a backstop; the suite below
+    # runs in one process to avoid retaining a controller plus a worker on CI.
     env:
       MPLBACKEND: Agg
       TEST_SH_MAX: "1"
@@ -89,8 +89,17 @@ jobs:
           # tests would silently *skip* and CI would go green without them.
           python -c "from pyensembl import EnsemblRelease; releases = (75, 81, 112, 114, 115); assert all(EnsemblRelease(r).genes_by_name('TP53') for r in releases); print(f'Ensembl releases {releases} ready')"
 
-      - name: Run unit tests
-        # test.sh sizes pytest-xdist workers from the runner's CPU + free RAM
-        # (Linux branch reads /proc/meminfo), so it stays within the runner's
-        # memory budget without a hand-tuned -n.
-        run: bash test.sh -q
+      - name: Run cancer-type evidence tests
+        # The evidence tests populate several large model/reference caches.
+        # Give them a fresh serial process; Python 3.9 runners were repeatedly
+        # killed while retaining those caches alongside earlier test state.
+        # Both invocations retain the wrapper's lock and thread limits.
+        run: bash test.sh -v -n 0 tests/test_cancer_type_evidence.py
+
+      - name: Run remaining unit tests
+        run: bash test.sh -v -n 0 tests --ignore=tests/test_cancer_type_evidence.py --ignore=tests/test_sarcoma_identity_policy.py
+
+      - name: Run sarcoma identity regression tests
+        # These exercise the complete reference-backed selector again. Run in
+        # a fresh process instead of retaining the rest of the suite's caches.
+        run: bash test.sh -v -n 0 tests/test_sarcoma_identity_policy.py

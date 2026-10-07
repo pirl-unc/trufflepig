@@ -1,0 +1,43 @@
+{% set statuses = {
+    'major_benefit': 'major prior benefit',
+    'benefit': 'prior benefit',
+    'stable_disease': 'prior disease control',
+    'current': 'current treatment',
+    'no_benefit': 'no prior benefit',
+    'progression': 'prior progression',
+    'intolerance': 'prior intolerance',
+    'contraindicated': 'a contraindication'
+} %}
+{% set relations = {
+    'exact_agent': 'this agent',
+    'contraindicated_component': 'a component of this treatment',
+    'unresolved_product': 'product formulation is unspecified in this therapy row',
+    'target_modality': 'this target and modality'
+} %}
+Supplied treatment history reports {{ statuses[record.status] }} with
+{{ therapy }} ({{ relations[match_kind] }}).
+{% if show_identity %}
+Registered identity: {{ identity.canonical_name }}.
+{% endif %}
+{% if action == 'prior_benefit' %}
+This evidence from the patient outranks the RNA source estimate, but current
+suitability, resistance, toxicity, organ function, and eligibility still require
+clinical review.
+{% elif action == 'current' %}
+Reconcile response and toxicity before presenting it as a new start.
+{% elif action == 'contraindicated' %}
+This pathway is excluded because of supplied treatment history.
+{% if unresolved_product %}
+Reconcile the exact product before reconsidering this pathway.
+{% endif %}
+{% elif action == 'negative' %}
+Do not prioritize the same treatment without a specific clinical rationale.
+{% endif %}
+{% if record.note %}
+Supplied note: {{ record.note | replace('|', '/') }}.
+{% endif %}
+{% if record.source %}
+Supplied source: {{ record.source | replace('|', '/') }}.
+{% elif record.source_path %}
+Supplied file: {{ record.source_path | replace('|', '/') }}.
+{% endif %}

@@ -438,7 +438,7 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert neighborhood_calls[0]["label_all"] is False
     assert neighborhood_calls[0]["focus_nearest_cancers"] == 25
     assert neighborhood_calls[0]["focus_nearest_normals"] == 10
-    assert len(report_calls) == 2
+    assert len(report_calls) == 1
     assert len(target_report_calls) == 1
     assert (tmp_path / "test-output" / "out-summary.md").exists()
     assert (tmp_path / "test-output" / "out-evidence.md").exists()
@@ -1971,6 +1971,34 @@ def test_scatter_uses_an_honest_available_reference_fallback(
     assert cohort_label == expected_label
     assert ") (" not in cohort_label
     plot_scatter_mod.plt.close(figures["markers"])
+
+
+def test_scatter_does_not_copy_retained_transcript_payload(monkeypatch):
+    class RetainedTranscripts:
+        def __deepcopy__(self, memo):
+            raise AssertionError("Scatter copied retained transcript data")
+
+    payload = RetainedTranscripts()
+    sample = pd.DataFrame({
+        "gene_id": ["ENSG00000141510.2", "ENSG00000146648"],
+        "gene_display_name": ["GENE1", "GENE2"],
+        "TPM": [10.0, 5.0],
+    })
+    sample.attrs["transcript_expression"] = payload
+    reference = pd.DataFrame({
+        "Ensembl_Gene_ID": ["ENSG00000141510", "ENSG00000146648"],
+        "BRCA_TPM": [2.0, 1.0],
+    })
+    monkeypatch.setattr(
+        plot_scatter_mod, "pan_cancer_expression", lambda **kwargs: reference.copy()
+    )
+    data, *_ = plot_scatter_mod._prepare_sample_vs_cancer_data(
+        sample, {"markers": ["ENSG00000141510"]}, "BRCA"
+    )
+    assert data["sample_tpm"].tolist() == [10.0, 5.0]
+    assert data["cohort_tpm"].tolist() == [2.0, 1.0]
+    assert data["gene_id"].tolist() == ["ENSG00000141510", "ENSG00000146648"]
+    assert sample.attrs["transcript_expression"] is payload
 
 
 def test_scatter_axis_describes_exact_reference_and_unit_as_one_phrase(monkeypatch):

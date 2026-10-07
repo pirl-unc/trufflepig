@@ -501,7 +501,7 @@ def test_treatment_path_context_dedupes_curated_note_prefix():
         "eligibility_note": "clinical-trial follow-up; not default standard",
     }
     context = therapy_path_context(row)
-    assert context == "clinical-trial follow-up; not default standard"
+    assert context == "This is a clinical-trial follow-up pathway, not default standard treatment."
     assert "clinical-trial follow-up; clinical-trial follow-up" not in context
 
 

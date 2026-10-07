@@ -182,8 +182,8 @@ def test_rare_marker_promotion_routes_into_rare_scope_inference():
     assert fine_scope_inference is None
 
 
-def test_fine_reference_promotion_routes_into_fine_scope_inference(monkeypatch):
-    """An OS osteogenic-program match should populate fine_scope_inference."""
+def test_osteogenic_reference_cannot_promote_an_rna_only_sarcoma_scope(monkeypatch):
+    """Bone/mesenchymal RNA remains context throughout the main wiring."""
     import trufflepig.cancer_type_evidence as evidence
     from trufflepig.cancer_type_evidence import _FINE_REFERENCE_SPECS
 
@@ -262,12 +262,16 @@ def test_fine_reference_promotion_routes_into_fine_scope_inference(monkeypatch):
         fine_scope_inference=None,
     )
 
-    assert selected_scope is not None
-    assert selected_scope["cancer_type"] == "SARC_OS"
-    assert "fine_reference" in selected_scope["evidence_sources"]
-    assert report_scope_cancer_type == "SARC_OS"
+    assert selected_scope is None
+    osteogenic = next(row for row in _evidence["evidence"] if row["cancer_type"] == "SARC_OS")
+    assert "fine_reference" in osteogenic["evidence_sources"]
+    assert not osteogenic["can_select_report_label"]
+    from trufflepig.cancer_type_policy import SARCOMA_IDENTITY_REASON
+
+    assert SARCOMA_IDENTITY_REASON in osteogenic["blocking_reasons"]
+    assert report_scope_cancer_type is None
     assert rare_scope_inference is None
-    assert fine_scope_inference is selected_scope
+    assert fine_scope_inference is None
 
 
 def test_routing_uses_selected_by_not_set_membership(monkeypatch):

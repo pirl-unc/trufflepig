@@ -172,13 +172,10 @@ def infantile_spindle_guidance(cancer_code, analysis=None) -> dict:
             "BRAF rearrangement/internal deletion, and other kinase fusions. Pan-TRK "
             "IHC can screen but does not replace molecular confirmation."
         ),
-        "therapy": (
-            "A confirmed NTRK fusion supports an FDA-approved TRK inhibitor; the "
-            "strongest prospective IFS evidence is for larotrectinib (94% objective "
-            "response within six cycles in COG ADVL1823). EGFR KDD/ITD "
-            "has only case-level/off-label TKI evidence in CMN-like disease and should "
-            "go to pediatric/rare-tumor molecular review."
-        ),
+        "therapy": " ".join([
+            *(["A confirmed NTRK fusion supports an FDA-approved TRK inhibitor; the strongest prospective IFS evidence is for larotrectinib (94% objective response within six cycles in COG ADVL1823)."] if ntrk_genes or not egfr_kdd else []),
+            *(["EGFR KDD/ITD has only case-level/off-label TKI evidence in CMN-like disease and belongs in pediatric/rare-tumor molecular review."] if egfr_kdd or not ntrk_genes else []),
+        ]),
         "upstream_driver_spectrum_available": {
             candidate: bool(rows) for candidate, rows in upstream.items()
         },

@@ -90,7 +90,7 @@ def test_dedicated_fusion_input_drives_broad_context_and_matched_therapy():
     )
 
     assert "confirmed supplied NTRK fusion involving NTRK3" in report
-    assert "- **NTRK3** — larotrectinib" in report
+    assert "larotrectinib ·" in report
 
 
 def test_unknown_fusion_details_do_not_hide_confirmed_therapy_evidence():
@@ -106,7 +106,7 @@ def test_unknown_fusion_details_do_not_hide_confirmed_therapy_evidence():
         )
 
         assert "confirmed supplied NTRK fusion involving NTRK3" in report
-        assert "- **NTRK3** — larotrectinib" in report
+        assert "larotrectinib ·" in report
 
 
 def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
@@ -138,7 +138,7 @@ def test_structured_gene_cell_fusion_pair_reaches_ntrk_therapy(tmp_path):
         disease_state="",
     )
     assert "confirmed supplied NTRK fusion involving NTRK3" in report
-    assert "- **NTRK3** — larotrectinib" in report
+    assert "larotrectinib ·" in report
 
 
 def test_fusion_commentary_does_not_create_a_negated_partner():
@@ -152,7 +152,7 @@ def test_fusion_commentary_does_not_create_a_negated_partner():
         disease_state="",
     )
     assert "confirmed supplied NTRK fusion" not in report
-    assert "- **NTRK3** — larotrectinib" not in report
+    assert "larotrectinib ·" not in report
 
 
 def test_explicitly_negative_fusion_calls_are_not_confirmed():
@@ -172,7 +172,7 @@ def test_explicitly_negative_fusion_calls_are_not_confirmed():
             disease_state="",
         )
         assert "confirmed supplied NTRK fusion" not in report
-        assert "- **NTRK3** — larotrectinib" not in report
+        assert "larotrectinib ·" not in report
 
 
 def test_inline_negative_egfr_event_never_enables_therapy():
@@ -189,7 +189,7 @@ def test_inline_negative_egfr_event_never_enables_therapy():
             cancer_code="CMN",
             disease_state="",
         )
-        assert "- **EGFR**" not in report
+        assert "EGFR TKI review (afatinib; osimertinib secondary) ·" not in report
 
 
 def test_singular_and_plural_rearrangement_wording_enable_ntrk_therapy():
@@ -209,7 +209,7 @@ def test_singular_and_plural_rearrangement_wording_enable_ntrk_therapy():
         )
 
         assert "confirmed supplied NTRK fusion involving NTRK3" in report
-        assert "- **NTRK3** — larotrectinib" in report
+        assert "larotrectinib ·" in report
 
 
 def test_ifs_summary_prioritizes_larotrectinib_for_confirmed_ntrk_fusion():
@@ -224,9 +224,9 @@ def test_ifs_summary_prioritizes_larotrectinib_for_confirmed_ntrk_fusion():
 
     assert "IFS is a heterogeneous infantile MAPK-rearranged spindle-cell tumor" in report
     assert "confirmed supplied NTRK fusion involving NTRK3" in report
-    assert "- **NTRK3** — larotrectinib" in report
+    assert "larotrectinib ·" in report
     assert "94% objective response" in report
-    assert "target RNA is context only" in report
+    assert "target rna is context only" in report.lower()
 
 
 def test_ntrk_expression_alone_does_not_create_a_drug_shortlist():
@@ -240,7 +240,7 @@ def test_ntrk_expression_alone_does_not_create_a_drug_shortlist():
     )
 
     assert "larotrectinib" in report  # conditional treatment-relevance guidance
-    assert "- **NTRK" not in report
+    assert "larotrectinib ·" not in report
     assert "structural-variant testing that covers NTRK1/2/3 fusions" in report
 
 
@@ -255,7 +255,7 @@ def test_braf_internal_deletion_prompts_workup_without_inventing_a_drug():
     )
 
     assert "BRAF rearrangement/internal deletion" in report
-    assert "- **BRAF**" not in report
+    assert "dabrafenib ·" not in report
     assert "dabrafenib" not in report.lower()
     assert "trametinib" not in report.lower()
 
@@ -273,10 +273,10 @@ def test_cmn_egfr_kdd_surfaces_case_level_egfr_tki_review_with_site_caveat():
     assert "CMN is a kidney-site-qualified pathologic diagnosis" in report
     assert "neither event alone establishes the diagnosis" in report
     assert (
-        "- **EGFR** — EGFR TKI review (afatinib; osimertinib secondary)" in report
+        "EGFR TKI review (afatinib; osimertinib secondary) ·" in report
     )
-    assert "case-level evidence only" in report
-    assert "target RNA is context only" in report
+    assert "case-level/off-label TKI evidence" in report
+    assert "target rna is context only" in report.lower()
 
 
 def test_egfr_expression_alone_does_not_create_an_egfr_tki_shortlist():
@@ -290,7 +290,7 @@ def test_egfr_expression_alone_does_not_create_an_egfr_tki_shortlist():
     )
 
     assert "EGFR KDD/ITD" in report
-    assert "- **EGFR**" not in report
+    assert "EGFR TKI review (afatinib; osimertinib secondary) ·" not in report
 
 
 def test_exact_spindle_entities_have_complete_conditional_target_panels():
@@ -321,7 +321,7 @@ def test_broad_sarcoma_egfr_kdd_is_context_not_a_cmn_relabel():
 
     assert "raises an infantile spindle/CMN differential" in report
     assert "do not establish IFS or CMN" in report
-    assert "- **EGFR**" in report
+    assert "EGFR TKI (afatinib / osimertinib) ·" in report
 
 
 def test_full_report_driver_spectrum_preserves_entity_and_frequency(monkeypatch):
@@ -362,3 +362,15 @@ def test_full_report_driver_spectrum_preserves_entity_and_frequency(monkeypatch)
     assert "| CMN | EGFR kinase-domain ITD | 43/80 (54%) |" in differential
     assert "prioritize confirmatory testing" in differential
     assert "do not establish this sample's diagnosis" in differential
+
+
+def test_matched_egfr_report_does_not_repeat_generic_testing_tasks():
+    report = build_summary(_analysis("SARC", "EGFR KDD"), _ranges(EGFR=300.0),
+                           cancer_code="SARC", disease_state="")
+    therapy_text = report.split("## Therapy rationale and blockers", 1)[1].split("## Information needed", 1)[0]
+    assert "case-level/off-label TKI evidence" in therapy_text
+    assert "larotrectinib" not in therapy_text
+    assert "confirm mutation / fusion / amplification status" not in therapy_text
+    assert "off-label follow-up; off-label/trial follow-up" not in therapy_text
+    assert "The supplied variant evidence matches" in therapy_text
+    assert "supplied clinical assay reports" in report.split("## Information needed", 1)[1]

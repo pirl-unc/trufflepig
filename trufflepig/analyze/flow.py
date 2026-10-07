@@ -652,6 +652,8 @@ def discover_output_artifacts(
 def write_analysis_output_records(
     run: AnalyzeRun,
     report_view: "ReportView",
+    *,
+    content,
 ) -> dict[str, str]:
     """Write the structured report and run manifest for every analyze mode.
 
@@ -666,11 +668,7 @@ def write_analysis_output_records(
         run.paths.out_dir,
         run.paths.prefix_base,
         report_view=report_view,
-        treatment_history=(
-            (run.steps.get("input").outputs or {}).get("treatment_history", [])
-            if run.steps.get("input") is not None
-            else []
-        ),
+        content=content,
     )
     report_pdf_path = build_interpretive_report_pdf(run.paths.out_dir)
     manifest_path = run.paths.file("manifest.json")

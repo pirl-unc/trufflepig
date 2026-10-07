@@ -406,21 +406,15 @@ def test_fusion_surrogate_pan_cancer_applies_to_any_code():
         assert required in genes, f"LUAD fusion surrogate missing: {required}"
 
 
-def test_brief_renders_corrected_subtype():
-    """End-to-end pin: when the analysis dict carries a liposarcoma
-    winning_subtype, the decomposition top template is met_bone, AND
-    MDM2 is amplified (activating the 12q-amp pair), the summary.md
-    should render osteosarcoma-consistent + a subtype note explaining
-    the swap. Reproduces the Sid public osteosarcoma-data failure mode.
-
-    This version exercises the tumor_tpm_by_symbol-from-ranges_df
-    path — the production analyze call builds the TPM dict from
-    ranges_df, not from an analysis key."""
+def test_brief_does_not_infer_sarcoma_subtype_from_bone_background():
+    """Bone context and MDM2 RNA do not establish a sarcoma subtype or DNA amplification."""
     import pandas as pd
 
     from trufflepig.reporting import cancer_key_genes_lookup_for_analysis
 
     analysis = {
+        "cancer_type": "SARC",
+        "cancer_type_source": "user-specified",
         "purity": {
             "overall_estimate": 0.74,
             "overall_lower": 0.42,
@@ -454,21 +448,14 @@ def test_brief_renders_corrected_subtype():
         disease_state="",
         sample_id="synthetic-bone-mdm2",
     )
-    assert "osteosarcoma-consistent" in summary, summary
-    assert "Bone-associated context favors osteosarcoma over liposarcoma" in summary, (
-        summary
-    )
-    assert cancer_key_genes_lookup_for_analysis("SARC", analysis, ranges_df) == (
-        "SARC_OS",
-        None,
-    )
-    assert "MDM2 / CDK4 / FRS2 amplification" in summary, summary
-    assert "site_template tiebreaker swapped" not in summary
+    assert "osteosarcoma-consistent" not in summary
+    assert "Bone-associated context favors osteosarcoma" not in summary
+    assert "MDM2 / CDK4 / FRS2 amplification" not in summary
+    assert "**Cancer call:** SARC" in summary
+    assert cancer_key_genes_lookup_for_analysis("SARC", analysis, ranges_df) == ("SARC", None)
 
-
-def test_brief_uses_site_hint_for_corrected_subtype_without_decomposition():
-    """Explicit site constraints can resolve subtype even when decomposition
-    did not produce a best template."""
+def test_supplied_bone_site_does_not_establish_sarcoma_subtype():
+    """Bone context and MDM2 RNA do not establish a sarcoma subtype or DNA amplification."""
     import pandas as pd
 
 
@@ -512,23 +499,20 @@ def test_brief_uses_site_hint_for_corrected_subtype_without_decomposition():
         sample_id="synthetic-bone-mdm2",
     )
 
-    assert "osteosarcoma-consistent" in summary, summary
-    assert "Bone-associated context favors osteosarcoma over liposarcoma" in summary, (
-        summary
-    )
-
+    assert "osteosarcoma-consistent" not in summary
+    assert "Bone-associated context favors osteosarcoma" not in summary
+    assert "MDM2 / CDK4 / FRS2 amplification" not in summary
+    assert "**Cancer call:** SARC" in summary
 
 def test_key_genes_lookup_switches_to_direct_os_panel():
-    """Degenerate resolution can land on a standalone cancer code.
-
-    When that happens, report curation must use the resolved code's
-    panel directly instead of the umbrella parent union.
-    """
+    """An independently supplied subtype uses its own panel despite a stale RNA winner."""
     import pandas as pd
 
     from trufflepig.reporting import cancer_key_genes_lookup_for_analysis
 
     analysis = {
+        "cancer_type": "SARC_OS",
+        "cancer_type_source": "user-specified",
         "candidate_trace": [
             {"code": "SARC", "winning_subtype": "SARC_LPS_UNSPEC"},
         ],
@@ -545,7 +529,7 @@ def test_key_genes_lookup_switches_to_direct_os_panel():
         ]
     )
     assert cancer_key_genes_lookup_for_analysis(
-        "SARC",
+        "SARC_OS",
         analysis,
         ranges_df=ranges_df,
     ) == ("SARC_OS", None)
@@ -561,6 +545,8 @@ def test_key_genes_lookup_matches_uppercase_parent_subtype_rows():
     from trufflepig.reporting import cancer_key_genes_lookup_for_analysis
 
     analysis = {
+        "cancer_type": "SARC_MPNST",
+        "cancer_type_source": "user-specified",
         "candidate_trace": [
             {"code": "SARC", "winning_subtype": "SARC_MPNST"},
         ],
@@ -570,22 +556,23 @@ def test_key_genes_lookup_matches_uppercase_parent_subtype_rows():
         },
     }
     assert cancer_key_genes_lookup_for_analysis(
-        "SARC",
+        "SARC_MPNST",
         analysis,
     ) == ("SARC", "MPNST")
 
 
-def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
+def test_brief_uses_supplied_os_scope_without_stale_targets():
     """User-facing pin for the Sid public osteosarcoma-data failure mode.
 
-    The summary should stop surfacing DDLPS-only therapies once the
-    bone-site tiebreaker resolves the sample to osteosarcoma, while
-    still filtering stale OS rows such as miscited ganitumab.
+    A supplied osteosarcoma diagnosis must not inherit DDLPS-only therapies
+    from a stale expression winner. Stale OS rows remain filtered too.
     """
     import pandas as pd
 
 
     analysis = {
+        "cancer_type": "SARC_OS",
+        "cancer_type_source": "user-specified",
         "purity": {
             "overall_estimate": 0.74,
             "overall_lower": 0.42,
@@ -593,7 +580,7 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
         },
         "purity_confidence": type("PT", (), {"tier": "low"})(),
         "sample_context": None,
-        "cancer_name": "Sarcoma",
+        "cancer_name": "Osteosarcoma",
         "candidate_trace": [
             {"code": "SARC", "winning_subtype": "SARC_LPS_UNSPEC"},
         ],
@@ -637,11 +624,11 @@ def test_brief_uses_os_scope_after_corrected_subtype_without_stale_targets():
     summary = render_summary(
         analysis,
         ranges_df=ranges_df,
-        cancer_code="SARC",
+        cancer_code="SARC_OS",
         disease_state="",
         sample_id="synthetic-bone-os-panel",
     )
-    assert "Using osteosarcoma-specific therapy evidence" in summary, summary
+    assert "curated SARC_OS panel" in summary, summary
     assert "ganitumab + chemo" not in summary, summary
     assert "brigimadlin" not in summary, summary
 

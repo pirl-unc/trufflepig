@@ -73,8 +73,8 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
     assert "crizotinib" in set(panel["agent"])
     assert panel["agent"].eq("crizotinib").sum() == 1
     assert "tumor_agnostic_alteration" in set(panel["eligibility_basis"])
-    assert "- **ALK** — crizotinib" in report
-    assert "validated ALK IHC or a molecular method such as FISH" in report
+    assert "crizotinib ·" in report
+    assert "validated ALK IHC or an orthogonal molecular method such as FISH" in report
     assert "imatinib-resistant GIST" not in report
 
     expression_only = build_summary(
@@ -83,8 +83,8 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
         cancer_code="SARC_IMT",
         disease_state="",
     )
-    assert "- **ALK** — crizotinib" not in expression_only
-    assert "- **NTRK" not in expression_only
+    assert "crizotinib ·" not in expression_only
+    assert "larotrectinib ·" not in expression_only
 
     for incompatible_event in (
         "ALK loss",
@@ -98,7 +98,7 @@ def test_imt_panel_is_exact_and_crizotinib_requires_supplied_alk_event():
             cancer_code="SARC_IMT",
             disease_state="",
         )
-        assert "- **ALK** — crizotinib" not in incompatible
+        assert "crizotinib ·" not in incompatible
 
 
 def test_dedicated_alk_fusion_input_enables_exact_imt_therapy():
@@ -119,7 +119,7 @@ def test_dedicated_alk_fusion_input_enables_exact_imt_therapy():
         disease_state="",
     )
 
-    assert "- **ALK** — crizotinib" in report
+    assert "crizotinib ·" in report
 
 
 def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():
@@ -134,7 +134,7 @@ def test_imt_singular_and_plural_rearrangement_wording_enable_crizotinib():
             disease_state="",
         )
 
-        assert "- **ALK** — crizotinib" in report
+        assert "crizotinib ·" in report
 
 
 def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
@@ -170,7 +170,7 @@ def test_structured_negative_alk_result_never_enables_crizotinib(tmp_path):
         )
 
         assert record["result_status"] == result_value
-        assert "- **ALK** — crizotinib" not in report
+        assert "crizotinib ·" not in report
 
 
 def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path):
@@ -221,7 +221,7 @@ def test_machine_readable_negative_alk_results_never_enable_crizotinib(tmp_path)
         )
 
         assert record["result_status"] == str(result_value)
-        assert "- **ALK** — crizotinib" not in report
+        assert "crizotinib ·" not in report
 
 
 def test_structured_pass_alk_results_enable_crizotinib(tmp_path):
@@ -251,7 +251,7 @@ def test_structured_pass_alk_results_enable_crizotinib(tmp_path):
         )
 
         assert record["result_status"] == result_value
-        assert "- **ALK** — crizotinib" in report
+        assert "crizotinib ·" in report
 
 
 def test_classification_status_does_not_suppress_verified_alk_event(tmp_path):
@@ -281,7 +281,7 @@ def test_classification_status_does_not_suppress_verified_alk_event(tmp_path):
         )
 
         assert record["result_status"] == status
-        assert "- **ALK** — crizotinib" in report
+        assert "crizotinib ·" in report
 
 
 def test_structured_filter_status_controls_alk_therapy_evidence(tmp_path):
@@ -314,7 +314,7 @@ def test_structured_filter_status_controls_alk_therapy_evidence(tmp_path):
         )
 
         assert record["filter_status"] == filter_status
-        assert ("- **ALK** — crizotinib" in report) is expected
+        assert ("crizotinib ·" in report) is expected
 
 
 def test_generic_filter_confidence_does_not_suppress_alk_therapy_evidence(tmp_path):
@@ -345,7 +345,7 @@ def test_generic_filter_confidence_does_not_suppress_alk_therapy_evidence(tmp_pa
         )
 
         assert record["filter_semantics"] == "generic"
-        assert "- **ALK** — crizotinib" in report
+        assert "crizotinib ·" in report
 
 
 def test_exact_report_scope_wins_over_broad_reference_argument():
@@ -381,9 +381,9 @@ def test_dfsp_fusion_matches_pdgfb_and_surfaces_only_imatinib():
     )
 
     assert list(panel["agent"]) == ["imatinib"]
-    assert "- **PDGFB** — imatinib" in report
+    assert "imatinib ·" in report
     assert "COL1A1-PDGFB" in report
-    assert "target RNA is context only" in report
+    assert "target rna is context only" in report.lower()
 
     histology_only = build_summary(
         _analysis("SARC_DFSP"),
@@ -391,7 +391,7 @@ def test_dfsp_fusion_matches_pdgfb_and_surfaces_only_imatinib():
         cancer_code="SARC_DFSP",
         disease_state="",
     )
-    assert "- **PDGFB** — imatinib" in histology_only
+    assert "imatinib ·" in histology_only
 
 
 def test_pecoma_uses_histology_gated_nab_sirolimus_without_expression_gate():

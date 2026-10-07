@@ -171,6 +171,14 @@ def build_report_view(
     sample_mode = analysis["sample_mode"]
     if not isinstance(cancer_type, str) or not cancer_type.strip():
         raise ValueError("Finalized analysis cancer_type must be a non-empty string")
+    if analysis.get("cancer_type_source") == "auto-detected":
+        from .cancer_type_policy import (
+            requires_independent_sarcoma_identity,
+            sarcoma_identity_is_supplied,
+        )
+
+        if requires_independent_sarcoma_identity(cancer_type) and not sarcoma_identity_is_supplied(analysis, cancer_type):
+            raise ValueError("Cannot finalize an RNA-only sarcoma report; finalize the identity abstention first")
     if not isinstance(sample_mode, str) or sample_mode not in {
         "solid",
         "mesenchymal",
@@ -208,6 +216,10 @@ def build_report_view(
         if isinstance(frac, bool) or not isinstance(frac, Real):
             raise TypeError("Finalized analysis candidate support must be numeric")
         if code in excluded:
+            continue
+        from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+        if requires_independent_sarcoma_identity(code) and not sarcoma_identity_is_supplied(analysis, code):
             continue
         alternatives.append((code, float(frac)))
 

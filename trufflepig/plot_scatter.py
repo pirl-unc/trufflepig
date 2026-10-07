@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 from adjustText import adjust_text
 
-from .common import _guess_gene_cols
+from .common import _guess_gene_cols, without_dataframe_attrs
 from trufflepig.reference import pan_cancer_expression
 from .plot_data_helpers import _strip_ensembl_version
 from .plot_strip import default_gene_sets
@@ -55,7 +55,10 @@ def _prepare_sample_vs_cancer_data(
 
     gene_id_col, gene_name_col = _guess_gene_cols(df_gene_expr)
 
-    df = df_gene_expr.copy()
+    # Retained transcript data in attrs is irrelevant to this gene-level plot.
+    # Pandas otherwise deep-copies that payload on every derived Series.
+    with without_dataframe_attrs(df_gene_expr):
+        df = df_gene_expr.copy()
     df[gene_id_col] = df[gene_id_col].astype(str).map(_strip_ensembl_version)
 
     cat_to_ids, id_to_name = normalize_gene_sets(gene_sets)
@@ -131,9 +134,9 @@ def _prepare_sample_vs_cancer_data(
     name_from_df = dict(zip(df[gene_id_col].astype(str), df[gene_name_col].astype(str)))
 
     rows = []
-    for _, row in df.iterrows():
-        gid = str(row[gene_id_col])
-        tpm = float(row[tpm_col])
+    for raw_gid, raw_tpm in zip(df[gene_id_col], df[tpm_col]):
+        gid = str(raw_gid)
+        tpm = float(raw_tpm)
         ref_tpm = ref_lookup.get(gid)
         if ref_tpm is None:
             continue

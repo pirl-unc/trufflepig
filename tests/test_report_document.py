@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from trufflepig import report_document as rd
+from trufflepig.report_content import ReportContent
+from trufflepig.report_language import report_plain_text
 from trufflepig.analyze import (
     AnalyzeConfig,
     AnalyzePaths,
@@ -23,81 +25,65 @@ from trufflepig.analyze import (
 from trufflepig.report_view import build_report_view
 
 
-@pytest.mark.parametrize("text, expected", [
-    ("HLA A*02:01 / A*24:02", "HLA A*02:01 / A*24:02"),
-    ("**HLA A*02:01 / A*24:02**", "HLA A*02:01 / A*24:02"),
-    ("*HLA A*02:01 / A*24:02*", "HLA A*02:01 / A*24:02"),
-    ("`HLA A*02:01 / A*24:02`", "HLA A*02:01 / A*24:02"),
-    ("**A*02:01P**; A*02:05P", "A*02:01P; A*02:05P"),
-    ("[A*02:01:01:01N](https://example.org)", "A*02:01:01:01N"),
-    (r"\*literal\* and A\*02:01", "*literal* and A*02:01"),
-    ("**Important:** A*02:01 is *required*.", "Important: A*02:01 is required."),
-])
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("HLA A*02:01 / A*24:02", "HLA A*02:01 / A*24:02"),
+        ("**HLA A*02:01 / A*24:02**", "HLA A*02:01 / A*24:02"),
+        ("*HLA A*02:01 / A*24:02*", "HLA A*02:01 / A*24:02"),
+        ("`HLA A*02:01 / A*24:02`", "HLA A*02:01 / A*24:02"),
+        ("**A*02:01P**; A*02:05P", "A*02:01P; A*02:05P"),
+        ("[A*02:01:01:01N](https://example.org)", "A*02:01:01:01N"),
+        (r"\*literal\* and A\*02:01", "*literal* and A*02:01"),
+        ("**Important:** A*02:01 is *required*.", "Important: A*02:01 is required."),
+    ],
+)
 def test_markdown_preserves_hla_literals_and_genuine_formatting(text, expected):
-    assert rd.clean_markdown(text) == expected
+    assert report_plain_text(text) == expected
 
-
-def test_hla_identifiers_round_trip_into_structured_report(tmp_path):
-    _write_reports(tmp_path)
-    summary = tmp_path / f"{_PREFIX}-summary.md"
-    summary.write_text(summary.read_text() + "\n**Supplied HLA:** A*02:01 / A*24:02\n")
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
-    assert rd.record_value(doc["records"], "Supplied HLA") == "A*02:01 / A*24:02"
-
-_SUMMARY = """# Summary
-
-**Cancer call:** PRAD (Prostate adenocarcinoma).
-**Purity:** 10% (model interval 6%–16%, moderate confidence).
-**Sample:** exome capture; preservation inferred as FFPE.
-**RNA quant QC:** salmon; 21k genes.
-**Cancer-type basis:** RNA-inferred PRAD context.
-**Mismatch-repair RNA context:** MMR ensemble favors proficient.
-**Disease state:** castrate-resistant pattern.
-
-## Top candidate therapies
-
-### Approved pathway / eligibility pending
-
-- **FOLH1** — lutetium-177 PSMA (Approved, mCRPC). tumor-supported; 128 tumor-source bulk TPM (model interval 100-150); guideline-standard approved pathway.
-- **AR** — enzalutamide (Approved, mCRPC). mixed-source; 48 tumor-source bulk TPM (model interval 40-50); guideline-standard approved pathway.
-
-## Notable biomarker outliers
-
-- FOLH1 - amplified, top 2%.
-
-## Caveats
-
-- Confirm MSI-H / dMMR status before immunotherapy.
-"""
-
-_ANALYSIS = """# Analysis
-
-## Therapy Prioritization
-
-| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
-|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FOLH1** | lu-psma | radioligand | approved | mCRPC | 142.0 | tumor 128 | 12 | tumor-supported; approved standard |
-| AR | enzalutamide | ARSI | approved | mCRPC | 50.0 | tumor 48 | 2 | tumor-supported |
-"""
-
-_EVIDENCE = """# Evidence
-
-### Surface Protein Targets
-
-| Gene | Value | Model interval | Bulk TPM | vs ref | Ref %ile | TME | Attribution | Therapies |
-|------|-------|----------------|----------|--------|----------|-----|-------------|-----------|
-| FOLH1 | 128 | 100-150 | 142 | +3 | 97 | tumor-enriched | tumor 128 / endothelial 12 - broadly expr. | lu-psma |
-"""
 
 _PREFIX = "sampleX"
 
 
-def _write_reports(tmp_path: Path, *, emit_figures=("sample-context", "purity-methods")) -> Path:
-    (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
-    (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS)
-    (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
+def _content():
+    return ReportContent(
+        _PREFIX,
+        [
+            {
+                "id": "conclusion",
+                "title": "Conclusion and supporting evidence",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "text": "**Cancer call:** PRAD. Low confidence; competing evidence remains.",
+                    },
+                    {"kind": "paragraph", "text": "**Supplied HLA:** A*02:01 / A*24:02"},
+                ],
+            },
+            {
+                "id": "therapies",
+                "title": "Therapy rationale and blockers",
+                "blocks": [
+                    {
+                        "kind": "paragraph",
+                        "text": "Prior treatment benefit supports review; current eligibility remains unresolved.",
+                    },
+                ],
+            },
+            {"id": "information", "title": "Information needed", "blocks": []},
+            {"id": "evidence", "title": "Detailed evidence and figures", "blocks": []},
+        ],
+        [{"agent": "FAP radioligand", "selected": True, "rationale": ["major prior benefit"]}],
+        [{"key": "hla_typing", "affects": ["afami-cel"]}],
+        None,
+        [],
+    )
+
+
+def _write_reports(tmp_path, *, emit_figures=("sample-context", "purity-methods")):
+    # Stale Markdown must have no influence on the authoritative document.
+    (tmp_path / f"{_PREFIX}-summary.md").write_text("# Stale call and recommendations")
     for suffix in emit_figures:
-        # A one-byte stand-in is enough: the manifest gates on file presence, not content.
         (tmp_path / f"{_PREFIX}-{suffix}.png").write_bytes(b"\x89PNG")
     return tmp_path
 
@@ -115,42 +101,58 @@ def _report_view():
     )
 
 
-def test_document_carries_headline_records_tables_and_figures(tmp_path):
+def test_document_preserves_authored_content_without_reading_markdown(tmp_path):
     _write_reports(tmp_path)
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
-
-    assert doc["schema_version"] == rd.SCHEMA_VERSION
-    assert doc["prefix"] == _PREFIX
-    # Headline is taken from the frozen ReportView, not scraped.
+    content = _content()
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view(), content=content)
+    assert doc["schema_version"] == 2
     assert doc["headline"]["cancer_type"] == "PRAD"
     assert doc["headline"]["purity"] == 0.10
-    assert doc["headline"]["purity_lo"] == 0.06 and doc["headline"]["purity_hi"] == 0.16
-    # Tables are structured {columns, rows}.
-    assert [c[0] for c in doc["therapy"]["columns"]][0] == "Target"
-    assert len(doc["therapy"]["rows"]) == 2
-    assert doc["targets"]["rows"] and doc["targets"]["rows"][0][0] == "FOLH1"
-    # At-a-glance records are present.
-    assert rd.record_value(doc["records"], "Cancer call").startswith("PRAD")
+    assert doc["therapy_assessments"] == content.therapy_assessments
+    assert doc["evidence_requests"] == content.evidence_requests
+    assert "A*02:01 / A*24:02" in doc["sections"][0]["blocks"][1]["text"]
+    assert [s["id"] for s in doc["sections"]] == [
+        "conclusion",
+        "therapies",
+        "information",
+        "evidence",
+    ]
+    assert content.sections[-1]["blocks"] == []  # serialization does not mutate content
+    assert "Stale" not in json.dumps(doc)
 
 
-def test_document_deduplicates_repeated_summary_highlights(tmp_path):
+def test_required_content_cannot_fall_back_to_markdown(tmp_path):
     _write_reports(tmp_path)
-    repeated = (
-        "Technical-RNA normalization: mtDNA/rRNA-like features were removed "
-        "for reference comparability."
-    )
-    summary = tmp_path / f"{_PREFIX}-summary.md"
-    summary.write_text(summary.read_text() + f"\n- {repeated}\n- {repeated}\n")
+    with pytest.raises(TypeError, match="content"):
+        rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
 
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
 
-    assert doc["highlights"].count(repeated) == 1
+def test_write_load_preserves_long_rationale_and_supplied_history(tmp_path):
+    content = _content()
+    long = "Evidence and limitations. " * 150 + "RATIONALE-END"
+    content.sections[1]["blocks"][0]["text"] = long
+    content.treatment_history = [
+        {"therapy": "FAP-2286", "status": "major_benefit", "source": "oncology assessment"}
+    ]
+    path = rd.write_report_document(tmp_path, _PREFIX, report_view=_report_view(), content=content)
+    doc = rd.load_report_document(tmp_path, _PREFIX)
+    assert doc == json.loads(path.read_text())
+    assert doc["sections"][1]["blocks"][0]["text"] == long
+    assert doc["treatment_history"] == content.treatment_history
+
+
+def test_load_requires_structured_document(tmp_path):
+    _write_reports(tmp_path)
+    with pytest.raises(FileNotFoundError, match="rerun analysis"):
+        rd.load_report_document(tmp_path)
 
 
 def test_figure_manifest_is_belief_gated(tmp_path):
     # Only two figures emitted; the rest of the registry must be present=False.
     _write_reports(tmp_path, emit_figures=("sample-context", "purity-methods"))
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
+    doc = rd.build_report_document(
+        tmp_path, _PREFIX, report_view=_report_view(), content=_content()
+    )
     figures = {f["suffix"]: f for f in doc["figures"]}
 
     # Every registry entry appears in the manifest.
@@ -162,15 +164,6 @@ def test_figure_manifest_is_belief_gated(tmp_path):
     # A plot the run never emitted (belief never fired) is gated out with no path.
     assert figures["therapy-pathway-state.png"]["present"] is False
     assert figures["therapy-pathway-state.png"]["path"] is None
-
-
-def test_headline_purity_agrees_with_parsed_purity_record(tmp_path):
-    # Cross-artifact parity: the structural ReportView headline the PDF cards can
-    # read must not disagree with the "Purity" line the markdown rendered.
-    _write_reports(tmp_path)
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
-    purity_record = rd.record_value(doc["records"], "Purity")
-    assert f"{round(doc['headline']['purity'] * 100)}%" in purity_record  # "10%"
 
 
 def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_path):
@@ -204,7 +197,7 @@ def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_pa
         }
     )
 
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=view)
+    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=view, content=_content())
     figures = {row["suffix"]: row for row in doc["figures"]}
 
     assert doc["headline"]["purity_status"] == "discordant_estimators"
@@ -214,45 +207,11 @@ def test_document_preserves_unresolved_purity_and_caveats_figure_captions(tmp_pa
         0.32,
         0.55,
     )
-    assert "not a resolved sample-composition measurement" in figures[
-        "decomposition-composition.png"
-    ]["caption"]
-    assert "not a fused consensus estimate" in figures["purity-methods.png"][
-        "caption"
-    ]
-
-
-def test_write_and_load_roundtrip(tmp_path):
-    _write_reports(tmp_path)
-    path = rd.write_report_document(tmp_path, _PREFIX, report_view=_report_view())
-    assert path.name == f"{_PREFIX}-report.json"
-    on_disk = json.loads(path.read_text())
-    # load_report_document reads the sidecar verbatim when present.
-    assert rd.load_report_document(tmp_path, _PREFIX) == on_disk
-    assert on_disk["headline"]["purity"] == 0.10
-
-
-def test_report_document_retains_structured_treatment_history(tmp_path):
-    _write_reports(tmp_path)
-    history = [
-        {
-            "therapy": "FAP-targeted radioligand therapy",
-            "target": "FAP",
-            "modality": "RLT",
-            "status": "major_benefit",
-            "note": "Very effective",
-            "source": "clinical history",
-        }
-    ]
-
-    doc = rd.build_report_document(
-        tmp_path,
-        _PREFIX,
-        report_view=_report_view(),
-        treatment_history=history,
+    assert (
+        "not a resolved sample-composition measurement"
+        in figures["decomposition-composition.png"]["caption"]
     )
-
-    assert doc["treatment_history"] == history
+    assert "not a fused consensus estimate" in figures["purity-methods.png"]["caption"]
 
 
 def test_output_finalization_writes_structured_records_without_figures(tmp_path):
@@ -283,7 +242,9 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
     )
     run.note_step("input", outputs={"treatment_history": history})
 
-    outputs = write_analysis_output_records(run, _report_view())
+    content = _content()
+    content.treatment_history = history
+    outputs = write_analysis_output_records(run, _report_view(), content=content)
 
     report_path = Path(outputs["report_document"])
     manifest_path = Path(outputs["manifest"])
@@ -293,98 +254,7 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
     assert manifest_path.name == f"{_PREFIX}-manifest.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text())
-    assert manifest["steps"]["output"]["outputs"]["report_document"] == str(
-        report_path
-    )
+    assert manifest["steps"]["output"]["outputs"]["report_document"] == str(report_path)
     assert json.loads(report_path.read_text())["treatment_history"] == history
     assert manifest["steps"]["output"]["outputs"]["report_pdf"] == outputs["report_pdf"]
-    assert not any(
-        artifact["kind"] == "figure" for artifact in manifest["artifacts"]
-    )
-
-
-def test_load_requires_structured_sidecar(tmp_path):
-    _write_reports(tmp_path)
-    assert not (tmp_path / f"{_PREFIX}-report.json").exists()
-    with pytest.raises(FileNotFoundError, match="rerun analysis"):
-        rd.load_report_document(tmp_path)
-
-
-def test_empty_dir_therapy_and_targets_are_none(tmp_path):
-    # No therapy/target tables in the reports -> null table sections, not a crash.
-    (tmp_path / f"{_PREFIX}-summary.md").write_text("# Summary\n\n**Cancer call:** UNKNOWN.\n")
-    (tmp_path / f"{_PREFIX}-analysis.md").write_text("# Analysis\n")
-    doc = rd.build_report_document(tmp_path, _PREFIX, report_view=_report_view())
-    assert doc["therapy"] is None
-    assert doc["targets"] is None
-    assert all(f["present"] is False for f in doc["figures"])
-
-
-# The detailed analysis contains a broader therapy landscape than the reader
-# summary. The structured document must reproduce the summary decision exactly
-# rather than independently selecting from the broader table.
-_ANALYSIS_AUDIT_SPLIT = """# Analysis
-
-## Therapy Prioritization
-
-### Sample-supported / clinically reviewable rows
-
-| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
-|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FOLH1** | lu-psma | radioligand | approved | mCRPC | 142.0 | tumor 128 | 12 | tumor-supported; approved standard |
-
-### Other curated rows — not supported by this sample
-
-These rows remain visible as disease-curation provenance or negative evidence.
-
-| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
-|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | not sample-supported; negative/background evidence; background-dominant |
-"""
-
-
-def test_therapy_recommendations_follow_summary_not_broader_analysis(tmp_path):
-    (tmp_path / f"{_PREFIX}-summary.md").write_text(_SUMMARY)
-    (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_AUDIT_SPLIT)
-    (tmp_path / f"{_PREFIX}-evidence.md").write_text(_EVIDENCE)
-
-    table = rd.parse_therapy_recommendations(
-        tmp_path / f"{_PREFIX}-summary.md"
-    )
-    assert table is not None
-    targets = {row[0] for row in table["rows"]}
-    assert targets == {"FOLH1", "AR"}
-    assert "FGFR3" not in targets
-    assert "erdafitinib" not in {cell for row in table["rows"] for cell in row}
-    assert table["rows"][0][1] == "lutetium-177 PSMA · Approved"
-    assert table["rows"][0][2] == "128 (100-150)"
-
-
-_ANALYSIS_ALL_AUDIT = """# Analysis
-
-## Therapy Prioritization
-
-### Sample-supported / clinically reviewable rows
-
-*No curated therapy row had tumor-supported or clinically reviewable RNA evidence in this sample.*
-
-### Other curated rows — not supported by this sample
-
-| Target | Agent | Class | Phase | Indication | Bulk TPM (measured) | Tumor-source bulk TPM (model) | Context TPM (model) | Interpretation |
-|--------|-------|-------|-------|------------|----------|-------------------------------|---------------------|----------------|
-| **FGFR3** | erdafitinib | FGFR-inhibitor | approved | urothelial | 10.6 | tumor 0 (0-0) | 1 | not sample-supported; negative/background evidence; background-dominant |
-"""
-
-
-def test_therapy_recommendations_are_none_when_summary_shortlist_is_empty(tmp_path):
-    summary = """# Summary
-
-## Top candidate therapies
-
-*Therapy shortlist is empty: no curated row qualified.*
-"""
-    (tmp_path / f"{_PREFIX}-summary.md").write_text(summary)
-    (tmp_path / f"{_PREFIX}-analysis.md").write_text(_ANALYSIS_ALL_AUDIT)
-    assert rd.parse_therapy_recommendations(
-        tmp_path / f"{_PREFIX}-summary.md"
-    ) is None
+    assert not any(artifact["kind"] == "figure" for artifact in manifest["artifacts"])

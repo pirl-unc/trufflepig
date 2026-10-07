@@ -254,7 +254,7 @@ def test_full_report_audit_requires_matching_provisional_status(tmp_path):
     assert issue["severity"] == "error"
 
 
-def test_full_report_audit_requires_structured_therapy_to_match_summary(tmp_path):
+def test_full_report_audit_requires_authored_content_to_match_summary(tmp_path):
     paths = _write_report_tree(
         tmp_path,
         "**Working cancer call**: READ (Rectum Adenocarcinoma).\n",
@@ -268,7 +268,7 @@ def test_full_report_audit_requires_structured_therapy_to_match_summary(tmp_path
 """
     )
     report_path = tmp_path / "sample-report.json"
-    report_path.write_text(json.dumps({"therapy": None}))
+    report_path.write_text(json.dumps({"schema_version": 2, "sections": []}))
     paths["report"] = report_path
 
     issues = _sample_issues(
@@ -281,6 +281,6 @@ def test_full_report_audit_requires_structured_therapy_to_match_summary(tmp_path
     issue = next(
         issue
         for issue in issues
-        if issue["category"] == "therapy_shortlist_mismatch"
+        if issue["category"] == "authored_summary_mismatch"
     )
     assert issue["severity"] == "error"

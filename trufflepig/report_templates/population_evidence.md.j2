@@ -1,0 +1,7 @@
+Sourced clinical outcome evidence:
+{% if endpoint %}{{ endpoint }}.{% endif %}
+{% if benefit %}Reported benefit tier: {{ benefit }}.{% endif %}
+{% if toxicity %}Reported toxicity tier: {{ toxicity }}.{% endif %}
+{% if toxicities %}Major toxicities include {{ toxicities }}.{% endif %}
+{% if source %}Source: {% if source_url %}[{{ source }}]({{ source_url }}){% else %}{{ source }}{% endif %}.{% endif %}
+{% if note %}{{ note }}{% endif %}
