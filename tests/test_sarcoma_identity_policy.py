@@ -98,6 +98,20 @@ def test_supplied_diagnosis_or_defining_molecular_identity_is_preserved(extra):
     assert analysis == before
 
 
+@pytest.mark.parametrize("supplied,canonical", [
+    ("OS", "SARC_OS"), ("osteosarcoma", "SARC_OS"), ("sarcoma", "SARC"),
+])
+def test_supplied_diagnosis_aliases_preserve_exact_identity(supplied, canonical):
+    from trufflepig.cancer_type_policy import sarcoma_identity_is_supplied
+
+    analysis = {**unresolved_analysis(), "cancer_type": canonical,
+                "cancer_type_source": "user-specified",
+                "analysis_constraints": {"cancer_type": supplied}}
+    assert sarcoma_identity_is_supplied(analysis, canonical)
+    assert not finalize_sarcoma_identity(analysis)
+    assert not sarcoma_identity_is_supplied(analysis, "SARC_LMS")
+
+
 def test_residual_fit_and_aneuploidy_cannot_establish_sarcoma():
     analysis = unresolved_analysis()
     analysis.update(cancer_type_decision={"status": "supported", "supported_code": "SARC",
