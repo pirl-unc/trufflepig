@@ -214,8 +214,16 @@ def therapeutic_lead_basis(assessment, analysis):
         if mismatch_repair_rna_state(analysis) == "MSI-like":
             return "MSI-like RNA prioritizes testing; clinical MSI-H/dMMR is unconfirmed."
         return ""
-    if any(r["kind"] == "mutation" for r in requirements):
-        return ""  # Abundant mutant-gene RNA never implies the required mutation.
+    if any(r["kind"] in {"mutation", "tmb_high", "histology_only"} for r in requirements):
+        # Target abundance cannot supply a genotype, mutation burden or diagnosis.
+        return ""
+    if any(r["kind"] == "clinical_target_assay" for r in requirements):
+        # The required assay can measure a different phenotype from the drug
+        # target (for example, hormone receptors for a CDK4/6 inhibitor).
+        # Only a matching, supported RNA proxy prioritizes that assay here.
+        her2 = (analysis.get("rna_biomarker_proxies") or {}).get("her2") or {}
+        if assessment["target"] != "ERBB2" or her2.get("status") != "supported":
+            return ""
     source = assessment.get("rna_source") or {}
     observation = assessment.get("observation") or {}
     if source.get("tier") == "tumor_supported" and observation.get("state") == "measured":

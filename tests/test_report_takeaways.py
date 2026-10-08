@@ -33,8 +33,9 @@ def test_abundant_gene_rna_cannot_create_mutation_or_background_leads():
         "observation": {"state": "measured"},
         "tumor_band": "1000", "target": "KRAS", "selected": False,
     }
-    assert therapeutic_lead_basis(assessment, {}) == ""
-
+    for kind in ("mutation", "tmb_high", "histology_only"):
+        assessment["eligibility"]["requirements"] = [{"kind": kind, "status": "missing"}]
+        assert therapeutic_lead_basis(assessment, {}) == ""
     assessment["eligibility"]["requirements"] = []
     assessment["rna_source"]["tier"] = "background_dominant"
     assert therapeutic_lead_basis(assessment, {}) == ""
@@ -55,6 +56,23 @@ def test_tissue_ambiguity_and_scale_conversion_remain_visible():
     summary = render_report_summary(content)
     assert "healthy-dominant" in summary
     assert "converted to linear TPM before interpretation" in summary
+
+
+def test_assay_lead_requires_a_matching_rna_proxy_not_just_drug_target_abundance():
+    assessment = {
+        "eligibility": {"requirements": [{"kind": "clinical_target_assay", "status": "missing"}]},
+        "rna_source": {"tier": "tumor_supported"},
+        "observation": {"state": "measured"},
+        "tumor_band": "150", "target": "CDK4", "selected": False,
+    }
+    assert therapeutic_lead_basis(assessment, {}) == ""
+    supported_her2 = {"rna_biomarker_proxies": {"her2": {"status": "supported"}}}
+    assert therapeutic_lead_basis(assessment, supported_her2) == ""
+    assessment["target"] = "ERBB2"
+    assert therapeutic_lead_basis(assessment, {}) == ""
+    assert "estimated tumor component" in therapeutic_lead_basis(assessment, supported_her2)
+    assessment["eligibility"]["direct_evidence_supported"] = True
+    assert "Supplied clinical evidence" in therapeutic_lead_basis(assessment, {})
 
 
 def test_numbered_references_match_actual_figures_in_markdown_and_pdf(tmp_path):
