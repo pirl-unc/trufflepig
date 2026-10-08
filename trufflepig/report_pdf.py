@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from html import escape
+from io import BytesIO
 from pathlib import Path
 
 from matplotlib import get_data_path
@@ -15,6 +16,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     CondPageBreak,
+    Flowable,
     Image,
     KeepTogether,
     LongTable,
@@ -139,7 +141,27 @@ class ReportBulletParagraph(Paragraph):
         return []
 
 
-def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
+class VectorFigure(Flowable):
+    """Reserve figure space; preserve the original vector PDF at final assembly."""
+
+    def __init__(self, path, width, max_height, placements):
+        super().__init__()
+        from pypdf import PdfReader
+
+        self.source = PdfReader(path).pages[0]
+        box = self.source.mediabox
+        self.scale = min(width / float(box.width), max_height / float(box.height))
+        self.width = float(box.width) * self.scale
+        self.height = float(box.height) * self.scale
+        self.hAlign = "CENTER"
+        self.placements = placements
+
+    def draw(self):
+        x, y = self.canv.absolutePosition(0, 0)
+        self.placements.append((self.canv.getPageNumber() - 1, x, y, self))
+
+
+def report_pdf_flowables(document: dict, analyze_dir: Path, *, vector_placements=None) -> list:
     """Render the authored blocks without truncating rationale or reevaluating evidence."""
     if document.get("schema_version") != 2 or not document.get("sections"):
         raise ValueError("The PDF requires report schema 2 with authored sections; rerun analysis.")
@@ -150,7 +172,7 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
     for section in document["sections"]:
         starts_with_figure = bool(section["blocks"] and section["blocks"][0]["kind"] == "figure")
         story.extend(
-            [PageBreak() if starts_with_figure else CondPageBreak(72),
+            [PageBreak() if starts_with_figure or section.get("id") == "information" else CondPageBreak(72),
              Paragraph(report_inline_html(section["title"]), styles["section"])]
         )
         for block in section["blocks"]:
@@ -200,11 +222,15 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
                     raise FileNotFoundError(
                         "A figure declared present in the report is missing: " + block["suffix"]
                     )
-                figure = Image(str(path))
-                scale = min(content_width / figure.imageWidth, 450 / figure.imageHeight)
-                figure.drawWidth = figure.imageWidth * scale
-                figure.drawHeight = figure.imageHeight * scale
-                figure.hAlign = "CENTER"
+                max_height = 550 if block["suffix"] == "therapy-pathway-state.png" else 490
+                if vector_placements is not None and path.with_suffix(".pdf").is_file():
+                    figure = VectorFigure(path.with_suffix(".pdf"), content_width, max_height, vector_placements)
+                else:
+                    figure = Image(str(path))
+                    scale = min(content_width / figure.imageWidth, max_height / figure.imageHeight)
+                    figure.drawWidth = figure.imageWidth * scale
+                    figure.drawHeight = figure.imageHeight * scale
+                    figure.hAlign = "CENTER"
                 story.append(
                     KeepTogether(
                         [
@@ -232,9 +258,11 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
         if output is not None
         else analyze_dir / f"{document['prefix']}-interpretive-report.pdf"
     )
-    story = report_pdf_flowables(document, analyze_dir)
+    placements = []
+    story = report_pdf_flowables(document, analyze_dir, vector_placements=placements)
+    buffer = BytesIO()
     pdf = SimpleDocTemplate(
-        str(output),
+        buffer,
         pagesize=letter,
         leftMargin=44,
         rightMargin=44,
@@ -256,6 +284,19 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
         canvas.restoreState()
 
     pdf.build(story, onFirstPage=footer, onLaterPages=footer)
+    if placements:
+        from pypdf import PdfReader, PdfWriter, Transformation
+
+        writer = PdfWriter(clone_from=PdfReader(buffer))
+        for page_index, x, y, figure in placements:
+            box = figure.source.mediabox
+            transform = (Transformation().translate(-float(box.left), -float(box.bottom))
+                         .scale(figure.scale).translate(x, y))
+            writer.pages[page_index].merge_transformed_page(figure.source, transform)
+        with output.open("wb") as stream:
+            writer.write(stream)
+    else:
+        output.write_bytes(buffer.getvalue())
     return output
 
 

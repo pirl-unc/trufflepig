@@ -49,9 +49,10 @@ FIGURE_REGISTRY = [
     (
         "priority-target-context.png",
         "Target RNA source and healthy-tissue context",
-        "Estimated contributions to bulk RNA from tumor and background help distinguish target signals from "
-        "normal-tissue RNA. Healthy-tissue expression flags overlap to investigate; RNA alone "
-        "does not establish protein accessibility or clinical safety.",
+        "Left: measured bulk RNA (black dot) and modeled tumor contribution (teal diamond; line = model range). "
+        "Middle: teal shows the estimated tumor share of that gene's bulk RNA; gray is the remainder. "
+        "Right: healthy-tissue overlap. TPM values use a compressed scale above 1. "
+        "These estimates do not establish tumor-cell protein expression or clinical safety.",
     ),
     (
         "actionable-targets.png",
@@ -98,9 +99,10 @@ FIGURE_REGISTRY = [
     (
         "therapy-pathway-state.png",
         "Therapy pathway state",
-        "Expression state of therapy-relevant pathways provides biological context "
-        "for the candidate recommendations. These cohort-relative RNA panels do not "
-        "establish prior treatment, drug sensitivity, or resistance.",
+        "Each point summarizes a gene panel relative to the cancer-cohort median (1x). "
+        "Genes that rise with activity support activation when high; genes that fall with activity "
+        "support activation when low. Values are measured expression, not predictions of treatment response. "
+        "Bulk muscle or stromal RNA can contribute to these patterns.",
     ),
     (
         "subtype-signature.png",

@@ -207,3 +207,29 @@ def test_page_long_finding_can_paginate_without_losing_text(tmp_path):
     assert len(pages) > 1
     assert "FIRST-BIOMARKER" in "\n".join(pages)
     assert "END-BIOMARKER" in pages[-1]
+
+
+def test_vector_plot_stays_searchable_and_preserves_report_links(tmp_path):
+    from reportlab.pdfgen import canvas
+
+    doc = document()
+    doc['sections'][1]['blocks'] = [{'kind': 'paragraph', 'text': '[See plot](#figure-1) and [source](https://example.org/source).'}]
+    doc['sections'][-1]['blocks'] = [{
+        'kind': 'figure', 'suffix': 'therapy-pathway-state.png', 'number': 1,
+        'title': 'Figure 1. Pathway state', 'caption': 'Direction of the pathway gene panels.',
+    }]
+    path = tmp_path / 'synthetic-therapy-pathway-state.png'
+    Image.new('RGB', (600, 1200), 'white').save(path)
+    plot = canvas.Canvas(str(path.with_suffix('.pdf')), pagesize=(300, 600))
+    plot.drawString(20, 550, 'VECTOR-TEXT-PRESERVED')
+    plot.line(20, 20, 250, 20)
+    plot.save()
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    assert sum(len(page.images) for page in pdf.pages) == 0
+    assert 'VECTOR-TEXT-PRESERVED' in '\n'.join(p.extract_text() for p in pdf.pages)
+    annotations = [a.get_object() for p in pdf.pages for a in p.get('/Annots', [])]
+    assert any(a.get('/A', {}).get('/URI') == 'https://example.org/source' for a in annotations)
+    destination = next(a['/Dest'] for a in annotations if a.get('/Dest'))
+    target = next(page for page in pdf.pages if page.indirect_reference == destination[0])
+    assert 'VECTOR-TEXT-PRESERVED' in target.extract_text()

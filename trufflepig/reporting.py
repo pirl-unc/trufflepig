@@ -858,6 +858,23 @@ def cancer_code_display_name(code, fallback=None):
     return text.replace("_", " ").strip()
 
 
+def mismatch_repair_rna_model_state(mmr: dict) -> str:
+    """Expose disagreement hidden by the ensemble mean; never a clinical call."""
+    import math
+
+    def valid(value):
+        return isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1
+
+    probability = mmr.get("msi_probability")
+    threshold = mmr.get("decision_threshold", 0.5)
+    if not valid(probability) or not valid(threshold):
+        return ""
+    members = [row.get("msi_probability") for row in mmr.get("member_probabilities", [])]
+    if members and (not all(valid(p) for p in members) or len({p >= threshold for p in members}) > 1):
+        return "Discordant"
+    return "MSI-like" if probability >= threshold else "MSS-like"
+
+
 def mismatch_repair_channel_matches_report(channel, active_code) -> bool:
     """Whether an MMR evidence channel belongs to the active report scope.
 

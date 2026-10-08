@@ -325,13 +325,10 @@ def test_plot_priority_targets_saves_png(tmp_path):
         legend_bbox.overlaps(patch.get_window_extent())
         for patch in ax.patches
     )
-    # PR-6 (§2.5): the tumor-source-vs-safety-band cue is folded into this (single
-    # reader) target figure — one scatter marker per target (shape = source tier,
-    # fill = healthy-tissue safety), plus an explanatory caption. Without the fold
-    # the ranking plot draws only barh (no scatter collections) and no such caption.
-    assert len(ax.collections) >= 2  # one source/safety cue marker per target row
-    fig_texts = "\n".join(text.get_text() for text in fig.texts)
-    assert "healthy-tissue safety" in fig_texts  # the folded cue's caption
+    # Figure 2 now owns RNA-source/context details. No dense footer may expand
+    # the ranking canvas and shrink the actual bars in the report.
+    assert not fig.texts
+    assert out.with_suffix(".pdf").exists()
 
 
 def test_priority_targets_exclude_hla_mismatched_rows(tmp_path):
@@ -473,36 +470,23 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     assert fig is not None
     assert out.exists()
     ax_range = fig.axes[0]
-    assert ax_range.get_xscale() == "linear"
-    assert "log10(TPM+1)" in ax_range.get_xlabel()
-    assert "patient bulk TPM (measured)" in ax_range.get_xlabel()
-    assert (
-        ax_range.get_title()
-        == "Estimated patient tumor attribution vs measured bulk expression"
-    )
-    assert fig._suptitle is not None
-    assert fig._suptitle.get_text() == "Target Expression and Priority Score — PRAD"
-    assert not ax_range.spines["top"].get_visible()
-    assert not ax_range.spines["right"].get_visible()
-    assert fig.legends
-    texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
-    assert "Approved pathway / eligibility pending" in texts
-    assert "Exploratory / expression-linked" in texts
-    header_texts = [
-        text
-        for text in fig.axes[0].texts
-        if text.get_text()
-        in {"Approved pathway / eligibility pending", "Exploratory / expression-linked"}
-    ]
-    assert header_texts
-    assert all(text.get_ha() == "right" for text in header_texts)
-    assert all(text.get_position()[0] < 0 for text in header_texts)
-    legend_texts = [
-        text.get_text()
-        for legend in fig.legends
-        for text in legend.get_texts()
-    ]
-    assert "bulk sample TPM" in legend_texts
+    assert ax_range.get_xscale() == "symlog"
+    assert ax_range.get_xlabel() == "Contribution to bulk RNA (TPM)"
+    assert ax_range.get_title(loc="left") == "RNA amount"
+    assert len(fig.axes) == 3
+    assert fig.axes[1].get_title(loc="left") == "RNA source"
+    assert fig.axes[2].get_title(loc="left") == "Healthy-tissue overlap"
+    # The fraction bars preserve modeled tumor share (not tumor-cell-equivalent
+    # TPM, nor the global specimen purity).
+    import pytest
+    assert [bar.get_width() for bar in fig.axes[1].patches] == pytest.approx([1, 0.39, 1, 0.39])
+    assert not fig.texts
+    assert out.with_suffix(".pdf").exists()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for axis in fig.axes:
+        for text in axis.texts:
+            assert fig.bbox.contains(*text.get_window_extent(renderer).get_points()[0])
 
 
 def test_priority_target_context_can_use_actionable_target_symbols(tmp_path):

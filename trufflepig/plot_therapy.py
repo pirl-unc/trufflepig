@@ -1629,9 +1629,8 @@ def plot_therapy_pathway_state(
     Renders the disease-state narrative visually: one row per therapy-
     response axis (AR / NE / EMT / hypoxia / IFN / ER / HER2 / MAPK-ERK
     where applicable), dumbbell showing up-panel vs down-panel fold-vs-
-    cohort, with state label + color. A caption underneath restates
-    the disease-state sentence so the figure is self-contained for
-    tumor-board review.
+    cohort, with state label + color. Explanatory prose belongs in the report
+    caption, outside the figure canvas, so it cannot shrink the plot.
 
     Parameters
     ----------
@@ -1641,9 +1640,8 @@ def plot_therapy_pathway_state(
     cancer_code : str
         Displayed in the title for context.
     disease_state_caption : str
-        Text to display under the plot (typically the output of
-        :func:`compose_disease_state_narrative`). Empty-caption calls
-        just skip the caption row.
+        Retained for caller compatibility; narrative is rendered in the report,
+        not embedded as tiny text in the figure.
     save_to_filename : str, optional
         Write PNG here (and print the saved-path line for the CLI
         progress log).
@@ -1696,7 +1694,7 @@ def plot_therapy_pathway_state(
                     "fold": item["up_fold"],
                     "n": item["up_n"],
                     "marker": "o",
-                    "panel_label": "expected-up genes",
+                    "panel_label": "Genes rising with activity",
                     "legend_label": "genes expected up when pathway active",
                 }
             )
@@ -1707,7 +1705,7 @@ def plot_therapy_pathway_state(
                     "fold": item["down_fold"],
                     "n": item["down_n"],
                     "marker": "s",
-                    "panel_label": "expected-down genes",
+                    "panel_label": "Genes falling with activity",
                     "legend_label": "genes expected down when pathway active",
                 }
             )
@@ -1725,20 +1723,8 @@ def plot_therapy_pathway_state(
 
     n_rows = len(plot_rows)
     if figsize is None:
-        # Reserve vertical room for the caption wrap. Width accommodates
-        # fold labels without the legend overflowing. Up- and down-panel
-        # folds are separate rows because they are opposite evidence streams.
-        figsize = (12, max(4.0, 0.55 * n_rows + 2.8))
-
-    fig = plt.figure(figsize=figsize)
-    # Top area for the dumbbells, bottom for the narrative caption.
-    if disease_state_caption:
-        ax = fig.add_axes([0.07, 0.38, 0.88, 0.52])
-        ax_caption = fig.add_axes([0.07, 0.02, 0.88, 0.18])
-        ax_caption.axis("off")
-    else:
-        ax = fig.add_axes([0.07, 0.24, 0.88, 0.66])
-        ax_caption = None
+        figsize = (9, max(4.5, 0.68 * n_rows + 2.3))
+    fig, ax = plt.subplots(figsize=figsize)
 
     # --- Dumbbell plot ---
     y_positions = np.arange(n_rows)
@@ -1784,8 +1770,8 @@ def plot_therapy_pathway_state(
             f"{fold:.2f}\u00d7",
             ha=ha,
             va="center",
-            fontsize=8,
-            color=color,
+            fontsize=11,
+            color="#243340",
             fontweight="bold",
         )
 
@@ -1802,11 +1788,11 @@ def plot_therapy_pathway_state(
         if f is not None and f > 0:
             x_vals.append(f)
     if x_vals:
-        lo = min(0.1, min(x_vals) * 0.7)
-        hi = max(10.0, max(x_vals) * 1.4)
+        lo = min(0.1, min(x_vals) * 0.30)
+        hi = max(10.0, max(x_vals) * 2.3)
         ax.set_xlim(lo, hi)
     ax.set_xlabel(
-        "Fold vs selected cancer-cohort median TPM (log scale; 1.0 = cohort median)",
+        "RNA fold vs selected cancer-cohort median (1 = typical)",
         fontsize=10,
     )
 
@@ -1818,10 +1804,11 @@ def plot_therapy_pathway_state(
         n_info = f" ({row['n']})" if row["n"] else ""
         panel_text = f"{row['panel_label']}{n_info}"
         if row["axis_first_row"]:
-            labels.append(f"{row['label']}  \u2014  {state_tag}\n  {panel_text}")
+            labels.append(f"{row['label']} ({state_tag})\n{panel_text}")
         else:
-            labels.append(f"  \u21b3 {panel_text}")
-    ax.set_yticklabels(labels, fontsize=10)
+            labels.append(panel_text)
+    from textwrap import fill
+    ax.set_yticklabels(["\n".join(fill(line, 36) for line in label.split("\n")) for label in labels], fontsize=10)
     ax.invert_yaxis()
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -1830,79 +1817,16 @@ def plot_therapy_pathway_state(
     if cancer_code:
         title += f" \u2014 {cancer_code}"
     ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=32)
-    ax.text(
-        0.0,
-        1.03,
-        "Background: per-gene median TPM in the selected cancer cohort; dotted lines mark reporting thresholds at 0.5x and 2.0x.",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=8.5,
-        color="#555555",
-    )
     band_handles = [
         Line2D([0], [0], color=color, linewidth=5, label=label)
         for label, _lo, _hi, color in _FOLD_BANDS
     ]
-    shape_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="#475569",
-            markerfacecolor="#475569",
-            linestyle="",
-            markersize=8,
-            label="expected-up panel",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="s",
-            color="#475569",
-            markerfacecolor="#475569",
-            linestyle="",
-            markersize=7,
-            label="expected-down panel",
-        ),
-    ]
-    ax.legend(
-        handles=band_handles + shape_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.13),
-        fontsize=7.5,
-        frameon=False,
-        markerscale=0.9,
-        handletextpad=0.5,
-        ncol=4,
-    )
-
-    # --- Caption ---
-    if ax_caption is not None and disease_state_caption:
-        # Single wrapped paragraph underneath. Narrow to ~130 chars per
-        # line so wrapping matches the figure width.
-        import textwrap
-
-        wrapped = "\n".join(
-            textwrap.wrap(
-                disease_state_caption,
-                width=130,
-                break_long_words=False,
-                break_on_hyphens=True,
-            )
-        )
-        ax_caption.text(
-            0.0,
-            1.0,
-            wrapped,
-            ha="left",
-            va="top",
-            fontsize=9,
-            color="#222222",
-            wrap=True,
-        )
+    ax.legend(handles=band_handles, loc="upper center", bbox_to_anchor=(0.5, -0.13),
+              fontsize=9, frameon=False, ncol=3)
+    fig.tight_layout(rect=[0, 0.13, 1, 1])
 
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        from .report_figures import save_report_figure
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
         print(f"Saved {save_to_filename}")
     return fig

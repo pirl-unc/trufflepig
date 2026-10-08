@@ -2654,3 +2654,28 @@ def test_actionable_therapy_cell_states_hla_once_without_clause_artifacts(monkey
     row = next(line for line in md.splitlines() if "| afamitresgene autoleucel |" in line)
     assert row.count("HLA match") == 1
     assert ".;" not in row
+
+
+def test_mmr_disagreement_is_not_hidden_by_the_ensemble_mean():
+    from trufflepig.brief import mismatch_repair_rna_state
+    from trufflepig.report_takeaways import therapeutic_lead_basis
+
+    analysis = _mmr_analysis(0.666518)
+    mmr = analysis['cancer_type_evidence']['staged_evidence_graph']['channels'][0]['details']['mismatch_repair']
+    mmr['member_probabilities'] = [
+        {'member': name, 'msi_probability': value}
+        for name, value in [('A', 0.00002), ('B', 0.999696), ('C', 0.999838)]
+    ]
+    assert mismatch_repair_rna_state(analysis) == 'Discordant'
+    line = mismatch_repair_summary_line(analysis)
+    assert 'RNA models disagree' in line
+    assert '0.00002' in line and '0.99970' in line
+    assert 'favors MSI' not in line and 'favors MSS' not in line
+    assessment = {'eligibility': {'requirements': [{'kind': 'msi_high', 'status': 'missing'}]}}
+    assert therapeutic_lead_basis(assessment, analysis) == ''
+    # No arbitrary new score cutoff: agreement and mean are separate facts.
+    mmr['member_probabilities'] = [{'msi_probability': p} for p in (0.6, 0.7, 0.7)]
+    assert mismatch_repair_rna_state(analysis) == 'MSI-like'
+    mmr['msi_probability'] = 0.333
+    mmr['member_probabilities'] = [{'msi_probability': p} for p in (0.1, 0.2, 0.7)]
+    assert mismatch_repair_rna_state(analysis) == 'Discordant'

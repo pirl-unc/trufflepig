@@ -81,6 +81,7 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
                     f"RNA comparisons retain {codes} as hypotheses. Pathology must resolve the site and subtype; "
                     "the full candidate comparison is in the detailed evidence.",
                 ))
+                blocks[-1]["detail"] = True
             blocks.append({"kind": "bullet", "text": alternatives, "detail": True})
 
     tissue = analysis.get("healthy_vs_tumor")
@@ -150,15 +151,14 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
     if state and isinstance(probability, (int, float)) and math.isfinite(probability):
         text = f"{state} expression (MSI-like model score {probability:.2f}). "
         text += "Prioritize clinical MSI/MMR confirmation." if state == "MSI-like" else "This RNA result does not determine clinical MSI/MMR status."
+        if state == "Discordant":
+            text = "MSI/MSS unresolved: RNA models disagree. Use the clinical MSI/MMR result."
         candidate = brief.candidate_winning_subtype_for_analysis(analysis)
         candidate_state = brief._mismatch_repair_state_from_code(candidate)
-        if candidate_state and candidate_state != ("MSI" if state == "MSI-like" else "MSS"):
+        if state != "Discordant" and candidate_state and candidate_state != ("MSI" if state == "MSI-like" else "MSS"):
             text += f" The final MMR evidence conflicts with the candidate-trace subtype {candidate}; that subtype is not adopted."
-        mlh1 = mmr.get("mlh1_expression") or {}
-        ratio = mlh1.get("cohort_ratio")
-        if state == "MSI-like" and isinstance(ratio, (int, float)) and ratio >= brief._MLH1_RETAINED_COHORT_RATIO:
-            text += " Retained bulk MLH1 RNA does not exclude MSI or tumor-specific MLH1 loss."
         blocks.append(finding("Mismatch repair", text))
+        blocks.append({"kind": "bullet", "text": brief.mismatch_repair_summary_line(analysis), "detail": True})
     pathway = brief._pathway_activity_line(analysis)
     if pathway:
         blocks.append({"kind": "bullet", "text": pathway, "figure_suffixes": ["therapy-pathway-state.png"]})
@@ -182,6 +182,7 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
         preservation = str(getattr(context, "preservation", "unknown")).replace("_", " ")
         support = "" if preservation == "unknown" else f" ({brief.heuristic_support_label(getattr(context, 'preservation_confidence', 0.0))})"
         blocks.append(finding("Sample quality", f"{prep}; preservation inferred as {preservation} from RNA QC{support}.", "sample-context.png", "degradation-index.png"))
+        blocks[-1]["detail"] = True
     for text in (brief.rna_quant_qc_summary_line(analysis.get("rna_quant_qc")), brief._cancer_call_rescue_summary_line(analysis)):
         if text:
             blocks.append({"kind": "bullet", "text": text, "figure_suffixes": ["sample-context.png"],

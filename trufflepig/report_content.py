@@ -479,8 +479,7 @@ def build_report_content(
     if assessments and not identity_unresolved:
         therapies.append({
             "kind": "paragraph",
-            "text": "The target figures compare RNA support, estimated source and healthy-tissue expression. "
-            "Their scores prioritize follow-up; they do not measure drug response or establish eligibility.",
+            "text": "Target ranking and RNA-source evidence are shown in the figures.",
             "figure_suffixes": ["priority-targets.png", "priority-target-context.png", "actionable-targets.png"],
         })
     if not selected_assessments and not identity_unresolved:

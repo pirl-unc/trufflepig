@@ -1899,6 +1899,7 @@ def _render_therapy_pathway_state(
         figure = None
     if figure is None:
         output_path.unlink(missing_ok=True)
+        output_path.with_suffix(".pdf").unlink(missing_ok=True)
         return None
     return str(output_path)
 
@@ -4330,6 +4331,9 @@ def _analyze_body(run: AnalyzeRun):
             destination = figures_dir / path.name
             if path.is_file() and path.suffix == ".png" and path != destination:
                 path.rename(destination)
+                vector = path.with_suffix(".pdf")
+                if vector.is_file():
+                    vector.rename(destination.with_suffix(".pdf"))
                 moved += 1
         if scatter_dir.is_dir():
             try:
@@ -7314,22 +7318,10 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         cancer_code,
     )
     if selected_mmr:
-        details = selected_mmr.get("details") or {}
-        mmr = details.get("mismatch_repair") or {}
-        if isinstance(mmr, dict) and mmr:
-            p_msi = mmr.get("msi_probability")
-            top_state = selected_mmr.get("code") or ""
-            context = mmr.get("context_group") or ""
-            if isinstance(p_msi, (int, float)):
-                bullets.append(
-                    "- **Mismatch-repair RNA context**: "
-                    f"{context + ' ' if context else ''}MMR ensemble favors "
-                    f"{top_state or 'an MMR state'} with MSI-like probability "
-                    f"{p_msi:.2f}. This is expression context only; confirm "
-                    "MSI/MMR status with MSI-PCR, MMR IHC, or validated "
-                    "clinical sequencing before using it for immunotherapy "
-                    "eligibility."
-                )
+        from .brief import mismatch_repair_summary_line
+        mmr_line = mismatch_repair_summary_line(analysis)
+        if mmr_line:
+            bullets.append(f"- {mmr_line}")
 
     her2_proxy_line = her2_proxy_summary_line(analysis)
     if her2_proxy_line:

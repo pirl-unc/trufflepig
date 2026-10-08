@@ -1981,17 +1981,11 @@ def mismatch_repair_summary_context(analysis: dict) -> dict:
 
 def mismatch_repair_rna_state(analysis: dict) -> str:
     """Reported RNA proxy state; it never supplies clinical assay eligibility."""
-    import math
+    from .reporting import mismatch_repair_rna_model_state
 
     channel = mismatch_repair_summary_context(analysis)
     mmr = (channel.get("details") or {}).get("mismatch_repair") or {}
-    probability = mmr.get("msi_probability")
-    threshold = mmr.get("decision_threshold", 0.5)
-    if not isinstance(probability, (int, float)) or not math.isfinite(probability):
-        return ""
-    if not isinstance(threshold, (int, float)):
-        threshold = 0.5
-    return "MSI-like" if probability >= threshold else "MSS-like"
+    return mismatch_repair_rna_model_state(mmr)
 
 
 # MLH1 at/above this fraction of the cohort-typical (median tumor) MLH1 counts as
@@ -2049,6 +2043,19 @@ def mismatch_repair_summary_line(
     state_label = mismatch_repair_rna_state(analysis)
     if not state_label:
         return ""
+    if state_label == "Discordant":
+        scores = ", ".join(
+            f"{row.get('member', 'model')}: {row['msi_probability']:.5f}"
+            for row in mmr.get("member_probabilities", [])
+            if isinstance(row.get("msi_probability"), (int, float))
+        )
+        return (
+            "**Mismatch-repair RNA context:** MSI/MSS unresolved: the RNA models disagree "
+            f"({scores}; ensemble mean {p_msi:.2f}). The mean is a model score, not a "
+            "validated probability of clinical MSI-H. Use clinical MSI-PCR, MMR IHC or "
+            "validated MSI sequencing to determine status; this RNA result does not "
+            "support immunotherapy selection."
+        )
     state = "MSI" if state_label == "MSI-like" else "MSS"
     tension_clause = _mlh1_msi_tension_clause(mmr) if state == "MSI" else ""
     context = str(mmr.get("context_group") or "").strip()

@@ -49,6 +49,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     prefix = str(tmp_path / "case")
     output = tmp_path / "case-therapy-pathway-state.png"
     output.write_text("old cancer")
+    output.with_suffix(".pdf").write_text("old vector")
     monkeypatch.setattr(
         plot_therapy,
         "plot_therapy_pathway_state",
@@ -65,6 +66,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     )
 
     assert missing is None
+    assert not output.with_suffix(".pdf").exists()
     assert not output.exists()
 
     def render_new(**kwargs):
@@ -90,7 +92,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     assert output.read_text() == "new cancer"
 
 
-def test_renders_dumbbell_and_caption(tmp_path):
+def test_renders_panels_with_plain_labels_and_vector_output(tmp_path):
     out = tmp_path / "tps.png"
     fig = plot_therapy_pathway_state(
         therapy_response_scores=_crpc_scores(),
@@ -106,9 +108,11 @@ def test_renders_dumbbell_and_caption(tmp_path):
     assert any("AR signaling" in label for label in labels)
     assert any("NE differentiation" in label for label in labels)
     assert any("EMT" in label for label in labels)
-    assert any("expected-up genes" in label for label in labels)
-    assert any("expected-down genes" in label for label in labels)
+    assert any("Genes rising with activity" in " ".join(label.split()) for label in labels)
+    assert any("Genes falling with activity" in " ".join(label.split()) for label in labels)
     assert len(labels) == 5
+    assert len(fig.axes) == 1  # narrative stays outside the figure
+    assert out.with_suffix(".pdf").exists()
 
 
 def test_state_tag_matches_direction(tmp_path):

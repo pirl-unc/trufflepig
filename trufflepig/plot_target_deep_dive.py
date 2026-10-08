@@ -1387,10 +1387,10 @@ def _draw_priority_group_headers(ax, group_headers):
     for y, label in group_headers:
         ax.axhline(y + 0.18, color="#e4e4e4", linewidth=0.8, zorder=0)
         ax.text(
-            -0.02,
+            0.0,
             y,
             label,
-            ha="right",
+            ha="left",
             va="center",
             fontsize=9,
             fontweight="bold",
@@ -1428,7 +1428,7 @@ def plot_priority_targets(
         return None
 
     y_pos, group_headers = _priority_group_positions(rows)
-    fig, ax = plt.subplots(figsize=(10.5, max(4.5, 0.55 * max(y_pos) + 2.1)))
+    fig, ax = plt.subplots(figsize=(8.5, max(4.5, 0.55 * max(y_pos) + 2.4)))
     score_parts = [
         ("Tumor support", "source_points", "#2e8b57"),
         ("Clinical readiness", "actionability_points", "#4a90d9"),
@@ -1457,33 +1457,9 @@ def plot_priority_targets(
         )
         left += np.array(values)
 
-    # §2.5: fold the tumor-source-vs-safety-band cue into this (now single) reader
-    # target figure so dropping the near-duplicate context/actionable dumbbells does
-    # not lose the source/safety signal. One marker per target, left of its bar:
-    # shape = tumor-source tier (o supported / D mixed / X background), fill =
-    # healthy-tissue safety tier — reusing the same row["marker"]/row["color"] the
-    # audit-only context plot renders.
-    cue_x = -0.62
     for i, row in enumerate(rows):
-        ax.text(
-            row["total_score"] + 0.14,
-            y_pos[i],
-            f"{row['total_score']:.1f}",
-            va="center",
-            fontsize=9,
-            color="#444444",
-        )
-        ax.scatter(
-            cue_x,
-            y_pos[i],
-            marker=row["marker"],
-            s=90,
-            facecolor=row["color"],
-            edgecolor="black",
-            linewidth=0.8,
-            zorder=5,
-            clip_on=False,
-        )
+        ax.text(row["total_score"] + 0.14, y_pos[i], f"{row['total_score']:.1f}",
+                va="center", fontsize=10, color="#444444")
 
     labels = [row["symbol"] for row in rows]
     ax.set_yticks(y_pos)
@@ -1491,7 +1467,7 @@ def plot_priority_targets(
     _draw_priority_group_headers(ax, group_headers)
     ax.set_ylim(max(y_pos) + 0.7, -1.15)
     ax.set_xlim(
-        cue_x - 0.45,
+        0,
         max(row["total_score"] for row in rows) + 0.95,
     )
     ax.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
@@ -1504,31 +1480,13 @@ def plot_priority_targets(
     )
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    # Keep the score legend outside the data rectangle. A lower-right in-axes
-    # legend overlaps the final group whenever a report has only a few
-    # exploratory targets, obscuring exactly the rows it is meant to explain.
-    ax.legend(
-        loc="upper left",
-        bbox_to_anchor=(1.01, 1.0),
-        borderaxespad=0.0,
-        fontsize=8,
-        frameon=False,
-    )
-    fig.text(
-        0.5,
-        0.008,
-        "Marker left of each target — shape = tumor source (o supported / D mixed / "
-        "X background); fill = healthy-tissue safety "
-        "(blue same-lineage · green restricted/CTA · orange broad · red vital-tissue).",
-        ha="center",
-        va="bottom",
-        fontsize=7.5,
-        color="#555555",
-    )
-    fig.tight_layout(rect=[0.0, 0.06, 1.0, 0.97])
-
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10),
+              fontsize=10, frameon=False, ncol=2)
+    fig.tight_layout(rect=[0, 0.15, 1, 1])
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        from .report_figures import save_report_figure
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
+
     return fig
 
 
@@ -1544,208 +1502,70 @@ def plot_priority_target_context(
     save_to_filename=None,
     save_dpi=300,
 ):
-    """Separate evidence plot for tumor range plus source / safety / maturity."""
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
+    """Separate measured RNA, modeled tumor contribution and normal overlap."""
+    from textwrap import fill
+    from .report_figures import save_report_figure
 
     cancer_code, rows = _priority_target_rows(
-        ranges_df,
-        cancer_type,
-        target_panel=target_panel,
-        df_gene_expr=df_gene_expr,
-        top_n=top_n,
-        target_symbols=target_symbols,
-        analysis=analysis,
+        ranges_df, cancer_type, target_panel=target_panel, df_gene_expr=df_gene_expr,
+        top_n=top_n, target_symbols=target_symbols, analysis=analysis,
         disease_state=disease_state,
     )
     if not rows:
         return None
-
-    y_pos, group_headers = _priority_group_positions(rows)
-    fig, ax_range = plt.subplots(
-        figsize=(11.5, max(5.0, 0.52 * max(y_pos) + 2.6)),
+    y_pos = np.arange(len(rows))
+    fig, (ax, fraction_ax, normal_ax) = plt.subplots(
+        1, 3, figsize=(10, max(4.0, 0.65 * len(rows) + 1.9)),
+        gridspec_kw={"width_ratios": [2.1, 1.1, 1.5]},
     )
-    labels = [row["symbol"] for row in rows]
-    source_labels = {row["source"]["label"] for row in rows}
-    normal_labels = {row["normal"]["label"] for row in rows}
-
-    def _log_tpm(value):
-        return np.log10(max(0.0, float(value)) + 1.0)
-
-    max_raw = max(max(row["high"], row["observed"], row["mid"], 1.0) for row in rows)
-
+    teal, gray = "#087e8b", "#dce2e6"
     for i, row in enumerate(rows):
-        y = y_pos[i]
-        low = _log_tpm(row["low"])
-        mid = _log_tpm(row["mid"])
-        high = _log_tpm(row["high"])
-        observed = _log_tpm(row["observed"])
-        ax_range.hlines(y, low, high, color=row["color"], lw=5, alpha=0.8)
-        ax_range.scatter(
-            mid,
-            y,
-            s=105,
-            marker=row["marker"],
-            color=row["color"],
-            edgecolor="black",
-            linewidth=0.9,
-            zorder=3,
-        )
-        ax_range.scatter(
-            observed,
-            y,
-            s=70,
-            marker="|",
-            color="black",
-            linewidth=1.4,
-            zorder=4,
-        )
-        ax_range.text(
-            _log_tpm(max_raw) + 0.05,
-            y,
-            f"{row['total_score']:.1f}",
-            va="center",
-            fontsize=8.5,
-            color="#555555",
-        )
-
-    ax_range.set_yticks(y_pos)
-    ax_range.set_yticklabels(labels, fontsize=10)
-    _draw_priority_group_headers(ax_range, group_headers)
-    raw_ticks = [0, 1, 3, 10, 30, 100, 300, 1000, 3000, 10000]
-    raw_ticks = [tick for tick in raw_ticks if tick <= max_raw * 1.2]
-    if raw_ticks[-1] < max_raw and max_raw > raw_ticks[-1] * 1.25:
-        raw_ticks.append(float(np.ceil(max_raw)))
-    ax_range.set_xticks([_log_tpm(tick) for tick in raw_ticks])
-    ax_range.set_xticklabels([f"{tick:g}" for tick in raw_ticks])
-    ax_range.set_xlim(left=0.0, right=_log_tpm(max_raw) + 0.35)
-    ax_range.set_ylim(max(y_pos) + 0.7, -1.15)
-    ax_range.set_xlabel(
-        "Expression, log10(TPM+1): range/diamond = estimated tumor TPM "
-        "(RNA model estimate); black tick = patient bulk TPM (measured); right number = priority score"
-    )
-    ax_range.set_title(
-        "Estimated patient tumor attribution vs measured bulk expression",
-        fontsize=12,
-        fontweight="bold",
-    )
-    ax_range.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
-    ax_range.set_axisbelow(True)
-    ax_range.spines["top"].set_visible(False)
-    ax_range.spines["right"].set_visible(False)
-    if df_gene_expr is not None:
-        try:
-            from .common import build_sample_tpm_by_symbol
-            from .plot_reference_lines import add_p90_reference_line
-
-            add_p90_reference_line(
-                ax_range,
-                build_sample_tpm_by_symbol(df_gene_expr),
-                orientation="vertical",
-                value_transform=_log_tpm,
-            )
-        except Exception:
-            pass
-
-    constant_notes = []
-    if len(source_labels) == 1:
-        constant_notes.append(
-            f"estimated patient tumor source: {next(iter(source_labels))}"
-        )
-    if len(normal_labels) == 1:
-        constant_notes.append(
-            f"healthy-tissue reference context: {next(iter(normal_labels))}"
-        )
-    if constant_notes:
-        fig.text(
-            0.50,
-            0.915,
-            "All rows share " + "; ".join(constant_notes) + ".",
-            ha="center",
-            va="top",
-            fontsize=8.5,
-            color="#555555",
-        )
-
-    normal_handles = [
-        Patch(facecolor=color, edgecolor="black", label=label)
-        for label, color in [
-            ("also expected in healthy tissue", _PRIORITY_NORMAL_COLORS["same_lineage_expected"]),
-            (
-                "restricted / CTA-like",
-                _PRIORITY_NORMAL_COLORS["restricted_outside_lineage"],
-            ),
-            (
-                "broad healthy expression",
-                _PRIORITY_NORMAL_COLORS["broad_healthy_expression"],
-            ),
-            ("important healthy tissue expression", _PRIORITY_NORMAL_COLORS["vital_tissue_concern"]),
-        ]
-    ]
-    source_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker=marker,
-            color="none",
-            markerfacecolor=_PRIORITY_SOURCE_COLORS.get(label, "#dddddd"),
-            markeredgecolor="black",
-            linestyle="none",
-            markersize=8,
-            label=label.replace("_", "-"),
-        )
-        for label, marker in _PRIORITY_SOURCE_MARKERS.items()
-    ]
-    source_handles.append(
-        Line2D(
-            [0],
-            [0],
-            marker="|",
-            color="black",
-            markeredgewidth=1.8,
-            linestyle="none",
-            markersize=12,
-            label="bulk sample TPM",
-        )
-    )
-    normal_legend = fig.legend(
-        handles=normal_handles,
-        loc="lower center",
-        bbox_to_anchor=(0.33, 0.015),
-        fontsize=8,
-        title="Healthy-tissue context",
-        frameon=False,
-        ncol=2,
-    )
-    fig.add_artist(normal_legend)
-    fig.legend(
-        handles=source_handles,
-        loc="lower center",
-        bbox_to_anchor=(0.76, 0.015),
-        fontsize=8,
-        title="Marker / tick meaning",
-        frameon=False,
-        ncol=2,
-    )
-
-    fig.suptitle(
-        f"Target Expression and Priority Score — {cancer_code}",
-        fontsize=13,
-        y=0.985,
-    )
-    fig.text(
-        0.5,
-        0.955,
-        "Rows are split by approval/readiness tier; colors show external healthy-tissue reference context, marker shapes show estimated patient tumor support, and scores include HLA/variant/current-therapy fit plus curated benefit/toxicity when available.",
-        ha="center",
-        va="top",
-        fontsize=9,
-        color="#555555",
-    )
-    fig.tight_layout(rect=[0.06, 0.13, 1.0, 0.89])
-
+        ax.hlines(i + 0.12, row["low"], row["high"], color=teal, linewidth=3)
+        ax.scatter(row["mid"], i + 0.12, marker="D", color=teal, s=42,
+                   label="Tumor contribution (modeled)" if i == 0 else None, zorder=3)
+        ax.scatter(row["observed"], i - 0.13, color="#172b3a", s=32,
+                   label="Bulk sample (measured)" if i == 0 else None, zorder=3)
+        source = row["source"]
+        fraction = max(0, min(1, float(source.get("attr_tumor_fraction", 0))))
+        fraction_ax.barh(i, 1, height=0.40, color=gray)
+        fraction_ax.barh(i, fraction, height=0.40, color=teal)
+        fraction_ax.text(1.06, i, f"{fraction:.0%}", va="center", fontsize=10)
+        normal_labels = {
+            "same_lineage_expected": "Expected in healthy tissue",
+            "restricted_outside_lineage": "Restricted normal expression",
+            "broad_healthy_expression": "Broad normal expression",
+            "vital_tissue_concern": "Vital-tissue expression",
+        }
+        label = normal_labels.get(row["normal"]["tier"], row["normal"]["label"])
+        normal_ax.text(0.02, i, fill(label, 24), va="center", fontsize=10,
+                       color="#243340")
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([row["symbol"] for row in rows], fontsize=11, fontweight="bold")
+    ax.set_xscale("symlog", linthresh=1)
+    ax.use_sticky_edges = False
+    ax.margins(x=0.12)
+    ax.set_xlabel("Contribution to bulk RNA (TPM)", fontsize=10)
+    ax.set_title("RNA amount", loc="left", fontsize=12, fontweight="bold", pad=15)
+    ax.legend(loc="upper left", bbox_to_anchor=(-0.18, -0.14), frameon=False, fontsize=10)
+    fraction_ax.set_xlim(0, 1.55)
+    fraction_ax.set_xticks([0, 0.5, 1], ["0%", "50%", "100%"])
+    fraction_ax.set_xlabel("Modeled tumor share", fontsize=10)
+    fraction_ax.set_title("RNA source", loc="left", fontsize=12, fontweight="bold", pad=15)
+    normal_ax.set_xlim(0, 1)
+    normal_ax.set_title("Healthy-tissue overlap", loc="left", fontsize=12, fontweight="bold", pad=15)
+    normal_ax.set_xticks([])
+    for axis in (ax, fraction_ax, normal_ax):
+        axis.set_ylim(len(rows) - 0.5, -0.6)
+        axis.spines[["top", "right", "left"]].set_visible(False)
+        axis.tick_params(axis="y", length=0)
+        for i in y_pos[:-1]:
+            axis.axhline(i + 0.5, color="#e8edf0", linewidth=0.8, zorder=0)
+    for axis in (fraction_ax, normal_ax):
+        axis.set_yticks([])
+    normal_ax.spines["bottom"].set_visible(False)
+    fig.tight_layout(rect=[0, 0.13, 1, 1], w_pad=2.0)
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
     return fig
 
 
