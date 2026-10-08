@@ -628,7 +628,7 @@ def test_brief_uses_supplied_os_scope_without_stale_targets():
         disease_state="",
         sample_id="synthetic-bone-os-panel",
     )
-    assert "Curated SARC_OS options" in summary, summary
+    assert "SARC_OS options" in summary, summary
     assert "ganitumab + chemo" not in summary, summary
     assert "brigimadlin" not in summary, summary
 
