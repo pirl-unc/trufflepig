@@ -626,7 +626,9 @@ def build_report_content(
     caveats = brief.caveats_from_purity_tier(
         report_view.purity.confidence, analysis.get("sample_context"), analysis
     )
-    conclusion_text = " ".join(report_plain_text(block["text"]) for block in conclusion).casefold()
+    conclusion_text = " ".join(
+        report_plain_text(block["text"]) for block in [*conclusion, *supporting_context]
+    ).casefold()
     caveats = [
         text
         for text in caveats

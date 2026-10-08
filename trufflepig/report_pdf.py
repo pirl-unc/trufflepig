@@ -127,6 +127,18 @@ def report_pdf_styles() -> dict:
     }
 
 
+class ReportBulletParagraph(Paragraph):
+    """Keep ordinary findings intact while honoring a preceding heading's keep-with-next."""
+
+    def split(self, availWidth, availHeight):
+        # A genuinely page-long finding must still paginate. Shorter findings
+        # move as one paragraph, without nested KeepTogether containers that can
+        # strand the preceding heading on the previous page.
+        if self.height > letter[1] - 100:
+            return super().split(availWidth, availHeight)
+        return []
+
+
 def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
     """Render the authored blocks without truncating rationale or reevaluating evidence."""
     if document.get("schema_version") != 2 or not document.get("sections"):
@@ -147,12 +159,13 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
                 if kind == "heading":
                     story.append(CondPageBreak(60))
                 style = styles["body"] if kind == "paragraph" else styles[kind]
-                paragraph = Paragraph(
+                paragraph_type = ReportBulletParagraph if kind == "bullet" else Paragraph
+                paragraph = paragraph_type(
                     report_inline_html(block["text"]),
                     style,
                     bulletText="•" if kind == "bullet" else None,
                 )
-                story.append(KeepTogether([paragraph]) if kind == "bullet" else paragraph)
+                story.append(paragraph)
             elif kind == "table":
                 rows = [block["headers"], *block["rows"]]
                 cells = [

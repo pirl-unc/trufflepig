@@ -172,3 +172,38 @@ def test_html_is_text_and_hla_asterisks_are_not_emphasis():
     text = report_inline_html("<script>untrusted</script> **A*02:01 / A*24:02**")
     assert "&lt;script&gt;" in text
     assert "<b>A*02:01 / A*24:02</b>" in text
+
+
+@pytest.mark.parametrize("context_repetitions", [150, 170, 190])
+def test_heading_stays_with_an_intact_finding_at_page_boundary(tmp_path, context_repetitions):
+    doc = document()
+    doc["sections"] = [{
+        "id": "evidence", "title": "Evidence", "blocks": [
+            {"kind": "paragraph", "text": "Background context. " * context_repetitions},
+            {"kind": "heading", "text": "Notable biomarker outliers"},
+            {"kind": "bullet", "text": "FIRST-BIOMARKER " + (
+                "RNA abundance is exploratory and needs clinical confirmation. " * 15
+            ) + "END-BIOMARKER"},
+        ],
+    }]
+    write_document(tmp_path, doc)
+    pages = [page.extract_text() for page in PdfReader(build_interpretive_report_pdf(tmp_path)).pages]
+    heading_page = next(page for page in pages if "Notable biomarker outliers" in page)
+    assert "FIRST-BIOMARKER" in heading_page
+    assert "END-BIOMARKER" in heading_page
+
+
+def test_page_long_finding_can_paginate_without_losing_text(tmp_path):
+    doc = document()
+    doc["sections"] = [{
+        "id": "evidence", "title": "Evidence", "blocks": [{
+            "kind": "bullet", "text": "FIRST-BIOMARKER " + (
+                "RNA abundance is exploratory and needs clinical confirmation. " * 150
+            ) + "END-BIOMARKER",
+        }],
+    }]
+    write_document(tmp_path, doc)
+    pages = [page.extract_text() for page in PdfReader(build_interpretive_report_pdf(tmp_path)).pages]
+    assert len(pages) > 1
+    assert "FIRST-BIOMARKER" in pages[0]
+    assert "END-BIOMARKER" in pages[-1]

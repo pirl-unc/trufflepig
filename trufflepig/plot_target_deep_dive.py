@@ -562,6 +562,9 @@ def plot_actionable_targets(
     ax.set_yticklabels(symbols, fontsize=9)
     ax.set_xlabel("TPM (log scale)")
     ax.set_xscale("symlog", linthresh=1.0)
+    # Keep extreme target estimates inside the panel when the caller's plot
+    # style uses zero x margins. Their markers and uncertainty bars carry evidence.
+    ax.margins(x=0.08)
     ax.invert_yaxis()
     ax.legend(loc="lower right", fontsize=8)
     ax.set_title(title or f"Actionable target expression screen — {cancer_code}")

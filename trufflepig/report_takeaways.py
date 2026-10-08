@@ -73,7 +73,14 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
     elif not unresolved:
         alternatives = brief._rna_alternatives_line(analysis, code)
         if alternatives:
-            blocks.append({"kind": "bullet", "text": alternatives})
+            codes = ", ".join(report_literal(candidate) for candidate, _ in report_view.cancer_type_alternatives[:3])
+            if codes:
+                blocks.append(finding(
+                    "Remaining uncertainty",
+                    f"RNA comparisons retain {codes} as hypotheses. Pathology must resolve the site and subtype; "
+                    "the full candidate comparison is in the detailed evidence.",
+                ))
+            blocks.append({"kind": "bullet", "text": alternatives, "detail": True})
 
     tissue = analysis.get("healthy_vs_tumor")
     if getattr(tissue, "structural_ambiguity", False):
