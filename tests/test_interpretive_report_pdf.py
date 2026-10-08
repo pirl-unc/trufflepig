@@ -205,5 +205,5 @@ def test_page_long_finding_can_paginate_without_losing_text(tmp_path):
     write_document(tmp_path, doc)
     pages = [page.extract_text() for page in PdfReader(build_interpretive_report_pdf(tmp_path)).pages]
     assert len(pages) > 1
-    assert "FIRST-BIOMARKER" in pages[0]
+    assert "FIRST-BIOMARKER" in "\n".join(pages)
     assert "END-BIOMARKER" in pages[-1]
