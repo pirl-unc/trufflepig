@@ -53,7 +53,8 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
         "fine_report_scope_inference", "cancer_call_rescue",
     ))
     if supplied or special_basis or (decision.refit_confirmed and decision.relationship != "same" and not decision.is_selection_basis):
-        blocks.append({"kind": "bullet", "text": brief._cancer_type_basis_line(analysis, code)})
+        blocks.append({"kind": "bullet", "text": brief._cancer_type_basis_line(analysis, code),
+                       "detail": supplied})
     elif not unresolved and not supplied and decision.is_selection_basis:
         blocks.append(finding(
             "Why this call",
@@ -69,7 +70,7 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
         ))
     crosscheck = brief._rna_crosscheck_line(analysis, code, call_tier=report_view.call_confidence)
     if crosscheck:
-        blocks.append({"kind": "bullet", "text": crosscheck})
+        blocks.append({"kind": "bullet", "text": crosscheck, "detail": True})
     elif not unresolved:
         alternatives = brief._rna_alternatives_line(analysis, code)
         if alternatives:
@@ -161,8 +162,11 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
     pathway = brief._pathway_activity_line(analysis)
     if pathway:
         blocks.append({"kind": "bullet", "text": pathway, "figure_suffixes": ["therapy-pathway-state.png"]})
-    for text in brief._disease_state_summary_lines(brief.report_disease_state_text(disease_state, analysis=analysis)):
+    for index, text in enumerate(brief._disease_state_summary_lines(brief.report_disease_state_text(disease_state, analysis=analysis))):
         if text.strip():
+            emt = (analysis.get("therapy_response_scores") or {}).get("EMT")
+            if index == 0 and disease_state and getattr(emt, "state", None) == "up":
+                text += " Bulk EMT RNA can reflect muscle or stroma; it does not establish a tumor-cell transition."
             blocks.append({"kind": "bullet", "text": text, "detail": not bool(disease_state),
                            "figure_suffixes": ["therapy-pathway-state.png"]})
     her2 = brief.her2_proxy_summary_line(analysis)

@@ -75,6 +75,26 @@ def test_assay_lead_requires_a_matching_rna_proxy_not_just_drug_target_abundance
     assert "Supplied clinical evidence" in therapeutic_lead_basis(assessment, {})
 
 
+def test_opening_preserves_supplied_identity_and_qualifies_bulk_emt():
+    analysis = {
+        "cancer_type": "BRCA", "sample_mode": "solid", "purity": {},
+        "analysis_constraints": {"cancer_type": "BRCA"},
+        "candidate_trace": [
+            {"code": "SARC", "support_fraction_of_top": 1.0},
+            {"code": "BRCA", "support_fraction_of_top": 0.8},
+        ],
+        "fit_quality": {"label": "ambiguous"},
+        "therapy_response_scores": {"EMT": SimpleNamespace(state="up")},
+    }
+    content = build_report_content(analysis, pd.DataFrame(), "BRCA", "EMT program is active.",
+                                   report_view=build_report_view(analysis))
+    opening = " ".join(b.get("text", "") for b in content.sections[0]["blocks"])
+    assert "supplied diagnosis" in opening
+    assert "SARC" not in opening
+    assert "does not establish a tumor-cell transition" in opening
+    assert "RNA classifier check" in render_report_summary(content)
+
+
 def test_numbered_references_match_actual_figures_in_markdown_and_pdf(tmp_path):
     figures = tmp_path / "figures"
     figures.mkdir()
