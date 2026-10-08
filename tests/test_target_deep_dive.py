@@ -108,6 +108,8 @@ def test_plot_actionable_targets_offsets_observed_and_adjusted_markers():
     )
 
     ax = fig.axes[0]
+    assert ax.get_xlim()[0] < 0  # Zero-valued estimates must not be clipped by the bars' sticky edge.
+    assert ax.get_xlim()[1] > ax.dataLim.x1
     scatter_offsets = [
         collection.get_offsets()
         for collection in ax.collections

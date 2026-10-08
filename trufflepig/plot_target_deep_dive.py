@@ -564,6 +564,7 @@ def plot_actionable_targets(
     ax.set_xscale("symlog", linthresh=1.0)
     # Keep extreme target estimates inside the panel when the caller's plot
     # style uses zero x margins. Their markers and uncertainty bars carry evidence.
+    ax.use_sticky_edges = False
     ax.margins(x=0.08)
     ax.invert_yaxis()
     ax.legend(loc="lower right", fontsize=8)
