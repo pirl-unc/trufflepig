@@ -367,10 +367,10 @@ def test_full_report_driver_spectrum_preserves_entity_and_frequency(monkeypatch)
 def test_matched_egfr_report_does_not_repeat_generic_testing_tasks():
     report = build_summary(_analysis("SARC", "EGFR KDD"), _ranges(EGFR=300.0),
                            cancer_code="SARC", disease_state="")
-    therapy_text = report.split("## Therapy rationale and blockers", 1)[1].split("## Information needed", 1)[0]
+    therapy_text = report.split("## Therapeutic directions", 1)[1].split("## What would change the treatment options", 1)[0]
     assert "case-level/off-label TKI evidence" in therapy_text
     assert "larotrectinib" not in therapy_text
     assert "confirm mutation / fusion / amplification status" not in therapy_text
     assert "off-label follow-up; off-label/trial follow-up" not in therapy_text
     assert "The supplied variant evidence matches" in therapy_text
-    assert "supplied clinical assay reports" in report.split("## Information needed", 1)[1]
+    assert "supplied clinical assay reports" in report.split("## What would change the treatment options", 1)[1]

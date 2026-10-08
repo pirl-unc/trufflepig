@@ -31,6 +31,7 @@ _ENVIRONMENT = Environment(
     lstrip_blocks=True,
 )
 _ENVIRONMENT.filters["literal"] = report_literal
+_ENVIRONMENT.filters["markdown_url"] = markdown_url
 
 
 def render_report_template(name: str, **facts: object) -> str:

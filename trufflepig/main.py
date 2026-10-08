@@ -4406,15 +4406,15 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 | `*-subtype-signature.png` | Patient | Final-call subtype analysis, when supported |
 | `*-purity-ctas.png` | Audit only | Tumor-adjusted cancer-testis antigen discovery screen; not a clinical recommendation |
 | `*-purity-surface.png` | Audit only | Tumor-adjusted surface-protein discovery screen; not a clinical recommendation |
-| `*-priority-targets.png` | Audit only | Broad target scoring retained for technical review; not a clinical recommendation or eligibility result |
+| `*-priority-targets.png` | Patient | Follow-up priority across curated pathways and exploratory targets; not drug-response or eligibility scores |
 | `*-sample-summary.png` | Audit only | Legacy composite that duplicates selected reader figures |
 | `*-decomposition-candidates.png` | Audit only | Competing decomposition fits, including rejected preliminary labels |
 | `*-cancer-hypotheses.png` | Audit only | Pre-adjudication bulk-RNA candidate ranking |
 | `*-cancer-type-signal-matrix.png` | Audit only | Full evidence trace, including preliminary and conflicting signals |
 | `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the patient PDF |
 | `*-treatments.png` | Audit only | Raw target-expression survey retained for technical review |
-| `*-actionable-targets.png` | Audit only | Broad actionable-target screen retained for provenance |
-| `*-priority-target-context.png` | Audit only | Detailed estimated patient tumor attribution and external healthy-tissue reference context |
+| `*-actionable-targets.png` | Patient | Candidate-target expression with tumor and healthy-tissue context |
+| `*-priority-target-context.png` | Patient | Estimated tumor/background target RNA and healthy-tissue overlap |
 | `*-target-tissues.pdf` | Audit only | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
 | `*-reference-mds.png` | Audit only | Raw reference comparison; not the final fused selection |
 | `*-reference-neighborhood.png` | Audit only | Raw reference distances; not the final fused selection |

@@ -43,7 +43,7 @@ except ImportError:
         expected_codes,
     )
 
-_SUMMARY_CALL = re.compile(r"\*\*Cancer call:\*\*\s*([A-Za-z][A-Za-z0-9_]*)\b")
+_SUMMARY_CALL = re.compile(r"\bCancer call:\s*([A-Za-z][A-Za-z0-9_]*)\b")
 _WORKING_CALL = re.compile(r"\*\*Working cancer call\*\*:\s*([^.\n]+)")
 _CODE_BEFORE_PAREN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(")
 _MECHANICAL_PATTERNS = {
@@ -106,7 +106,7 @@ def _sample_paths(analysis_md: Path, sample_id: str) -> dict[str, Path | None]:
 
 
 def _summary_call(summary_text: str) -> str:
-    match = _SUMMARY_CALL.search(summary_text)
+    match = _SUMMARY_CALL.search(report_plain_text(summary_text))
     return match.group(1) if match else ""
 
 
@@ -242,10 +242,7 @@ def _authored_report_issues(
     expected_summary = render_report_template(
         "report",
         sample_id=document.get("sample_id") or "",
-        sections=[
-            {**section, "blocks": [b for b in section["blocks"] if b["kind"] != "figure"]}
-            for section in document.get("sections", [])
-        ],
+        sections=document.get("sections", []),
     )
     if summary_text.strip() != expected_summary.strip():
         issues.append(

@@ -234,7 +234,7 @@ def test_spindle_diagnostic_workup_occurs_only_in_the_information_section():
     summary = render_report_summary(content)
     workup = "Review renal versus soft-tissue site and pathology"
     assert summary.count(workup) == 1
-    assert summary.index(workup) > summary.index("## Information needed")
+    assert summary.index(workup) > summary.index("## What would change the treatment options")
     assert any(r["key"] == "spindle_diagnostic_context" for r in content.evidence_requests)
 
 
@@ -341,7 +341,7 @@ def test_selected_therapy_clinical_criteria_survive_all_report_formats(tmp_path,
     assert any(a["agent"] == agent and a["selected"] for a in content.therapy_assessments)
     summary = render_report_summary(content)
     assert summary.count(phrase) == 1
-    assert summary.index(phrase) > summary.index("## Information needed")
+    assert summary.index(phrase) > summary.index("## What would change the treatment options")
     request = next(r for r in content.evidence_requests if r["key"] == "clinical_setting")
     detail = next(d for d in request["details"] if phrase in d["question"])
     assert agent in detail["affects"]

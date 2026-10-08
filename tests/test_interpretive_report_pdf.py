@@ -24,6 +24,7 @@ def test_figure_registry_entries_are_suffix_title_interpretation_triples():
 def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
     suffixes = {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
     assert {
+        "priority-targets.png", "priority-target-context.png", "actionable-targets.png",
         "sample-context.png",
         "decomposition-composition.png",
         "decomposition-components.png",
@@ -39,9 +40,6 @@ def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
         "treatments.png",
         "purity-ctas.png",
         "purity-surface.png",
-        "priority-targets.png",
-        "priority-target-context.png",
-        "actionable-targets.png",
     }.isdisjoint(suffixes)
 
 
@@ -53,7 +51,7 @@ def document():
         "sections": [
             {
                 "id": "conclusion",
-                "title": "Conclusion and supporting evidence",
+                "title": "What we learned about this sample",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -71,7 +69,7 @@ def document():
             },
             {
                 "id": "therapies",
-                "title": "Therapy rationale and blockers",
+                "title": "Therapeutic directions",
                 "blocks": [
                     {"kind": "heading", "text": "1. Historical therapy · Prior treatment"},
                     {
@@ -86,7 +84,7 @@ def document():
             },
             {
                 "id": "information",
-                "title": "Information needed",
+                "title": "What would change the treatment options",
                 "blocks": [
                     {"kind": "bullet", "text": "Reconcile organ function and treatment history."},
                 ],

@@ -346,7 +346,7 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
     prefix = "synthetic-clinical-assay"
     summary = render_report_summary(content)
     if candidate["selected"]:
-        information = summary.split("## Information needed", 1)[1].split("## ", 1)[0]
+        information = summary.split("## What would change the treatment options", 1)[1].split("## ", 1)[0]
         assert "unresectable or metastatic colorectal cancer" in information
         assert "requires validated MSI-H/dMMR" not in information
     elif followup:

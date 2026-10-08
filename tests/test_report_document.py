@@ -51,7 +51,7 @@ def _content():
         [
             {
                 "id": "conclusion",
-                "title": "Conclusion and supporting evidence",
+                "title": "What we learned about this sample",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -62,7 +62,7 @@ def _content():
             },
             {
                 "id": "therapies",
-                "title": "Therapy rationale and blockers",
+                "title": "Therapeutic directions",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -70,7 +70,7 @@ def _content():
                     },
                 ],
             },
-            {"id": "information", "title": "Information needed", "blocks": []},
+            {"id": "information", "title": "What would change the treatment options", "blocks": []},
             {"id": "evidence", "title": "Detailed evidence and figures", "blocks": []},
         ],
         [{"agent": "FAP radioligand", "selected": True, "rationale": ["major prior benefit"]}],

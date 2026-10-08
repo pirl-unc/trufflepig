@@ -2463,51 +2463,8 @@ def purity_estimator_scenario_text(scenarios) -> str:
     return "; ".join(rendered)
 
 
-def summary_conclusion_paragraphs(
-    analysis,
-    ranges_df,
-    cancer_code: str,
-    disease_state: str,
-    sample_id: Optional[str] = None,
-    *,
-    report_view: ReportView,
-) -> List[str]:
-    """Author the finalized conclusion paragraphs shared by all report formats."""
-    conclusion = report_view.purity
-    sample_context = analysis.get("sample_context")
-    cancer_code = report_view.cancer_type
-    cancer_name = report_view.cancer_type_name or cancer_code
-
-    lines: List[str] = []
-    sample_id = display_sample_id(sample_id)
-
-    # #149: tissue-composition banner. Above the cancer call so
-    # the reader sees the caveat before anchoring on the cancer label.
-    # Banner decision reads downstream tumor evidence (purity from
-    # tumor purity and signature score so a confident cancer call
-    # doesn't trigger a spurious tissue-composition warning.
-    hvt = analysis.get("healthy_vs_tumor")
-    if hvt is not None:
-        banner = hvt.brief_banner(
-            purity=conclusion.estimate,
-            signature_score=_top_candidate_signature_score(analysis),
-            active_cancer_code=cancer_code,
-            active_cancer_label=cancer_name,
-        )
-        if banner:
-            lines.append(banner)
-            lines.append("")
-
-    # Cancer call — annotated with #169 contested-call confidence when
-    # orthogonal signals (lineage concordance, runner-up gap, tissue-composition
-    # top-ρ cohort) disagree with the classifier's pick.
-    call_tier = report_view.call_confidence
-    suffix = _call_confidence_suffix(
-        call_tier,
-        concise=True,
-        include_reasons=False,
-    )
-
+def resolved_subtype_summary_line(analysis, ranges_df):
+    """Render subtype context after the shared degeneracy and identity checks."""
     # #171/#198: resolve subtype evidence separately from the report-scope
     # cancer label. The subtype signal is useful context, but rendering it
     # inside the cancer-call parenthetical made clinical labels, RNA labels,
@@ -2578,6 +2535,60 @@ def summary_conclusion_paragraphs(
                 "degenerate-subtype resolution failed; keeping classifier pick",
                 exc_info=True,
             )
+
+    return _subtype_status_line(
+        winning_subtype=winning_subtype,
+        degenerate_status=degenerate_status,
+        degenerate_resolution=degenerate_resolution,
+        original_winning_subtype=original_winning_subtype,
+        analysis=analysis,
+    )
+
+
+def summary_conclusion_paragraphs(
+    analysis,
+    ranges_df,
+    cancer_code: str,
+    disease_state: str,
+    sample_id: Optional[str] = None,
+    *,
+    report_view: ReportView,
+) -> List[str]:
+    """Author the finalized conclusion paragraphs shared by all report formats."""
+    conclusion = report_view.purity
+    sample_context = analysis.get("sample_context")
+    cancer_code = report_view.cancer_type
+    cancer_name = report_view.cancer_type_name or cancer_code
+
+    lines: List[str] = []
+    sample_id = display_sample_id(sample_id)
+
+    # #149: tissue-composition banner. Above the cancer call so
+    # the reader sees the caveat before anchoring on the cancer label.
+    # Banner decision reads downstream tumor evidence (purity from
+    # tumor purity and signature score so a confident cancer call
+    # doesn't trigger a spurious tissue-composition warning.
+    hvt = analysis.get("healthy_vs_tumor")
+    if hvt is not None:
+        banner = hvt.brief_banner(
+            purity=conclusion.estimate,
+            signature_score=_top_candidate_signature_score(analysis),
+            active_cancer_code=cancer_code,
+            active_cancer_label=cancer_name,
+        )
+        if banner:
+            lines.append(banner)
+            lines.append("")
+
+    # Cancer call — annotated with #169 contested-call confidence when
+    # orthogonal signals (lineage concordance, runner-up gap, tissue-composition
+    # top-ρ cohort) disagree with the classifier's pick.
+    call_tier = report_view.call_confidence
+    suffix = _call_confidence_suffix(
+        call_tier,
+        concise=True,
+        include_reasons=False,
+    )
 
     call_punctuation = suffix or "."
     lines.append(f"**Cancer call:** {cancer_code} ({cancer_name}){call_punctuation}")
@@ -2652,13 +2663,7 @@ def summary_conclusion_paragraphs(
             f"**Rare-marker prompt:** {surrogate}{tpm_clause}{context_clause} raises {label} as a "
             f"testing prompt, not the report scope{evidence_clause}."
         )
-    subtype_line = _subtype_status_line(
-        winning_subtype=winning_subtype,
-        degenerate_status=degenerate_status,
-        degenerate_resolution=degenerate_resolution,
-        original_winning_subtype=original_winning_subtype,
-        analysis=analysis,
-    )
+    subtype_line = resolved_subtype_summary_line(analysis, ranges_df)
     if subtype_line:
         lines.append(subtype_line)
 

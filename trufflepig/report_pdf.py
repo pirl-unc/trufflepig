@@ -19,6 +19,7 @@ from reportlab.platypus import (
     KeepTogether,
     LongTable,
     Paragraph,
+    PageBreak,
     SimpleDocTemplate,
     Spacer,
     TableStyle,
@@ -135,8 +136,10 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
     title = document.get("sample_id") or document["prefix"]
     story = [Paragraph(report_inline_html(str(title)), styles["title"])]
     for section in document["sections"]:
+        starts_with_figure = bool(section["blocks"] and section["blocks"][0]["kind"] == "figure")
         story.extend(
-            [CondPageBreak(72), Paragraph(report_inline_html(section["title"]), styles["section"])]
+            [PageBreak() if starts_with_figure else CondPageBreak(72),
+             Paragraph(report_inline_html(section["title"]), styles["section"])]
         )
         for block in section["blocks"]:
             kind = block["kind"]
@@ -144,13 +147,12 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
                 if kind == "heading":
                     story.append(CondPageBreak(60))
                 style = styles["body"] if kind == "paragraph" else styles[kind]
-                story.append(
-                    Paragraph(
-                        report_inline_html(block["text"]),
-                        style,
-                        bulletText="•" if kind == "bullet" else None,
-                    )
+                paragraph = Paragraph(
+                    report_inline_html(block["text"]),
+                    style,
+                    bulletText="•" if kind == "bullet" else None,
                 )
+                story.append(KeepTogether([paragraph]) if kind == "bullet" else paragraph)
             elif kind == "table":
                 rows = [block["headers"], *block["rows"]]
                 cells = [
@@ -193,7 +195,10 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
                 story.append(
                     KeepTogether(
                         [
-                            Paragraph(report_inline_html(block["title"]), styles["heading"]),
+                            Paragraph(
+                                (f'<a name="figure-{int(block["number"])}"/>' if block.get("number") else "")
+                                + report_inline_html(block["title"]), styles["heading"],
+                            ),
                             Paragraph(report_inline_html(block["caption"]), styles["caption"]),
                             figure,
                             Spacer(1, 10),

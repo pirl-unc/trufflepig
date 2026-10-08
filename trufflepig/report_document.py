@@ -40,6 +40,29 @@ SCHEMA_VERSION = 2
 # and the evidence tables retain them for technical review.
 FIGURE_REGISTRY = [
     (
+        "priority-targets.png",
+        "Targets to prioritize for follow-up",
+        "Curated treatment pathways and exploratory RNA targets are shown separately. "
+        "Ranking combines evidence, estimated RNA source and normal-tissue context; "
+        "it is not a drug-response score. Mutation-specific therapies still require the exact molecular result.",
+    ),
+    (
+        "priority-target-context.png",
+        "Target RNA source and healthy-tissue context",
+        "Estimated contributions to bulk RNA from tumor and background help distinguish target signals from "
+        "normal-tissue RNA. Healthy-tissue expression flags overlap to investigate; RNA alone "
+        "does not establish protein accessibility or clinical safety.",
+    ),
+    (
+        "actionable-targets.png",
+        "Expression of candidate targets",
+        "Observed bulk RNA, modeled tumor-cell-equivalent TPM and healthy-tissue references. "
+        "Tumor-cell-equivalent values adjust for tumor RNA fraction; source-attribution values "
+        "elsewhere describe contributions to bulk RNA. "
+        "Expression supports a follow-up hypothesis; it does not establish a target mutation, "
+        "clinical target positivity or treatment benefit.",
+    ),
+    (
         "sample-context.png",
         "Sample quality context",
         "Compact library, preservation, and expression-concentration checks used "
@@ -130,6 +153,7 @@ def build_figure_manifest(
     *,
     purity_status: str = "resolved",
     purity_unresolved_reason: Optional[str] = None,
+    identity_unresolved: bool = False,
 ) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
@@ -170,18 +194,27 @@ def build_figure_manifest(
                 "and benign same-lineage cells share the modeled programs."
             ),
         }
+    number = 0
     for suffix, title, caption in FIGURE_REGISTRY:
         if purity_status == "discordant_estimators":
             caption = unresolved_captions.get(suffix, caption)
         figure = find_figure(analyze_dir, prefix, suffix)
+        if identity_unresolved and suffix in {
+            "priority-targets.png", "priority-target-context.png", "actionable-targets.png",
+        }:
+            figure = None
         present = figure is not None
+        if present:
+            number += 1
         manifest.append(
             {
                 "suffix": suffix,
-                "title": title,
+                "title": f"Figure {number}. {title}" if present else title,
+                "number": number if present else None,
+                "anchor": f"figure-{number}" if present else None,
                 "caption": caption,
                 "present": present,
-                "path": figure.name if present else None,
+                "path": figure.relative_to(analyze_dir).as_posix() if present else None,
             }
         )
     return manifest
@@ -214,12 +247,21 @@ def build_report_document(
             prefix,
             purity_status=report_view.purity.status,
             purity_unresolved_reason=report_view.purity.unresolved_reason,
+            identity_unresolved=report_view.cancer_type == "UNRESOLVED",
         ),
     }
+    figures_by_suffix = {f["suffix"]: f for f in document["figures"] if f["present"]}
+    for section in document["sections"]:
+        for block in section["blocks"]:
+            references = [figures_by_suffix[s] for s in block.get("figure_suffixes", []) if s in figures_by_suffix]
+            if references:
+                block["text"] += " See " + ", ".join(
+                    f"[Figure {f['number']}](#{f['anchor']})" for f in references
+                ) + "."
     detail = next(section for section in document["sections"] if section["id"] == "evidence")
-    for figure in document["figures"]:
-        if figure["present"]:
-            detail["blocks"].append({"kind": "figure", **figure})
+    detail["blocks"] = [
+        {"kind": "figure", **figure} for figure in document["figures"] if figure["present"]
+    ] + detail["blocks"]
     return document
 
 
@@ -240,6 +282,13 @@ def write_report_document(
     )
     path = analyze_dir / f"{prefix}-report.json"
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False))
+    # Resolve references only after plots have been emitted, then render both
+    # reader formats from this final document. --no-figures cannot leave dangling links.
+    from .report_language import render_report_template
+
+    (analyze_dir / f"{prefix}-summary.md").write_text(render_report_template(
+        "report", sample_id=document["sample_id"], sections=document["sections"],
+    ))
     return path
 
 
