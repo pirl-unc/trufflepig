@@ -363,3 +363,32 @@ def test_audit_requires_selected_therapies_citations_and_requests_in_the_summary
         "therapy_source_missing_from_summary",
         "evidence_request_missing_from_summary",
     }
+
+
+def test_audit_checks_each_source_when_a_therapy_has_multiple_citations():
+    from scripts.audit_generated_reports import _authored_report_issues
+    from trufflepig.report_language import render_report_template
+
+    first = "https://example.org/first"
+    second = "https://example.org/second"
+    document = {
+        "sample_id": "sample",
+        "therapy_assessments": [{
+            "agent": "example drug",
+            "selected": True,
+            "source_url": "",
+            "sources": [{"url": first}, {"url": second}],
+        }],
+        "sections": [{"id": "therapies", "title": "Therapies", "blocks": [{
+            "kind": "paragraph", "text": f"example drug [first]({first})",
+        }]}],
+    }
+    summary = render_report_template(
+        "report", sample_id="sample", sections=document["sections"],
+    )
+    issues = _authored_report_issues("sample", document, summary)
+    assert issues == [{
+        "sample": "sample", "severity": "error",
+        "category": "therapy_source_missing_from_summary",
+        "detail": f"example drug: {second}",
+    }]

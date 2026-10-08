@@ -13,6 +13,7 @@ import importlib.util
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 # Load the script as a module (it isn't an installed package).
 _spec = importlib.util.spec_from_file_location(
@@ -126,7 +127,7 @@ def test_cancer_type_decision_calibration_matches_production(
     monkeypatch.setattr(
         tumor_purity,
         "analyze_sample",
-        lambda _frame, tissue_signal=None: {"candidate_trace": trace},
+        lambda _frame, tissue_signal=None, **_kwargs: {"candidate_trace": trace},
     )
     monkeypatch.setattr(
         rare_inference,
@@ -205,7 +206,8 @@ def test_cancer_type_decision_calibration_matches_production(
     assert decision_calls[0].selection_allowed is False
     assert decision_calls[0].sample_mode == "solid"
     assert decision_calls[0].supported_code_mode == "heme"
-    assert summary["consolidated_cancer_type"] == "SARC"
+    assert summary["consolidated_cancer_type"] == "UNRESOLVED"
+    assert summary["consolidated_selected_by"] == "identity_abstention"
 
 
 def test_cancer_type_decision_calibration_rolls_back_unconfirmed_scope(
@@ -232,7 +234,7 @@ def test_cancer_type_decision_calibration_rolls_back_unconfirmed_scope(
     monkeypatch.setattr(
         tumor_purity,
         "analyze_sample",
-        lambda _frame, tissue_signal=None: {"candidate_trace": trace},
+        lambda _frame, tissue_signal=None, **_kwargs: {"candidate_trace": trace},
     )
     monkeypatch.setattr(
         rare_inference,
@@ -363,7 +365,8 @@ def test_non_decision_calibration_keeps_production_composition_evidence(
         lambda _frame: tissue_signal,
     )
 
-    def fake_analyze(_frame, *, tissue_signal=None):
+    def fake_analyze(_frame, *, tissue_signal=None, _exploratory_context=False):
+        assert _exploratory_context is True
         observed["analyze_tissue_signal"] = tissue_signal
         return {"candidate_trace": trace}
 
@@ -398,3 +401,59 @@ def test_non_decision_calibration_keeps_production_composition_evidence(
     assert observed["analyze_tissue_signal"] is tissue_signal
     assert observed["selected_analysis"]["healthy_vs_tumor"] is tissue_signal
     assert summary["consolidated_cancer_type"] == "BLCA"
+
+
+@pytest.mark.parametrize(
+    "raw_code, selected_code, expected",
+    [("SARC", None, "UNRESOLVED"), ("SARC_OS", None, "UNRESOLVED"), ("SARC", "CRC", "CRC")],
+)
+def test_calibration_final_identity_cannot_restore_rna_only_sarcoma(
+    monkeypatch, raw_code, selected_code, expected,
+):
+    import trufflepig.cancer_type_evidence as cancer_type_evidence
+    import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.rare_inference as rare_inference
+    import trufflepig.tumor_purity as tumor_purity
+
+    trace = [{"code": raw_code, "support_fraction_of_top": 1.0}]
+    monkeypatch.setattr(healthy_vs_tumor, "assess_healthy_vs_tumor", lambda _frame: {})
+
+    def fake_analyze(_frame, *, tissue_signal, _exploratory_context):
+        assert _exploratory_context is True
+        return {"candidate_trace": trace, "purity": {"overall": 0.8}}
+
+    monkeypatch.setattr(tumor_purity, "analyze_sample", fake_analyze)
+    monkeypatch.setattr(
+        rare_inference, "infer_rare_cancer_marker_hypotheses_from_rna", lambda *_args: [],
+    )
+    monkeypatch.setattr(
+        cancer_type_evidence, "select_report_scope_from_evidence",
+        lambda *_args, **_kwargs: {
+            "selected": {"cancer_type": selected_code, "selected_by": "entity_consensus"}
+            if selected_code else None,
+        },
+    )
+    returned_trace, summary = calib._classify_one(pd.DataFrame(), return_analysis=True)
+    analysis = summary["analysis"]
+    assert returned_trace == trace
+    assert summary["broad_top_code"] == raw_code
+    assert summary["consolidated_cancer_type"] == expected
+    assert analysis["cancer_type"] == analysis["report_scope_cancer_type"] == expected
+    if expected == "UNRESOLVED":
+        assert analysis["purity"]["quantitative_unresolved_reason"] == "cancer_type_unresolved"
+        assert analysis["cancer_type_evidence"]["selected"] is None
+    else:
+        assert "cancer_type_abstention" not in analysis
+
+
+def test_empty_calibration_trace_retains_requested_analysis(monkeypatch):
+    import trufflepig.healthy_vs_tumor as healthy_vs_tumor
+    import trufflepig.tumor_purity as tumor_purity
+
+    analysis = {"candidate_trace": [], "cancer_type": None}
+    monkeypatch.setattr(healthy_vs_tumor, "assess_healthy_vs_tumor", lambda _frame: {})
+    monkeypatch.setattr(tumor_purity, "analyze_sample", lambda *_args, **_kwargs: analysis)
+    trace, summary = calib._classify_one(pd.DataFrame(), return_analysis=True)
+    assert trace == []
+    assert summary["analysis"] is analysis
+    assert summary["consolidated_cancer_type"] is None

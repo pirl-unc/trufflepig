@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Validate cancer-type inference WITHOUT hints on local truth samples and medoids.
 
-Runs the full no-hint production decision path, including evidence
-consolidation, residual cancer-type decision, and transactional refit, then
-scores both entity and lineage compatibility against curated truth.
+Exercises evidence consolidation, residual cancer-type decisions, transactional
+refits and the final identity guard without a diagnosis hint, then scores both
+entity and lineage compatibility against curated truth.
 
 Run:  python3 scripts/eval_nohint_validation.py
 """
 import argparse
-import sys, warnings
+import sys
+import warnings
 warnings.filterwarnings("ignore")
 
 import pandas as pd
@@ -202,9 +203,14 @@ def _classify_corpus_item(group, item, signal_frames=None):
     if group == "LOCAL REPORTS":
         name = item["name"]
         expected_codes = item["expected_codes"]
-        load = lambda: _load_report(item)
+
+        def load():
+            return _load_report(item)
     else:
-        name, expected_codes, load = item, [item], lambda: _medoid_df(item)
+        name, expected_codes = item, [item]
+
+        def load():
+            return _medoid_df(item)
     try:
         result = classify_without_hint_with_analysis(load())            # the only fallible step
     except EXPECTED_SAMPLE_ERRORS as exc:

@@ -263,9 +263,14 @@ def _authored_report_issues(
         agent = " ".join(str(assessment.get("agent") or "").split())
         if agent and agent not in plain:
             issues.append(issue("selected_therapy_missing_from_summary", agent))
-        url = markdown_url(assessment.get("source_url"))
-        if url and f"({url})" not in summary_text:
-            issues.append(issue("therapy_source_missing_from_summary", f"{agent}: {url}"))
+        urls = {
+            markdown_url(source.get("url"))
+            for source in assessment.get("sources", [])
+        }
+        urls.add(markdown_url(assessment.get("source_url")))
+        for url in sorted(urls):
+            if url and f"({url})" not in summary_text:
+                issues.append(issue("therapy_source_missing_from_summary", f"{agent}: {url}"))
     for request in document.get("evidence_requests", []):
         question = " ".join(report_plain_text(str(request.get("question") or "")).split())
         question = question.rstrip(". ")

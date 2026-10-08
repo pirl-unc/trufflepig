@@ -804,11 +804,13 @@ def _classify_one(
     # remove the healthy/tumor composition screen, shorten the candidate trace,
     # or otherwise change the cancer-type inputs being calibrated.
     tissue_signal = assess_healthy_vs_tumor(df_expr)
-    analysis = analyze_sample(df_expr, tissue_signal=tissue_signal)
+    analysis = analyze_sample(
+        df_expr, tissue_signal=tissue_signal, _exploratory_context=True,
+    )
     analysis["healthy_vs_tumor"] = tissue_signal
     trace = list(analysis.get("candidate_trace") or [])
     if not trace:
-        return [], {
+        summary = {
             "broad_top_code": None,
             "broad_top_support": 0.0,
             "broad_top3": [],
@@ -816,6 +818,9 @@ def _classify_one(
             "consolidated_cancer_type": None,
             "consolidated_selected_by": None,
         }
+        if return_analysis:
+            summary["analysis"] = analysis
+        return [], summary
     top = trace[0]
     broad_top_code = str(top.get("code") or "")
     broad_top3 = [str(row.get("code") or "") for row in trace[:3]]
@@ -849,6 +854,7 @@ def _classify_one(
     except (KeyError, ValueError, TypeError):
         evidence = {}
     selected = (evidence or {}).get("selected") or {}
+    analysis["cancer_type_evidence"] = evidence
     pre_decision_cancer_type = (
         str(selected.get("cancer_type") or "") or broad_top_code
     )
@@ -971,6 +977,7 @@ def _classify_one(
             if cancer_type_decision_refit_accepted:
                 consolidated_cancer_type = proposed_cancer_type
                 consolidated_selected_by = proposed_selected_by
+                analysis["cancer_type_evidence"] = post_evidence
             else:
                 cancer_type_decision = refit_decision.block_selection(
                     "the cancer-type decision did not reproduce after the "
@@ -998,6 +1005,22 @@ def _classify_one(
         else:
             consolidated_cancer_type = proposed_cancer_type
             consolidated_selected_by = proposed_selected_by
+            analysis["cancer_type_evidence"] = post_evidence
+
+    # Keep the raw reference winner in the audit trace, but apply the same
+    # identity boundary as the report after all exploratory fits and fallbacks.
+    from trufflepig.cancer_type_policy import (
+        finalize_sarcoma_identity,
+        mark_unresolved_identity_purity,
+    )
+
+    analysis["cancer_type"] = consolidated_cancer_type
+    analysis["report_scope_cancer_type"] = consolidated_cancer_type
+    if finalize_sarcoma_identity(analysis):
+        consolidated_cancer_type = analysis["cancer_type"]
+        consolidated_selected_by = "identity_abstention"
+        if "purity" in analysis:
+            mark_unresolved_identity_purity(analysis)
     summary = {
         "broad_top_code": broad_top_code,
         "broad_top_support": float(top.get("support_fraction_of_top") or 0.0),
