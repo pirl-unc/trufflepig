@@ -167,6 +167,7 @@ class VectorFigure(Flowable):
 FULL_PAGE_FIGURES = {
     "priority-targets.png", "priority-target-context.png",
     "actionable-targets.png", "therapy-pathway-state.png",
+    "degradation-index.png",
 }
 
 

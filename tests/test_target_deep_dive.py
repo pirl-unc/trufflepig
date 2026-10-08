@@ -585,3 +585,23 @@ def test_plot_subtype_signature_no_contrast_returns_none():
     df = _tcga_sample("ACC")
     fig = plot_subtype_signature(df, "ACC")
     assert fig is None
+
+
+def test_priority_source_does_not_present_caps_or_zero_residual_as_measured_shares(monkeypatch):
+    import trufflepig.plot_target_deep_dive as plots
+    from trufflepig.reporting import tumor_attribution_context
+
+    rows = []
+    for symbol, fraction, capped in [('CAPPED', 0.2304, True), ('ZERO', 0, False)]:
+        source = tumor_attribution_context({
+            'observed_tpm': 100, 'attr_tumor_tpm': 100 * fraction,
+            'attr_tumor_fraction': fraction, 'low_purity_cap_applied': capped,
+        })
+        rows.append(dict(symbol=symbol, observed=100, low=0, mid=100 * fraction,
+                         high=60, source=source,
+                         normal={'tier': 'same_lineage_expected', 'label': ''}))
+    monkeypatch.setattr(plots, '_priority_target_rows', lambda *a, **kw: ('COAD', rows))
+    fig = plots.plot_priority_target_context(pd.DataFrame(), 'COAD')
+    labels = [text.get_text() for text in fig.axes[1].texts]
+    assert labels == ['Cap-limited\nsource unresolved', 'No tumor residual\nin this model']
+    assert not fig.axes[1].patches  # neither a 23% share nor a fully background bar

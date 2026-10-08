@@ -1072,6 +1072,7 @@ def tumor_attribution_context(row):
         "attr_tumor_fraction_low": low_frac,
         "attr_tumor_fraction_high": high_frac,
         "attr_support_fraction": support_fraction,
+        "low_purity_cap_applied": _truthy(row.get("low_purity_cap_applied")),
     }
 
 

@@ -1067,315 +1067,76 @@ def _sample_context_concentration_line(sample_context: SampleContext) -> str:
     return f"{parts[0]} ({', '.join(parts[1:])})" if len(parts) > 1 else parts[0]
 
 
+def _length_pair_plot_summary(index):
+    """Describe the direction of this check without treating enrichment as integrity."""
+    if index is None or not math.isfinite(index):
+        return "Not available", "Too few usable gene pairs to assess length bias."
+    if index > _THRESHOLDS["degradation_pair_biased_upper"]:
+        return ("Long transcripts enriched",
+                "Library bias can affect this check; RNA integrity remains unresolved.")
+    if index < 0.55:
+        return ("Long transcripts depleted",
+                "This pattern can support degradation; use the other quality evidence too.")
+    return ("No strong length bias",
+            "This check alone does not establish RNA integrity.")
+
+
 def plot_sample_context(
     sample_context: SampleContext, save_to_filename: str, save_dpi: int = 150
 ) -> Optional[str]:
-    """Standalone PNG summarising ``sample_context`` as the first panel
-    a user sees in an analyze report.
-
-    Two-row layout (single PNG — plot-crowding preference):
-
-    - **Top**: text block with library prep, preservation, degradation
-      severity, missing-MT flag, and confidence.
-    - **Bottom**: three horizontal bars showing the diagnostic fractions
-      (histone mRNA fraction of total; MT rRNA fraction of MT; overall
-      MT fraction of total) with the thresholds used for the call.
-    """
+    """A short finding-and-implication summary; diagnostic values stay in the data."""
+    from textwrap import fill
     import matplotlib.pyplot as plt
+    from .report_figures import save_report_figure
 
-    fig, (ax_text, ax_bars) = plt.subplots(
-        nrows=2,
-        ncols=1,
-        figsize=(10, 5.5),
-        gridspec_kw={"height_ratios": [1, 1.5]},
-    )
-    ax_text.axis("off")
-
-    prep_label = library_prep_display_label(
-        sample_context.library_prep,
-        title_case=True,
-    )
-
-    pres_label = {
-        "fresh_frozen": "Fresh / frozen",
-        "ffpe": "FFPE",
+    prep = library_prep_display_label(sample_context.library_prep, title_case=True)
+    condition = {
+        "fresh_frozen": "Fresh / frozen-like",
+        "ffpe": "FFPE-like",
         "degraded": "Partial degradation",
-        "unknown": "Unknown",
+        "unknown": "Unresolved",
     }.get(sample_context.preservation, sample_context.preservation)
-
-    severity_color = {
-        "none": "#2e8b57",
-        "mild": "#daa520",
-        "moderate": "#d2691e",
-        "severe": "#b22222",
-    }.get(sample_context.degradation_severity, "#666666")
-
-    header_lines = [
-        (
-            f"Library:       {prep_label} "
-            f"({heuristic_support_label(sample_context.library_prep_confidence)})"
-        ),
-        f"Preservation:  {pres_label}",
-        f"Length-pair:   {length_pair_display_label(sample_context)}",
+    severity = sample_context.degradation_severity
+    if severity and severity != "none":
+        condition += f" ({severity})"
+    length_label, length_detail = _length_pair_plot_summary(sample_context.degradation_index)
+    if sample_context.degradation_index is not None:
+        length_label += f" ({sample_context.degradation_index:.2f}x reference)"
+    rows = [
+        ("Library (inferred)", prep, "Compare RNA abundance with library preparation in mind."),
+        ("RNA condition (inferred)", condition,
+         "Low or missing RNA signals need caution." if severity != "none"
+         else "Expression-based inference; laboratory quality metrics take precedence."),
+        ("Length-pair check", length_label, length_detail),
     ]
+    signals = sample_context.signals or {}
+    share = signals.get("top_10_share_of_total_tpm")
+    level = str(signals.get("expression_concentration_level") or "unclassified")
+    if share is not None:
+        rows.append(("Expression concentration", f"Top 10 genes: {float(share):.1%} of RNA",
+                     f"{level.capitalize()} concentration; " +
+                     ("a few genes dominate the profile." if level in {"high", "extreme"}
+                      else "not a direct measure of RNA integrity.")))
+    burden = float((signals.get("qc_class_shares") or {}).get("rrna_plus_mt_fraction") or 0)
+    if burden >= 0.10:
+        rows.append(("Technical RNA burden", f"Mitochondrial / rRNA-like: {burden:.1%}",
+                     "These RNAs can dominate normalized abundance estimates."))
     if sample_context.missing_mt:
-        header_lines.append("MT genes missing from quant table")
+        rows.append(("Measurement limit", "Mitochondrial genes missing",
+                     "Filtering or library capture can remove this quality signal."))
 
-    concentration_line = _sample_context_concentration_line(sample_context)
-    ax_text.text(
-        0.02,
-        0.95,
-        "Sample context",
-        fontsize=14,
-        fontweight="bold",
-        va="top",
-    )
-    for i, line in enumerate(header_lines):
-        ax_text.text(
-            0.02,
-            0.70 - 0.22 * i,
-            line,
-            fontsize=11,
-            va="top",
-            family="monospace",
-            color=severity_color if i == 2 else "black",
-        )
-    if concentration_line:
-        ax_text.text(
-            0.02,
-            0.04,
-            concentration_line,
-            fontsize=9,
-            va="bottom",
-            color="#7a2e1f",
-        )
-
-    # Bottom panel: diagnostic bars
-    signals = sample_context.signals
-    hist_frac = signals.get("histone_fraction", 0.0) or 0.0
-    mt_frac = signals.get("mt_fraction", 0.0) or 0.0
-    mt_rrna_frac = signals.get("mt_rrna_fraction_of_mt") or 0.0
-
-    bars = []
-    signal_keys = []
-
-    def _append_bar(label, value, threshold, threshold_name, signal_key):
-        bars.append((label, value, threshold, threshold_name))
-        signal_keys.append(signal_key)
-
-    _append_bar(
-        "Histone fraction\n(replication-dependent mRNAs)",
-        hist_frac,
-        _THRESHOLDS["histone_fraction_total_floor"],
-        "Total/ribo-dep floor",
-        "histone_fraction",
-    )
-    _append_bar(
-        "MT fraction\n(of total sample TPM)",
-        mt_frac,
-        _THRESHOLDS["mt_fraction_suspicious_floor"],
-        "Suspicious-floor",
-        "mt_fraction",
-    )
-    _append_bar(
-        "MT-rRNA / MT-total",
-        mt_rrna_frac,
-        _THRESHOLDS["mt_rrna_fraction_of_mt_total_floor"],
-        "Total-RNA floor",
-        "mt_rrna_fraction_of_mt",
-    )
-    top_10_share = signals.get("top_10_share_of_total_tpm")
-    concentration_level = str(signals.get("expression_concentration_level") or "")
-    qc_shares = signals.get("qc_class_shares") or {}
-    rrna_pseudogene_fraction = float(
-        qc_shares.get("rrna_pseudogene_fraction") or 0.0
-    )
-    rrna_plus_mt_fraction = float(qc_shares.get("rrna_plus_mt_fraction") or 0.0)
-    nuclear_rrna_like_fraction = float(
-        qc_shares.get("nuclear_rrna_like_fraction") or 0.0
-    )
-    if top_10_share is not None:
-        _append_bar(
-            "Top-10 TPM share\n(expression concentration QC)",
-            float(top_10_share),
-            0.60,
-            "QC flag",
-            "top_10_share_of_total_tpm",
-        )
-    if rrna_pseudogene_fraction >= 0.005:
-        _append_bar(
-            "rRNA pseudogene\n(of total sample TPM)",
-            rrna_pseudogene_fraction,
-            0.01,
-            "QC flag",
-            "rrna_pseudogene_fraction",
-        )
-    elif nuclear_rrna_like_fraction >= 0.005:
-        _append_bar(
-            "Nuclear rRNA-like\n(of total sample TPM)",
-            nuclear_rrna_like_fraction,
-            0.01,
-            "QC flag",
-            "nuclear_rrna_like_fraction",
-        )
-    if rrna_plus_mt_fraction >= 0.10:
-        _append_bar(
-            "mtDNA + rRNA-like\n(technical-RNA burden)",
-            rrna_plus_mt_fraction,
-            0.10,
-            "QC flag",
-            "rrna_plus_mt_fraction",
-        )
-    y = [i for i in range(len(bars))]
-    values = [b[1] for b in bars]
-    labels = [b[0] for b in bars]
-    thresholds = [(b[2], b[3]) for b in bars]
-
-    # #107: expected-range bands for the inferred library prep +
-    # preservation. Shading a band behind each bar lets the reader see
-    # whether the observed value is inside the "normal for this prep"
-    # window instead of chasing an absolute threshold that doesn't
-    # apply to every prep.
-    expectations = _load_artifact_expectations()
-    bar_bands = []
-    in_band_count = 0
-    for yi, sig_key in zip(y, signal_keys):
-        gene_class = _GENE_CLASS_TO_SIGNAL.get(sig_key)
-        band = (
-            _expectation_for(
-                expectations,
-                sample_context.library_prep,
-                sample_context.preservation,
-                gene_class,
-            )
-            if gene_class
-            else None
-        )
-        bar_bands.append(band)
-        if band is not None:
-            lo, hi, _ = band
-            ax_bars.axhspan(
-                yi - 0.35,
-                yi + 0.35,
-                xmin=0.0,
-                xmax=1.0,
-                facecolor="none",
-                edgecolor="none",  # no-op placeholder
-            )
-            # Use axvspan-shape-per-row: draw a narrow patch via bar
-            # on a secondary layer to keep implementation simple.
-            ax_bars.barh(
-                [yi],
-                [hi - lo],
-                left=[lo],
-                color="#bbd8a3",
-                alpha=0.4,
-                edgecolor="none",
-                height=0.75,
-                zorder=0,
-            )
-            val = (
-                values[yi]
-                if sig_key
-                in ("histone_fraction", "mt_fraction", "mt_rrna_fraction_of_mt")
-                else None
-            )
-            if val is not None and lo <= val <= hi:
-                in_band_count += 1
-
-    ax_bars.barh(y, values, color="#4682b4", alpha=0.85)
-    ax_bars.set_yticks(y)
-    label_fontsize = 8 if len(bars) > 4 else 9
-    ax_bars.set_yticklabels(labels, fontsize=label_fontsize)
-    ax_bars.invert_yaxis()
-    # #102: with exome-capture samples every value is ~0 and a raw axis
-    # (xlim = 1.0) produces a chart that looks empty. Give a minimum axis
-    # width tied to the thresholds so bars remain readable, and annotate
-    # the "all near zero" case with the plausible library-prep explanation.
-    max_value = max(values) if values else 0.0
-    max_threshold = max((b[2] for b in bars), default=0.0)
-    max_band_hi = max((band[1] for band in bar_bands if band is not None), default=0.0)
-    if max_value < 0.01:
-        axis_floor = max(max_threshold * 4.0, max_band_hi * 1.1, 0.05)
-    else:
-        axis_floor = max(max_threshold * 1.15, max_band_hi * 1.1, 0.05)
-    ax_bars.set_xlim(0, min(1.0, max(max_value * 1.12, axis_floor)))
-    ax_bars.set_xlabel("Fraction", fontsize=10)
-    for yi, (thr, thr_name) in zip(y, thresholds):
-        ax_bars.axvline(thr, color="#888888", linestyle="--", linewidth=0.8)
-        ax_bars.text(
-            thr,
-            yi - 0.4,
-            thr_name,
-            fontsize=7,
-            color="#666666",
-            ha="left",
-        )
-    for yi, val, band in zip(y, values, bar_bands):
-        if band is not None:
-            lo, hi, _ = band
-            status = (
-                "ok"
-                if lo <= val <= hi
-                else ("out" if val < lo * 0.5 or val > hi * 2 else "~")
-            )
-        else:
-            status = ""
-        text_color = (
-            "#7a2e1f"
-            if (
-                (
-                    signal_keys[yi] == "top_10_share_of_total_tpm"
-                    and concentration_level in {"high", "extreme"}
-                )
-                or signal_keys[yi]
-                in {
-                    "rrna_pseudogene_fraction",
-                    "nuclear_rrna_like_fraction",
-                    "rrna_plus_mt_fraction",
-                }
-            )
-            else "black"
-        )
-        ax_bars.text(
-            val, yi, f"  {val:.3f} {status}", va="center", fontsize=9, color=text_color
-        )
-
-    if max_value < 0.01:
-        # Show the user what "all near zero" means rather than leaving a
-        # visually empty plot. Exome / hybrid-capture library prep strips
-        # non-polyadenylated RNAs (histones, mitochondrial), so near-zero
-        # values are the expected pattern — not a quality problem.
-        explanation = (
-            "All diagnostic signals are near zero — consistent with\n"
-            "exome / hybrid-capture library prep (non-polyadenylated\n"
-            "RNAs are filtered). Interpret MT / histone fractions\n"
-            "relative to the expected floor for this prep, not as\n"
-            "degradation evidence."
-        )
-        ax_bars.text(
-            0.98,
-            0.05,
-            explanation,
-            transform=ax_bars.transAxes,
-            fontsize=8,
-            color="#444444",
-            ha="right",
-            va="bottom",
-            bbox=dict(
-                boxstyle="round,pad=0.4",
-                facecolor="#f5f5dc",
-                edgecolor="#bbbbbb",
-                linewidth=0.6,
-            ),
-        )
-
-    ax_bars.spines["top"].set_visible(False)
-    ax_bars.spines["right"].set_visible(False)
-    ax_bars.set_title("Library-prep and degradation signals", fontsize=10, loc="left")
-
-    fig.tight_layout()
-    fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(10, 1.18 * len(rows)))
+    ax.set(xlim=(0, 1), ylim=(len(rows), 0))
+    ax.axis("off")
+    for i, (label, finding, implication) in enumerate(rows):
+        ax.text(0.01, i + 0.12, fill(label, 25), va="top", fontsize=11, color="#536471")
+        ax.text(0.33, i + 0.12, fill(finding, 48), va="top", fontsize=13,
+                fontweight="bold", color="#243340")
+        ax.text(0.33, i + 0.50, fill(implication, 60), va="top", fontsize=11, color="#536471")
+        if i < len(rows) - 1:
+            ax.axhline(i + 0.95, color="#dbe3e8", linewidth=0.8)
+    fig.tight_layout(pad=1.2)
+    save_report_figure(fig, save_to_filename, dpi=save_dpi)
     plt.close(fig)
     return save_to_filename
 
@@ -1867,88 +1628,61 @@ def plot_degradation_index(
     save_to_filename: str,
     save_dpi: int = 150,
 ) -> Optional[str]:
-    """Scatter of expected vs observed long/short pair ratios (#27).
-
-    One point per gene pair from ``data/degradation-gene-pairs.csv``:
-    x = expected (fresh-tissue calibrated) ratio, y = observed in this
-    sample. Diagonal = no degradation. Points below the diagonal flag
-    preferential loss of long transcripts. The plot annotates the
-    median observed/expected ratio and the severity call from the
-    sample context, so users can see whether the call is driven by a
-    systematic shift across pairs or a few outliers.
-
-    Returns the filename on success, ``None`` when no pair has the
-    short-gene expressed (``s_tpm > 1``) so the plot would be empty.
-    """
+    """Labeled long/short fold ratios on one reference-centered axis."""
     import matplotlib.pyplot as plt
     import numpy as np
-
+    from matplotlib.ticker import FuncFormatter
     from pirlygenes.gene_sets_cancer import degradation_gene_pairs
+    from .report_figures import save_report_figure
 
     tpm_by_symbol = _build_tpm_by_symbol(df_gene_expr)
-
-    expected_vals = []
-    observed_vals = []
-    labels = []
+    rows = []
     for short_sym, long_sym, expected in degradation_gene_pairs():
-        s = tpm_by_symbol.get(short_sym)
+        short_tpm = tpm_by_symbol.get(short_sym)
         long_tpm = tpm_by_symbol.get(long_sym)
-        if s is None or not (s > 1):
+        if short_tpm is None or long_tpm is None:
             continue
-        if long_tpm is None or expected <= 0:
+        if not all(math.isfinite(float(v)) for v in (short_tpm, long_tpm, expected)):
             continue
-        expected_vals.append(float(expected))
-        observed_vals.append(float(long_tpm) / float(s))
-        labels.append(f"{short_sym}/{long_sym}")
-
-    if not expected_vals:
+        if short_tpm <= 1 or long_tpm < 0 or expected <= 0:
+            continue
+        rows.append((f"{long_sym} / {short_sym}", float(long_tpm / short_tpm / expected)))
+    if not rows:
         return None
-
-    expected_arr = np.array(expected_vals)
-    observed_arr = np.array(observed_vals)
-    deviation = observed_arr / np.maximum(expected_arr, 1e-6)
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-
-    # Diagonal guide.
-    diag_lo = 0.0
-    diag_hi = max(expected_arr.max(), observed_arr.max()) * 1.1
-    ax.plot(
-        [diag_lo, diag_hi],
-        [diag_lo, diag_hi],
-        linestyle="--",
-        color="#888888",
-        linewidth=0.8,
-        label="expected = observed (no degradation)",
-    )
-
-    sc = ax.scatter(
-        expected_arr,
-        observed_arr,
-        c=np.log2(np.maximum(deviation, 1e-3)),
-        cmap="RdYlGn",
-        edgecolors="black",
-        linewidth=0.3,
-        s=60,
-    )
-    cb = plt.colorbar(sc, ax=ax, pad=0.02)
-    cb.set_label("log2(observed / expected)", fontsize=9)
-
-    ax.set_xlabel("Expected long/short ratio (fresh-tissue calibration)", fontsize=10)
-    ax.set_ylabel("Observed long/short ratio (this sample)", fontsize=10)
-    ax.set_xlim(diag_lo, diag_hi)
-    ax.set_ylim(diag_lo, diag_hi)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-
-    title_parts = [
-        f"Length-pair ratio check — {length_pair_display_label(sample_context)}"
-    ]
-    title_parts.append(f"{len(expected_vals)} pairs")
-    ax.set_title(" · ".join(title_parts), fontsize=11, loc="left")
-    ax.legend(loc="upper left", fontsize=9)
-
+    rows.sort(key=lambda row: row[1])
+    values = np.array([row[1] for row in rows])
+    median = float(np.median(values))
+    headline, _ = _length_pair_plot_summary(median)
+    fig, ax = plt.subplots(figsize=(9, max(4, 0.36 * len(rows) + 2)))
+    for i, (_, value) in enumerate(rows):
+        color = "#bd621f" if value < 1 else "#3578a5"
+        ax.plot([min(value, 1), max(value, 1)], [i, i], color=color, alpha=0.35, linewidth=2)
+        ax.scatter([value], [i], s=45, color=color, zorder=3)
+        ax.text(value, i, f"  {value:.2g}x", va="center", fontsize=10, color="#243340")
+    ax.axvline(1, color="#536471", linestyle="--", linewidth=1)
+    high = max(2, float(values.max()) * 2.3)
+    if (values == 0).any():
+        ax.set_xscale("symlog", linthresh=0.125)
+        low = 0
+        ticks = [0, 0.25, 0.5, 1]
+    else:
+        ax.set_xscale("log", base=2)
+        low = min(0.25, float(values.min()) / 2)
+        ticks = [2 ** i for i in range(int(np.ceil(np.log2(low))), 1)]
+    ax.set_xlim(low, high)
+    ticks += [2 ** i for i in range(1, max(2, int(np.ceil(np.log2(high))) + 1)) if 2 ** i <= high]
+    ax.set_xticks(ticks)
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value:g}"))
+    ax.set_yticks(np.arange(len(rows)), [row[0] for row in rows], fontsize=10)
+    ax.set_ylim(len(rows) - 0.4, -0.8)
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlabel("Long/short RNA ratio relative to reference (1 = reference)", fontsize=11)
+    ax.set_title(f"{headline}\nMedian {median:.2f}x reference across {len(rows)} gene pairs",
+                 loc="left", fontsize=13, fontweight="bold", pad=18)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.grid(axis="x", color="#e8edf0", linewidth=0.6)
+    ax.set_axisbelow(True)
     fig.tight_layout()
-    fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+    save_report_figure(fig, save_to_filename, dpi=save_dpi)
     plt.close(fig)
     return save_to_filename

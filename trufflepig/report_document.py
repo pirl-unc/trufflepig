@@ -50,7 +50,8 @@ FIGURE_REGISTRY = [
         "priority-target-context.png",
         "Target RNA source and healthy-tissue context",
         "Left: measured bulk RNA (black dot) and modeled tumor contribution (teal diamond; line = model range). "
-        "Middle: teal shows the estimated tumor share of that gene's bulk RNA; gray is the remainder. "
+        "Middle: estimated tumor share, or a model limitation. 'Cap-limited' means a low-purity "
+        "safeguard limits the estimate; it is not a measured share. 'No tumor residual' does not prove absence. "
         "Right: healthy-tissue overlap. TPM values use a compressed scale above 1. "
         "These estimates do not establish tumor-cell protein expression or clinical safety.",
     ),
@@ -66,28 +67,32 @@ FIGURE_REGISTRY = [
     (
         "sample-context.png",
         "Sample quality context",
-        "Compact library, preservation, and expression-concentration checks used "
-        "to judge whether the sample is suitable for interpretation.",
+        "The main quality findings and their effect on interpretation. Library and RNA condition "
+        "are inferred from expression; they do not replace laboratory quality measurements. "
+        "Detailed diagnostic signals remain in the analysis tables.",
     ),
     (
         "degradation-index.png",
         "RNA degradation check",
-        "Long-to-short transcript ratios show the sample-specific degradation signal "
-        "that informs uncertainty in downstream estimates.",
+        "Each row compares a long/short gene-expression ratio with its reference: "
+        "below 1 means less long-transcript RNA; above 1 means more. "
+        "A broad downward shift can support degradation. An upward shift can reflect library bias "
+        "and does not establish intact RNA. Labels list the long gene first.",
     ),
     (
         "decomposition-composition.png",
         "Estimated RNA composition",
         "Conditional RNA-mixture model weights for the estimated patient tumor "
         "contribution and fitted external normal, immune, and stromal references. "
-        "These are not per-gene subtraction percentages.",
+        "These are not cell counts or per-gene subtraction percentages. "
+        "Normal references are external panels, not a matched specimen from this patient.",
     ),
     (
         "decomposition-components.png",
         "Tumor microenvironment components",
         "The selected final-call model partitions its non-tumor RNA weight among "
         "external stromal and immune references; each gene can have a different "
-        "source attribution.",
+        "source attribution. All entries are RNA-model estimates, not measured cell counts.",
     ),
     (
         "purity-methods.png",
@@ -99,7 +104,8 @@ FIGURE_REGISTRY = [
     (
         "therapy-pathway-state.png",
         "Therapy pathway state",
-        "Each point summarizes a gene panel relative to the cancer-cohort median (1x). "
+        "Left: pathway and its inferred state. Middle: whether the measured gene panel normally rises "
+        "or falls when that pathway is active. Right: observed RNA relative to the cancer-cohort median (1x). "
         "Genes that rise with activity support activation when high; genes that fall with activity "
         "support activation when low. Values are measured expression, not predictions of treatment response. "
         "Bulk muscle or stromal RNA can contribute to these patterns.",

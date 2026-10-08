@@ -1519,6 +1519,7 @@ def plot_priority_target_context(
         gridspec_kw={"width_ratios": [2.1, 1.1, 1.5]},
     )
     teal, gray = "#087e8b", "#dce2e6"
+    has_fraction_bar = False
     for i, row in enumerate(rows):
         ax.hlines(i + 0.12, row["low"], row["high"], color=teal, linewidth=3)
         ax.scatter(row["mid"], i + 0.12, marker="D", color=teal, s=42,
@@ -1527,9 +1528,17 @@ def plot_priority_target_context(
                    label="Bulk sample (measured)" if i == 0 else None, zorder=3)
         source = row["source"]
         fraction = max(0, min(1, float(source.get("attr_tumor_fraction", 0))))
-        fraction_ax.barh(i, 1, height=0.40, color=gray)
-        fraction_ax.barh(i, fraction, height=0.40, color=teal)
-        fraction_ax.text(1.06, i, f"{fraction:.0%}", va="center", fontsize=10)
+        if source["low_purity_cap_applied"]:
+            fraction_ax.text(0.02, i, "Cap-limited\nsource unresolved", va="center",
+                             fontsize=10, color="#72531b")
+        elif fraction == 0:
+            fraction_ax.text(0.02, i, "No tumor residual\nin this model", va="center",
+                             fontsize=10, color="#536471")
+        else:
+            has_fraction_bar = True
+            fraction_ax.barh(i, 1, height=0.40, color=gray)
+            fraction_ax.barh(i, fraction, height=0.40, color=teal)
+            fraction_ax.text(1.06, i, f"{fraction:.0%}", va="center", fontsize=10)
         normal_labels = {
             "same_lineage_expected": "Expected in healthy tissue",
             "restricted_outside_lineage": "Restricted normal expression",
@@ -1548,8 +1557,12 @@ def plot_priority_target_context(
     ax.set_title("RNA amount", loc="left", fontsize=12, fontweight="bold", pad=15)
     ax.legend(loc="upper left", bbox_to_anchor=(-0.18, -0.14), frameon=False, fontsize=10)
     fraction_ax.set_xlim(0, 1.55)
-    fraction_ax.set_xticks([0, 0.5, 1], ["0%", "50%", "100%"])
-    fraction_ax.set_xlabel("Modeled tumor share", fontsize=10)
+    if has_fraction_bar:
+        fraction_ax.set_xticks([0, 0.5, 1], ["0%", "50%", "100%"])
+        fraction_ax.set_xlabel("Tumor share, if estimable", fontsize=10)
+    else:
+        fraction_ax.set_xticks([])
+        fraction_ax.spines["bottom"].set_visible(False)
     fraction_ax.set_title("RNA source", loc="left", fontsize=12, fontweight="bold", pad=15)
     normal_ax.set_xlim(0, 1)
     normal_ax.set_title("Healthy-tissue overlap", loc="left", fontsize=12, fontweight="bold", pad=15)

@@ -1723,8 +1723,12 @@ def plot_therapy_pathway_state(
 
     n_rows = len(plot_rows)
     if figsize is None:
-        figsize = (9, max(4.5, 0.68 * n_rows + 2.3))
-    fig, ax = plt.subplots(figsize=figsize)
+        figsize = (11, max(4.5, 0.72 * n_rows + 2.1))
+    fig = plt.figure(figsize=figsize)
+    grid = fig.add_gridspec(1, 3, width_ratios=[2.5, 1.65, 4.1], wspace=0.10)
+    ax = fig.add_subplot(grid[0, 2])
+    pathway_ax = fig.add_subplot(grid[0, 0], sharey=ax)
+    panel_ax = fig.add_subplot(grid[0, 1], sharey=ax)
 
     # --- Dumbbell plot ---
     y_positions = np.arange(n_rows)
@@ -1776,7 +1780,8 @@ def plot_therapy_pathway_state(
         )
 
         if row["axis_last_row"] and i < n_rows - 1:
-            ax.axhline(i + 0.5, color="#eeeeee", linewidth=0.8, zorder=0)
+            for column in (ax, pathway_ax, panel_ax):
+                column.axhline(i + 0.5, color="#dbe3e8", linewidth=0.8, zorder=0)
 
     ax.axvline(1.0, color="#888888", linestyle="--", linewidth=1.0, alpha=0.7, zorder=1)
     ax.axvline(0.5, color="#ea580c", linestyle=":", linewidth=1.0, alpha=0.55, zorder=1)
@@ -1796,34 +1801,47 @@ def plot_therapy_pathway_state(
         fontsize=10,
     )
 
-    # Y-axis: label + state tag (color-coded)
+    # Pathway identity/state and gene-panel direction occupy distinct columns.
+    # A falling panel belongs to its parent pathway, not another pathway.
     ax.set_yticks(y_positions)
-    labels = []
-    for row in plot_rows:
-        state_tag = _axis_state_tag(row)
-        n_info = f" ({row['n']})" if row["n"] else ""
-        panel_text = f"{row['panel_label']}{n_info}"
-        if row["axis_first_row"]:
-            labels.append(f"{row['label']} ({state_tag})\n{panel_text}")
-        else:
-            labels.append(panel_text)
+    ax.tick_params(axis="y", left=False, labelleft=False)
     from textwrap import fill
-    ax.set_yticklabels(["\n".join(fill(line, 36) for line in label.split("\n")) for label in labels], fontsize=10)
-    ax.invert_yaxis()
+    row_height_points = fig.get_size_inches()[1] * 72 * 0.74 / (n_rows + 0.15)
+    for i, row in enumerate(plot_rows):
+        if row["axis_first_row"]:
+            center = i + (row["axis_panel_count"] - 1) / 2
+            name = fill(row["label"], 25)
+            name_height = 11 * 1.2 * len(name.splitlines())
+            top = center - (name_height + 15) / (2 * row_height_points)
+            pathway_ax.text(0.02, top, name, va="top",
+                            fontsize=11, fontweight="bold", color="#243340")
+            pathway_ax.text(0.02, top + (name_height + 3) / row_height_points,
+                            _axis_state_tag(row), va="top",
+                            fontsize=10, color="#536471")
+        direction = "Rise" if row["panel"] == "up" else "Fall"
+        n_info = (f"\n{row['n']} " + ("gene" if row["n"] == 1 else "genes")) if row["n"] else ""
+        panel_ax.text(0.04, i, f"{direction} with activity{n_info}", va="center",
+                      fontsize=10, color="#536471")
+    ax.set_ylim(n_rows - 0.45, -0.6)
+    for column, heading in ((pathway_ax, "Pathway / state"), (panel_ax, "Gene panel")):
+        column.set_xlim(0, 1)
+        column.set_axis_off()
+        column.set_title(heading, fontsize=11, fontweight="bold", loc="left", pad=16)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     title = "Therapy-response pathway RNA"
     if cancer_code:
         title += f" \u2014 {cancer_code}"
-    ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=32)
+    fig.suptitle(title, fontsize=14, fontweight="bold", x=0.02, ha="left", y=0.995)
+    ax.set_title("Measured RNA", fontsize=11, fontweight="bold", loc="left", pad=16)
     band_handles = [
         Line2D([0], [0], color=color, linewidth=5, label=label)
         for label, _lo, _hi, color in _FOLD_BANDS
     ]
-    ax.legend(handles=band_handles, loc="upper center", bbox_to_anchor=(0.5, -0.13),
-              fontsize=9, frameon=False, ncol=3)
-    fig.tight_layout(rect=[0, 0.13, 1, 1])
+    fig.legend(handles=band_handles, loc="lower center", bbox_to_anchor=(0.5, 0.005),
+               fontsize=10, frameon=False, ncol=3, title="RNA abundance relative to cohort")
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.90, bottom=0.16)
 
     if save_to_filename:
         from .report_figures import save_report_figure
