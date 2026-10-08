@@ -102,7 +102,7 @@ def _entity_compatible(call, expected_codes):
 
 
 def classify_without_hint_with_analysis(df):
-    """Run the production no-hint path through residual decision and refit."""
+    """Run no-hint validation through residual decisions and the final identity guard."""
     from scripts.calibrate_decomposition import _classify_one
 
     _trace, summary = _classify_one(
@@ -120,13 +120,14 @@ def classify_without_hint_with_analysis(df):
 
 
 def classify_without_hint(df):
-    """Run the full no-hint pipeline → ``(bulk_classifier_call, final_call, purity_result)``."""
+    """Return ``(bulk_classifier_call, final_call, purity_result)`` from no-hint validation."""
     bulk_classifier_call, final_call, purity, _analysis = classify_without_hint_with_analysis(df)
     return bulk_classifier_call, final_call, purity
 
 
 def full_granularity_analysis(df):
     """Return ``(bulk_classifier_call, finest_final_call, analysis)``."""
+    from trufflepig.cancer_type_policy import finalize_sarcoma_identity, mark_unresolved_identity_purity
     from trufflepig.degenerate_subtype import resolve_degenerate_subtype
     from trufflepig.reporting import candidate_winning_subtype_for_analysis
     from trufflepig.tumor_purity import _build_sample_tpm_by_symbol
@@ -140,6 +141,11 @@ def full_granularity_analysis(df):
     )
     final_call = resolution.get("final_subtype") or base
     analysis["cancer_type"] = final_call
+    if finalize_sarcoma_identity(analysis):
+        final_call = analysis["cancer_type"]
+        if "purity" in analysis:
+            mark_unresolved_identity_purity(analysis)
+    analysis["report_scope_cancer_type"] = final_call
     analysis["full_granularity_call"] = final_call
     return bulk_classifier_call, final_call, analysis
 

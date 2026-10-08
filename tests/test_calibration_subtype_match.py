@@ -457,3 +457,26 @@ def test_empty_calibration_trace_retains_requested_analysis(monkeypatch):
     assert trace == []
     assert summary["analysis"] is analysis
     assert summary["consolidated_cancer_type"] is None
+
+
+def test_fine_validation_refinement_cannot_introduce_rna_only_sarcoma(monkeypatch):
+    from scripts import eval_nohint_validation as validation
+    import trufflepig.degenerate_subtype as degenerate_subtype
+    import trufflepig.reporting as reporting
+    import trufflepig.tumor_purity as tumor_purity
+
+    analysis = {"cancer_type": "CRC", "purity": {"overall": 0.8}}
+    monkeypatch.setattr(
+        validation, "classify_without_hint_with_analysis",
+        lambda _frame: ("SARC", "CRC", analysis["purity"], analysis),
+    )
+    monkeypatch.setattr(reporting, "candidate_winning_subtype_for_analysis", lambda _analysis: None)
+    monkeypatch.setattr(tumor_purity, "_build_sample_tpm_by_symbol", lambda _frame: {})
+    monkeypatch.setattr(
+        degenerate_subtype, "resolve_degenerate_subtype",
+        lambda *_args, **_kwargs: {"final_subtype": "SARC_OS"},
+    )
+    raw, final, returned = validation.full_granularity_analysis(pd.DataFrame())
+    assert raw == "SARC"
+    assert final == returned["full_granularity_call"] == returned["report_scope_cancer_type"] == "UNRESOLVED"
+    assert returned["purity"]["quantitative_unresolved_reason"] == "cancer_type_unresolved"
