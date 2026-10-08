@@ -15,14 +15,17 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
+    BaseDocTemplate,
     CondPageBreak,
     Flowable,
+    Frame,
     Image,
     KeepTogether,
     LongTable,
+    NextPageTemplate,
     Paragraph,
     PageBreak,
-    SimpleDocTemplate,
+    PageTemplate,
     Spacer,
     TableStyle,
 )
@@ -161,6 +164,57 @@ class VectorFigure(Flowable):
         self.placements.append((self.canv.getPageNumber() - 1, x, y, self))
 
 
+FULL_PAGE_FIGURES = {
+    "priority-targets.png", "priority-target-context.png",
+    "actionable-targets.png", "therapy-pathway-state.png",
+}
+
+
+class ReportFigurePage(Flowable):
+    """Use a dedicated page's available area, preserving the plot's aspect ratio."""
+
+    def __init__(self, path, block, styles, placements, section_title=None):
+        super().__init__()
+        self.path = path
+        self.placements = placements
+        self.paragraphs = []
+        if section_title:
+            self.paragraphs.append(Paragraph(report_inline_html(section_title), styles["caption"]))
+        self.paragraphs.extend([
+            Paragraph(
+                (f'<a name="figure-{int(block["number"])}"/>' if block.get("number") else "")
+                + report_inline_html(block["title"]), styles["heading"],
+            ),
+            Paragraph(report_inline_html(block["caption"]), styles["caption"]),
+        ])
+
+    def wrap(self, availWidth, availHeight):
+        self.width, self.height = availWidth, availHeight
+        self.paragraph_heights = [p.wrap(availWidth, availHeight)[1] for p in self.paragraphs]
+        header_height = sum(h + p.getSpaceAfter() for p, h in zip(self.paragraphs, self.paragraph_heights))
+        self.plot_height = availHeight - header_height
+        if self.plot_height < 72:
+            raise ValueError("Figure title and caption leave insufficient page space.")
+        if self.placements is not None and self.path.with_suffix(".pdf").is_file():
+            self.figure = VectorFigure(self.path.with_suffix(".pdf"), availWidth, self.plot_height, self.placements)
+            self.figure_width, self.figure_height = self.figure.width, self.figure.height
+        else:
+            self.figure = Image(str(self.path))
+            scale = min(availWidth / self.figure.imageWidth, self.plot_height / self.figure.imageHeight)
+            self.figure_width = self.figure.drawWidth = self.figure.imageWidth * scale
+            self.figure_height = self.figure.drawHeight = self.figure.imageHeight * scale
+        return self.width, self.height
+
+    def draw(self):
+        y = self.height
+        for paragraph, height in zip(self.paragraphs, self.paragraph_heights):
+            y -= height
+            paragraph.drawOn(self.canv, 0, y)
+            y -= paragraph.getSpaceAfter()
+        self.figure.drawOn(self.canv, (self.width - self.figure_width) / 2,
+                           (self.plot_height - self.figure_height) / 2)
+
+
 def report_pdf_flowables(document: dict, analyze_dir: Path, *, vector_placements=None) -> list:
     """Render the authored blocks without truncating rationale or reevaluating evidence."""
     if document.get("schema_version") != 2 or not document.get("sections"):
@@ -171,11 +225,13 @@ def report_pdf_flowables(document: dict, analyze_dir: Path, *, vector_placements
     story = [Paragraph(report_inline_html(str(title)), styles["title"])]
     for section in document["sections"]:
         starts_with_figure = bool(section["blocks"] and section["blocks"][0]["kind"] == "figure")
-        story.extend(
-            [PageBreak() if starts_with_figure or section.get("id") == "information" else CondPageBreak(72),
-             Paragraph(report_inline_html(section["title"]), styles["section"])]
-        )
-        for block in section["blocks"]:
+        starts_full_page = starts_with_figure and section["blocks"][0]["suffix"] in FULL_PAGE_FIGURES
+        if not starts_full_page:
+            story.extend(
+                [PageBreak() if starts_with_figure or section.get("id") == "information" else CondPageBreak(72),
+                 Paragraph(report_inline_html(section["title"]), styles["section"])]
+            )
+        for block_index, block in enumerate(section["blocks"]):
             kind = block["kind"]
             if kind in {"paragraph", "heading", "bullet"}:
                 if kind == "heading":
@@ -222,7 +278,15 @@ def report_pdf_flowables(document: dict, analyze_dir: Path, *, vector_placements
                     raise FileNotFoundError(
                         "A figure declared present in the report is missing: " + block["suffix"]
                     )
-                max_height = 550 if block["suffix"] == "therapy-pathway-state.png" else 490
+                if block["suffix"] in FULL_PAGE_FIGURES:
+                    story.extend([
+                        NextPageTemplate("Figure"), PageBreak(),
+                        ReportFigurePage(path, block, styles, vector_placements,
+                                         section["title"] if starts_full_page and block_index == 0 else None),
+                        NextPageTemplate("Body"),
+                    ])
+                    continue
+                max_height = 490
                 if vector_placements is not None and path.with_suffix(".pdf").is_file():
                     figure = VectorFigure(path.with_suffix(".pdf"), content_width, max_height, vector_placements)
                 else:
@@ -261,7 +325,7 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
     placements = []
     story = report_pdf_flowables(document, analyze_dir, vector_placements=placements)
     buffer = BytesIO()
-    pdf = SimpleDocTemplate(
+    pdf = BaseDocTemplate(
         buffer,
         pagesize=letter,
         leftMargin=44,
@@ -283,7 +347,16 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
         canvas.drawRightString(letter[0] - 44, 20, str(doc.page))
         canvas.restoreState()
 
-    pdf.build(story, onFirstPage=footer, onLaterPages=footer)
+    pdf.addPageTemplates([
+        PageTemplate(id="Body", onPage=footer, frames=[
+            Frame(44, 44, letter[0] - 88, letter[1] - 86),
+        ]),
+        PageTemplate(id="Figure", onPage=footer, frames=[
+            Frame(24, 44, letter[0] - 48, letter[1] - 68,
+                  leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0),
+        ]),
+    ])
+    pdf.build(story)
     if placements:
         from pypdf import PdfReader, PdfWriter, Transformation
 

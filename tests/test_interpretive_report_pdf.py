@@ -233,3 +233,54 @@ def test_vector_plot_stays_searchable_and_preserves_report_links(tmp_path):
     destination = next(a['/Dest'] for a in annotations if a.get('/Dest'))
     target = next(page for page in pdf.pages if page.indirect_reference == destination[0])
     assert 'VECTOR-TEXT-PRESERVED' in target.extract_text()
+
+
+@pytest.mark.parametrize("vector", [False, True])
+def test_dense_figures_fill_dedicated_pages_without_blank_transitions(tmp_path, monkeypatch, vector):
+    from reportlab.pdfgen import canvas
+    from trufflepig.report_pdf import ReportFigurePage
+
+    doc = document()
+    doc['sections'] = [
+        {'id': 'conclusion', 'title': 'Summary', 'blocks': [
+            {'kind': 'paragraph', 'text': 'INTRODUCTION [See targets](#figure-1).'},
+        ]},
+        {'id': 'evidence', 'title': 'Detailed evidence and figures', 'blocks': [
+            {'kind': 'figure', 'suffix': suffix, 'number': i,
+             'title': f'Figure {i}. Dense target evidence',
+             'caption': 'Caption with [evidence](https://example.org/evidence).'}
+            for i, suffix in enumerate(('priority-targets.png', 'priority-target-context.png'), 1)
+        ] + [{'kind': 'paragraph', 'text': 'FOLLOWING-NARRATIVE'}]},
+    ]
+    for block in doc['sections'][1]['blocks'][:2]:
+        path = tmp_path / ('synthetic-' + block['suffix'])
+        Image.new('RGB', (600, 760), '#bcd5e6').save(path)
+        if vector:
+            plot = canvas.Canvas(str(path.with_suffix('.pdf')), pagesize=(600, 760))
+            plot.drawString(10, 730, 'VECTOR-PLOT')
+            plot.rect(0, 0, 600, 760)
+            plot.save()
+    drawn = []
+    original = ReportFigurePage.draw
+
+    def record_draw(self):
+        drawn.append((self.figure_width, self.figure_height, self.plot_height))
+        return original(self)
+
+    monkeypatch.setattr(ReportFigurePage, 'draw', record_draw)
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pages = [page.extract_text() for page in pdf.pages]
+    assert len(pages) == 4
+    assert 'INTRODUCTION' in pages[0]
+    assert 'Figure 1. Dense' in pages[1] and 'Figure 2. Dense' not in pages[1]
+    assert 'Figure 2. Dense' in pages[2] and 'FOLLOWING-NARRATIVE' not in pages[2]
+    assert 'FOLLOWING-NARRATIVE' in pages[3]
+    for width, height, available_height in drawn:
+        assert width > 510 and height > 650  # old fixed cap was 490 pt
+        assert height <= available_height
+        assert width / height == pytest.approx(600 / 760)
+        assert width == pytest.approx(564) or height == pytest.approx(available_height)
+    destination = next(a.get_object()['/Dest'] for a in pdf.pages[0]['/Annots'] if a.get_object().get('/Dest'))
+    assert destination[0] == pdf.pages[1].indirect_reference
+    assert sum(len(page.images) for page in pdf.pages) == (0 if vector else 2)
