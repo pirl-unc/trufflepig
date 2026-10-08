@@ -131,7 +131,9 @@ def test_brca_pam50_subtypes_present():
     """BRCA's expression-based PAM50 tiles must be in the registry so
     the second-pass subtype classifier can route to them."""
     subs = cancer_type_subtypes_of("BRCA")
-    assert set(subs) == {
+    # Additional clinically defined children (e.g. TNBC) may coexist with
+    # the five expression-defined PAM50 tiles in newer registry releases.
+    assert set(subs) >= {
         "BRCA_LumA",
         "BRCA_LumB",
         "BRCA_HER2",
@@ -379,8 +381,10 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
     print_cancer_registry(family="carcinoma-breast")
     out = capsys.readouterr().out
 
-    assert "TCGA/PAM50:BRCA_HER2" in out
-    assert "no expr 0" in out
+    for subtype in ("LumA", "LumB", "HER2", "Basal", "Normal"):
+        assert f"TCGA/PAM50:BRCA_{subtype}" in out
+    # Clinically defined children can lack an expression reference; their
+    # addition must not invalidate coverage of the five PAM50 references.
 
     # RB moved from the retired `pediatric-eye` family to `embryonal` (5.12).
     print_cancer_registry(family="embryonal")

@@ -1119,6 +1119,10 @@ def test_mmr_summary_flags_mlh1_retained_msi_tension():
     assert "favors MSI-like" in line
     assert "MLH1 mRNA is retained (18 TPM, 101% of the cohort-typical level)" in line
     assert "does not exclude MSI" in line
+    assert "tumor-specific MLH1 loss" in line
+    assert "background cells" in line
+    assert "POLE" not in line
+    assert "argues against MLH1-promoter silencing" not in line
 
 
 def test_mmr_summary_omits_tension_when_mlh1_silenced():
