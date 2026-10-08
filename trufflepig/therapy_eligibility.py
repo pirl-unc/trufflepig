@@ -18,17 +18,13 @@ from .reporting import (
     indication_biomarker,
     indication_biomarker_label,
     required_protein_changes_for_therapy,
-    supplied_variant_context_for_target_row,
+    supplied_variant_context,
     supplied_variant_supports_target_row,
     target_hla_eligibility,
     therapy_row_requires_confirmed_eligibility,
 )
-from .treatment_history import (
-    treatment_history_blocks_row,
-    treatment_history_context,
-    treatment_history_marks_current,
-    treatment_history_supports_review,
-)
+from .therapeutic_agents import protein_change_requirement_for_therapy
+from .treatment_history import assess_treatment_history, treatment_history_match_context
 
 
 @dataclass(frozen=True)
@@ -44,6 +40,7 @@ class EvidenceRequirement:
     source: str = ""
     evidence: dict[str, Any] = field(default_factory=dict)
     priority: str = "routine"
+    label: str = ""  # Reader heading, such as "KRAS G12C" or "HLA typing".
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -86,6 +83,12 @@ class TherapyEligibility:
 
 def therapy_row_in_scope(target_row, analysis, panel_subtype=None) -> bool:
     """Require subtype context for subtype-only rows in an unresolved SARC panel."""
+    if analysis and analysis.get("cancer_type_abstention"):
+        # A reference cohort cannot provide the disease scope of an indication.
+        # Keep target and variant observations available without selecting a
+        # disease-specific treatment from an unresolved diagnosis.
+        indication = clean_therapy_value(target_row.get("indication"))
+        return bool(re.search(r"tumou?r[- ]agnostic|\bsolid tumou?rs?\b", indication, re.I))
     if not analysis or str(analysis.get("cancer_type") or "").strip() != "SARC":
         return True
     subtype = clean_therapy_value(target_row.get("subtype"))
@@ -94,7 +97,14 @@ def therapy_row_in_scope(target_row, analysis, panel_subtype=None) -> bool:
     indication = clean_therapy_value(target_row.get("indication"))
     if re.search(r"\bSTS\b|\bsoft[- ]tissue sarcomas?\b", indication, re.I):
         return True
-    return bool(supplied_variant_supports_target_row(target_row, analysis))
+    # A matching drug-target alteration cannot establish GIST, liposarcoma or
+    # another histologic subtype. Curated tumor-agnostic and kinase-driven
+    # sarcoma paths can instead be supported by their molecular requirement.
+    molecular_scope = (
+        re.search(r"tumou?r[- ]agnostic|\bsolid tumou?rs?\b", indication, re.I)
+        or subtype == "kinase_driven_sarcoma"
+    )
+    return bool(molecular_scope and supplied_variant_supports_target_row(target_row, analysis))
 
 
 def clean_therapy_value(value) -> str:
@@ -103,6 +113,46 @@ def clean_therapy_value(value) -> str:
         return ""
     text = str(value).strip()
     return "" if text.lower() in {"nan", "none", "<na>", "nat"} else text
+
+
+UNMET_REQUIREMENT_STATUSES = frozenset({"blocked", "missing", "unresolved"})
+_EVIDENCE_KIND_LABELS = {
+    "history": "Treatment history",
+    "scope": "Disease subtype",
+    "hla": "HLA typing",
+    "msi_high": "MSI/MMR",
+    "diagnosis": "Diagnosis",
+    "clinical_setting": "Clinical setting",
+}
+
+
+def evidence_kind_label(kind: str) -> str:
+    """Reader heading for an evidence kind when a requirement has no own label."""
+    if kind in _EVIDENCE_KIND_LABELS:
+        return _EVIDENCE_KIND_LABELS[kind]
+    label = indication_biomarker_label({"indication_biomarker": kind})
+    return label[:1].upper() + label[1:]
+
+
+def requirement_descriptions(
+    eligibility: TherapyEligibility, *, stated: str = "", unmet_only: bool = False
+) -> list[str]:
+    """Distinct requirement explanations not already present in ``stated``.
+
+    Table cells combine these with treatment-path text that already carries the
+    history and HLA sentences, so those are never repeated. A satisfied decision
+    the cell does not otherwise state, such as a clinical MSI result, is kept.
+    """
+    already = stated.casefold()
+    return [
+        description
+        for description in dict.fromkeys(
+            r.description
+            for r in eligibility.requirements
+            if not unmet_only or r.status in UNMET_REQUIREMENT_STATUSES
+        )
+        if description and description.rstrip(" .").casefold() not in already
+    ]
 
 
 def msi_mmr_requirement(analysis, *, rna_triage: bool = False) -> EvidenceRequirement:
@@ -127,6 +177,7 @@ def msi_mmr_requirement(analysis, *, rna_triage: bool = False) -> EvidenceRequir
         ("--clinical-context JSON: assays", "MSI-PCR result", "MMR IHC report", "validated clinical sequencing result"),
         evidence=decision.public_dict(),
         priority="high" if rna_triage or decision.status == "conflicting" else "routine",
+        label="MSI/MMR",
     )
 
 
@@ -140,24 +191,36 @@ def evaluate_therapy_eligibility(
     clinical review when they have not been supplied.
     """
     requirements = []
-    supported_history = treatment_history_supports_review(target_row, analysis)
-    variant_match = bool(supplied_variant_supports_target_row(target_row, analysis))
+    history = assess_treatment_history(target_row, analysis)
+    supported_history = history.supports_review
+    matched_variants = supplied_variant_supports_target_row(target_row, analysis)
+    variant_match = bool(matched_variants)
     biomarker = indication_biomarker(target_row)
     direct_match = direct_eligibility_evidence_supported(analysis, biomarker)
-    history_text = treatment_history_context(target_row, analysis)
-    if treatment_history_blocks_row(target_row, analysis) or treatment_history_marks_current(
-        target_row, analysis
-    ):
-        requirements.append(EvidenceRequirement("history", "history", "blocked", history_text))
+    history_text = treatment_history_match_context(history.best_match)
+    if history.blocks_row or history.marks_current:
+        requirements.append(
+            EvidenceRequirement("history", "history", "blocked", history_text, label="Treatment history")
+        )
     elif history_text:
-        requirements.append(EvidenceRequirement("history", "history", "satisfied", history_text))
+        requirements.append(
+            EvidenceRequirement("history", "history", "satisfied", history_text, label="Treatment history")
+        )
     if not therapy_row_in_scope(target_row, analysis, panel_subtype):
+        # An unestablished subtype is missing information, not a known exclusion:
+        # the therapy stays gated and the report asks for the subtype.
+        subtype = clean_therapy_value(target_row.get("subtype")).replace("_", " ")
         requirements.append(
             EvidenceRequirement(
                 "disease_scope",
                 "scope",
-                "blocked",
-                "The required disease subtype has not been established for this report.",
+                "missing",
+                f"This therapy is curated for the {subtype} subtype, which has not been established for this report."
+                if subtype
+                else "The required disease subtype has not been established for this report.",
+                "Establish the disease subtype with pathology or a disease-defining molecular result before considering subtype-specific therapies.",
+                ("pathology report", "confirmed cancer subtype", "disease-defining molecular result"),
+                label="Disease subtype",
             )
         )
 
@@ -180,6 +243,7 @@ def evaluate_therapy_eligibility(
                 ("HLA typing report", "--hla-types"),
                 hla.get("source", ""),
                 evidence=hla,
+                label="HLA typing",
             )
         )
 
@@ -191,8 +255,11 @@ def evaluate_therapy_eligibility(
         alleles = required_protein_changes_for_therapy(target_row)
         if alleles:
             label = gene + " " + " or ".join(alleles)
-        elif gene and biomarker in {"mutation", "wildtype", "clinical_target_assay"}:
+        elif gene and biomarker == "mutation":
             label = gene + " " + label
+        # A drug's expression target is not necessarily its eligibility marker:
+        # anti-EGFR therapy needs RAS wild-type status, and a TROP2-directed ADC
+        # can require clinical ER/HER2 context without a TROP2 companion assay.
         note = clean_therapy_value(target_row.get("eligibility_note"))
         accepted = {
             "mutation": ("clinical variant report", "normalized variant table", "--variants"),
@@ -215,8 +282,19 @@ def evaluate_therapy_eligibility(
             for record in variant_evidence_records(analysis)
             if record.get("gene") == gene or gene in (record.get("genes") or [])
         ]
+        explicit_alleles = target_row.get("required_protein_changes")
+        allele_source = ""
+        if alleles and not (
+            explicit_alleles
+            if isinstance(explicit_alleles, (tuple, list))
+            else clean_therapy_value(explicit_alleles)
+        ):
+            curated = protein_change_requirement_for_therapy(
+                target_row.get("agent"), gene, target_row.get("cancer_code")
+            )
+            allele_source = curated.source if curated else ""
         if variant_match:
-            description = supplied_variant_context_for_target_row(target_row, analysis)
+            description = supplied_variant_context(matched_variants)
         elif direct_match:
             description = f"Supplied evidence supports the {label} requirement; verify indication-specific criteria."
         elif alleles and supplied_gene_records:
@@ -243,11 +321,13 @@ def evaluate_therapy_eligibility(
                 description,
                 note or f"Supply the required {label} result.",
                 accepted,
+                allele_source,
                 evidence={
                     "required_protein_changes": list(alleles),
                     "supplied_variants": supplied_gene_records,
-                    "matched_variants": supplied_variant_supports_target_row(target_row, analysis),
+                    "matched_variants": matched_variants,
                 },
+                label=label[:1].upper() + label[1:],
             )
         )
     return TherapyEligibility(tuple(requirements), supported_history, variant_match, direct_match)
@@ -298,6 +378,7 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                     "id": "request-" + hashlib.sha256(key.encode()).hexdigest()[:10],
                     "key": key,
                     "kind": requirement["kind"],
+                    "label": requirement.get("label") or evidence_kind_label(requirement["kind"]),
                     "status": requirement["status"],
                     "question": requirement["question"],
                     "priority": requirement.get("priority", "routine"),

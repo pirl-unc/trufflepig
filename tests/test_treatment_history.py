@@ -482,12 +482,30 @@ def history_report_content(analysis, ranges):
     return build_report_content(analysis, ranges, analysis["cancer_type"], "", report_view=view)
 
 
+def therapy_table(content):
+    return next(
+        (
+            block
+            for section in content.sections
+            if section["id"] == "therapies"
+            for block in section["blocks"]
+            if block["kind"] == "table"
+        ),
+        None,
+    )
+
+
 def test_prior_treatment_shortlist_round_trips_rationale(tmp_path):
     analysis = {"cancer_type": "SARC", **_fap_history()}
     content = history_report_content(analysis, pd.DataFrame([_fap_expression()]))
-    recommendation = next(row for row in content.therapy["rows"] if "Prior treatment" in row[1])
+    recommendation = next(
+        row for row in therapy_table(content)["rows"] if "Prior treatment" in row[1]
+    )
     assert "FAP" in recommendation[1]
-    assert "major prior benefit" in recommendation[3]
+    selected = next(
+        a for a in content.therapy_assessments if a["selected"] and a["phase"] == "Prior treatment"
+    )
+    assert any("major prior benefit" in text for text in selected["rationale"])
     assert content.treatment_history
 
 
@@ -496,11 +514,15 @@ def test_osteosarcoma_paths_carry_disease_matched_evidence_without_rna_selection
     _, _, panel = cancer_therapy_panel_for_analysis("SARC_OS", analysis)
     top = recommend_therapies(panel, pd.DataFrame(), analysis=analysis)
     assert {row["agent"] for row, _ in top} == {"regorafenib", "cabozantinib"}
-    doc = history_report_content(analysis, pd.DataFrame()).therapy
-    assert len(doc["sources"]) == 2
-    rego = next(row for row in doc["rows"] if row[1].startswith("regorafenib"))
+    content = history_report_content(analysis, pd.DataFrame())
+    table = therapy_table(content)
+    assert sum("](" in row[3] for row in table["rows"]) == 2
+    rego = next(
+        a for a in content.therapy_assessments if a["selected"] and a["agent"].startswith("regorafenib")
+    )
+    rationale = " ".join(rego["rationale"]) + " Indication: " + rego["indication"]
     for expected in ("3.6 vs 1.7", "recurrent, progressive", "64%", "not established"):
-        assert expected in rego[3]
+        assert expected in rationale
 
 
 def test_bladder_pembrolizumab_uses_treatment_setting_not_pd_l1_assay():

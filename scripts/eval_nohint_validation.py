@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Validate cancer-type inference WITHOUT hints on local truth samples and medoids.
 
-Runs the full ``analyze_sample`` + cancer-type evidence selector with no
-``cancer_type`` hint, including rare-marker RNA hypotheses, then scores both
-entity compatibility and lineage compatibility against curated truth.
+Runs the full no-hint production decision path, including evidence
+consolidation, residual cancer-type decision, and transactional refit, then
+scores both entity and lineage compatibility against curated truth.
 
 Run:  python3 scripts/eval_nohint_validation.py
 """
@@ -17,15 +17,12 @@ from pirlygenes.gene_sets_cancer import cancer_lineage_group
 from oncoref.normalization import clean_tpm
 from trufflepig.cancer_ontology import registry_parent_code
 from trufflepig.expression_decomposition import _group_to_mode
-from trufflepig.tumor_purity import analyze_sample
-from trufflepig.cancer_type_evidence import select_report_scope_from_evidence
 from trufflepig.cancer_type_signal_matrix import (
     build_cancer_type_signal_matrix,
     build_signal_sample_summary,
     build_signal_matrix_summary_markdown,
 )
 from trufflepig.load_expression import load_expression_data
-from trufflepig.rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
 
 D = "/Users/iskander/data"
 # Local truth samples. ``expected_codes`` may name an accepted parent, e.g. CRC
@@ -104,48 +101,20 @@ def _entity_compatible(call, expected_codes):
 
 
 def classify_without_hint_with_analysis(df):
-    """Run the full no-hint cancer-type pipeline and keep the analysis object.
+    """Run the production no-hint path through residual decision and refit."""
+    from scripts.calibrate_decomposition import _classify_one
 
-    Mirrors ``main._analyze_body`` with no cancer-type hint: the bulk classifier (``analyze_sample``)
-    → the cancer-type evidence selector → the deconvolved local-reference lineage veto → the final
-    purity finalize (so the returned purity is consistent with the final call).
-    """
-    from trufflepig.main import (
-        _finalize_purity_for_final_call,
-        _veto_local_reference_lineage_flip,
-    )
-    from trufflepig.healthy_vs_tumor import assess_healthy_vs_tumor
-
-    try:
-        tissue_signal = assess_healthy_vs_tumor(df)
-    except Exception:  # noqa: BLE001 - mirror the report CLI's optional screen
-        tissue_signal = None
-    analysis = analyze_sample(                                         # no cancer_type → auto-detect
+    _trace, summary = _classify_one(
         df,
-        tissue_signal=tissue_signal,
+        include_cancer_type_decision=True,
+        return_analysis=True,
     )
-    analysis["healthy_vs_tumor"] = tissue_signal
-    rare_marker_hypotheses = infer_rare_cancer_marker_hypotheses_from_rna(df, analysis)
-    analysis["rare_marker_hypotheses"] = rare_marker_hypotheses
-    scope = select_report_scope_from_evidence(
-        df,
-        analysis,
-        rare_marker_hypotheses=rare_marker_hypotheses,
-    )
-    analysis["cancer_type_evidence"] = scope
-    selected = scope.get("selected") or {}
-    bulk_classifier_call = analysis.get("cancer_type")
-    evidence_call = (selected.get("cancer_type") or scope.get("top_reference_cancer_type")
-                     or bulk_classifier_call)
-    final_call = (_veto_local_reference_lineage_flip(analysis, df, evidence_call,
-                                                     bulk_classifier_call, selected)
-                  or bulk_classifier_call)
-    _finalize_purity_for_final_call(analysis, df, final_call)           # purity consistent with the final call
+    analysis = summary["analysis"]
+    bulk_classifier_call = summary.get("broad_top_code")
+    final_call = summary.get("consolidated_cancer_type") or bulk_classifier_call
     analysis["cancer_type"] = final_call
     analysis["report_scope_cancer_type"] = final_call
-    analysis["reference_cancer_type"] = (
-        selected.get("reference_cancer_type") or final_call
-    )
+    analysis.setdefault("reference_cancer_type", final_call)
     return bulk_classifier_call, final_call, (analysis.get("purity") or {}), analysis
 
 
@@ -216,7 +185,7 @@ EXPECTED_SAMPLE_ERRORS = (FileNotFoundError, ValueError, KeyError)
 
 _LEGEND = (
     "Columns — bulk_classifier_call: analyze_sample's ranking winner; final_call: the call after the "
-    "evidence selector + lineage veto; lineage_ok: final lineage == truth lineage; overall_purity: "
+    "evidence selector + residual decision/refit; lineage_ok: final lineage == truth lineage; overall_purity: "
     "headline purity; estimate_method_purity: ESTIMATE stroma/immune purity (None when gated); "
     "estimate_gated: ESTIMATE disabled for a heme/sarcoma lineage; residual_fraction: decomposition "
     "tumor fraction; aneuploidy_purity: aneuploidy-calibrated purity; reconciliation: the purity "

@@ -6,8 +6,9 @@ its sections in the same order:
 
 1. **Conclusion and supporting evidence:** disease call, confidence, competing
    evidence, tumor-fraction uncertainty and specimen context.
-2. **Therapy rationale and blockers:** ranked candidates with patient and
-   population evidence; known exclusions and treatments awaiting eligibility.
+2. **Therapy rationale and blockers:** a compact table of ranked candidates with
+   estimated tumor RNA and linked evidence sources, then each candidate's patient
+   and population evidence, known exclusions and treatments awaiting eligibility.
 3. **Information needed:** one list grouped by evidence requirement, retaining
    every affected therapy and the specific results needed.
 4. **Detailed evidence and figures:** supplied history, attribution explanations,
@@ -37,7 +38,9 @@ nomenclature boundary as other HLA operations.
 Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
 `blocked`. Prior benefit can support review while an assay remains missing; it
 does not confirm that assay or override conflicting molecular evidence. A known HLA mismatch or exclusion remains a blocker; it does not become
-a request for new typing. An explicitly contraindicated component blocks its
+a request for new typing. A therapy curated for a disease subtype the report has
+not established awaits eligibility with a request to establish that subtype; it
+is not listed as a known exclusion. An explicitly contraindicated component blocks its
 containing regimen. Requests on an already excluded treatment remain in the audit
 assessment without generating a new testing task. Sharing a request does not
 merge different treatments or erase different assay requirements. Overlapping
@@ -45,9 +48,15 @@ target keys and shared assay questions are merged transitively, so a later
 requirement cannot recreate a duplicate request. Clinical-setting questions
 use this same collector.
 
-RNA abundance does not establish a mutation. Exact protein requirements on the
-covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,
-a nucleotide-only assertion and an unrelated variant file. These rules do not
+RNA abundance does not establish a mutation. Exact protein requirements for the
+covered KRAS/BRAF drugs come from the packaged
+`therapy-protein-change-requirements.csv`, which cites each label; a
+disease-specific row replaces the general one. They reject another amino-acid
+change, imprecise nomenclature, a nucleotide-only assertion and an unrelated
+variant file. An indication that names a mutation, such as BRCA-mut or MET exon
+14, needs a sequence-level alteration. An indication naming an altered gene also
+accepts a fusion or amplification. A curated protein-change value that cannot be
+parsed stays visible as an unmet requirement instead of stopping the report. These rules do not
 constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
 remains context for confirmation. [Clinical MSI/MMR input](clinical-context.md)
 can satisfy the corresponding biomarker gate; RNA alone cannot. VCF/MAF adapters remain tracked in #140/#141. The
@@ -61,7 +70,8 @@ the new PDF renderer. PDFs use native text, clickable source links, automatic
 pagination and packaged Unicode fonts; no fixed line count truncates a rationale.
 
 The detailed analysis and evidence tables retain broader curation and source
-attribution. They refer to the summary's consolidated information list. Figures
+attribution. Each row states its unmet requirements once, alongside the row's
+curated eligibility note. They refer to the summary's consolidated information list. Figures
 must describe measured or modeled RNA patterns and their uncertainty; they must
 not assert treatment exposure, receptor-assay status or a mutation from expression.
 

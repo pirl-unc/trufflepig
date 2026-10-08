@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from functools import lru_cache
+import logging
 import re
 
 from .cancer_ontology import cancer_codes_context_compatible
@@ -20,6 +21,8 @@ from .hla import (
     parse_hla_types,
 )
 from .therapeutic_agents import hla_requirements_for_agent
+
+logger = logging.getLogger(__name__)
 
 
 def _truthy(value) -> bool:
@@ -43,6 +46,16 @@ def _clean_text(value) -> str:
     if text.lower() in {"nan", "<na>", "none", "null"}:
         return ""
     return text
+
+
+def join_report_clauses(parts) -> str:
+    """Join reader-facing clauses with semicolons.
+
+    Parts may be complete template sentences; their closing period is dropped
+    so a join never produces ".;".
+    """
+    clauses = (str(part).strip().rstrip(" .;") for part in parts if part)
+    return "; ".join(clause for clause in clauses if clause)
 
 
 def md_table_cell(value) -> str:
@@ -488,6 +501,8 @@ def _current_therapy_row_overrides(target_row) -> dict:
     if cancer_code == "PRAD" and "ifinatamab deruxtecan" in agent:
         return {
             "phase": "phase_3",
+            "therapy_evidence_source": "IDeate-Prostate01 (NCT06925737)",
+            "therapy_evidence_url": "https://clinicaltrials.gov/study/NCT06925737",
             "treatment_path_tier": "late_clinical",
             "eligibility_note": (
                 "active phase 3 mCRPC program; trial eligibility, prior therapy, "
@@ -497,10 +512,14 @@ def _current_therapy_row_overrides(target_row) -> dict:
     if cancer_code == "PRAD" and "xaluritamig" in agent:
         return {
             "phase": "phase_3",
+            "therapy_evidence_source": "XALute (NCT06691984)",
+            "therapy_evidence_url": "https://clinicaltrials.gov/study/NCT06691984",
             "treatment_path_tier": "late_clinical",
             "eligibility_note": (
-                "phase 3 mCRPC program; verify cohort status, prior therapy, "
-                "and recruiting availability"
+                "phase 3 XALute (NCT06691984) was active but not recruiting "
+                "when checked on 2026-10-06; this is a development-program "
+                "direction, not an available enrollment slot; verify other "
+                "cohorts, prior therapy, and current site availability"
             ),
         }
     if cancer_code == "PRAD" and "bpx-601" in agent:
@@ -600,6 +619,7 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
                 "symbol": "",
                 "agent": "ZEN003694 + abemaciclib",
                 "phase": "phase_1",
+                "source": "NCT05372640",
                 "indication": "metastatic or unresectable NUT carcinoma",
                 "rationale": (
                     "recruiting NUT-carcinoma cohort in NCT05372640; dual BET "
@@ -763,24 +783,28 @@ def therapy_withdrawal_note(target_row) -> str:
 
 def filter_current_therapy_targets(targets_df):
     """Drop stale rows and apply verified current-status report corrections."""
+    import pandas as pd
+
     if targets_df is None:
         return None
-    try:
-        if len(targets_df) == 0:
-            return targets_df.reset_index(drop=True)
-        keep = [
-            not therapy_filter_note(row)
-            for row in targets_df.to_dict("records")
-        ]
-        current = targets_df.loc[keep].copy().reset_index(drop=True)
-        for index, row in current.iterrows():
-            for column, value in _current_therapy_row_overrides(row).items():
-                if column not in current.columns:
-                    current[column] = ""
-                current.at[index, column] = value
-        return current
-    except Exception:
-        return targets_df
+    if len(targets_df) == 0:
+        return targets_df.reset_index(drop=True)
+    keep = [
+        not therapy_filter_note(row)
+        for row in targets_df.to_dict("records")
+    ]
+    current = targets_df.loc[keep].copy().reset_index(drop=True)
+    for index, row in current.iterrows():
+        for column, value in _current_therapy_row_overrides(row).items():
+            if column not in current.columns:
+                # ``None`` gives the new column object dtype, so both boolean
+                # gates and reader-facing strings can be assigned without a
+                # pandas incompatible-dtype error.
+                current[column] = pd.Series(None, index=current.index, dtype=object)
+            elif not pd.api.types.is_object_dtype(current[column].dtype):
+                current[column] = current[column].astype(object)
+            current.at[index, column] = value
+    return current
 
 
 @lru_cache(maxsize=1)
@@ -1124,6 +1148,26 @@ _WILDTYPE_INDICATION = re.compile(
     r"\b(?:wild[- ]?type|ras[- ]?wt|ras\s+wt)\b",
     re.IGNORECASE,
 )
+# Supplied alteration classes a molecular therapy requirement can accept.
+_SEQUENCE_VARIANT_TYPES = frozenset({"mutation", "loss", "kdd", "internal_tandem_duplication"})
+_MOLECULAR_VARIANT_TYPES = _SEQUENCE_VARIANT_TYPES | {"fusion", "amplification"}
+_STRUCTURAL_VARIANT_TYPES = _MOLECULAR_VARIANT_TYPES - {"mutation"}
+# An indication naming a mutation rather than any alteration of the gene.
+_MUTATION_SPECIFIC_ROW_TEXT = re.compile(
+    r"\bmut(?:ant|ated|ation|ations)?\b|\bexon\s*\d+\b|\b[a-z]\d{2,4}[a-z]\b|\bv600[a-z]?\b",
+    re.IGNORECASE,
+)
+_NAMED_EXON_EVENT = re.compile(r"\bexon\s*(\d+)\b", re.IGNORECASE)
+_NAMED_PROTEIN_CHANGE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z][a-z]{2}|[A-Za-z])[1-9]\d+"
+    r"(?:[A-Z][a-z]{2}|[A-Za-z*])(?![A-Za-z0-9])"
+)
+_NAMED_EXON_QUALIFIERS = {
+    "skipping": re.compile(r"\bskip(?:ping|ped)?\b", re.IGNORECASE),
+    "insertion": re.compile(r"\bins(?:ert(?:ion|ed)?)?\b", re.IGNORECASE),
+    "deletion": re.compile(r"\bdel(?:et(?:ion|ed)?)?\b", re.IGNORECASE),
+}
+_BROAD_ALTERATION_TEXT = re.compile(r"\b(?:alteration|altered)\b", re.IGNORECASE)
 _MSI_HIGH_INDICATION = re.compile(
     r"\b(msi[- ]?h|msi[- ]?high|dmmr|deficient\s+mmr|mismatch\s+repair\s+deficien)",
     re.IGNORECASE,
@@ -1299,8 +1343,14 @@ def target_observation_state(sym, ranges_df) -> str:
     input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")
     if input_syms is None:
         return "unknown"
-    input_syms = {canonical_target_symbol(value) for value in input_syms}
-    return "below_detection" if sym in input_syms else "not_in_input"
+    # Test membership instead of canonicalizing the whole input on every call;
+    # an input file may label the target by its curated alias (MAGE-A4).
+    present = sym in input_syms or any(
+        label in input_syms
+        for label, canonical in _TARGET_SYMBOL_ALIASES.items()
+        if canonical == sym
+    )
+    return "below_detection" if present else "not_in_input"
 
 
 def target_rna_observation(expression_row=None, *, symbol="", ranges_df=None) -> dict:
@@ -1361,39 +1411,94 @@ def supplied_variants_for_gene(analysis, gene: str) -> list[dict]:
 def required_protein_changes_for_therapy(target_row) -> tuple[str, ...]:
     """Exact protein requirements for a curated drug, target and disease scope.
 
-    Structured row requirements take precedence. These drug-specific criteria
-    are independent of RNA expression and of prose mentioning other alleles.
+    A structured ``required_protein_changes`` row value takes precedence over the
+    packaged drug table (``therapy-protein-change-requirements.csv``). Curated
+    spellings are normalized. A token that is not a protein substitution is kept
+    verbatim, so the requirement stays visible and no supplied variant can
+    satisfy it, instead of failing the whole report.
     """
     from .variants import normalize_protein_substitution
-    from .therapeutic_agents import resolve_therapy_identity
+    from .therapeutic_agents import protein_change_requirement_for_therapy
 
-    explicit = target_row.get("required_protein_changes")
-    if isinstance(explicit, (tuple, list)):
-        raw = explicit
-    else:
-        raw = _clean_text(explicit).split(";")
-    if any(_clean_text(value) for value in raw):
-        parsed = tuple(normalize_protein_substitution(value) for value in raw)
-        if not all(parsed):
-            raise ValueError(f"Invalid required protein substitutions: {explicit!r}")
-        return parsed
+    if not hasattr(target_row, "get"):
+        return ()
     gene = canonical_target_symbol(target_row.get("symbol"))
-    identity = resolve_therapy_identity(target_row.get("agent"))
-    components = set(identity.components)
-    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-sotorasib-panitumumab-kras-g12c-mutated-colorectal-cancer
-    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-grants-accelerated-approval-adagrasib-cetuximab-kras-g12c-mutated-colorectal-cancer
-    if gene == "KRAS":
-        if components & {"sotorasib", "adagrasib"}:
-            return ("G12C",)
-    # FDA BRAFTOVI label: https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/210496s021lbl.pdf
-    # TAFINLAR label: https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fee1e6b1-e1a5-4254-9f2e-a70e0f8dbdea
-    if gene == "BRAF":
-        code = _clean_text(target_row.get("cancer_code")).upper()
-        if components & {"dabrafenib", "encorafenib"}:
-            return ("V600E", "V600K") if code == "SKCM" else ("V600E",)
-        if "vemurafenib" in components:
-            return ("V600E",)
-    return ()
+    explicit = target_row.get("required_protein_changes")
+    raw = explicit if isinstance(explicit, (tuple, list)) else _clean_text(explicit).split(";")
+    tokens = [token for token in (_clean_text(value) for value in raw) if token]
+    if tokens:
+        alleles = []
+        for token in tokens:
+            allele = normalize_protein_substitution(token, gene=gene)
+            if not allele:
+                _warn_unparsed_protein_change(token)
+            alleles.append(allele or token)
+        return tuple(dict.fromkeys(alleles))
+    requirement = protein_change_requirement_for_therapy(
+        target_row.get("agent"), gene, target_row.get("cancer_code")
+    )
+    return requirement.alleles if requirement else ()
+
+
+@lru_cache(maxsize=None)
+def _warn_unparsed_protein_change(token: str) -> None:
+    logger.warning(
+        "Curated required_protein_changes value %r is not a protein substitution; "
+        "the requirement is kept and no supplied variant can satisfy it.",
+        token,
+    )
+
+
+def _protein_changes_in_text(text: str, gene: str) -> set[str]:
+    """Exact protein substitutions named in curated or observed event text."""
+    from .variants import normalize_protein_substitution
+
+    return {
+        normalized
+        for match in _NAMED_PROTEIN_CHANGE.finditer(text)
+        if (normalized := normalize_protein_substitution(match.group(0), gene=gene))
+    }
+
+
+def _matching_named_mutation_events(
+    requirement_text: str, records: list[dict], gene: str
+) -> list[dict] | None:
+    """Match a named exon/protein event, or return ``None`` when none is named.
+
+    A same-gene coarse variant class cannot establish a specifically named
+    event. Exact genomic splice variants that do not state the resulting exon
+    event therefore remain unresolved, which is safer than inferring it here.
+    """
+    required_exons = set(_NAMED_EXON_EVENT.findall(requirement_text))
+    required_proteins = _protein_changes_in_text(requirement_text, gene)
+    if not required_exons and not required_proteins:
+        return None
+    required_qualifiers = {
+        name
+        for name, pattern in _NAMED_EXON_QUALIFIERS.items()
+        if pattern.search(requirement_text)
+    }
+    matched = []
+    for record in records:
+        observed = " ".join(
+            _clean_text(record.get(key))
+            for key in ("variant", "raw_name")
+        )
+        if required_exons and not required_exons.intersection(
+            _NAMED_EXON_EVENT.findall(observed)
+        ):
+            continue
+        if required_qualifiers and not all(
+            _NAMED_EXON_QUALIFIERS[name].search(observed)
+            for name in required_qualifiers
+        ):
+            continue
+        if required_proteins and not required_proteins.intersection(
+            _protein_changes_in_text(observed, gene)
+        ):
+            continue
+        matched.append(record)
+    return matched
 
 
 def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
@@ -1415,9 +1520,13 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
         return []
     required_alleles = required_protein_changes_for_therapy(target_row)
     if required_alleles:
-        return [record for record in records
-                if _clean_text(record.get("variant_type")).lower() == "mutation"
-                and normalize_protein_substitution(record.get("variant"), gene=sym) in required_alleles]
+        # The exact protein change is the requirement. A record naming it is a
+        # sequence-level call unless it was typed as a structural event.
+        return [
+            record for record in records
+            if _clean_text(record.get("variant_type")).lower() not in _STRUCTURAL_VARIANT_TYPES
+            and normalize_protein_substitution(record.get("variant"), gene=sym) in required_alleles
+        ]
     text = " ".join(
         _clean_text(target_row.get(key))
         for key in ("indication", "rationale", "eligibility_note")
@@ -1439,7 +1548,19 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     elif re.search(r"\b(amplification|amplified|\bamp\b|copy\s*number\s*gain)\b", text):
         required_types.add("amplification")
     elif indication_biomarker(target_row) == "mutation":
-        required_types.add("mutation")
+        named_matches = _matching_named_mutation_events(text, records, sym)
+        if named_matches is not None:
+            return [record for record in named_matches
+                    if (_clean_text(record.get("variant_type")).lower() == "mutation"
+                        or classify_variant_type(record.get("variant")) == "mutation"
+                        and _clean_text(record.get("variant_type")).lower() in {"", "unknown"})]
+        # Generic "mutated" indications accept mutations only. A deliberately
+        # broad "altered" indication can accept any positive molecular class.
+        required_types.update(
+            _MOLECULAR_VARIANT_TYPES
+            if _BROAD_ALTERATION_TEXT.search(text)
+            else {"mutation"}
+        )
     if not required_types:
         return []
     supported: list[dict] = []
@@ -1470,6 +1591,14 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     if not hasattr(target_row, "get"):
         return False
     if required_protein_changes_for_therapy(target_row):
+        return True
+    indication = _clean_text(target_row.get("indication"))
+    if indication_biomarker(target_row) == "mutation" and (
+        _MUTATION_INDICATION.search(indication) or _MUTATION_SPECIFIC_ROW_TEXT.search(indication)
+    ):
+        # An indication that names an alteration (BRCA-mut, MET exon 14, RET fusion)
+        # needs that alteration whatever the upstream basis column says. Agent-class
+        # or rationale wording alone ("fusion protein", "BRCA-wt") does not gate.
         return True
     if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
         # Pirlygenes therapy tables retain this legacy column.
@@ -1508,7 +1637,11 @@ def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
 
 def supplied_variant_context_for_target_row(target_row, analysis) -> str:
     """Reader-facing summary of supplied variant evidence for a target row."""
-    supported = supplied_variant_supports_target_row(target_row, analysis)
+    return supplied_variant_context(supplied_variant_supports_target_row(target_row, analysis))
+
+
+def supplied_variant_context(supported: list[dict]) -> str:
+    """Reader-facing summary of supplied variant records that match a requirement."""
     if not supported:
         return ""
     labels: list[str] = []
@@ -1526,7 +1659,6 @@ def supplied_variant_context_for_target_row(target_row, analysis) -> str:
         "The supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
-
     )
 
 
@@ -2651,6 +2783,8 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
     """Author separate patient, population, treatment-path and HLA explanations."""
     from .treatment_history import population_therapy_evidence_context, treatment_history_context
 
+    if not hasattr(target_row, "get"):
+        return []
     history = treatment_history_context(target_row, analysis)
     from .report_language import render_report_paragraph
 
@@ -2667,22 +2801,51 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
 
 
 def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:
-    """Treatment rationale in one cell for the detailed therapy landscape."""
-    return " ".join(therapy_rationale_paragraphs(target_row, analysis=analysis))
+    """Treatment rationale in one cell for the detailed therapy landscape.
+
+    A landscape row is read on its own, so unlike the summary, which gathers
+    curated criteria under Information needed, it carries the row's curated
+    eligibility note.
+    """
+    if not hasattr(target_row, "get"):
+        return ""
+    from .report_language import render_report_paragraph
+
+    paragraphs = therapy_rationale_paragraphs(target_row, analysis=analysis)
+    note = _note_beyond_stated_text(
+        _clean_text(target_row.get("eligibility_note")), " ".join(paragraphs)
+    )
+    if note and _phase_text(target_row) != "patient_history":
+        paragraphs.append(render_report_paragraph("eligibility_note", note=note))
+    return " ".join(paragraphs)
+
+
+def _note_beyond_stated_text(note: str, stated: str) -> str:
+    """The rest of a curated note after leading clauses the text already states.
+
+    Curated notes often open by restating the pathway tier, as in
+    "clinical-trial follow-up; not default standard". The remainder is kept verbatim.
+    """
+    already = stated.casefold()
+    remainder = note.strip()
+    while remainder:
+        match = re.match(r"([^;,]*)(?:[;,]\s*|$)", remainder)
+        clause = match.group(1).strip(" .")
+        if clause and clause.casefold() not in already:
+            break
+        remainder = remainder[match.end():]
+    return remainder.strip()
 
 
 def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:
     """Sort standard paths ahead of exploratory rows in concise reports."""
-    from .treatment_history import (
-        treatment_history_blocks_row,
-        treatment_history_rank,
-        treatment_history_supports_review,
-    )
+    from .treatment_history import assess_treatment_history
 
-    if treatment_history_blocks_row(target_row, analysis):
+    history = assess_treatment_history(target_row, analysis)
+    if history.blocks_row:
         return 99
-    if treatment_history_supports_review(target_row, analysis):
-        return -10 + treatment_history_rank(target_row, analysis)
+    if history.supports_review:
+        return -10 + history.rank
     return int(_therapy_path_info(target_row)["rank"])
 
 
@@ -2782,7 +2945,7 @@ def target_interpretation_summary(
         parts.append(f"current-therapy check: {caution}")
     if maturity:
         parts.append(maturity)
-    return "; ".join(part for part in parts if part)
+    return join_report_clauses(parts)
 
 
 def partition_tumor_core_rows(ranges_df, min_tumor_tpm=1.0):
@@ -2834,6 +2997,9 @@ def subtype_resolution_for_analysis(analysis, ranges_df=None):
     clinical scope (notably therapy lookup) must inspect ``status`` rather than
     treating every ``final_subtype`` as established.
     """
+    if analysis.get("cancer_type_abstention"):
+        return {"final_subtype": None, "status": "unresolved",
+                "reason": analysis["cancer_type_abstention"]["reason"]}
     try:
         from .analyze import cancer_type_context_from_analysis
 
@@ -3017,6 +3183,16 @@ def candidate_winning_subtype_for_analysis(analysis):
     winning_subtype = _clean_text(row.get("winning_subtype"))
     if not winning_subtype:
         return None
+    from .cancer_type_policy import (
+        requires_independent_sarcoma_identity,
+        sarcoma_identity_is_supplied,
+    )
+
+    if (
+        requires_independent_sarcoma_identity(winning_subtype)
+        and not sarcoma_identity_is_supplied(analysis, winning_subtype)
+    ):
+        return None
     subtype_evidence = next(
         (
             evidence_row
@@ -3193,6 +3369,11 @@ def cancer_therapy_panel_for_analysis(
             or _clean_text(analysis.get("cancer_type"))
             or active_cancer_code
         )
+
+    if analysis and analysis.get("cancer_type_abstention"):
+        # Do not fall back from an unresolved diagnosis to its exploratory
+        # sarcoma reference, even when a loader has parent-panel defaults.
+        return active_cancer_code, None, pd.DataFrame()
 
     # Histology-specific treatment evidence follows the report entity, not an
     # expression-only child carried for reference/marker interpretation.  A

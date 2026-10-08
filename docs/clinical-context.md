@@ -58,6 +58,12 @@ have `scope: "current"`. Dates are optional ISO dates; unknown dates stay unknow
 | `protein_results` | Optional MMR mapping for `MLH1`, `MSH2`, `MSH6`, `PMS2`: `retained`, `lost`, `equivocal`, `not_tested`, `unknown` |
 | `id` | Optional stable assertion ID; otherwise generated from its content and provenance |
 
+Result values ignore case, spaces, hyphens and underscores, so `MSI High`,
+`msi-h` and `not tested` are accepted. A few whole-value synonyms are also
+accepted: `stable` or `microsatellite stable` for MSS, and `deficient` or
+`proficient`, optionally preceded by `MMR` or `mismatch repair`, for dMMR or
+pMMR. A result is never extracted from a longer phrase such as `possibly MSI-H`.
+
 MSI and MMR remain separate assay records. Validated, reportable MSI-H or dMMR
 evidence for the bound specimen can satisfy the MSI-H/dMMR biomarker requirement.
 MSS, MSI-L and pMMR do not satisfy that indication. Conflicting current results
@@ -91,11 +97,18 @@ analyze("gene_tpm.tsv", output_dir="output/specimen-A", clinical_context=context
 
 `ClinicalContext`, `ClinicalAssay` and `ClinicalSource` also accept direct Python
 construction. `load_clinical_context` accepts these contexts, JSON mappings or
-JSON paths and rejects unknown fields. `AnalyzeConfig` validates and captures the
-input once; manifests contain the normalized values rather than relying on a
-mutable source file. The normal report JSON carries `clinical_context`, assay
+JSON paths and rejects unknown fields. A missing file or invalid JSON raises an
+error that names the file. `AnalyzeConfig` validates and captures the input once;
+manifests contain the normalized values rather than relying on a mutable source
+file. The normal report JSON carries `clinical_context`, assay
 evidence on eligibility requirements, and consolidated `evidence_requests` with
 priority and retained evidence. Markdown and PDF render the same authored facts.
+
+Captured domain records are frozen dataclasses. Mutable mapping inputs are copied
+into `FrozenMapping` values, and `public_dict()` returns fresh JSON-compatible
+containers through the shared dataclass serializer. The `public_dict` name marks
+the stable artifact/API projection: unlike a mechanical `to_dict`, it may omit
+internal fields or add derived public fields while preserving a versioned schema.
 
 The web form accepts the same JSON as “Clinical assay results”. It validates
 the upload before launching a run. Uploads are limited to 1 MB; a JSON scalar

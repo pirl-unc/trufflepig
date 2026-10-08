@@ -1,6 +1,6 @@
 """Clinical assay results, specimen limitations and the shared report path."""
 
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 import json
 from pathlib import Path
 
@@ -104,6 +104,44 @@ def test_mmr_protein_results_are_retained_without_inventing_an_overall_result():
     ctx = context(assay("dMMR", protein_results=proteins))
     assert evaluate_msi_mmr(ctx).satisfied
     assert load_clinical_context(ctx.public_dict()).assays[0].protein_results == proteins
+
+
+def test_mmr_protein_results_are_an_immutable_defensive_snapshot():
+    from trufflepig.analyze.models import AnalyzeConfig
+
+    proteins = {"MLH1": "retained", "PMS2": "retained"}
+    record = assay("pMMR", protein_results=proteins)
+    original_id = record.id
+    proteins["MLH1"] = "lost"
+
+    assert is_dataclass(record) and is_dataclass(record.protein_results)
+    assert record.protein_results["MLH1"] == "retained"
+    with pytest.raises(TypeError):
+        record.protein_results["MLH1"] = "lost"
+
+    exported = record.public_dict()
+    exported["protein_results"]["MLH1"] = "lost"
+    config = AnalyzeConfig(input_path="sample.tsv", clinical_context=context(record))
+    assert record.id == original_id
+    assert config.clinical_context.assays[0].protein_results["MLH1"] == "retained"
+    assert evaluate_msi_mmr(config.clinical_context).status == "negative"
+
+
+def test_clinical_dataclasses_share_json_safe_public_serialization():
+    source = ClinicalSource(title="Pathology")
+    record = assay("dMMR", source=source, protein_results={"MLH1": "lost"})
+    ctx = context(record)
+
+    assert source.public_dict() == {
+        "title": "Pathology",
+        "reference": "",
+        "excerpt": "",
+        "review_status": "supplied",
+    }
+    serialized = ctx.public_dict()
+    assert json.loads(json.dumps(serialized)) == serialized
+    serialized["assays"][0]["protein_results"]["MLH1"] = "retained"
+    assert record.protein_results["MLH1"] == "lost"
 
 
 @pytest.mark.parametrize(
@@ -446,3 +484,77 @@ def test_clinical_provenance_renders_literally(tmp_path):
     pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
     extracted = " ".join(" ".join(p.extract_text() for p in pdf.pages).split())
     assert source.title in extracted and source.excerpt in extracted
+
+
+@pytest.mark.parametrize(
+    "kind, supplied, canonical",
+    [
+        ("msi", "MSI High", "MSI-H"),
+        ("msi", "MSI H", "MSI-H"),
+        ("msi", "not tested", "not_tested"),
+        ("msi", "stable", "MSS"),
+        ("mmr", "d MMR", "dMMR"),
+        ("mmr", "deficient", "dMMR"),
+        ("mmr", "Mismatch repair proficient", "pMMR"),
+    ],
+)
+def test_result_spacing_and_whole_value_synonyms_are_canonical(kind, supplied, canonical):
+    from trufflepig.clinical_context import ClinicalAssay
+
+    assert ClinicalAssay(kind=kind, result=supplied).result == canonical
+
+
+def test_unreadable_context_files_name_the_problem(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Clinical context file not found"):
+        load_clinical_context(tmp_path / "missing.json")
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text("{not json")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        load_clinical_context(malformed)
+
+
+def test_config_with_per_protein_mmr_findings_remains_hashable():
+    from trufflepig.analyze.models import AnalyzeConfig
+
+    payload = {
+        "specimen_id": "S1",
+        "assays": [
+            {
+                "kind": "mmr",
+                "result": "dMMR",
+                "method": "IHC",
+                "specimen_id": "S1",
+                "scope": "current",
+                "validity": "validated",
+                "reportability": "reportable",
+                "source": {"title": "Pathology report"},
+                "protein_results": {"MLH1": "lost", "PMS2": "lost"},
+            }
+        ],
+    }
+    config = AnalyzeConfig(input_path="sample.tsv", clinical_context=payload)
+    assert hash(config) == hash(AnalyzeConfig(input_path="sample.tsv", clinical_context=payload))
+
+
+def test_protein_conflict_is_decided_by_limitation_code_not_wording():
+    from trufflepig.clinical_context import PROTEIN_RESULT_CONFLICT, ClinicalContext
+
+    ctx = ClinicalContext(
+        specimen_id="S1",
+        assays=(
+            {
+                "kind": "mmr",
+                "result": "pMMR",
+                "method": "IHC",
+                "specimen_id": "S1",
+                "scope": "current",
+                "validity": "validated",
+                "reportability": "reportable",
+                "source": {"title": "Pathology report"},
+                "protein_results": {"MLH1": "lost"},
+            },
+        ),
+    )
+    decision = evaluate_msi_mmr(ctx)
+    assert decision.status == "conflicting"
+    assert decision.assays[0]["limitation_codes"] == [PROTEIN_RESULT_CONFLICT]

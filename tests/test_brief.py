@@ -1,17 +1,18 @@
 """Tests for the two-tier brief / actionable handoff (#111)."""
 
 import pandas as pd
+import pytest
 
 from trufflepig.brief import (
     build_actionable as _build_actionable,
     build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
     _expression_independent_evidence_gap,
-    _empty_therapy_shortlist_message,
+    empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
-    _format_cta_outlier_bullet,
-    _notable_cta_outliers,
+    format_cta_outlier_bullet,
+    notable_cta_outliers,
     _shortlist_omission_note,
     recommend_therapies,
     mismatch_repair_summary_line,
@@ -66,7 +67,7 @@ def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
         ]
     )
 
-    message = _empty_therapy_shortlist_message(targets, ranges)
+    message = empty_therapy_shortlist_message(targets, ranges)
 
     assert "did not meet the shortlist's" in message
     assert "clinical eligibility" in message
@@ -97,9 +98,9 @@ def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
         ]
     )
 
-    rows = _notable_cta_outliers(ranges)
+    rows = notable_cta_outliers(ranges)
     assert [row["symbol"] for row in rows] == ["TUMOR_CTA", "BACKGROUND_CTA"]
-    bullet = _format_cta_outlier_bullet(rows[0])
+    bullet = format_cta_outlier_bullet(rows[0])
     assert "100 patient bulk TPM" in bullet
     assert "60 estimated patient tumor TPM" in bullet
     assert "RNA model interval 30-100" in bullet
@@ -1201,13 +1202,13 @@ def test_summary_rna_alternatives_use_post_gate_support_fraction():
     # not report a rank-2 candidate as >1x the top call.
     analysis["candidate_trace"] = [
         {
-            "code": "SARC",
+            "code": "PRAD",
             "support_geomean": 0.42,
             "support_fraction_of_top": 1.0,
             "signature_score": 0.64,
         },
         {
-            "code": "UCS",
+            "code": "BLCA",
             "support_geomean": 0.44,
             "support_fraction_of_top": 0.51,
             "signature_score": 0.54,
@@ -1218,11 +1219,11 @@ def test_summary_rna_alternatives_use_post_gate_support_fraction():
     md = build_summary(
         analysis,
         ranges_df,
-        cancer_code="SARC",
+        cancer_code="PRAD",
         disease_state="",
     )
 
-    assert "UCS (rank 2, 0.51x top support)" in md
+    assert "BLCA (rank 2, 0.51x top support)" in md
     assert "1.03x top support" not in md
 
 
@@ -1564,11 +1565,13 @@ def test_missing_eligibility_becomes_a_clinical_task_not_a_recommendation(monkey
         "requires_verified_alteration": True,
         "eligibility_note": "requires clinical germline BRCA testing and HER2-negative disease",
     }])
-    monkeypatch.setattr(brief, "_curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
+    monkeypatch.setattr(brief, "curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
     analysis = {**_make_analysis(), "cancer_type": "BRCA"}
     text = build_summary(analysis, _make_ranges_df(), cancer_code="BRCA", disease_state="")
     content = build_report_content(analysis, _make_ranges_df(), "BRCA", "", report_view=build_report_view(analysis))
-    assert content.therapy is None
+    assert not any(
+        block["kind"] == "table" for section in content.sections for block in section["blocks"]
+    )
     assert any("olaparib" in request["affects"] and "germline BRCA testing" in request["question"] for request in content.evidence_requests)
     assert "## Information needed" in text
 
@@ -1869,7 +1872,7 @@ def test_summary_prompts_for_hla_when_hla_gated_target_is_plausible():
     )
 
     assert "HLA typing is unavailable for tebentafusp" in md
-    assert "requires A*02:01" in md
+    assert "requires A\\*02:01" in md  # HLA alleles are Markdown-escaped
 
 
 def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
@@ -2369,7 +2372,7 @@ def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
     )
     monkeypatch.setattr(
         brief_mod,
-        "_curated_target_panel_for_sample",
+        "curated_target_panel_for_sample",
         lambda *a, **k: ("SARC", None, targets_df),
     )
 
@@ -2587,3 +2590,66 @@ def therapy_review_text(target, expression, target_panel=None, **context):
     return " ".join([assessment['agent'], assessment['phase'], assessment['indication'],
                      *assessment['rationale'], assessment['maturity'],
                      _expression_independent_evidence_gap(target, context.get('analysis'))])
+
+
+@pytest.mark.parametrize(
+    "tier, reasons, expected",
+    [
+        ("high", [], ""),
+        ("high", ["x"], ""),
+        ("unknown", ["no purity estimate available"], ""),
+        ("degenerate", ["degenerate"], ""),
+        ("moderate", [], ""),
+        ("moderate", ["runner-up close"], " — **moderate confidence**"),
+        ("low", ["wide purity CI"], " — **low confidence, provisional**"),
+    ],
+)
+def test_call_confidence_badge_only_marks_contested_calls(tier, reasons, expected):
+    from types import SimpleNamespace
+
+    from trufflepig.brief import _call_confidence_suffix
+
+    call_tier = SimpleNamespace(tier=tier, reasons=reasons, inline_note="; ".join(reasons))
+    assert _call_confidence_suffix(call_tier, include_reasons=False) == expected
+
+
+def test_actionable_therapy_cell_states_hla_once_without_clause_artifacts(monkeypatch):
+    import trufflepig.brief as brief_mod
+
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "SARC"
+    analysis.setdefault("analysis_constraints", {})["hla_types"] = ["A*02:01"]
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "observed_tpm": 19.0,
+                "attribution": {},
+                "attr_tumor_tpm": 8.0,
+                "attr_tumor_fraction": 0.42,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }
+        ]
+    )
+    targets_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "agent": "afamitresgene autoleucel",
+                "agent_class": "TCR-T",
+                "phase": "approved",
+                "indication": "synovial sarcoma",
+                "treatment_path_tier": "approved_indication_matched",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        brief_mod, "curated_target_panel_for_sample", lambda *a, **k: ("SARC", None, targets_df)
+    )
+    md = build_actionable(analysis, ranges_df, cancer_code="SARC", disease_state="", sample_id="sample_X")
+    row = next(line for line in md.splitlines() if "| afamitresgene autoleucel |" in line)
+    assert row.count("HLA match") == 1
+    assert ".;" not in row

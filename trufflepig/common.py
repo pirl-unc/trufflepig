@@ -749,6 +749,7 @@ def panel_symbols_to_gene_ids(symbols) -> dict[str, str]:
         return cached
     out: dict[str, str] = {}
     try:
+        from oncoref import canonical_gene_id
         from pirlygenes.gene_ids import find_gene_id_by_name_from_ensembl
     except ImportError:
         _PANEL_SYMBOL_TO_ID_CACHE[sym_set] = out
@@ -756,7 +757,11 @@ def panel_symbols_to_gene_ids(symbols) -> dict[str, str]:
         return out
     for sym in sym_set:
         try:
-            gid = find_gene_id_by_name_from_ensembl(sym)
+            # Use the reference owner's primary-assembly namespace before the
+            # installed-genome fallback. New Ensembl releases can resolve a
+            # symbol to another locus absent from the shipped reference matrix
+            # (e.g. MUC2), silently losing a measured lineage marker.
+            gid = canonical_gene_id(sym) or find_gene_id_by_name_from_ensembl(sym)
         except Exception:  # noqa: BLE001
             continue
         if gid:

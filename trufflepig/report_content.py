@@ -6,8 +6,16 @@ from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 import hashlib
 import json
+import re
 
-from .report_language import render_report_paragraph, render_report_template
+from . import brief
+from .report_language import (
+    markdown_url,
+    render_report_paragraph,
+    render_report_template,
+    report_literal,
+    report_plain_text,
+)
 from .reporting import (
     canonical_target_symbol,
     clinical_maturity_summary,
@@ -39,7 +47,6 @@ class ReportContent:
     sections: list[dict[str, Any]]
     therapy_assessments: list[dict[str, Any]]
     evidence_requests: list[dict[str, Any]]
-    therapy: dict[str, Any] | None
     treatment_history: list[dict[str, Any]]
     clinical_context: dict[str, Any] = field(default_factory=dict)
 
@@ -57,6 +64,40 @@ def therapy_assessment_id(row) -> str:
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def therapy_evidence_sources(row) -> list[dict[str, str]]:
+    """Retain curated citations, linking only recognized complete identifiers."""
+    label = clean_therapy_value(row.get("therapy_evidence_source"))
+    url = clean_therapy_value(row.get("therapy_evidence_url"))
+    if label or url:
+        return [{"label": label or "Source", "url": url}]
+    sources = []
+    for item in clean_therapy_value(row.get("source")).split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        pmid = re.fullmatch(r"PMID:\s*(\d+)", item, re.IGNORECASE)
+        if pmid:
+            url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid.group(1)}/"
+        elif re.fullmatch(r"NCT\d{8}", item, re.IGNORECASE):
+            url = f"https://clinicaltrials.gov/study/{item.upper()}"
+        elif item.startswith(("https://", "http://")):
+            url = item
+        else:
+            url = ""
+        source = {"label": item, "url": url}
+        if source not in sources:
+            sources.append(source)
+    return sources
+
+
+def _evidence_source_cell(assessment) -> str:
+    return " · ".join(
+        f"[{report_literal(source['label'])}]({markdown_url(source['url'])})"
+        if source["url"] else report_literal(source["label"])
+        for source in assessment["sources"]
+    ) or "Not supplied"
+
+
 def assess_therapy(
     row,
     expr=None,
@@ -67,20 +108,20 @@ def assess_therapy(
     ranges_df=None,
     disease_state="",
     selected=False,
+    eligibility=None,
 ) -> dict:
     """Explain one curated treatment with its identity, requirements and RNA evidence.
 
     This function does not select a treatment. Call ``recommend_therapies`` for
     ranking; use this assessment to inspect selected and excluded alternatives.
     """
-    from .brief import _therapy_agent_label, _phase_label
-
-    agent = _therapy_agent_label(row)
+    agent = brief.therapy_agent_label(row)
     identity = resolve_therapy_identity(row.get("agent"))
     gene = canonical_target_symbol(row.get("symbol"))
     observation = target_rna_observation(expr, symbol=gene, ranges_df=ranges_df)
     state, observed = observation["state"], observation["observed_tpm"]
-    eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
+    if eligibility is None:
+        eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
     rationale = []
     rationale.extend(r.description for r in eligibility.requirements if r.kind == "msi_high")
     if eligibility.supplied_variant_supported:
@@ -116,6 +157,7 @@ def assess_therapy(
     caution = therapy_state_caution(row, analysis=analysis, disease_state=disease_state)
     if caution:
         rationale.append("Current-treatment context: " + caution.rstrip(". ") + ".")
+    sources = therapy_evidence_sources(row)
     return {
         "id": therapy_assessment_id(row),
         "identity": asdict(identity),
@@ -123,7 +165,7 @@ def assess_therapy(
         "canonical_agent": identity.canonical_name,
         "target": gene or "Clinical pathway",
         "selected": selected,
-        "phase": _phase_label(clean_therapy_value(row.get("phase"))),
+        "phase": brief.phase_label(clean_therapy_value(row.get("phase"))),
         "indication": clean_therapy_value(row.get("indication")),
         "maturity": clinical_maturity_summary(row, target_panel=target_panel),
         "eligibility": eligibility.public_dict(),
@@ -141,9 +183,21 @@ def assess_therapy(
                 "treatment_path_tier", "rationale",
             )
         },
-        "source": clean_therapy_value(row.get("therapy_evidence_source")),
-        "source_url": clean_therapy_value(row.get("therapy_evidence_url")),
+        "sources": sources,
+        "source": "; ".join(source["label"] for source in sources),
+        "source_url": sources[0]["url"] if len(sources) == 1 else "",
     }
+
+
+def therapy_source_markdown(assessment: dict) -> str:
+    """Citation cell for one therapy assessment, linked when a source URL is curated."""
+    if assessment.get("sources"):
+        return _evidence_source_cell(assessment)
+    label = report_literal(assessment.get("source") or "")
+    url = markdown_url(assessment.get("source_url"))
+    if url:
+        return f"[{label or 'Evidence source'}]({url})"
+    return label or "—"
 
 
 def build_report_content(
@@ -162,30 +216,15 @@ def build_report_content(
     selection. JSON retains exact identities, observation state and requirements;
     no clinical meaning is recovered from generated Markdown.
     """
-    from .brief import (
-        _caveats_from_purity_tier,
-        _curated_target_panel_for_sample,
-        _display_sample_id,
-        _empty_therapy_shortlist_message,
-        _format_biomarker_outlier_bullet,
-        _format_cta_outlier_bullet,
-        _notable_biomarker_outliers,
-        _notable_cta_outliers,
-        _therapy_agent_label,
-        recommend_therapies,
-        summary_conclusion_paragraphs,
-        source_attribution_rows,
-        _format_trace_tpm,
-    )
     from .common import ranges_by_symbol, ranges_by_gene_id, panel_symbols_to_gene_ids
 
     cancer_code = report_view.cancer_type
     analysis = {**analysis, "cancer_type": cancer_code, "cancer_name": report_view.cancer_type_name}
-    sample_id = _display_sample_id(sample_id) or report_view.sample_id or ""
+    sample_id = brief.display_sample_id(sample_id) or report_view.sample_id or ""
     prefix = prefix or sample_id or "report"
     conclusion = [
         paragraph(text)
-        for text in summary_conclusion_paragraphs(
+        for text in brief.summary_conclusion_paragraphs(
             analysis,
             ranges_df,
             cancer_code,
@@ -195,17 +234,29 @@ def build_report_content(
         )
         if text.strip()
     ]
-    panel_code, panel_subtype, panel = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, panel = brief.curated_target_panel_for_sample(
         cancer_code,
         analysis,
         ranges_df=ranges_df,
     )
-    recommended = recommend_therapies(
+    eligibility_by_row: dict[str, Any] = {}
+
+    def eligibility_for(row):
+        # Selection and assessment read the same rows; evaluate each row once.
+        key = therapy_assessment_id(row)
+        if key not in eligibility_by_row:
+            eligibility_by_row[key] = evaluate_therapy_eligibility(
+                row, analysis, panel_subtype=panel_subtype
+            )
+        return eligibility_by_row[key]
+
+    recommended = brief.recommend_therapies(
         panel,
         ranges_df,
         analysis=analysis,
         disease_state=disease_state,
         panel_subtype=panel_subtype,
+        eligibility_for=eligibility_for,
     )
     selected = {therapy_assessment_id(row.therapy) for row in recommended}
     expression = ranges_by_symbol(ranges_df) if ranges_df is not None else {}
@@ -214,7 +265,7 @@ def build_report_content(
     rows = panel.to_dict("records") if panel is not None else []
     gene_ids = panel_symbols_to_gene_ids(canonical_target_symbol(row.get("symbol")) for row in rows)
     for row in rows:
-        agent = _therapy_agent_label(row)
+        agent = brief.therapy_agent_label(row)
         if not agent:
             continue
         gene = canonical_target_symbol(row.get("symbol"))
@@ -230,6 +281,7 @@ def build_report_content(
             ranges_df=ranges_df,
             disease_state=disease_state,
             selected=therapy_assessment_id(row) in selected,
+            eligibility=eligibility_for(row),
         )
         assessments.append(assessment)
 
@@ -241,13 +293,12 @@ def build_report_content(
             selected_assessments.append(match)
 
     # Report-level questions join therapy requirements before deduplication.
-    from .brief import mismatch_repair_summary_context, mismatch_repair_rna_state
     from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
 
     clinical_context = clinical_context_for_analysis(analysis)
     clinical_mmr = evaluate_msi_mmr(clinical_context)
-    rna_mmr = mismatch_repair_summary_context(analysis)
-    rna_state = mismatch_repair_rna_state(analysis)
+    rna_mmr = brief.mismatch_repair_summary_context(analysis)
+    rna_state = brief.mismatch_repair_rna_state(analysis)
     if clinical_context.assays:
         conclusion.append(paragraph(
             "**Clinical MSI/MMR evidence:** " + msi_mmr_requirement(analysis).description
@@ -270,6 +321,7 @@ def build_report_content(
                 "Overlapping kinase events do not establish the exact spindle-cell diagnosis.",
                 spindle_guidance["workup"],
                 ("pathology and primary-site report", "RNA/DNA structural-variant report"),
+                label="Spindle-cell diagnosis",
             )
         )
     constraints = analysis.get("analysis_constraints") or {}
@@ -285,6 +337,7 @@ def build_report_content(
                 "The disease call is based on RNA evidence and needs clinical reconciliation.",
                 "Reconcile the proposed disease and subtype with pathology, clinical history and any disease-defining molecular assay.",
                 ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
+                label="Diagnosis",
             )
         )
     if rna_mmr or clinical_context.assays:
@@ -302,6 +355,7 @@ def build_report_content(
                 "treatment and toxicity history",
                 "relevant laboratory and imaging results",
             ),
+            label="Clinical setting",
         )
         clinical_requirements = [
             {
@@ -338,7 +392,13 @@ def build_report_content(
     therapies = [
         paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))
     ]
-    if panel is None or len(panel) == 0:
+    identity_unresolved = bool(analysis.get("cancer_type_abstention"))
+    if identity_unresolved:
+        therapies = [paragraph(
+            "Cancer type remains unresolved. Disease-specific therapies are withheld "
+            "until pathology or a disease-defining molecular result establishes their scope."
+        )]
+    elif panel is None or len(panel) == 0:
         therapies = [
             paragraph(
                 f"{cancer_code} is not yet in the curated key-genes panel; no disease-specific therapy shortlist is available."
@@ -347,6 +407,26 @@ def build_report_content(
 
     if spindle_guidance:
         therapies.append(paragraph(spindle_guidance["therapy"]))
+
+    if selected_assessments:
+        therapies.append({
+            "kind": "table",
+            "headers": [
+                "Target",
+                "Recommendation",
+                "Estimated tumor TPM (RNA model)",
+                "Evidence source",
+            ],
+            "rows": [
+                [
+                    report_literal(a["target"]),
+                    report_literal(f"{a['agent']} · {a['phase']}"),
+                    report_literal(a["tumor_band"]),
+                    therapy_source_markdown(a),
+                ]
+                for a in selected_assessments
+            ],
+        })
 
     for index, assessment in enumerate(selected_assessments, 1):
         therapies.append(
@@ -362,8 +442,17 @@ def build_report_content(
             )
         )
         therapies.extend(paragraph(text) for text in assessment["rationale"])
-    if not selected_assessments:
-        therapies.append(paragraph(_empty_therapy_shortlist_message(panel, ranges_df)))
+    if not selected_assessments and not identity_unresolved:
+        unmet = any(
+            r["status"] in {"blocked", "missing", "unresolved"}
+            for a in assessments for r in a["eligibility"]["requirements"]
+        )
+        therapies.append(paragraph(
+            "No therapy meets the current shortlisting criteria. Clinical blockers and "
+            "unresolved eligibility requirements are detailed below; RNA evidence alone "
+            "cannot resolve those requirements."
+            if unmet else brief.empty_therapy_shortlist_message(panel, ranges_df)
+        ))
     blocked = [
         a
         for a in assessments
@@ -404,12 +493,7 @@ def build_report_content(
 
     request_blocks = []
     for request in requests:
-        label = {"msi_high": "MSI/MMR"}.get(
-            request["kind"], request["kind"].replace("_", " ").capitalize()
-        )
-        request_blocks.append(
-            paragraph(render_report_paragraph("evidence_request", label=label, **request))
-        )
+        request_blocks.append(paragraph(render_report_paragraph("evidence_request", **request)))
         # Different therapies can require distinct tests for one evidence kind.
         # Keep those specifications visible even when the request is deduplicated.
         for detail in request["details"]:
@@ -430,7 +514,7 @@ def build_report_content(
             f"[Full interpreted analysis]({prefix}-analysis.md) · [Detailed evidence tables]({prefix}-evidence.md)"
         )
     ]
-    source_rows = source_attribution_rows(panel, ranges_df, recommended)
+    source_rows = brief.source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})
         for row in source_rows:
@@ -439,11 +523,11 @@ def build_report_content(
                     render_report_paragraph(
                         "target_attribution",
                         symbol=row["symbol"],
-                        bulk=_format_trace_tpm(row["bulk"]),
-                        tumor=_format_trace_tpm(row["tumor"]),
+                        bulk=brief.format_trace_tpm(row["bulk"]),
+                        tumor=brief.format_trace_tpm(row["tumor"]),
                         fraction=f"{row['fraction']:.0%}",
                         component=row["component"] if row["component"] != "—" else "none estimated",
-                        component_tpm=_format_trace_tpm(row["component_tpm"]),
+                        component_tpm=brief.format_trace_tpm(row["component_tpm"]),
                         reason=row["reason"],
                     )
                 )
@@ -458,29 +542,33 @@ def build_report_content(
             paragraph(render_report_paragraph("clinical_assay_record", assay=assay))
             for assay in clinical_mmr.assays
         )
+    if identity_unresolved:
+        detail.append(paragraph(
+            "Tumor-attributed TPM and cohort-relative pathway results are conditional "
+            "on an exploratory reference model. They do not establish tumor-cell origin; "
+            "the observed bulk RNA measurements remain available for review."
+        ))
     for title, items, formatter in (
         (
             "Notable biomarker outliers",
-            _notable_biomarker_outliers(
+            brief.notable_biomarker_outliers(
                 ranges_df,
                 panel_code,
                 panel_subtype,
                 excluded_symbols={a["target"] for a in selected_assessments},
             ),
-            _format_biomarker_outlier_bullet,
+            brief.format_biomarker_outlier_bullet,
         ),
-        ("Notable CTA RNA signals", _notable_cta_outliers(ranges_df), _format_cta_outlier_bullet),
+        ("Notable CTA RNA signals", brief.notable_cta_outliers(ranges_df), brief.format_cta_outlier_bullet),
     ):
         if items:
             detail.append({"kind": "heading", "text": title})
             detail.extend(
                 {"kind": "bullet", "text": formatter(item).removeprefix("- ")} for item in items
             )
-    caveats = _caveats_from_purity_tier(
+    caveats = brief.caveats_from_purity_tier(
         report_view.purity.confidence, analysis.get("sample_context"), analysis
     )
-    from .report_language import report_plain_text
-
     conclusion_text = " ".join(report_plain_text(block["text"]) for block in conclusion).casefold()
     caveats = [
         text
@@ -490,30 +578,6 @@ def build_report_content(
     if caveats:
         detail.append({"kind": "heading", "text": "Interpretation limits"})
         detail.extend({"kind": "bullet", "text": text} for text in dict.fromkeys(caveats))
-    therapy_table = None
-    if selected_assessments:
-        therapy_table = {
-            "columns": [
-                ["Target", 15],
-                ["Recommendation", 38],
-                ["Estimated tumor TPM (RNA model)", 25],
-                ["Eligibility / RNA provenance", 39],
-            ],
-            "rows": [
-                [
-                    a["target"],
-                    a["agent"] + " · " + a["phase"],
-                    a["tumor_band"],
-                    " ".join(a["rationale"]) + " Indication: " + a["indication"],
-                ]
-                for a in selected_assessments
-            ],
-            "sources": [
-                {"label": a["source"], "url": a["source_url"]}
-                for a in selected_assessments
-                if a["source_url"]
-            ],
-        }
     return ReportContent(
         sample_id,
         [
@@ -528,7 +592,6 @@ def build_report_content(
         ],
         assessments,
         requests,
-        therapy_table,
         [record.public_dict() for record in treatment_records(analysis)],
         clinical_context.public_dict(),
     )

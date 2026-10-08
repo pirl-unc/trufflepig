@@ -46,7 +46,10 @@ class AnalyzeConfig:
     variants: str | None = None
     variant_genome_build: str | None = None
     treatment_history: str | None = None
-    clinical_context: Any = None
+    # Validated snapshot taken when the config is built, so editing the source file
+    # during a run cannot change the report. Assay records carry mappings, so the
+    # snapshot is excluded from the frozen config's hash.
+    clinical_context: Any = field(default=None, hash=False)
     # Deprecated constructor compatibility. It is omitted from public output.
     alterations: str | None = None
     alignment_qc: str | None = None

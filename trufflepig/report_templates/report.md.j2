@@ -13,7 +13,7 @@
 {% elif block.kind == 'table' %}
 | {{ block.headers | join(' | ') }} |
 |{% for header in block.headers %} --- |{% endfor %}
-{% for row in block.rows %}
+{% for row in block.rows -%}
 | {{ row | join(' | ') }} |
 {% endfor %}
 {% endif %}

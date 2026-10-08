@@ -250,17 +250,32 @@ class TherapyIdentity:
     parent_agent: str = ""
 
 
+class TherapyIdentityCycleError(ValueError):
+    """A registered therapy is defined, through components or parent, by itself."""
+
+
 def resolve_therapy_identity(name: object) -> TherapyIdentity:
     """Resolve registered names and explicit ``+`` combinations.
 
     Slash alternatives and unspecified treatment classes remain distinct from
     a regimen containing every named agent. Unknown names retain literal keys
     with ``registered=False``; they never acquire an inferred drug identity.
+    Results are cached because the packaged registry is immutable at runtime.
     """
-    supplied = _clean(name)
+    return _resolve_therapy_identity(_clean(name), ())
+
+
+@lru_cache(maxsize=4096)
+def _resolve_therapy_identity(supplied: str, resolving: tuple[str, ...]) -> TherapyIdentity:
     agents = agents_for_name(supplied)
     agent = agents[0] if agents else None
     canonical = agent.agent if agent else supplied
+    key = _agent_name_key(canonical)
+    if key and key in resolving:
+        raise TherapyIdentityCycleError(
+            "Circular therapy identity in the registry: " + " -> ".join((*resolving, key))
+        )
+    path = (*resolving, key) if key else resolving
     kind = agent.identity_kind if agent else "unknown"
     parts = [p.strip() for p in agent.components.split(";") if p.strip()] if agent else []
     if not parts and not agent and "+" in supplied:
@@ -268,17 +283,20 @@ def resolve_therapy_identity(name: object) -> TherapyIdentity:
         if any(not p for p in parts):
             parts = []
     if parts:
-        resolved = [resolve_therapy_identity(part) for part in parts]
-        keys = tuple(sorted({key for part in resolved for key in part.components}))
+        resolved = [_resolve_therapy_identity(_clean(part), path) for part in parts]
+        keys = tuple(sorted({component for part in resolved for component in part.components}))
         if kind == "alternatives":
-            return TherapyIdentity(supplied, canonical, _agent_name_key(canonical), kind, keys, True)
+            return TherapyIdentity(supplied, canonical, key, kind, keys, True)
         return TherapyIdentity(
             supplied, " + ".join(sorted({part.canonical_name for part in resolved})),
             " + ".join(keys), "regimen", keys,
             bool(agent) or all(part.registered for part in resolved),
         )
-    key = _agent_name_key(canonical)
-    parent = agent_identity(agent.parent_agent) if agent and agent.parent_agent else ""
+    parent = (
+        _resolve_therapy_identity(_clean(agent.parent_agent), path).key
+        if agent and agent.parent_agent
+        else ""
+    )
     return TherapyIdentity(supplied, canonical, key, kind, (key,) if key else (), bool(agent), parent)
 
 
@@ -302,6 +320,69 @@ def hla_requirements_for_agent(name: object) -> dict:
         "source": source,
         "reviewed_at": reviewed_at,
     }
+
+
+_PROTEIN_CHANGE_CSV = TRUFFLEPIG_DATA_DIR / "therapy-protein-change-requirements.csv"
+
+
+@dataclass(frozen=True)
+class ProteinChangeRequirement:
+    """Exact protein changes a curated drug requires for one target and disease."""
+
+    alleles: tuple[str, ...]
+    source: str = ""
+
+
+@lru_cache(maxsize=1)
+def therapy_protein_change_requirements() -> pd.DataFrame:
+    """Curated drug-specific protein-change requirements with their label sources.
+
+    A blank ``cancer_code`` applies in every disease; a disease-specific row
+    replaces the general requirement for that disease.
+    """
+    from .variants import normalize_protein_substitution
+
+    df = pd.read_csv(_PROTEIN_CHANGE_CSV, dtype=str).fillna("")
+    expected = ["agent", "target_gene", "cancer_code", "required_protein_changes", "source"]
+    if list(df.columns) != expected:
+        raise ValueError(f"{_PROTEIN_CHANGE_CSV.name} columns must be {expected}")
+    for column in expected:
+        df[column] = df[column].str.strip()
+    df["target_gene"] = df["target_gene"].str.upper()
+    df["cancer_code"] = df["cancer_code"].str.upper()
+    for row in df.itertuples(index=False):
+        tokens = [token.strip() for token in row.required_protein_changes.split(";")]
+        if not row.agent or not row.target_gene or not all(
+            token and normalize_protein_substitution(token) == token for token in tokens
+        ):
+            raise ValueError(f"Invalid protein-change requirement row: {row}")
+    return df
+
+
+def protein_change_requirement_for_therapy(
+    agent: object, target_gene: object, cancer_code: object = ""
+) -> ProteinChangeRequirement | None:
+    """The curated protein-change requirement for a drug or regimen, if any."""
+    components = set(resolve_therapy_identity(agent).components)
+    gene = _clean(target_gene).upper()
+    code = _clean(cancer_code).upper()
+    if not components or not gene:
+        return None
+    rows = [
+        row
+        for row in therapy_protein_change_requirements().to_dict("records")
+        if row["target_gene"] == gene
+        and row["cancer_code"] in {code, ""}
+        and resolve_therapy_identity(row["agent"]).key in components
+    ]
+    if not rows:
+        return None
+    rows = [row for row in rows if row["cancer_code"]] or rows
+    alleles = tuple(dict.fromkeys(
+        token.strip() for row in rows for token in row["required_protein_changes"].split(";")
+    ))
+    source = "; ".join(dict.fromkeys(row["source"] for row in rows if row["source"]))
+    return ProteinChangeRequirement(alleles, source)
 
 
 def best_agent_for_target(symbol: str | None) -> TherapeuticAgent | None:

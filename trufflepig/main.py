@@ -157,6 +157,7 @@ from .reporting import (
     select_mismatch_repair_channel_for_report,
     subtype_curation_scope_note,
     target_observation_state,
+    join_report_clauses,
     therapy_path_context,
     therapy_path_rank,
     therapy_rna_context_conflict,
@@ -2385,6 +2386,7 @@ def _analyze_body(run: AnalyzeRun):
         df_expr,
         cancer_type=analysis_cancer_type,
         tissue_signal=healthy_vs_tumor,
+        _exploratory_context=True,
     )
     rna_inferred_cancer_type = analysis.get("cancer_type")
     rna_inferred_cancer_name = analysis.get("cancer_name")
@@ -2578,7 +2580,14 @@ def _analyze_body(run: AnalyzeRun):
         supplied_label_diverges = bool(cancer_type) and (
             top_code_for_print != str(cancer_code or "").strip()
         )
-        if report_scope_cancer_type or supplied_label_diverges:
+        from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+        if requires_independent_sarcoma_identity(cancer_code) and not sarcoma_identity_is_supplied(analysis, cancer_code):
+            print(
+                f"[analysis] Exploratory reference: {cancer_code}; sarcoma identity "
+                "is unestablished. Continuing background-separated adjudication."
+            )
+        elif report_scope_cancer_type or supplied_label_diverges:
             print(
                 f"[analysis] Cancer label context: {analysis['cancer_name']} ({cancer_code}); "
                 f"RNA top candidate: {top_code_for_print or rna_inferred_cancer_type}, "
@@ -3143,6 +3152,22 @@ def _analyze_body(run: AnalyzeRun):
                         ),
                     },
                 )
+    # Exploratory references remain available to decomposition, but the final
+    # report must not turn an unsupported muscle/stromal match into sarcoma.
+    from .cancer_type_policy import finalize_sarcoma_identity
+
+    if finalize_sarcoma_identity(analysis):
+        cancer_type_context = _synchronize_cancer_type_context(
+            analysis, supplied_cancer_type=cancer_type,
+        )
+        cancer_code = cancer_type_context.code_for("report")
+        reference_cancer_code = cancer_type_context.code_for("cohort")
+        report_scope_cancer_type = cancer_code
+        selected_scope = None
+        rare_scope_inference = None
+        fine_scope_inference = None
+        print("[analysis] Cancer type unresolved: sarcoma-like RNA is context only")
+
     # ``cancer_call`` is first recorded before decomposition. The decomposition
     # decision may replace it, so refresh the canonical step
     # before any machine-readable artifacts are emitted while preserving the
@@ -3494,6 +3519,9 @@ def _analyze_body(run: AnalyzeRun):
             degradation_caveat["widened_lower"] = round(float(lower), 4)
             degradation_caveat["widened_upper"] = round(float(upper), 4)
 
+    from .cancer_type_policy import mark_unresolved_identity_purity
+
+    mark_unresolved_identity_purity(analysis)
     final_purity = analysis.get("purity") or {}
     final_purity_text = _format_purity_interval(
         final_purity.get("overall_estimate"),
@@ -6558,6 +6586,12 @@ def _cancer_type_context_line(cancer_type_context):
     expression = cancer_type_context.label_for("expression")
     if not report:
         return ""
+    if cancer_type_context.report_code == "UNRESOLVED":
+        return (
+            "- **Cancer label roles**: tumor identity is unresolved. "
+            f"{reference} supplies an exploratory RNA reference only; shared muscle "
+            "or stromal expression cannot establish malignancy or sarcoma identity."
+        )
     source_kind = str(
         getattr(cancer_type_context, "best_expression_source_kind", "") or ""
     )
@@ -6847,6 +6881,8 @@ def _retained_cancer_type_differential_markdown(
     call_summary=None,
     decomp_results=None,
 ):
+    if analysis.get("cancer_type_abstention"):
+        return ""
     call_summary = call_summary or {}
     decomp_results = decomp_results or []
     selected_code = _report_label_code(analysis, call_summary)
@@ -6858,8 +6894,14 @@ def _retained_cancer_type_differential_markdown(
         for label in (call_summary.get("label_options") or [])
         if str(label or "").strip()
     ]
-    retained_labels = [label for label in label_options[1:] if label != selected_code]
+    from .cancer_type_policy import requires_independent_sarcoma_identity, sarcoma_identity_is_supplied
+
+    def reportable(code):
+        return not requires_independent_sarcoma_identity(code) or sarcoma_identity_is_supplied(analysis, code)
+
+    retained_labels = [label for label in label_options[1:] if label != selected_code and reportable(label)]
     candidate_trace = analysis.get("candidate_trace") or []
+    candidate_trace = [row for row in candidate_trace if reportable(row.get("code"))]
     candidate_alts = _format_candidate_trace_alternatives(
         candidate_trace,
         selected_code,
@@ -6868,9 +6910,11 @@ def _retained_cancer_type_differential_markdown(
         decomp_results,
         selected_code,
     )
+    from .cancer_type_policy import reportable_rare_marker_hypotheses
+
     rare_marker_hypotheses = [
         finding
-        for finding in (analysis.get("rare_marker_hypotheses") or [])
+        for finding in reportable_rare_marker_hypotheses(analysis)
         if str(finding.get("cancer_type") or "").strip() != selected_code
     ]
     if not (retained_labels or candidate_alts or decomp_alts or rare_marker_hypotheses):
@@ -6937,6 +6981,9 @@ def _retained_cancer_type_differential_markdown(
 
 
 def _tumor_type_sanity_markdown(analysis, *, max_rows: int = 6) -> str:
+    abstention = analysis.get("cancer_type_abstention") or {}
+    if abstention:
+        return "### Tumor identity remains unresolved\n\n" + str(abstention["reason"]) + "\n"
     sanity = analysis.get("tumor_type_sanity") or {}
     if not sanity:
         return ""
@@ -7297,7 +7344,8 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             cancer_code,
         )
         decomposition_selected_scope = decomposition_decision.is_selection_basis
-        ranker_detail_applicable = not decomposition_selected_scope
+        identity_abstention = analysis.get("cancer_type_abstention") or {}
+        ranker_detail_applicable = not decomposition_selected_scope and not identity_abstention
         distinct_reference_used = cancer_type_context.uses_distinct_reference
         supplied_discordant = (
             analysis.get("cancer_type_source") == "user-specified"
@@ -7308,7 +7356,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
             and best_code != str(cancer_code).strip()
             and _selected_report_scope_label(analysis) == str(cancer_code or "").strip()
         )
-        if evidence_selected_discordant and decomposition_selected_scope:
+        if identity_abstention:
+            sentence = "- **Cancer identity**: unresolved. " + str(identity_abstention["reason"]).rstrip(".")
+        elif evidence_selected_discordant and decomposition_selected_scope:
             bulk_pattern = (
                 "a sarcoma-like pattern"
                 if best_code.startswith("SARC")
@@ -7633,7 +7683,9 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         active_biology.append(
             f"{finding.get('label')}: {status} downstream program ({genes}; {source})"
         )
-    for finding in (analysis.get("fusion_expression_hypotheses") or [])[:2]:
+    from .cancer_type_policy import reportable_fusion_expression_hypotheses
+
+    for finding in reportable_fusion_expression_hypotheses(analysis)[:2]:
         genes = ", ".join(finding.get("observed_genes") or [])
         source = _report_expression_source_label(finding.get("expression_source"))
         active_biology.append(
@@ -7761,7 +7813,9 @@ def _fusion_evidence_markdown(analysis, *, heading: str = "## Fusion evidence") 
     findings = analysis.get("fusion_findings") or []
     rare_inference = analysis.get("rare_report_scope_inference") or {}
     fusion_effects = analysis.get("fusion_expression_effects") or []
-    fusion_hypotheses = analysis.get("fusion_expression_hypotheses") or []
+    from .cancer_type_policy import reportable_fusion_expression_hypotheses
+
+    fusion_hypotheses = reportable_fusion_expression_hypotheses(analysis)
     fusion_inputs_supplied = bool(analysis.get("fusion_inputs_supplied"))
     if (
         not records
@@ -7871,10 +7925,12 @@ def _rare_marker_hypotheses_markdown(
     *,
     heading: str = "## Rare-marker hypotheses",
 ) -> str:
+    from .cancer_type_policy import reportable_rare_marker_hypotheses
+
     current_code = str(analysis.get("cancer_type") or "").strip()
     hypotheses = [
         finding
-        for finding in (analysis.get("rare_marker_hypotheses") or [])
+        for finding in reportable_rare_marker_hypotheses(analysis)
         if str(finding.get("cancer_type") or "").strip() != current_code
     ]
     if not hypotheses:
@@ -8392,7 +8448,12 @@ def _generate_text_reports(
             )
     purity_heading = _purity_metric_label(sample_mode).title()
     if conclusion.status == "discordant_estimators":
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "- **Quantitative conclusion**: **unresolved** — tumor identity "
+                "is unestablished; the modeled residual may include benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 f"- **{purity_heading}**: **quantitatively unresolved** because "
                 "tumor and benign bone/mesenchymal cells share the modeled RNA "
@@ -9080,7 +9141,12 @@ def _generate_text_reports(
         conclusion.upper,
     )
     if conclusion.status == "discordant_estimators":
-        if conclusion.unresolved_reason == "same_lineage_not_identifiable":
+        if conclusion.unresolved_reason == "cancer_type_unresolved":
+            lines.append(
+                "- **Quantitative conclusion**: **unresolved** — tumor identity "
+                "is unestablished; the modeled residual may include benign muscle or stroma."
+            )
+        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
             lines.append(
                 "- **Quantitative conclusion**: **unresolved** — tumor and benign "
                 "bone/mesenchymal cells share the RNA programs used for subtraction."
@@ -9120,7 +9186,12 @@ def _generate_text_reports(
             f"{purity_interval_text}{tier_suffix}"
         )
     purity_source = conclusion.method or ""
-    if purity_source == "background_residual":
+    if conclusion.unresolved_reason == "cancer_type_unresolved":
+        lines.append(
+            "- **Quantitative basis**: exploratory background subtraction. Neither "
+            "the residual fraction nor the shared lineage markers establish tumor identity."
+        )
+    elif purity_source == "background_residual":
         residual_fraction = (
             (purity.get("components") or {})
             .get("decomposition", {})
@@ -9231,7 +9302,13 @@ def _generate_text_reports(
     # Lineage gene narrative
     lineage = components.get("lineage", {})
     lineage_genes = lineage.get("per_gene", [])
-    if lineage_genes:
+    if lineage_genes and conclusion.unresolved_reason == "cancer_type_unresolved":
+        lines.append(
+            "\nPer-gene lineage ratios are withheld as purity estimates because "
+            "shared muscle or stromal expression establishes neither sarcoma "
+            "identity nor a malignant-cell fraction.\n"
+        )
+    elif lineage_genes:
         lines.append("")
         if bulk_purity_reference:
             lines.append("### Lineage Gene Calibration\n")
@@ -9475,7 +9552,11 @@ def _generate_text_reports(
             lines.append(call_summary["site_note"] + "\n")
         if len(call_summary.get("hypothesis_display", [])) == 2:
             lines.append(
-                "Decomposition model comparison: selected report-compatible fit is **"
+                (
+                    "Exploratory decomposition: best-fitting reference model is **"
+                    if analysis.get("cancer_type_abstention")
+                    else "Decomposition model comparison: selected report-compatible fit is **"
+                )
                 + _hypothesis_label(
                     call_summary["hypothesis_display"][0],
                     primary_code=cancer_code,
@@ -9487,12 +9568,17 @@ def _generate_text_reports(
                     primary_code=cancer_code,
                     analysis=analysis,
                 )
-                + "**. The alternative is context, not a second report label.\n"
+                + (
+                    "**. Neither fit establishes tumor identity or a malignant-cell fraction.\n"
+                    if analysis.get("cancer_type_abstention")
+                    else "**. The alternative is context, not a second report label.\n"
+                )
             )
         if decomp_results:
             lines.append(
-                "| Hypothesis | Use | Score | Estimated tumor fraction | "
-                "Tissue score | Warnings |"
+                "| Hypothesis | Use | Score | "
+                + ("Conditional residual fraction" if analysis.get("cancer_type_abstention") else "Estimated tumor fraction")
+                + " | Tissue score | Warnings |"
             )
             lines.append("|------------|-----|-------|----------------|--------------|----------|")
             for row in decomp_results[:6]:
@@ -9850,7 +9936,7 @@ def _build_target_report(
                 her2_context = her2_proxy_therapy_context(target_row, analysis)
                 if her2_context:
                     parts.append(her2_context)
-            return "; ".join(part for part in parts if part)
+            return join_report_clauses(parts)
         if include_maturity:
             return target_interpretation_summary(
                 target_row,
@@ -9902,7 +9988,7 @@ def _build_target_report(
             her2_context = her2_proxy_therapy_context(target_row, analysis)
             if her2_context:
                 parts.append(her2_context)
-        return "; ".join(part for part in parts if part)
+        return join_report_clauses(parts)
 
     def _low_purity_cap_audit_md(target_symbols):
         if not target_symbols or ranges_df is None or len(ranges_df) == 0:
@@ -10280,7 +10366,10 @@ def _build_target_report(
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
                     expr = None if sym == "—" else sym_to_row.get(sym)
-                    from .therapy_eligibility import evaluate_therapy_eligibility
+                    from .therapy_eligibility import (
+                        evaluate_therapy_eligibility,
+                        requirement_descriptions,
+                    )
 
                     eligibility = evaluate_therapy_eligibility(trow, analysis, panel_subtype=panel_subtype)
                     history_supported = eligibility.history_supported
@@ -10323,19 +10412,22 @@ def _build_target_report(
                             target_row=trow,
                         )
                         source_reliability = target_reliability_status(expr)
-                    audit_only = (
+                    rna_unsupported = (
                         source_reliability == "unsupported"
                         and not expression_independent_indication(trow)
                         and not history_supported
-                    ) or not eligibility.permits_review
-                    reasons = list(dict.fromkeys(r.description for r in eligibility.requirements))
-                    if reasons:
-                        interpretation_cell = " ".join(reasons) + " " + interpretation_cell
-                    elif audit_only:
+                    )
+                    audit_only = rna_unsupported or not eligibility.permits_review
+                    if rna_unsupported:
                         interpretation_cell = (
                             "not sample-supported; negative/background evidence; "
                             + interpretation_cell
                         )
+                    # Each eligibility decision is stated once; history and HLA
+                    # sentences already in the treatment-path text are not repeated.
+                    reasons = requirement_descriptions(eligibility, stated=interpretation_cell)
+                    if reasons:
+                        interpretation_cell = " ".join(reasons) + " " + interpretation_cell
                     return {
                         "sym": sym,
                         "agent": agent,

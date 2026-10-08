@@ -7,12 +7,15 @@ are explicit. This module does not infer clinical results from expression.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import dataclass, field, fields
 from datetime import date
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Mapping
+
+from .data_objects import FrozenMapping, dataclass_public_dict
 
 
 ASSAY_RESULTS = {
@@ -21,6 +24,37 @@ ASSAY_RESULTS = {
 }
 POSITIVE_RESULTS = frozenset({"MSI-H", "dMMR"})
 NEGATIVE_RESULTS = frozenset({"MSI-L", "MSS", "pMMR"})
+# Whole-value synonyms clinicians write for the canonical results above.
+_RESULT_SYNONYMS = {
+    "msi": {
+        "msihigh": "MSI-H",
+        "microsatelliteinstabilityhigh": "MSI-H",
+        "msilow": "MSI-L",
+        "microsatelliteinstabilitylow": "MSI-L",
+        "microsatellitestable": "MSS",
+        "stable": "MSS",
+    },
+    "mmr": {
+        "deficient": "dMMR",
+        "mmrdeficient": "dMMR",
+        "mismatchrepairdeficient": "dMMR",
+        "proficient": "pMMR",
+        "mmrproficient": "pMMR",
+        "mismatchrepairproficient": "pMMR",
+    },
+}
+# An overall MMR call contradicted by its own per-protein findings.
+PROTEIN_RESULT_CONFLICT = "overall_protein_result_conflict"
+
+
+def _result_key(value: str) -> str:
+    return re.sub(r"[\s_-]+", "", value.strip().casefold())
+
+
+_CANONICAL_RESULTS = {
+    kind: {**{_result_key(v): v for v in results}, **_RESULT_SYNONYMS.get(kind, {})}
+    for kind, results in ASSAY_RESULTS.items()
+}
 
 
 def validated_fields(cls, value: Mapping) -> dict:
@@ -48,6 +82,9 @@ class ClinicalSource:
         if self.review_status not in {"supplied", "confirmed", "proposed", "rejected"}:
             raise ValueError(f"Invalid source review status: {self.review_status!r}")
 
+    def public_dict(self) -> dict:
+        return dataclass_public_dict(self)
+
 
 @dataclass(frozen=True)
 class ClinicalAssay:
@@ -68,7 +105,7 @@ class ClinicalAssay:
     validity: str = "unknown"
     reportability: str = "unknown"
     source: ClinicalSource = field(default_factory=ClinicalSource)
-    protein_results: dict[str, str] = field(default_factory=dict)
+    protein_results: Mapping[str, str] = field(default_factory=FrozenMapping)
     id: str = ""
 
     def __post_init__(self):
@@ -79,11 +116,9 @@ class ClinicalAssay:
                 raise ValueError(f"Clinical assay {f.name} must be a string")
         if self.kind not in ASSAY_RESULTS:
             raise ValueError(f"Unsupported clinical assay: {self.kind!r}")
-        # Canonicalize case and punctuation only, never extract a result from prose.
-        canonical = {
-            v.casefold().replace("-", "").replace("_", ""): v for v in ASSAY_RESULTS[self.kind]
-        }
-        result = canonical.get(self.result.strip().casefold().replace("-", "").replace("_", ""))
+        # Canonicalize the whole value's case, spacing and punctuation and accept
+        # listed synonyms; never extract a result from prose.
+        result = _CANONICAL_RESULTS[self.kind].get(_result_key(self.result))
         if result is None:
             raise ValueError(f"Invalid {self.kind.upper()} result: {self.result!r}")
         object.__setattr__(self, "result", result)
@@ -111,52 +146,61 @@ class ClinicalAssay:
             raise ValueError("MMR protein results must be an object")
         if self.protein_results and self.kind != "mmr":
             raise ValueError("Per-protein IHC results belong to an MMR assay")
-        for protein, state in self.protein_results.items():
+        protein_results = dict(self.protein_results)
+        for protein, state in protein_results.items():
             if protein not in {"MLH1", "MSH2", "MSH6", "PMS2"}:
                 raise ValueError(f"Unknown MMR protein: {protein!r}")
             if state not in {"retained", "lost", "equivocal", "not_tested", "unknown"}:
                 raise ValueError(f"Invalid MMR protein result: {state!r}")
-        object.__setattr__(self, "protein_results", dict(self.protein_results))
+        object.__setattr__(self, "protein_results", FrozenMapping(protein_results))
         if not self.id:
-            payload = {k: v for k, v in asdict(self).items() if k != "id"}
+            payload = {k: v for k, v in self.public_dict().items() if k != "id"}
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
             object.__setattr__(self, "id", f"{self.kind}-{digest}")
 
-    def limitations(self, specimen_id: str) -> tuple[str, ...]:
-        """Reasons this assertion cannot establish a current clinical result."""
+    def limitation_findings(self, specimen_id: str) -> tuple[tuple[str, str], ...]:
+        """Coded reasons, with reader text, this assertion cannot establish a result."""
         limits = []
         if self.scope != "current":
-            limits.append(f"specimen scope is {self.scope}")
+            limits.append(("specimen_scope", f"specimen scope is {self.scope}"))
         if not specimen_id or not self.specimen_id:
-            limits.append("specimen identity is missing")
+            limits.append(("specimen_identity_missing", "specimen identity is missing"))
         elif self.specimen_id != specimen_id:
-            limits.append("assay concerns a different specimen")
+            limits.append(("different_specimen", "assay concerns a different specimen"))
         if self.validity != "validated":
-            limits.append(f"assay validity is {self.validity}")
+            limits.append(("validity", f"assay validity is {self.validity}"))
         if self.reportability != "reportable":
-            limits.append(f"reportability is {self.reportability}")
+            limits.append(("reportability", f"reportability is {self.reportability}"))
         methods = {"msi": {"PCR", "NGS"}, "mmr": {"IHC", "NGS"}}
         if self.method not in methods[self.kind]:
-            limits.append("a supported clinical assay method is required")
+            limits.append(("method", "a supported clinical assay method is required"))
         if not self.source.title.strip() and not self.source.reference.strip():
-            limits.append("clinical source is missing")
+            limits.append(("source_missing", "clinical source is missing"))
         if self.source.review_status not in {"supplied", "confirmed"}:
-            limits.append(f"source assertion is {self.source.review_status}")
+            limits.append(("source_review", f"source assertion is {self.source.review_status}"))
         if self.result not in POSITIVE_RESULTS | NEGATIVE_RESULTS:
-            limits.append(f"result is {self.result}")
+            limits.append(("result", f"result is {self.result}"))
         # An explicit overall result cannot silently override contradictory IHC.
         if self.result == "pMMR" and "lost" in self.protein_results.values():
-            limits.append("pMMR conflicts with a reported lost MMR protein")
+            limits.append(
+                (PROTEIN_RESULT_CONFLICT, "pMMR conflicts with a reported lost MMR protein")
+            )
         if (
             self.result == "dMMR"
             and len(self.protein_results) == 4
             and set(self.protein_results.values()) == {"retained"}
         ):
-            limits.append("dMMR conflicts with retention of all four MMR proteins")
+            limits.append(
+                (PROTEIN_RESULT_CONFLICT, "dMMR conflicts with retention of all four MMR proteins")
+            )
         return tuple(limits)
 
+    def limitations(self, specimen_id: str) -> tuple[str, ...]:
+        """Reasons this assertion cannot establish a current clinical result."""
+        return tuple(text for _, text in self.limitation_findings(specimen_id))
+
     def public_dict(self) -> dict:
-        return asdict(self)
+        return dataclass_public_dict(self)
 
 
 @dataclass(frozen=True)
@@ -191,9 +235,7 @@ class ClinicalContext:
         object.__setattr__(self, "assays", assays)
 
     def public_dict(self) -> dict:
-        value = asdict(self)
-        value["assays"] = [a.public_dict() for a in self.assays]
-        return value
+        return dataclass_public_dict(self)
 
 
 def load_clinical_context(value=None) -> ClinicalContext:
@@ -203,7 +245,15 @@ def load_clinical_context(value=None) -> ClinicalContext:
     if isinstance(value, ClinicalContext):
         return value
     if isinstance(value, (str, Path)):
-        value = json.loads(Path(value).read_text())
+        path = Path(value)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(f"Clinical context file not found: {path}") from exc
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Clinical context file is not valid JSON: {path}: {exc}") from exc
     return ClinicalContext(**validated_fields(ClinicalContext, value))
 
 
@@ -228,9 +278,7 @@ class ClinicalAssayDecision:
         return self.status == "positive"
 
     def public_dict(self) -> dict:
-        value = asdict(self)
-        value["assays"] = list(self.assays)
-        return value
+        return dataclass_public_dict(self)
 
 
 def evaluate_msi_mmr(context: ClinicalContext) -> ClinicalAssayDecision:
@@ -240,10 +288,15 @@ def evaluate_msi_mmr(context: ClinicalContext) -> ClinicalAssayDecision:
     unreviewed assertions remain visible and cannot cancel a usable current
     result. A contradictory overall/per-protein result remains unresolved.
     """
-    records = tuple(
-        {**a.public_dict(), "limitations": list(a.limitations(context.specimen_id))}
-        for a in context.assays
-    )
+    records = []
+    for assay in context.assays:
+        findings = assay.limitation_findings(context.specimen_id)
+        records.append({
+            **assay.public_dict(),
+            "limitations": [text for _, text in findings],
+            "limitation_codes": [code for code, _ in findings],
+        })
+    records = tuple(records)
     usable = [r for r in records if not r["limitations"]]
     states = {"positive" if r["result"] in POSITIVE_RESULTS else "negative" for r in usable}
     if len(states) > 1:
@@ -252,7 +305,7 @@ def evaluate_msi_mmr(context: ClinicalContext) -> ClinicalAssayDecision:
             "Reportable current MSI/MMR results disagree; reconcile the clinical reports.",
         )
     elif any(
-        r["limitations"] and all("conflicts with" in limit for limit in r["limitations"])
+        r["limitation_codes"] and set(r["limitation_codes"]) <= {PROTEIN_RESULT_CONFLICT}
         for r in records
     ):
         status, reason = (

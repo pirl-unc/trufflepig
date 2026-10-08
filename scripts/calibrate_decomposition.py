@@ -783,6 +783,7 @@ def _classify_one(
     df_expr: pd.DataFrame,
     *,
     include_cancer_type_decision: bool = False,
+    return_analysis: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Return ``(candidate_trace, summary)`` for one sample.
 
@@ -997,7 +998,7 @@ def _classify_one(
         else:
             consolidated_cancer_type = proposed_cancer_type
             consolidated_selected_by = proposed_selected_by
-    return trace, {
+    summary = {
         "broad_top_code": broad_top_code,
         "broad_top_support": float(top.get("support_fraction_of_top") or 0.0),
         "broad_top3": broad_top3,
@@ -1020,6 +1021,9 @@ def _classify_one(
         "consolidated_cancer_type": consolidated_cancer_type,
         "consolidated_selected_by": consolidated_selected_by,
     }
+    if return_analysis:
+        summary["analysis"] = analysis
+    return trace, summary
 
 
 def _bootstrap_ci(

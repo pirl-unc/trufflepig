@@ -364,69 +364,101 @@ def treatment_history_matches(target_row, analysis) -> list[dict[str, Any]]:
     return matches
 
 
+_BEST_MATCH_STATUS_RANK = {
+    "contraindicated": 0,
+    "intolerance": 1,
+    "progression": 2,
+    "no_benefit": 3,
+    "current": 4,
+    "major_benefit": 10,
+    "benefit": 11,
+    "stable_disease": 12,
+}
+
+
+@dataclass(frozen=True)
+class TreatmentHistoryAssessment:
+    """Every supplied-history decision for one therapy row, from one record scan."""
+
+    matches: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def rank(self) -> int:
+        """Patient-evidence rank; lower values outrank model-only nominations."""
+        ranks = [
+            _POSITIVE_RANK[match["record"].status]
+            for match in self.matches
+            if match["record"].status in {"major_benefit", "benefit", "stable_disease"}
+        ]
+        return min(ranks) if ranks else 10
+
+    @property
+    def supports_review(self) -> bool:
+        return self.rank < 3
+
+    @property
+    def blocks_row(self) -> bool:
+        """Whether supplied history argues against presenting this as a candidate.
+
+        A named negative outcome blocks that same agent. An explicit component
+        contraindication also blocks regimens containing it. Progression,
+        intolerance, and current treatment do not propagate to new combinations.
+        A target-and-modality-only record intentionally applies to the whole
+        specified class. A negative outcome never spills across unrelated
+        modalities for the same target.
+        """
+        return any(match["record"].status in _NEGATIVE_STATUSES for match in self.matches)
+
+    @property
+    def marks_current(self) -> bool:
+        return any(match["record"].status == "current" for match in self.matches)
+
+    @property
+    def best_match(self) -> dict[str, Any] | None:
+        if not self.matches:
+            return None
+        return min(
+            self.matches,
+            key=lambda match: (
+                _BEST_MATCH_STATUS_RANK.get(match["record"].status, 99),
+                0 if match["match_kind"] == "exact_agent" else 1,
+            ),
+        )
+
+
+def assess_treatment_history(target_row, analysis) -> TreatmentHistoryAssessment:
+    """Match supplied history to one therapy row once, for every history decision."""
+    return TreatmentHistoryAssessment(tuple(treatment_history_matches(target_row, analysis)))
+
+
 def treatment_history_rank(target_row, analysis) -> int:
     """Patient-evidence rank; lower values outrank model-only nominations."""
-    ranks = [
-        _POSITIVE_RANK[match["record"].status]
-        for match in treatment_history_matches(target_row, analysis)
-        if match["record"].status in {"major_benefit", "benefit", "stable_disease"}
-    ]
-    return min(ranks) if ranks else 10
+    return assess_treatment_history(target_row, analysis).rank
 
 
 def treatment_history_supports_review(target_row, analysis) -> bool:
-    return treatment_history_rank(target_row, analysis) < 3
+    return assess_treatment_history(target_row, analysis).supports_review
 
 
 def treatment_history_blocks_row(target_row, analysis) -> bool:
-    """Whether supplied history argues against presenting this as a candidate.
-
-    A named negative outcome blocks that same agent. An explicit component
-    contraindication also blocks regimens containing it. Progression,
-    intolerance, and current treatment do not propagate to new combinations.
-    A target-and-modality-only
-    record intentionally applies to the whole specified class. A negative
-    outcome never spills across unrelated modalities for the same target.
-    """
-    for match in treatment_history_matches(target_row, analysis):
-        record = match["record"]
-        if record.status in _NEGATIVE_STATUSES:
-            return True
-    return False
+    """Whether supplied history argues against presenting this as a candidate."""
+    return assess_treatment_history(target_row, analysis).blocks_row
 
 
 def treatment_history_marks_current(target_row, analysis) -> bool:
-    return any(
-        match["record"].status == "current"
-        for match in treatment_history_matches(target_row, analysis)
-    )
+    return assess_treatment_history(target_row, analysis).marks_current
 
 
 def best_treatment_history_match(target_row, analysis) -> dict[str, Any] | None:
-    matches = treatment_history_matches(target_row, analysis)
-    if not matches:
-        return None
-    status_rank = {
-        "contraindicated": 0,
-        "intolerance": 1,
-        "progression": 2,
-        "no_benefit": 3,
-        "current": 4,
-        "major_benefit": 10,
-        "benefit": 11,
-        "stable_disease": 12,
-    }
-    return min(
-        matches,
-        key=lambda match: (
-            status_rank.get(match["record"].status, 99),
-            0 if match["match_kind"] == "exact_agent" else 1,
-        ),
-    )
+    return assess_treatment_history(target_row, analysis).best_match
 
 
 def treatment_history_context(target_row, analysis) -> str:
-    match = best_treatment_history_match(target_row, analysis)
+    return treatment_history_match_context(best_treatment_history_match(target_row, analysis))
+
+
+def treatment_history_match_context(match: dict[str, Any] | None) -> str:
+    """Reader-facing explanation of the most decisive supplied-history match."""
     if match is None:
         return ""
     from .report_language import render_report_paragraph
