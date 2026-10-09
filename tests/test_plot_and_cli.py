@@ -1285,6 +1285,9 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
         fig.axes[0].get_title()
         == "Sample composition — SARC (Sarcoma) (host context indeterminate)"
     )
+    legend = fig.axes[1].get_legend()
+    assert legend._ncols == 1
+    assert all("RNA model" not in label.get_text() for label in legend.get_texts())
     component_fig = plot_decomposition_component_breakdown(
         best,
         title="TME cell-type breakdown — SARC (Sarcoma)",
@@ -1292,6 +1295,8 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
     component_text = {text.get_text() for text in component_fig.axes[0].texts}
     assert component_text == {"9%"}
     assert "1.20" not in component_text
+    assert all("RNA model" not in label.get_text()
+               for label in component_fig.axes[0].get_yticklabels())
 
     row = SimpleNamespace(
         purity=0.80,

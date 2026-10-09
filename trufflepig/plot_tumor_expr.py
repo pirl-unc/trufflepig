@@ -947,8 +947,10 @@ def estimate_tumor_expression_ranges(
     p_hi = max(purity_result.get("overall_upper") or p_med, 0.01)
     p_lo, p_med, p_hi = sorted([p_lo, p_med, p_hi])
 
-    LOW_PURITY_THRESHOLD = 0.25
-    LOW_PURITY_HEADROOM = 3.0
+    # A small tumor RNA fraction makes source attribution fragile, but does
+    # not bound an individual gene's tumor share. Keep this as an uncertainty
+    # flag, never a purity-multiple ceiling on gene expression.
+    attribution_low_purity = p_lo < 0.25
 
     non_tumor_source_by_symbol = {}
     if epithelial_context:
@@ -1382,8 +1384,6 @@ def estimate_tumor_expression_ranges(
             attribution = {
                 comp: round(val * scale, 2) for comp, val in attribution.items()
             }
-        attr_tme_total = sum(attribution.values())
-
         # Breadth metrics (precomputed once above).
         n_healthy_tissues_expressed = int(n_healthy_tissues_by_symbol.get(symbol, 0))
         mean_top_healthy_tpm = float(mean_top_healthy_tpm_by_symbol.get(symbol, 0.0))
@@ -1472,20 +1472,6 @@ def estimate_tumor_expression_ranges(
                     observed - max(attr_total_candidate, breadth_floor_candidate),
                 )
 
-            capped = False
-            tumor_candidate_pre_cap = float(tumor_candidate)
-            purity_cap = None
-            if (
-                purity_used is not None
-                and float(purity_used) < LOW_PURITY_THRESHOLD
-                and not over_predicted_candidate
-                and observed > 0
-            ):
-                purity_cap = observed * float(purity_used) * LOW_PURITY_HEADROOM
-                if tumor_candidate > purity_cap:
-                    tumor_candidate = purity_cap
-                    capped = True
-
             tumor_fraction_candidate = (
                 float(tumor_candidate / observed) if observed > 0 else 0.0
             )
@@ -1493,87 +1479,24 @@ def estimate_tumor_expression_ranges(
                 tumor_candidate,
                 tumor_fraction_candidate,
                 over_predicted_candidate,
-                capped,
-                tumor_candidate_pre_cap,
-                purity_cap,
             )
 
-        # Effective non-tumor attribution = max of
-        # (per-compartment fit, breadth baseline). For gene-sparse
-        # cases where the compartment fit is tiny but healthy cells
-        # alone carry a meaningful baseline, breadth floor wins.
-        #
-        # #134 Option A: when matched-normal over-predicts, tumor is
-        # computed directly from the purity split rather than the
-        # residual — `observed × tumor_fraction`. The breadth floor
-        # is still applied as a sanity check so broadly-expressed
-        # genes don't claim unreasonably high tumor attribution even
-        # under the purity-weighted fallback. Non-over-predicted
-        # rows keep the residual semantics unchanged.
-        if matched_normal_over_predicted and top_fractions:
-            tumor_fraction_fit = float(top_fractions.get("tumor", 0.0) or 0.0)
-            if tumor_fraction_fit <= 0:
-                tumor_fraction_fit = float(p_med or 0.0)
-            purity_inferred_tumor = observed * tumor_fraction_fit
-            attr_tumor_tpm = max(
-                0.0, min(purity_inferred_tumor, observed - breadth_floor)
-            )
-        else:
-            effective_non_tumor = max(attr_tme_total, breadth_floor)
-            attr_tumor_tpm = max(0.0, observed - effective_non_tumor)
-
-        # #204: low-purity attribution cap. At purity < 25% the fitted
-        # per-compartment TPMs systematically under-represent stromal
-        # / TME contribution for broadly-expressed genes — the
-        # reference tables (HPA per-cell-type nTPM) under-predict what
-        # fibroblast / endothelial / macrophage compartments actually
-        # contribute to bulk tissue, so the residual defaults to the
-        # tumor compartment. Anchor attr_tumor_tpm to
-        # ``purity * observed`` with a 3× headroom factor so genuine
-        # amplification still registers (tumor-intrinsic can exceed
-        # bulk-observed), but pure-stromal inflation is damped.
-        #
-        # Example (rs PRAD, 16% pure): FN1 obs=801, attr_tumor before
-        # cap = 368 (46%); cap = 0.16 * 801 * 3 = 384 → unchanged.
-        # IGF1R obs=279, attr_tumor before cap = 267 (96%); cap =
-        # 0.16 * 279 * 3 = 134 → dropped to 134 (the tumor share this
-        # compartment pattern + purity can plausibly support).
-        low_purity_cap_applied = False
-        if (
-            p_med is not None
-            and p_med < LOW_PURITY_THRESHOLD
-            and not matched_normal_over_predicted
-            and observed > 0
-        ):
-            purity_cap = observed * float(p_med) * LOW_PURITY_HEADROOM
-            if attr_tumor_tpm > purity_cap:
-                attr_tumor_tpm = purity_cap
-                low_purity_cap_applied = True
-
+        # Retain the background-subtracted estimates across purity scenarios.
+        # The former observed * purity * 3 ceiling had no gene-level
+        # calibration and manufactured identical shares for unrelated genes.
         attr_estimates = []
         attr_fraction_estimates = []
         attr_over_predicted_flags = []
-        attr_capped_flags = []
-        attr_pre_cap_estimates = []
-        attr_cap_estimates = []
         for purity_used in [p_lo, p_med, p_hi]:
             (
                 tumor_candidate,
                 fraction_candidate,
                 over_flag,
-                capped_flag,
-                pre_cap_candidate,
-                cap_candidate,
             ) = _attribution_candidate(purity_used)
             attr_estimates.append(float(tumor_candidate))
             attr_fraction_estimates.append(float(fraction_candidate))
             attr_over_predicted_flags.append(bool(over_flag))
-            attr_capped_flags.append(bool(capped_flag))
-            attr_pre_cap_estimates.append(float(pre_cap_candidate))
-            if cap_candidate is not None:
-                attr_cap_estimates.append(float(cap_candidate))
         attr_tumor_tpm = float(np.median(attr_estimates))
-        attr_tumor_tpm_pre_cap = float(np.median(attr_pre_cap_estimates))
         attr_tumor_fraction = (
             float(np.median(attr_fraction_estimates))
             if attr_fraction_estimates
@@ -1584,28 +1507,6 @@ def estimate_tumor_expression_ranges(
         )
         attr_tumor_tpm_high = (
             float(max(attr_estimates)) if attr_estimates else attr_tumor_tpm
-        )
-        attr_tumor_tpm_pre_cap_low = (
-            float(min(attr_pre_cap_estimates))
-            if attr_pre_cap_estimates
-            else attr_tumor_tpm_pre_cap
-        )
-        attr_tumor_tpm_pre_cap_high = (
-            float(max(attr_pre_cap_estimates))
-            if attr_pre_cap_estimates
-            else attr_tumor_tpm_pre_cap
-        )
-        low_purity_cap_tpm = (
-            float(np.median(attr_cap_estimates)) if attr_cap_estimates else None
-        )
-        low_purity_cap_tpm_low = (
-            float(min(attr_cap_estimates)) if attr_cap_estimates else None
-        )
-        low_purity_cap_tpm_high = (
-            float(max(attr_cap_estimates)) if attr_cap_estimates else None
-        )
-        low_purity_cap_delta_tpm = max(
-            0.0, float(attr_tumor_tpm_pre_cap - attr_tumor_tpm)
         )
         attr_tumor_fraction_low = (
             float(min(attr_fraction_estimates))
@@ -1629,7 +1530,6 @@ def estimate_tumor_expression_ranges(
             if attr_estimates
             else 0.0
         )
-        low_purity_cap_applied = bool(low_purity_cap_applied or any(attr_capped_flags))
         matched_normal_over_predicted = bool(
             matched_normal_over_predicted or any(attr_over_predicted_flags)
         )
@@ -1695,13 +1595,13 @@ def estimate_tumor_expression_ranges(
                 "tumor_attributed_bulk_tpm_low": round(attr_tumor_tpm_low, 2),
                 "tumor_attributed_bulk_tpm_high": round(attr_tumor_tpm_high, 2),
                 "tumor_attributed_bulk_tpm_pre_low_purity_cap": round(
-                    attr_tumor_tpm_pre_cap, 2
+                    attr_tumor_tpm, 2
                 ),
                 "tumor_attributed_bulk_tpm_pre_low_purity_cap_low": round(
-                    attr_tumor_tpm_pre_cap_low, 2
+                    attr_tumor_tpm_low, 2
                 ),
                 "tumor_attributed_bulk_tpm_pre_low_purity_cap_high": round(
-                    attr_tumor_tpm_pre_cap_high, 2
+                    attr_tumor_tpm_high, 2
                 ),
                 "attr_tumor_tpm": round(attr_tumor_tpm, 2),
                 "attr_tumor_fraction": round(attr_tumor_fraction, 4),
@@ -1712,28 +1612,14 @@ def estimate_tumor_expression_ranges(
                 "attr_support_fraction": round(attr_support_fraction, 4),
                 "attr_top_compartment": attr_top_comp,
                 "attr_top_compartment_tpm": round(float(attr_top_tpm), 2),
-                # #204: True when the low-purity cap damped attr_tumor_tpm
-                # away from the raw residual; downstream renderers can
-                # tag these rows as "low-purity-capped" so clinicians know
-                # the tumor share is bounded by purity × headroom, not
-                # fitted directly.
-                "low_purity_cap_applied": bool(low_purity_cap_applied),
-                "low_purity_cap_tpm": (
-                    round(low_purity_cap_tpm, 2)
-                    if low_purity_cap_tpm is not None
-                    else None
-                ),
-                "low_purity_cap_tpm_low": (
-                    round(low_purity_cap_tpm_low, 2)
-                    if low_purity_cap_tpm_low is not None
-                    else None
-                ),
-                "low_purity_cap_tpm_high": (
-                    round(low_purity_cap_tpm_high, 2)
-                    if low_purity_cap_tpm_high is not None
-                    else None
-                ),
-                "low_purity_cap_delta_tpm": round(low_purity_cap_delta_tpm, 2),
+                "attribution_low_purity": bool(attribution_low_purity),
+                # Deprecated audit columns remain readable by older consumers.
+                # New estimates are never clipped to a purity-multiple ceiling.
+                "low_purity_cap_applied": False,
+                "low_purity_cap_tpm": None,
+                "low_purity_cap_tpm_low": None,
+                "low_purity_cap_tpm_high": None,
+                "low_purity_cap_delta_tpm": 0.0,
                 # #128: breadth metrics used by the robust attribution.
                 # `n_healthy_tissues_expressed` counts non-reproductive HPA
                 # tissues with nTPM >= HK_TISSUE_NTPM_THRESHOLD;

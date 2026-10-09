@@ -157,6 +157,7 @@ from .reporting import (
     select_mismatch_repair_channel_for_report,
     subtype_curation_scope_note,
     target_observation_state,
+    join_report_clauses,
     therapy_path_context,
     therapy_path_rank,
     therapy_rna_context_conflict,
@@ -1046,7 +1047,10 @@ def _tumor_tpm_by_symbol_from_ranges(ranges_df) -> dict[str, float]:
 
     mapping: dict[str, float] = {}
     from .common import ranges_records
+    from .reporting import tumor_attribution_context
     for row in ranges_records(ranges_df):
+        if tumor_attribution_context(row)["source_uncertain"]:
+            continue
         symbol = str(row.get("symbol") or "").strip()
         if not symbol or symbol.lower() == "nan":
             continue
@@ -1070,6 +1074,8 @@ def _store_variant_effect_reasoning(
     tumor_tpm_by_symbol = _tumor_tpm_by_symbol_from_ranges(ranges_df)
     if tumor_tpm_by_symbol:
         analysis["tumor_tpm_by_symbol"] = tumor_tpm_by_symbol
+    else:
+        analysis.pop("tumor_tpm_by_symbol", None)
     try:
         from .fusion_effects import (
             infer_fusion_expression_hypotheses,
@@ -1898,6 +1904,7 @@ def _render_therapy_pathway_state(
         figure = None
     if figure is None:
         output_path.unlink(missing_ok=True)
+        output_path.with_suffix(".pdf").unlink(missing_ok=True)
         return None
     return str(output_path)
 
@@ -4329,6 +4336,9 @@ def _analyze_body(run: AnalyzeRun):
             destination = figures_dir / path.name
             if path.is_file() and path.suffix == ".png" and path != destination:
                 path.rename(destination)
+                vector = path.with_suffix(".pdf")
+                if vector.is_file():
+                    vector.rename(destination.with_suffix(".pdf"))
                 moved += 1
         if scatter_dir.is_dir():
             try:
@@ -4405,15 +4415,15 @@ Use `*-interpretive-report.pdf` for review and sharing. It includes the clinical
 | `*-subtype-signature.png` | Patient | Final-call subtype analysis, when supported |
 | `*-purity-ctas.png` | Audit only | Tumor-adjusted cancer-testis antigen discovery screen; not a clinical recommendation |
 | `*-purity-surface.png` | Audit only | Tumor-adjusted surface-protein discovery screen; not a clinical recommendation |
-| `*-priority-targets.png` | Audit only | Broad target scoring retained for technical review; not a clinical recommendation or eligibility result |
+| `*-priority-targets.png` | Patient | Follow-up priority across curated pathways and exploratory targets; not drug-response or eligibility scores |
 | `*-sample-summary.png` | Audit only | Legacy composite that duplicates selected reader figures |
 | `*-decomposition-candidates.png` | Audit only | Competing decomposition fits, including rejected preliminary labels |
 | `*-cancer-hypotheses.png` | Audit only | Pre-adjudication bulk-RNA candidate ranking |
 | `*-cancer-type-signal-matrix.png` | Audit only | Full evidence trace, including preliminary and conflicting signals |
 | `*-purity.png` | Audit only | Detailed signature-gene purity panel, superseded by purity-methods in the patient PDF |
 | `*-treatments.png` | Audit only | Raw target-expression survey retained for technical review |
-| `*-actionable-targets.png` | Audit only | Broad actionable-target screen retained for provenance |
-| `*-priority-target-context.png` | Audit only | Detailed estimated patient tumor attribution and external healthy-tissue reference context |
+| `*-actionable-targets.png` | Patient | Candidate-target expression with tumor and healthy-tissue context |
+| `*-priority-target-context.png` | Patient | Estimated tumor/background target RNA and healthy-tissue overlap |
 | `*-target-tissues.pdf` | Audit only | Detailed per-gene tissue-expression appendix for reviewed therapy targets |
 | `*-reference-mds.png` | Audit only | Raw reference comparison; not the final fused selection |
 | `*-reference-neighborhood.png` | Audit only | Raw reference distances; not the final fused selection |
@@ -7313,22 +7323,10 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
         cancer_code,
     )
     if selected_mmr:
-        details = selected_mmr.get("details") or {}
-        mmr = details.get("mismatch_repair") or {}
-        if isinstance(mmr, dict) and mmr:
-            p_msi = mmr.get("msi_probability")
-            top_state = selected_mmr.get("code") or ""
-            context = mmr.get("context_group") or ""
-            if isinstance(p_msi, (int, float)):
-                bullets.append(
-                    "- **Mismatch-repair RNA context**: "
-                    f"{context + ' ' if context else ''}MMR ensemble favors "
-                    f"{top_state or 'an MMR state'} with MSI-like probability "
-                    f"{p_msi:.2f}. This is expression context only; confirm "
-                    "MSI/MMR status with MSI-PCR, MMR IHC, or validated "
-                    "clinical sequencing before using it for immunotherapy "
-                    "eligibility."
-                )
+        from .brief import mismatch_repair_summary_line
+        mmr_line = mismatch_repair_summary_line(analysis)
+        if mmr_line:
+            bullets.append(f"- {mmr_line}")
 
     her2_proxy_line = her2_proxy_summary_line(analysis)
     if her2_proxy_line:
@@ -9935,7 +9933,7 @@ def _build_target_report(
                 her2_context = her2_proxy_therapy_context(target_row, analysis)
                 if her2_context:
                     parts.append(her2_context)
-            return "; ".join(part for part in parts if part)
+            return join_report_clauses(parts)
         if include_maturity:
             return target_interpretation_summary(
                 target_row,
@@ -9987,7 +9985,7 @@ def _build_target_report(
             her2_context = her2_proxy_therapy_context(target_row, analysis)
             if her2_context:
                 parts.append(her2_context)
-        return "; ".join(part for part in parts if part)
+        return join_report_clauses(parts)
 
     def _low_purity_cap_audit_md(target_symbols):
         if not target_symbols or ranges_df is None or len(ranges_df) == 0:
@@ -10036,6 +10034,8 @@ def _build_target_report(
             return []
 
         capped_n = int(sub["_cap_applied"].sum())
+        if capped_n == 0:
+            return []
         lines_out = [
             "### Low-purity cap audit\n",
             "When estimated tumor fraction is low, the RNA attribution model caps "
@@ -10365,7 +10365,10 @@ def _build_target_report(
                     phase = _cell(trow.get("phase")).replace("_", " ")
                     indication = _cell(trow.get("indication"))
                     expr = None if sym == "—" else sym_to_row.get(sym)
-                    from .therapy_eligibility import evaluate_therapy_eligibility
+                    from .therapy_eligibility import (
+                        evaluate_therapy_eligibility,
+                        requirement_descriptions,
+                    )
 
                     eligibility = evaluate_therapy_eligibility(trow, analysis, panel_subtype=panel_subtype)
                     history_supported = eligibility.history_supported
@@ -10408,19 +10411,22 @@ def _build_target_report(
                             target_row=trow,
                         )
                         source_reliability = target_reliability_status(expr)
-                    audit_only = (
+                    rna_unsupported = (
                         source_reliability == "unsupported"
                         and not expression_independent_indication(trow)
                         and not history_supported
-                    ) or not eligibility.permits_review
-                    reasons = list(dict.fromkeys(r.description for r in eligibility.requirements))
-                    if reasons:
-                        interpretation_cell = " ".join(reasons) + " " + interpretation_cell
-                    elif audit_only:
+                    )
+                    audit_only = rna_unsupported or not eligibility.permits_review
+                    if rna_unsupported:
                         interpretation_cell = (
                             "not sample-supported; negative/background evidence; "
                             + interpretation_cell
                         )
+                    # Each eligibility decision is stated once; history and HLA
+                    # sentences already in the treatment-path text are not repeated.
+                    reasons = requirement_descriptions(eligibility, stated=interpretation_cell)
+                    if reasons:
+                        interpretation_cell = " ".join(reasons) + " " + interpretation_cell
                     return {
                         "sym": sym,
                         "agent": agent,

@@ -10,6 +10,14 @@
 {{ block.text }}
 {% elif block.kind == 'bullet' %}
 - {{ block.text }}
+{% elif block.kind == 'figure' %}
+<a id="{{ block.anchor }}"></a>
+
+### {{ block.title }}
+
+{{ block.caption }}
+
+![{{ block.title }}]({{ block.path | markdown_url }})
 {% elif block.kind == 'table' %}
 | {{ block.headers | join(' | ') }} |
 |{% for header in block.headers %} --- |{% endfor %}

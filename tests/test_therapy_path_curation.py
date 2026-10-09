@@ -683,14 +683,14 @@ def test_subtype_call_falls_back_to_parent_therapy_panel():
     of its own (HNSC_HPVneg, LAML_ELNfav) must fall back to the parent cohort's
     curated panel instead of emptying the shortlist (recovers HNSC's
     PD-1/EGFR and AML's CD33/FLT3/IDH/venetoclax)."""
-    from trufflepig.brief import _curated_target_panel_for_sample, _parent_code_for
+    from trufflepig.brief import curated_target_panel_for_sample, _parent_code_for
 
     assert _parent_code_for("HNSC_HPVneg") == "HNSC"
     assert _parent_code_for("LAML_ELNfav") == "LAML"
     assert _parent_code_for("BRCA") == ""  # top-level: no parent, not "nan"
 
     for code, parent in [("HNSC_HPVneg", "HNSC"), ("LAML_ELNfav", "LAML")]:
-        panel_code, panel_subtype, targets_df = _curated_target_panel_for_sample(
+        panel_code, panel_subtype, targets_df = curated_target_panel_for_sample(
             code, {"cancer_type": code}
         )
         assert panel_code == parent, f"{code} did not fall back to {parent}"
@@ -699,9 +699,9 @@ def test_subtype_call_falls_back_to_parent_therapy_panel():
 
 def test_crc_grouping_uses_colorectal_child_therapy_union():
     """A decomposition-supported CRC parent call still needs the mCRC panel."""
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, targets = curated_target_panel_for_sample(
         "CRC",
         {
             "cancer_type": "CRC",
@@ -735,9 +735,9 @@ def test_crc_wildtype_eligibility_language_is_grammatical():
 
 
 def test_current_nutm_panel_adds_recruiting_bet_cdk46_trial():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, targets = curated_target_panel_for_sample(
         "NUTM",
         {"cancer_type": "NUTM"},
     )
@@ -751,9 +751,9 @@ def test_current_nutm_panel_adds_recruiting_bet_cdk46_trial():
 
 
 def test_current_blca_panel_names_approved_ev_pembrolizumab_combination():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "BLCA",
         {"cancer_type": "BLCA"},
     )
@@ -767,9 +767,9 @@ def test_current_blca_panel_names_approved_ev_pembrolizumab_combination():
 
 
 def test_current_brca_panel_includes_parp_and_tnbc_immunotherapy_gates():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "BRCA",
         {"cancer_type": "BRCA"},
     )
@@ -787,9 +787,9 @@ def test_current_brca_panel_includes_parp_and_tnbc_immunotherapy_gates():
 
 
 def test_current_prad_panel_includes_2025_2026_biomarker_approvals():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "PRAD",
         {"cancer_type": "PRAD"},
     )
@@ -844,9 +844,9 @@ def test_directed_target_wording_is_not_misread_as_negative_assay_status():
 
 
 def test_current_osteosarcoma_panel_does_not_describe_suspended_trial_as_open():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "SARC_OS",
         {"cancer_type": "SARC_OS"},
     )

@@ -411,7 +411,6 @@ def _cached_reference_matrices(normalize=None):
     #   percentile_matrix — per-gene percentile rank across cancer types (rank-based; robust to
     #                       outliers/scale where z-score's normality assumption is weak)
     percentile_matrix = expr_matrix.rank(axis=1, pct=True).fillna(0.0)
-
     entry = {
         "ref_by_sym": ref_by_sym,
         "cohort_cols": cohort_cols,

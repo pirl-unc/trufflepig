@@ -108,6 +108,8 @@ def test_plot_actionable_targets_offsets_observed_and_adjusted_markers():
     )
 
     ax = fig.axes[0]
+    assert ax.get_xlim()[0] < 0  # Zero-valued estimates must not be clipped by the bars' sticky edge.
+    assert ax.get_xlim()[1] > ax.dataLim.x1
     scatter_offsets = [
         collection.get_offsets()
         for collection in ax.collections
@@ -323,13 +325,10 @@ def test_plot_priority_targets_saves_png(tmp_path):
         legend_bbox.overlaps(patch.get_window_extent())
         for patch in ax.patches
     )
-    # PR-6 (§2.5): the tumor-source-vs-safety-band cue is folded into this (single
-    # reader) target figure — one scatter marker per target (shape = source tier,
-    # fill = healthy-tissue safety), plus an explanatory caption. Without the fold
-    # the ranking plot draws only barh (no scatter collections) and no such caption.
-    assert len(ax.collections) >= 2  # one source/safety cue marker per target row
-    fig_texts = "\n".join(text.get_text() for text in fig.texts)
-    assert "healthy-tissue safety" in fig_texts  # the folded cue's caption
+    # Figure 2 now owns RNA-source/context details. No dense footer may expand
+    # the ranking canvas and shrink the actual bars in the report.
+    assert not fig.texts
+    assert out.with_suffix(".pdf").exists()
 
 
 def test_priority_targets_exclude_hla_mismatched_rows(tmp_path):
@@ -471,36 +470,24 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     assert fig is not None
     assert out.exists()
     ax_range = fig.axes[0]
-    assert ax_range.get_xscale() == "linear"
-    assert "log10(TPM+1)" in ax_range.get_xlabel()
-    assert "patient bulk TPM (measured)" in ax_range.get_xlabel()
-    assert (
-        ax_range.get_title()
-        == "Estimated patient tumor attribution vs measured bulk expression"
-    )
-    assert fig._suptitle is not None
-    assert fig._suptitle.get_text() == "Target Expression and Priority Score — PRAD"
-    assert not ax_range.spines["top"].get_visible()
-    assert not ax_range.spines["right"].get_visible()
-    assert fig.legends
-    texts = "\n".join(text.get_text() for ax in fig.axes for text in ax.texts)
-    assert "Approved pathway / eligibility pending" in texts
-    assert "Exploratory / expression-linked" in texts
-    header_texts = [
-        text
-        for text in fig.axes[0].texts
-        if text.get_text()
-        in {"Approved pathway / eligibility pending", "Exploratory / expression-linked"}
-    ]
-    assert header_texts
-    assert all(text.get_ha() == "right" for text in header_texts)
-    assert all(text.get_position()[0] < 0 for text in header_texts)
-    legend_texts = [
-        text.get_text()
-        for legend in fig.legends
-        for text in legend.get_texts()
-    ]
-    assert "bulk sample TPM" in legend_texts
+    assert ax_range.get_xscale() == "symlog"
+    assert ax_range.get_xlabel() == "Contribution to bulk RNA (TPM)"
+    assert ax_range.get_title(loc="left") == "RNA amount"
+    assert len(fig.axes) == 3
+    assert fig.axes[1].get_title(loc="left") == "RNA source"
+    assert fig.axes[2].get_title(loc="left") == "Healthy-tissue overlap"
+    # The estimable target retains its modeled share. The stromal target gets
+    # a source caveat rather than a precise share next to contradictory text.
+    import pytest
+    assert [bar.get_width() for bar in fig.axes[1].patches] == pytest.approx([1, 0.39])
+    assert "Non-tumor source\nplausible" in [text.get_text() for text in fig.axes[1].texts]
+    assert not fig.texts
+    assert out.with_suffix(".pdf").exists()
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for axis in fig.axes:
+        for text in axis.texts:
+            assert fig.bbox.contains(*text.get_window_extent(renderer).get_points()[0])
 
 
 def test_priority_target_context_can_use_actionable_target_symbols(tmp_path):
@@ -599,3 +586,38 @@ def test_plot_subtype_signature_no_contrast_returns_none():
     df = _tcga_sample("ACC")
     fig = plot_subtype_signature(df, "ACC")
     assert fig is None
+
+
+def test_priority_source_does_not_present_caps_or_zero_residual_as_measured_shares(monkeypatch):
+    import trufflepig.plot_target_deep_dive as plots
+    from trufflepig.reporting import tumor_attribution_context
+
+    rows = []
+    for symbol, fraction, capped in [('CAPPED', 0.2304, True), ('ZERO', 0, False)]:
+        source = tumor_attribution_context({
+            'observed_tpm': 100, 'attr_tumor_tpm': 100 * fraction,
+            'attr_tumor_fraction': fraction, 'low_purity_cap_applied': capped,
+        })
+        rows.append(dict(symbol=symbol, observed=100, low=0, mid=100 * fraction,
+                         high=60, source=source,
+                         normal={'tier': 'same_lineage_expected', 'label': ''}))
+    monkeypatch.setattr(plots, '_priority_target_rows', lambda *a, **kw: ('COAD', rows))
+    fig = plots.plot_priority_target_context(pd.DataFrame(), 'COAD')
+    labels = [text.get_text() for text in fig.axes[1].texts]
+    assert labels == ['Tumor source\nuncertain', 'Non-tumor source\nplausible']
+    assert not fig.axes[1].patches  # neither a 23% share nor a fully background bar
+    assert len(fig.axes[0].collections) == 2  # measured points only, no unsupported tumor estimates
+
+
+def test_uncertain_residual_does_not_add_tumor_priority_points():
+    from trufflepig.plot_target_deep_dive import _priority_target_rows
+
+    ranges = pd.DataFrame([{
+        "symbol": "EGFR", "observed_tpm": 100, "attr_tumor_tpm": 90,
+        "attr_tumor_fraction": 0.9, "attribution_low_purity": True,
+        "therapies": "antibody", "tcga_percentile": 0.99,
+    }])
+    _, rows = _priority_target_rows(ranges, "COAD")
+    assert len(rows) == 1
+    assert rows[0]["source_points"] == 0
+    assert rows[0]["strength_points"] == 0

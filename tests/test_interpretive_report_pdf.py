@@ -24,6 +24,7 @@ def test_figure_registry_entries_are_suffix_title_interpretation_triples():
 def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
     suffixes = {suffix for suffix, _, _ in rd.FIGURE_REGISTRY}
     assert {
+        "priority-targets.png", "priority-target-context.png", "actionable-targets.png",
         "sample-context.png",
         "decomposition-composition.png",
         "decomposition-components.png",
@@ -39,9 +40,6 @@ def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
         "treatments.png",
         "purity-ctas.png",
         "purity-surface.png",
-        "priority-targets.png",
-        "priority-target-context.png",
-        "actionable-targets.png",
     }.isdisjoint(suffixes)
 
 
@@ -53,7 +51,7 @@ def document():
         "sections": [
             {
                 "id": "conclusion",
-                "title": "Conclusion and supporting evidence",
+                "title": "What we learned about this sample",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -71,7 +69,7 @@ def document():
             },
             {
                 "id": "therapies",
-                "title": "Therapy rationale and blockers",
+                "title": "Therapeutic directions",
                 "blocks": [
                     {"kind": "heading", "text": "1. Historical therapy · Prior treatment"},
                     {
@@ -86,7 +84,7 @@ def document():
             },
             {
                 "id": "information",
-                "title": "Information needed",
+                "title": "What would change the treatment options",
                 "blocks": [
                     {"kind": "bullet", "text": "Reconcile organ function and treatment history."},
                 ],
@@ -174,3 +172,115 @@ def test_html_is_text_and_hla_asterisks_are_not_emphasis():
     text = report_inline_html("<script>untrusted</script> **A*02:01 / A*24:02**")
     assert "&lt;script&gt;" in text
     assert "<b>A*02:01 / A*24:02</b>" in text
+
+
+@pytest.mark.parametrize("context_repetitions", [150, 170, 190])
+def test_heading_stays_with_an_intact_finding_at_page_boundary(tmp_path, context_repetitions):
+    doc = document()
+    doc["sections"] = [{
+        "id": "evidence", "title": "Evidence", "blocks": [
+            {"kind": "paragraph", "text": "Background context. " * context_repetitions},
+            {"kind": "heading", "text": "Notable biomarker outliers"},
+            {"kind": "bullet", "text": "FIRST-BIOMARKER " + (
+                "RNA abundance is exploratory and needs clinical confirmation. " * 15
+            ) + "END-BIOMARKER"},
+        ],
+    }]
+    write_document(tmp_path, doc)
+    pages = [page.extract_text() for page in PdfReader(build_interpretive_report_pdf(tmp_path)).pages]
+    heading_page = next(page for page in pages if "Notable biomarker outliers" in page)
+    assert "FIRST-BIOMARKER" in heading_page
+    assert "END-BIOMARKER" in heading_page
+
+
+def test_page_long_finding_can_paginate_without_losing_text(tmp_path):
+    doc = document()
+    doc["sections"] = [{
+        "id": "evidence", "title": "Evidence", "blocks": [{
+            "kind": "bullet", "text": "FIRST-BIOMARKER " + (
+                "RNA abundance is exploratory and needs clinical confirmation. " * 150
+            ) + "END-BIOMARKER",
+        }],
+    }]
+    write_document(tmp_path, doc)
+    pages = [page.extract_text() for page in PdfReader(build_interpretive_report_pdf(tmp_path)).pages]
+    assert len(pages) > 1
+    assert "FIRST-BIOMARKER" in "\n".join(pages)
+    assert "END-BIOMARKER" in pages[-1]
+
+
+def test_vector_plot_stays_searchable_and_preserves_report_links(tmp_path):
+    from reportlab.pdfgen import canvas
+
+    doc = document()
+    doc['sections'][1]['blocks'] = [{'kind': 'paragraph', 'text': '[See plot](#figure-1) and [source](https://example.org/source).'}]
+    doc['sections'][-1]['blocks'] = [{
+        'kind': 'figure', 'suffix': 'therapy-pathway-state.png', 'number': 1,
+        'title': 'Figure 1. Pathway state', 'caption': 'Direction of the pathway gene panels.',
+    }]
+    path = tmp_path / 'synthetic-therapy-pathway-state.png'
+    Image.new('RGB', (600, 1200), 'white').save(path)
+    plot = canvas.Canvas(str(path.with_suffix('.pdf')), pagesize=(300, 600))
+    plot.drawString(20, 550, 'VECTOR-TEXT-PRESERVED')
+    plot.line(20, 20, 250, 20)
+    plot.save()
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    assert sum(len(page.images) for page in pdf.pages) == 0
+    assert 'VECTOR-TEXT-PRESERVED' in '\n'.join(p.extract_text() for p in pdf.pages)
+    annotations = [a.get_object() for p in pdf.pages for a in p.get('/Annots', [])]
+    assert any(a.get('/A', {}).get('/URI') == 'https://example.org/source' for a in annotations)
+    destination = next(a['/Dest'] for a in annotations if a.get('/Dest'))
+    target = next(page for page in pdf.pages if page.indirect_reference == destination[0])
+    assert 'VECTOR-TEXT-PRESERVED' in target.extract_text()
+
+
+@pytest.mark.parametrize("vector", [False, True])
+def test_dense_figures_fill_dedicated_pages_without_blank_transitions(tmp_path, monkeypatch, vector):
+    from reportlab.pdfgen import canvas
+    from trufflepig.report_pdf import ReportFigurePage
+
+    doc = document()
+    doc['sections'] = [
+        {'id': 'conclusion', 'title': 'Summary', 'blocks': [
+            {'kind': 'paragraph', 'text': 'INTRODUCTION [See targets](#figure-1).'},
+        ]},
+        {'id': 'evidence', 'title': 'Detailed evidence and figures', 'blocks': [
+            {'kind': 'figure', 'suffix': suffix, 'number': i,
+             'title': f'Figure {i}. Dense target evidence',
+             'caption': 'Caption with [evidence](https://example.org/evidence).'}
+            for i, suffix in enumerate(('priority-targets.png', 'priority-target-context.png'), 1)
+        ] + [{'kind': 'paragraph', 'text': 'FOLLOWING-NARRATIVE'}]},
+    ]
+    for block in doc['sections'][1]['blocks'][:2]:
+        path = tmp_path / ('synthetic-' + block['suffix'])
+        Image.new('RGB', (600, 760), '#bcd5e6').save(path)
+        if vector:
+            plot = canvas.Canvas(str(path.with_suffix('.pdf')), pagesize=(600, 760))
+            plot.drawString(10, 730, 'VECTOR-PLOT')
+            plot.rect(0, 0, 600, 760)
+            plot.save()
+    drawn = []
+    original = ReportFigurePage.draw
+
+    def record_draw(self):
+        drawn.append((self.figure_width, self.figure_height, self.plot_height))
+        return original(self)
+
+    monkeypatch.setattr(ReportFigurePage, 'draw', record_draw)
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pages = [page.extract_text() for page in pdf.pages]
+    assert len(pages) == 4
+    assert 'INTRODUCTION' in pages[0]
+    assert 'Figure 1. Dense' in pages[1] and 'Figure 2. Dense' not in pages[1]
+    assert 'Figure 2. Dense' in pages[2] and 'FOLLOWING-NARRATIVE' not in pages[2]
+    assert 'FOLLOWING-NARRATIVE' in pages[3]
+    for width, height, available_height in drawn:
+        assert width > 510 and height > 650  # old fixed cap was 490 pt
+        assert height <= available_height
+        assert width / height == pytest.approx(600 / 760)
+        assert width == pytest.approx(564) or height == pytest.approx(available_height)
+    destination = next(a.get_object()['/Dest'] for a in pdf.pages[0]['/Annots'] if a.get_object().get('/Dest'))
+    assert destination[0] == pdf.pages[1].indirect_reference
+    assert sum(len(page.images) for page in pdf.pages) == (0 if vector else 2)

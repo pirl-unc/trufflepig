@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from functools import lru_cache
+import logging
 import re
 
 from .cancer_ontology import cancer_codes_context_compatible
@@ -20,6 +21,8 @@ from .hla import (
     parse_hla_types,
 )
 from .therapeutic_agents import hla_requirements_for_agent
+
+logger = logging.getLogger(__name__)
 
 
 def _truthy(value) -> bool:
@@ -43,6 +46,16 @@ def _clean_text(value) -> str:
     if text.lower() in {"nan", "<na>", "none", "null"}:
         return ""
     return text
+
+
+def join_report_clauses(parts) -> str:
+    """Join reader-facing clauses with semicolons.
+
+    Parts may be complete template sentences; their closing period is dropped
+    so a join never produces ".;".
+    """
+    clauses = (str(part).strip().rstrip(" .;") for part in parts if part)
+    return "; ".join(clause for clause in clauses if clause)
 
 
 def md_table_cell(value) -> str:
@@ -784,7 +797,9 @@ def filter_current_therapy_targets(targets_df):
     for index, row in current.iterrows():
         for column, value in _current_therapy_row_overrides(row).items():
             if column not in current.columns:
-                # Corrections contain both text and boolean clinical gates.
+                # ``None`` gives the new column object dtype, so both boolean
+                # gates and reader-facing strings can be assigned without a
+                # pandas incompatible-dtype error.
                 current[column] = pd.Series(None, index=current.index, dtype=object)
             elif not pd.api.types.is_object_dtype(current[column].dtype):
                 current[column] = current[column].astype(object)
@@ -841,6 +856,23 @@ def cancer_code_display_name(code, fallback=None):
     if fallback_text:
         return fallback_text
     return text.replace("_", " ").strip()
+
+
+def mismatch_repair_rna_model_state(mmr: dict) -> str:
+    """Expose disagreement hidden by the ensemble mean; never a clinical call."""
+    import math
+
+    def valid(value):
+        return isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1
+
+    probability = mmr.get("msi_probability")
+    threshold = mmr.get("decision_threshold", 0.5)
+    if not valid(probability) or not valid(threshold):
+        return ""
+    members = [row.get("msi_probability") for row in mmr.get("member_probabilities", [])]
+    if members and (not all(valid(p) for p in members) or len({p >= threshold for p in members}) > 1):
+        return "Discordant"
+    return "MSI-like" if probability >= threshold else "MSS-like"
 
 
 def mismatch_repair_channel_matches_report(channel, active_code) -> bool:
@@ -975,14 +1007,22 @@ def tumor_attribution_context(row):
     )
     support_fraction = max(0.0, min(1.0, support_fraction))
 
+    # Old saved analyses may still contain the retired numerical ceiling.
+    # Never interpret that ceiling as evidence for either RNA source.
+    legacy_cap = _truthy(row.get("low_purity_cap_applied"))
+    low_purity = (
+        _truthy(row.get("attribution_low_purity"))
+        or _truthy(row.get("sample_low_purity"))
+    )
+    source_uncertain = (
+        legacy_cap or low_purity or _truthy(row.get("matched_normal_over_predicted"))
+    )
     notes = []
     if _truthy(row.get("matched_normal_over_predicted")):
         notes.append(
             "the external tissue reference predicts more RNA than was measured"
         )
-    if _truthy(row.get("low_purity_cap_applied")):
-        notes.append("low-purity cap is active")
-    if _truthy(row.get("sample_low_purity")):
+    if low_purity or legacy_cap:
         notes.append(
             "low estimated tumor fraction — the tumor expression estimate is less certain "
             "(small tumor fraction amplifies attribution noise)"
@@ -995,10 +1035,14 @@ def tumor_attribution_context(row):
         )
     if _truthy(row.get("tme_explainable")) and support_fraction < 1.0:
         notes.append("non-tumor tissue explanations remain plausible")
-    if _truthy(row.get("tme_dominant")):
+    if _truthy(row.get("tme_dominant")) and not legacy_cap:
         notes.append("most fitted signal remains non-tumor")
 
-    if high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
+    if legacy_cap:
+        tier = "mixed_source"
+        label = "tumor source uncertain"
+        summary = "RNA does not reliably distinguish tumor from non-tumor sources"
+    elif high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
         tier = "background_dominant"
         label = "mostly background"
         summary = "non-tumor compartments remain the simpler explanation"
@@ -1008,6 +1052,7 @@ def tumor_attribution_context(row):
         and support_fraction >= 0.67
         and not _truthy(row.get("matched_normal_over_predicted"))
         and not source_marker
+        and not source_uncertain
     ):
         tier = "tumor_supported"
         label = "mostly tumor"
@@ -1017,7 +1062,10 @@ def tumor_attribution_context(row):
         label = "mixed tumor and background"
         summary = "both tumor and benign/background sources remain plausible"
 
-    if observed > 0:
+    quantifiable = not source_uncertain and mid_tpm > 0 and mid_frac > 0
+    if source_uncertain:
+        band = "tumor contribution uncertain"
+    elif observed > 0:
         band = (
             f"{mid_tpm:.0f} estimated tumor TPM (RNA model; "
             f"model interval {low_tpm:.0f}-{high_tpm:.0f}; "
@@ -1040,6 +1088,8 @@ def tumor_attribution_context(row):
         "attr_tumor_fraction_low": low_frac,
         "attr_tumor_fraction_high": high_frac,
         "attr_support_fraction": support_fraction,
+        "source_uncertain": source_uncertain,
+        "quantifiable": quantifiable,
     }
 
 
@@ -1328,8 +1378,14 @@ def target_observation_state(sym, ranges_df) -> str:
     input_syms = getattr(ranges_df, "attrs", {}).get("sample_input_symbols")
     if input_syms is None:
         return "unknown"
-    input_syms = {canonical_target_symbol(value) for value in input_syms}
-    return "below_detection" if sym in input_syms else "not_in_input"
+    # Test membership instead of canonicalizing the whole input on every call;
+    # an input file may label the target by its curated alias (MAGE-A4).
+    present = sym in input_syms or any(
+        label in input_syms
+        for label, canonical in _TARGET_SYMBOL_ALIASES.items()
+        if canonical == sym
+    )
+    return "below_detection" if present else "not_in_input"
 
 
 def target_rna_observation(expression_row=None, *, symbol="", ranges_df=None) -> dict:
@@ -1390,39 +1446,42 @@ def supplied_variants_for_gene(analysis, gene: str) -> list[dict]:
 def required_protein_changes_for_therapy(target_row) -> tuple[str, ...]:
     """Exact protein requirements for a curated drug, target and disease scope.
 
-    Structured row requirements take precedence. These drug-specific criteria
-    are independent of RNA expression and of prose mentioning other alleles.
+    A structured ``required_protein_changes`` row value takes precedence over the
+    packaged drug table (``therapy-protein-change-requirements.csv``). Curated
+    spellings are normalized. A token that is not a protein substitution is kept
+    verbatim, so the requirement stays visible and no supplied variant can
+    satisfy it, instead of failing the whole report.
     """
     from .variants import normalize_protein_substitution
-    from .therapeutic_agents import resolve_therapy_identity
+    from .therapeutic_agents import protein_change_requirement_for_therapy
 
-    explicit = target_row.get("required_protein_changes")
-    if isinstance(explicit, (tuple, list)):
-        raw = explicit
-    else:
-        raw = _clean_text(explicit).split(";")
-    if any(_clean_text(value) for value in raw):
-        parsed = tuple(normalize_protein_substitution(value) for value in raw)
-        if not all(parsed):
-            raise ValueError(f"Invalid required protein substitutions: {explicit!r}")
-        return parsed
+    if not hasattr(target_row, "get"):
+        return ()
     gene = canonical_target_symbol(target_row.get("symbol"))
-    identity = resolve_therapy_identity(target_row.get("agent"))
-    components = set(identity.components)
-    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-sotorasib-panitumumab-kras-g12c-mutated-colorectal-cancer
-    # FDA: https://www.fda.gov/drugs/resources-information-approved-drugs/fda-grants-accelerated-approval-adagrasib-cetuximab-kras-g12c-mutated-colorectal-cancer
-    if gene == "KRAS":
-        if components & {"sotorasib", "adagrasib"}:
-            return ("G12C",)
-    # FDA BRAFTOVI label: https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/210496s021lbl.pdf
-    # TAFINLAR label: https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fee1e6b1-e1a5-4254-9f2e-a70e0f8dbdea
-    if gene == "BRAF":
-        code = _clean_text(target_row.get("cancer_code")).upper()
-        if components & {"dabrafenib", "encorafenib"}:
-            return ("V600E", "V600K") if code == "SKCM" else ("V600E",)
-        if "vemurafenib" in components:
-            return ("V600E",)
-    return ()
+    explicit = target_row.get("required_protein_changes")
+    raw = explicit if isinstance(explicit, (tuple, list)) else _clean_text(explicit).split(";")
+    tokens = [token for token in (_clean_text(value) for value in raw) if token]
+    if tokens:
+        alleles = []
+        for token in tokens:
+            allele = normalize_protein_substitution(token, gene=gene)
+            if not allele:
+                _warn_unparsed_protein_change(token)
+            alleles.append(allele or token)
+        return tuple(dict.fromkeys(alleles))
+    requirement = protein_change_requirement_for_therapy(
+        target_row.get("agent"), gene, target_row.get("cancer_code")
+    )
+    return requirement.alleles if requirement else ()
+
+
+@lru_cache(maxsize=None)
+def _warn_unparsed_protein_change(token: str) -> None:
+    logger.warning(
+        "Curated required_protein_changes value %r is not a protein substitution; "
+        "the requirement is kept and no supplied variant can satisfy it.",
+        token,
+    )
 
 
 def _protein_changes_in_text(text: str, gene: str) -> set[str]:
@@ -1496,9 +1555,13 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
         return []
     required_alleles = required_protein_changes_for_therapy(target_row)
     if required_alleles:
-        return [record for record in records
-                if _clean_text(record.get("variant_type")).lower() == "mutation"
-                and normalize_protein_substitution(record.get("variant"), gene=sym) in required_alleles]
+        # The exact protein change is the requirement. A record naming it is a
+        # sequence-level call unless it was typed as a structural event.
+        return [
+            record for record in records
+            if _clean_text(record.get("variant_type")).lower() not in _STRUCTURAL_VARIANT_TYPES
+            and normalize_protein_substitution(record.get("variant"), gene=sym) in required_alleles
+        ]
     text = " ".join(
         _clean_text(target_row.get(key))
         for key in ("indication", "rationale", "eligibility_note")
@@ -1526,8 +1589,10 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
                     if (_clean_text(record.get("variant_type")).lower() == "mutation"
                         or classify_variant_type(record.get("variant")) == "mutation"
                         and _clean_text(record.get("variant_type")).lower() in {"", "unknown"})]
+        # Generic "mutated" indications accept mutations only. A deliberately
+        # broad "altered" indication can accept any positive molecular class.
         required_types.update(
-            {"mutation", "fusion", "amplification"}
+            _MOLECULAR_VARIANT_TYPES
             if _BROAD_ALTERATION_TEXT.search(text)
             else {"mutation"}
         )
@@ -1566,8 +1631,9 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     if indication_biomarker(target_row) == "mutation" and (
         _MUTATION_INDICATION.search(indication) or _MUTATION_SPECIFIC_ROW_TEXT.search(indication)
     ):
-        # The named molecular indication needs evidence even when the upstream
-        # row omits its gate flag. RNA abundance cannot establish the alteration.
+        # An indication that names an alteration (BRCA-mut, MET exon 14, RET fusion)
+        # needs that alteration whatever the upstream basis column says. Agent-class
+        # or rationale wording alone ("fusion protein", "BRCA-wt") does not gate.
         return True
     if _truthy(target_row.get("requires_supplied_variant")) or _truthy(
         # Pirlygenes therapy tables retain this legacy column.
@@ -1606,7 +1672,11 @@ def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
 
 def supplied_variant_context_for_target_row(target_row, analysis) -> str:
     """Reader-facing summary of supplied variant evidence for a target row."""
-    supported = supplied_variant_supports_target_row(target_row, analysis)
+    return supplied_variant_context(supplied_variant_supports_target_row(target_row, analysis))
+
+
+def supplied_variant_context(supported: list[dict]) -> str:
+    """Reader-facing summary of supplied variant records that match a requirement."""
     if not supported:
         return ""
     labels: list[str] = []
@@ -1624,7 +1694,6 @@ def supplied_variant_context_for_target_row(target_row, analysis) -> str:
         "The supplied variant evidence matches this therapy requirement: "
         + ", ".join(labels)
         + suffix
-
     )
 
 
@@ -1731,6 +1800,8 @@ def tumor_band_cell(row):
     if not tumor_band_available(row):
         return "—"
     ctx = tumor_attribution_context(row)
+    if ctx["source_uncertain"]:
+        return "Uncertain"
     return (
         f"{ctx['attr_tumor_tpm']:.0f} "
         f"({ctx['attr_tumor_tpm_low']:.0f}-{ctx['attr_tumor_tpm_high']:.0f})"
@@ -1753,8 +1824,8 @@ def target_reliability_reasons(row, *, category=None):
         reasons.append("could come from healthy tissue")
     if _truthy(row.get("source_marker_non_tumor_prior")):
         reasons.append("non-tumor lineage marker")
-    if _truthy(row.get("low_purity_cap_applied")):
-        reasons.append("low-purity capped")
+    if source["source_uncertain"]:
+        reasons.append("tumor contribution uncertain")
     return reasons
 
 
@@ -2749,6 +2820,8 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
     """Author separate patient, population, treatment-path and HLA explanations."""
     from .treatment_history import population_therapy_evidence_context, treatment_history_context
 
+    if not hasattr(target_row, "get"):
+        return []
     history = treatment_history_context(target_row, analysis)
     from .report_language import render_report_paragraph
 
@@ -2765,22 +2838,51 @@ def therapy_rationale_paragraphs(target_row, *, analysis=None) -> list[str]:
 
 
 def therapy_path_context(target_row, *, analysis=None, disease_state=None) -> str:
-    """Treatment rationale in one cell for the detailed therapy landscape."""
-    return " ".join(therapy_rationale_paragraphs(target_row, analysis=analysis))
+    """Treatment rationale in one cell for the detailed therapy landscape.
+
+    A landscape row is read on its own, so unlike the summary, which gathers
+    curated criteria under Information needed, it carries the row's curated
+    eligibility note.
+    """
+    if not hasattr(target_row, "get"):
+        return ""
+    from .report_language import render_report_paragraph
+
+    paragraphs = therapy_rationale_paragraphs(target_row, analysis=analysis)
+    note = _note_beyond_stated_text(
+        _clean_text(target_row.get("eligibility_note")), " ".join(paragraphs)
+    )
+    if note and _phase_text(target_row) != "patient_history":
+        paragraphs.append(render_report_paragraph("eligibility_note", note=note))
+    return " ".join(paragraphs)
+
+
+def _note_beyond_stated_text(note: str, stated: str) -> str:
+    """The rest of a curated note after leading clauses the text already states.
+
+    Curated notes often open by restating the pathway tier, as in
+    "clinical-trial follow-up; not default standard". The remainder is kept verbatim.
+    """
+    already = stated.casefold()
+    remainder = note.strip()
+    while remainder:
+        match = re.match(r"([^;,]*)(?:[;,]\s*|$)", remainder)
+        clause = match.group(1).strip(" .")
+        if clause and clause.casefold() not in already:
+            break
+        remainder = remainder[match.end():]
+    return remainder.strip()
 
 
 def therapy_path_rank(target_row, *, analysis=None, disease_state=None) -> int:
     """Sort standard paths ahead of exploratory rows in concise reports."""
-    from .treatment_history import (
-        treatment_history_blocks_row,
-        treatment_history_rank,
-        treatment_history_supports_review,
-    )
+    from .treatment_history import assess_treatment_history
 
-    if treatment_history_blocks_row(target_row, analysis):
+    history = assess_treatment_history(target_row, analysis)
+    if history.blocks_row:
         return 99
-    if treatment_history_supports_review(target_row, analysis):
-        return -10 + treatment_history_rank(target_row, analysis)
+    if history.supports_review:
+        return -10 + history.rank
     return int(_therapy_path_info(target_row)["rank"])
 
 
@@ -2880,7 +2982,7 @@ def target_interpretation_summary(
         parts.append(f"current-therapy check: {caution}")
     if maturity:
         parts.append(maturity)
-    return "; ".join(part for part in parts if part)
+    return join_report_clauses(parts)
 
 
 def partition_tumor_core_rows(ranges_df, min_tumor_tpm=1.0):

@@ -143,3 +143,29 @@ def test_formulation_restriction_requires_reconciliation_when_product_is_unspeci
     assert 'formulation is unspecified' in context and 'Reconcile the exact product' in context
     generic_history = {'treatment_history': [{'therapy': generic, 'status': 'contraindicated'}]}
     assert treatment_history_blocks_row({'agent': brand}, generic_history)
+
+
+def test_registry_identity_cycle_is_reported_instead_of_recursing(monkeypatch):
+    from dataclasses import replace
+
+    import trufflepig.therapeutic_agents as agents_module
+
+    template = registered_agents()[0]
+    fake = {
+        name: replace(
+            template, agent=name, aliases="", brand_name="",
+            identity_kind="regimen", components=other, parent_agent="",
+        )
+        for name, other in (("cycle a", "cycle b"), ("cycle b", "cycle a"))
+    }
+    monkeypatch.setattr(
+        agents_module, "agents_for_name", lambda name: (fake[name],) if name in fake else ()
+    )
+    agents_module._resolve_therapy_identity.cache_clear()
+    try:
+        with pytest.raises(
+            agents_module.TherapyIdentityCycleError, match="cycle a -> cycle b -> cycle a"
+        ):
+            resolve_therapy_identity("cycle a")
+    finally:
+        agents_module._resolve_therapy_identity.cache_clear()

@@ -554,9 +554,6 @@ def _compute_cancer_type_signature_stats(
                     cohort_pct = min(cohort_pct, 0.5)
                 elif basis == "raw" and sample_raw < 1.0:
                     cohort_pct = min(cohort_pct, 0.5)
-            # Production: cohort_pct == 1, so this is simply within_pct.
-            # Explicit A/B bases can additionally ask how high the sample is
-            # relative to the reference cohorts.
             within_pct = float(_within_pct.get(gene, 0.0))
             percentile = cohort_pct * ((1.0 - _WITHIN_PCT_WEIGHT) + _WITHIN_PCT_WEIGHT * within_pct)
             percentiles.append(percentile)

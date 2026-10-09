@@ -1,0 +1,8 @@
+agent,target_gene,cancer_code,required_protein_changes,source
+sotorasib,KRAS,,G12C,https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-sotorasib-panitumumab-kras-g12c-mutated-colorectal-cancer
+adagrasib,KRAS,,G12C,https://www.fda.gov/drugs/resources-information-approved-drugs/fda-grants-accelerated-approval-adagrasib-cetuximab-kras-g12c-mutated-colorectal-cancer
+dabrafenib,BRAF,,V600E,https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fee1e6b1-e1a5-4254-9f2e-a70e0f8dbdea
+dabrafenib,BRAF,SKCM,V600E;V600K,https://dailymed.nlm.nih.gov/dailymed/drugInfo.cfm?setid=fee1e6b1-e1a5-4254-9f2e-a70e0f8dbdea
+encorafenib,BRAF,,V600E,https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/210496s021lbl.pdf
+encorafenib,BRAF,SKCM,V600E;V600K,https://www.accessdata.fda.gov/drugsatfda_docs/label/2026/210496s021lbl.pdf
+vemurafenib,BRAF,,V600E,

@@ -929,8 +929,25 @@ def test_tumor_attribution_context_adds_low_sample_purity_note():
     }
     with_flag = tumor_attribution_context({**base, "sample_low_purity": True})
     assert any("low estimated tumor fraction" in n for n in with_flag["notes"])
+    assert with_flag["tier"] == "mixed_source"
+    assert not with_flag["quantifiable"]
+    assert with_flag["band"] == "tumor contribution uncertain"
     without = tumor_attribution_context(base)
+    assert without["tier"] == "tumor_supported"
     assert not any("low sample purity" in n for n in without["notes"])
+
+
+def test_legacy_cap_is_not_evidence_for_a_non_tumor_source():
+    from trufflepig.reporting import tumor_attribution_context, tumor_band_cell
+
+    row = {"observed_tpm": 100, "attr_tumor_tpm": 23.04,
+           "attr_tumor_fraction": 0.2304, "low_purity_cap_applied": True,
+           "tme_dominant": True}
+    source = tumor_attribution_context(row)
+    assert source["tier"] == "mixed_source"
+    assert not source["quantifiable"]
+    assert tumor_band_cell(row) == "Uncertain"
+    assert not any("cap" in note or "most fitted" in note for note in source["notes"])
 
 
 def therapy_review_text(target, expression, target_panel=None, **context):

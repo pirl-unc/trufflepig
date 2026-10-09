@@ -1,17 +1,18 @@
 """Tests for the two-tier brief / actionable handoff (#111)."""
 
 import pandas as pd
+import pytest
 
 from trufflepig.brief import (
     build_actionable as _build_actionable,
     build_summary as _build_summary,
     biomarker_expression_is_not_eligibility,
     _expression_independent_evidence_gap,
-    _empty_therapy_shortlist_message,
+    empty_therapy_shortlist_message,
     _lineage_panel_evidence_line,
     _lineage_panel_subtype_reasoning_line,
-    _format_cta_outlier_bullet,
-    _notable_cta_outliers,
+    format_cta_outlier_bullet,
+    notable_cta_outliers,
     _shortlist_omission_note,
     recommend_therapies,
     mismatch_repair_summary_line,
@@ -66,7 +67,7 @@ def test_empty_shortlist_does_not_mislabel_every_present_target_as_nontumor():
         ]
     )
 
-    message = _empty_therapy_shortlist_message(targets, ranges)
+    message = empty_therapy_shortlist_message(targets, ranges)
 
     assert "did not meet the shortlist's" in message
     assert "clinical eligibility" in message
@@ -97,9 +98,9 @@ def test_notable_cta_summary_prioritizes_estimated_patient_tumor_signal():
         ]
     )
 
-    rows = _notable_cta_outliers(ranges)
+    rows = notable_cta_outliers(ranges)
     assert [row["symbol"] for row in rows] == ["TUMOR_CTA", "BACKGROUND_CTA"]
-    bullet = _format_cta_outlier_bullet(rows[0])
+    bullet = format_cta_outlier_bullet(rows[0])
     assert "100 patient bulk TPM" in bullet
     assert "60 estimated patient tumor TPM" in bullet
     assert "RNA model interval 30-100" in bullet
@@ -442,8 +443,8 @@ def test_summary_has_four_complete_sections():
     )
     lines = md.splitlines()
     assert [line for line in lines if line.startswith("## ")] == [
-        "## Conclusion and supporting evidence", "## Therapy rationale and blockers",
-        "## Information needed", "## Detailed evidence and figures",
+        "## What we learned about this sample", "## Therapeutic directions",
+        "## What would change the treatment options", "## Detailed evidence and figures",
     ]
 
     # Key structural elements present.
@@ -454,7 +455,7 @@ def test_summary_has_four_complete_sections():
     assert "model interval" in md
     assert "(CI " not in md
     assert "**Disease state:**" in md
-    assert "Therapy rationale and blockers" in md
+    assert "Therapeutic directions" in md
 
 
 def test_summary_surfaces_rna_qc_and_prad_stromal_pitfall():
@@ -501,7 +502,7 @@ def test_summary_explains_a_ceiling_purity_estimate():
     )
 
     assert "**Estimated tumor fraction (RNA model):** 100%" in md
-    assert "Do not interpret this as literal 100% tumor cellularity" in md
+    assert "does not establish 100% tumor cellularity" in md
 
 
 def test_summary_uses_generic_text_for_orphan_context_rescue():
@@ -574,7 +575,7 @@ def test_summary_marks_supplied_cancer_type_basis():
     assert "Cancer-type basis" in md
     assert "externally supplied PRAD (Prostate Adenocarcinoma) sets the report label" in md
     assert "RNA evidence is used downstream for confidence" in md
-    assert "## Information needed" in md
+    assert "## What would change the treatment options" in md
     assert "RNA-inferred — treat it as a hypothesis" not in md
 
 
@@ -625,14 +626,11 @@ def test_summary_names_background_separated_cancer_type_basis():
         disease_state="",
     )
 
-    assert "Cancer-type basis" in md
-    assert "bulk profile initially showed a sarcoma-like pattern" in md
-    assert "alongside a strong smooth muscle signal" in md
-    assert "decomposition consistently nominated" in md
-    assert "CRC (Colorectal Adenocarcinoma)" in md
-    assert "final refit agreed" in md
-    assert "preliminary pattern remains in the audit detail" in md
-    assert "does not drive downstream interpretation" in md
+    assert "**Why this call:**" in md
+    assert "CRC lineage program persists after background subtraction" in md
+    assert "final refit agrees" in md
+    assert "Strong smooth muscle RNA makes bulk similarity nonspecific" in md
+    assert "interpret targets after source attribution" in md
     assert "SARC_DDLPS" not in md
     assert "**Retained RNA differential:**" not in md
 
@@ -900,10 +898,10 @@ def test_summary_marks_rna_inferred_cancer_type_as_hypothesis():
         disease_state="",
     )
 
-    assert "Cancer-type basis" in md
-    assert "RNA-inferred hypothesis" in md
+    assert "RNA-inferred" in md
+    assert "Confirm the RNA-inferred label with pathology" in md
     assert "Reconcile the proposed disease and subtype with pathology" in md
-    assert "## Information needed" in md
+    assert "## What would change the treatment options" in md
 
 
 def test_summary_lists_rna_alternatives_for_inferred_non_rare_call():
@@ -983,8 +981,8 @@ def test_summary_mmr_release_vote_overrides_conflicting_mss_subtype_text():
         disease_state="",
     )
 
-    assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
-    assert "MSI-like probability 0.81" in md
+    assert "**Mismatch repair:** MSI-like expression" in md
+    assert "MSI-like model score 0.81" in md
     assert "conflicts with the candidate-trace subtype READ_MSS" in md
     assert "MSS Rectum Adenocarcinoma-consistent" not in md
     assert "RNA subtype signal is" not in md
@@ -1076,8 +1074,8 @@ def test_summary_mmr_vote_can_use_explicit_crc_context_for_read_call():
         disease_state="",
     )
 
-    assert "**Mismatch-repair RNA context:** CRC MMR ensemble favors MSI-like" in md
-    assert "MSI-like probability 0.71" in md
+    assert "**Mismatch repair:** MSI-like expression" in md
+    assert "MSI-like model score 0.71" in md
 
 
 def _mmr_analysis(msi_probability, *, mlh1_expression=None, code="COAD"):
@@ -1448,7 +1446,7 @@ def test_brief_does_not_promote_breast_therapies_without_clinical_biomarkers():
     )
     assert "- **ERBB2**" not in md
     assert "- **TACSTD2**" not in md
-    assert "## Therapy rationale and blockers" in md
+    assert "## Therapeutic directions" in md
 
 
 def test_expression_independent_therapy_without_eligibility_stays_out_of_shortlist():
@@ -1478,7 +1476,7 @@ def test_expression_independent_therapy_without_eligibility_stays_out_of_shortli
     assert not any(
         line.startswith("- **CD274**") for line in md.splitlines()
     )
-    assert "## Therapy rationale and blockers" in md
+    assert "## Therapeutic directions" in md
 
 
 def test_target_dependent_phase_one_row_with_no_estimated_tumor_signal_stays_out():
@@ -1568,13 +1566,15 @@ def test_missing_eligibility_becomes_a_clinical_task_not_a_recommendation(monkey
         "requires_verified_alteration": True,
         "eligibility_note": "requires clinical germline BRCA testing and HER2-negative disease",
     }])
-    monkeypatch.setattr(brief, "_curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
+    monkeypatch.setattr(brief, "curated_target_panel_for_sample", lambda *a, **kw: ("BRCA", None, panel))
     analysis = {**_make_analysis(), "cancer_type": "BRCA"}
     text = build_summary(analysis, _make_ranges_df(), cancer_code="BRCA", disease_state="")
     content = build_report_content(analysis, _make_ranges_df(), "BRCA", "", report_view=build_report_view(analysis))
-    assert content.therapy is None
+    assert not any(
+        block["kind"] == "table" for section in content.sections for block in section["blocks"]
+    )
     assert any("olaparib" in request["affects"] and "germline BRCA testing" in request["question"] for request in content.evidence_requests)
-    assert "## Information needed" in text
+    assert "## What would change the treatment options" in text
 
 
 def test_agent_only_sarcoma_therapies_are_shortlisted_without_nan_symbol():
@@ -1872,8 +1872,8 @@ def test_summary_prompts_for_hla_when_hla_gated_target_is_plausible():
         disease_state="",
     )
 
-    assert "HLA typing is unavailable for tebentafusp" in md
-    assert "requires A*02:01" in md
+    assert "HLA" in md and "tebentafusp" in md
+    assert "requires A\\*02:01" in md  # HLA alleles are Markdown-escaped
 
 
 def test_brief_downranks_er_dependent_brca_therapy_when_er_axis_low():
@@ -1997,7 +1997,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
     assert "PSCA" in md
     assert "prostate lineage reference (external panel)" in md
     assert "phase 1 exploratory" in md
-    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## Conclusion and supporting evidence", "## Therapy rationale and blockers", "## Information needed", "## Detailed evidence and figures"]
+    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## What we learned about this sample", "## Therapeutic directions", "## What would change the treatment options", "## Detailed evidence and figures"]
 
 
 def test_source_trace_renders_when_top_trial_rows_are_mixed_source():
@@ -2373,7 +2373,7 @@ def test_actionable_canonicalizes_curated_antigen_symbols(monkeypatch):
     )
     monkeypatch.setattr(
         brief_mod,
-        "_curated_target_panel_for_sample",
+        "curated_target_panel_for_sample",
         lambda *a, **k: ("SARC", None, targets_df),
     )
 
@@ -2491,7 +2491,7 @@ def test_summary_flags_mutation_gated_biomarker_outlier_via_public_api():
     outlier = next(line for line in md.splitlines() if line.startswith("- **TP53**"))
     assert "RNA abundance 15.0×" in outlier
     assert "amplified" not in outlier
-    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## Conclusion and supporting evidence", "## Therapy rationale and blockers", "## Information needed", "## Detailed evidence and figures"]
+    assert [line for line in md.splitlines() if line.startswith("## ")] == ["## What we learned about this sample", "## Therapeutic directions", "## What would change the treatment options", "## Detailed evidence and figures"]
 
 
 def test_summary_low_purity_caveat_rides_on_tumor_source_tpm():
@@ -2591,3 +2591,91 @@ def therapy_review_text(target, expression, target_panel=None, **context):
     return " ".join([assessment['agent'], assessment['phase'], assessment['indication'],
                      *assessment['rationale'], assessment['maturity'],
                      _expression_independent_evidence_gap(target, context.get('analysis'))])
+
+
+@pytest.mark.parametrize(
+    "tier, reasons, expected",
+    [
+        ("high", [], ""),
+        ("high", ["x"], ""),
+        ("unknown", ["no purity estimate available"], ""),
+        ("degenerate", ["degenerate"], ""),
+        ("moderate", [], ""),
+        ("moderate", ["runner-up close"], " — **moderate confidence**"),
+        ("low", ["wide purity CI"], " — **low confidence, provisional**"),
+    ],
+)
+def test_call_confidence_badge_only_marks_contested_calls(tier, reasons, expected):
+    from types import SimpleNamespace
+
+    from trufflepig.brief import _call_confidence_suffix
+
+    call_tier = SimpleNamespace(tier=tier, reasons=reasons, inline_note="; ".join(reasons))
+    assert _call_confidence_suffix(call_tier, include_reasons=False) == expected
+
+
+def test_actionable_therapy_cell_states_hla_once_without_clause_artifacts(monkeypatch):
+    import trufflepig.brief as brief_mod
+
+    analysis = _make_analysis()
+    analysis["cancer_type"] = "SARC"
+    analysis.setdefault("analysis_constraints", {})["hla_types"] = ["A*02:01"]
+    ranges_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "observed_tpm": 19.0,
+                "attribution": {},
+                "attr_tumor_tpm": 8.0,
+                "attr_tumor_fraction": 0.42,
+                "attr_top_compartment": "",
+                "attr_top_compartment_tpm": 0.0,
+                "tme_dominant": False,
+                "tme_explainable": False,
+            }
+        ]
+    )
+    targets_df = pd.DataFrame(
+        [
+            {
+                "symbol": "MAGEA4",
+                "agent": "afamitresgene autoleucel",
+                "agent_class": "TCR-T",
+                "phase": "approved",
+                "indication": "synovial sarcoma",
+                "treatment_path_tier": "approved_indication_matched",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        brief_mod, "curated_target_panel_for_sample", lambda *a, **k: ("SARC", None, targets_df)
+    )
+    md = build_actionable(analysis, ranges_df, cancer_code="SARC", disease_state="", sample_id="sample_X")
+    row = next(line for line in md.splitlines() if "| afamitresgene autoleucel |" in line)
+    assert row.count("HLA match") == 1
+    assert ".;" not in row
+
+
+def test_mmr_disagreement_is_not_hidden_by_the_ensemble_mean():
+    from trufflepig.brief import mismatch_repair_rna_state
+    from trufflepig.report_takeaways import therapeutic_lead_basis
+
+    analysis = _mmr_analysis(0.666518)
+    mmr = analysis['cancer_type_evidence']['staged_evidence_graph']['channels'][0]['details']['mismatch_repair']
+    mmr['member_probabilities'] = [
+        {'member': name, 'msi_probability': value}
+        for name, value in [('A', 0.00002), ('B', 0.999696), ('C', 0.999838)]
+    ]
+    assert mismatch_repair_rna_state(analysis) == 'Discordant'
+    line = mismatch_repair_summary_line(analysis)
+    assert 'RNA models disagree' in line
+    assert '0.00002' in line and '0.99970' in line
+    assert 'favors MSI' not in line and 'favors MSS' not in line
+    assessment = {'eligibility': {'requirements': [{'kind': 'msi_high', 'status': 'missing'}]}}
+    assert therapeutic_lead_basis(assessment, analysis) == ''
+    # No arbitrary new score cutoff: agreement and mean are separate facts.
+    mmr['member_probabilities'] = [{'msi_probability': p} for p in (0.6, 0.7, 0.7)]
+    assert mismatch_repair_rna_state(analysis) == 'MSI-like'
+    mmr['msi_probability'] = 0.333
+    mmr['member_probabilities'] = [{'msi_probability': p} for p in (0.1, 0.2, 0.7)]
+    assert mismatch_repair_rna_state(analysis) == 'Discordant'

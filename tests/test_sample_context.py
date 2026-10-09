@@ -566,3 +566,37 @@ def test_histone_prefixes_include_both_hgnc_old_and_new():
     assert "H2BC" in prefixes
     assert "H3C" in prefixes
     assert "HIST1H" in prefixes
+
+
+def test_quality_summary_distinguishes_enrichment_from_rna_condition(tmp_path):
+    from pypdf import PdfReader
+    from trufflepig.sample_context import SampleContext, plot_sample_context
+
+    context = SampleContext(library_prep='ribo_depleted', preservation='degraded',
+                            degradation_severity='mild', degradation_index=3.10)
+    path = tmp_path / 'quality.png'
+    plot_sample_context(context, str(path), save_dpi=60)
+    text = ' '.join(PdfReader(path.with_suffix('.pdf')).pages[0].extract_text().split())
+    assert 'Partial degradation (mild)' in text
+    assert 'Long transcripts enriched' in text
+    assert 'RNA integrity remains unresolved' in text
+    assert 'Suspicious-floor' not in text
+
+
+def test_degradation_plot_labels_long_over_short_and_preserves_zero(tmp_path, monkeypatch):
+    from pypdf import PdfReader
+    import pirlygenes.gene_sets_cancer as genes
+    from trufflepig.sample_context import SampleContext, plot_degradation_index
+
+    monkeypatch.setattr(genes, 'degradation_gene_pairs',
+                        lambda: [('SHORT1', 'LONG1', 2), ('SHORT2', 'LONG2', 1)])
+    data = pd.DataFrame({'gene': ['SHORT1', 'LONG1', 'SHORT2', 'LONG2'],
+                         'TPM': [10, 80, 10, 0]})
+    path = tmp_path / 'degradation.png'
+    plot_degradation_index(data, SampleContext(), str(path), save_dpi=60)
+    text = ' '.join(PdfReader(path.with_suffix('.pdf')).pages[0].extract_text().split())
+    assert 'LONG1 / SHORT1' in text and 'LONG2 / SHORT2' in text
+    assert '4x' in text and '0x' in text
+    assert 'Median 2.00x reference across 2 gene pairs' in text
+    assert 'Long transcripts enriched' in text
+    assert 'no degradation' not in text

@@ -17,7 +17,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
-from trufflepig.report_language import render_report_template
+from trufflepig.report_document import SCHEMA_VERSION as REPORT_SCHEMA_VERSION
+from trufflepig.report_language import markdown_url, render_report_template, report_plain_text
 
 try:
     from .analyze_reports import (
@@ -42,7 +43,7 @@ except ImportError:
         expected_codes,
     )
 
-_SUMMARY_CALL = re.compile(r"\*\*Cancer call:\*\*\s*([A-Za-z][A-Za-z0-9_]*)\b")
+_SUMMARY_CALL = re.compile(r"\bCancer call:\s*([A-Za-z][A-Za-z0-9_]*)\b")
 _WORKING_CALL = re.compile(r"\*\*Working cancer call\*\*:\s*([^.\n]+)")
 _CODE_BEFORE_PAREN = re.compile(r"([A-Za-z][A-Za-z0-9_]*)\s*\(")
 _MECHANICAL_PATTERNS = {
@@ -105,7 +106,7 @@ def _sample_paths(analysis_md: Path, sample_id: str) -> dict[str, Path | None]:
 
 
 def _summary_call(summary_text: str) -> str:
-    match = _SUMMARY_CALL.search(summary_text)
+    match = _SUMMARY_CALL.search(report_plain_text(summary_text))
     return match.group(1) if match else ""
 
 
@@ -220,6 +221,61 @@ def _duplicated_global_learned_votes(
         for (role, code), count in sorted(counts.items())
         if count > 1
     ]
+
+
+def _authored_report_issues(
+    sample_id: str, document: dict, summary_text: str | None
+) -> list[dict[str, str]]:
+    """Check that the reader summary carries every authored decision in report.json.
+
+    The section comparison catches a stale or edited summary. The decision checks
+    do not depend on the template round trip: each selected therapy, its curated
+    evidence source and each information request must reach the reader.
+    """
+
+    def issue(category: str, detail: str) -> dict[str, str]:
+        return {"sample": sample_id, "severity": "error", "category": category, "detail": detail}
+
+    if summary_text is None:
+        return [issue("authored_summary_mismatch", "the reader summary is missing")]
+    issues = []
+    expected_summary = render_report_template(
+        "report",
+        sample_id=document.get("sample_id") or "",
+        sections=document.get("sections", []),
+    )
+    if summary_text.strip() != expected_summary.strip():
+        issues.append(
+            issue(
+                "authored_summary_mismatch",
+                "the reader summary differs from the authored sections in report.json",
+            )
+        )
+    plain = " ".join(
+        " ".join(report_plain_text(line).split()) for line in summary_text.splitlines()
+    )
+    for assessment in document.get("therapy_assessments", []):
+        if not assessment.get("selected"):
+            continue
+        agent = " ".join(str(assessment.get("agent") or "").split())
+        if agent and agent not in plain:
+            issues.append(issue("selected_therapy_missing_from_summary", agent))
+        urls = {
+            markdown_url(source.get("url"))
+            for source in assessment.get("sources", [])
+        }
+        urls.add(markdown_url(assessment.get("source_url")))
+        for url in sorted(urls):
+            if url and f"({url})" not in summary_text:
+                issues.append(issue("therapy_source_missing_from_summary", f"{agent}: {url}"))
+    for request in document.get("evidence_requests", []):
+        question = " ".join(report_plain_text(str(request.get("question") or "")).split())
+        question = question.rstrip(". ")
+        if question and question not in plain:
+            issues.append(
+                issue("evidence_request_missing_from_summary", str(request.get("key") or ""))
+            )
+    return issues
 
 
 def _sample_issues(
@@ -352,25 +408,30 @@ def _sample_issues(
                     "detail": str(error),
                 }
             )
-        else:
-            summary_path = paths.get("summary")
-            expected_summary = render_report_template(
-                "report", sample_id=report_document.get("sample_id") or "",
-                sections=[{**section, "blocks": [block for block in section["blocks"] if block["kind"] != "figure"]}
-                          for section in report_document.get("sections", [])],
+    if (
+        report_document is not None
+        and report_document.get("schema_version") != REPORT_SCHEMA_VERSION
+    ):
+        issues.append(
+            {
+                "sample": sample_id,
+                "severity": "warning",
+                "category": "legacy_structured_report",
+                "detail": (
+                    f"report.json schema {report_document.get('schema_version')!r} predates "
+                    f"authored sections (schema {REPORT_SCHEMA_VERSION}); rerun analysis to audit them"
+                ),
+            }
+        )
+        report_document = None
+    if report_document is not None:
+        issues.extend(
+            _authored_report_issues(
+                sample_id,
+                report_document,
+                summary_text if paths.get("summary") is not None else None,
             )
-            if summary_path is None or summary_path.read_text().strip() != expected_summary.strip():
-                issues.append(
-                    {
-                        "sample": sample_id,
-                        "severity": "error",
-                        "category": "authored_summary_mismatch",
-                        "detail": (
-                            "authored report sections differ from "
-                            "the reader summary"
-                        ),
-                    }
-                )
+        )
     if report_document is not None:
         for assessment in report_document.get('therapy_assessments', []):
             if assessment.get('selected') and not assessment.get('eligibility', {}).get('permits_review'):
