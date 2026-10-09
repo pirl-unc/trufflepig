@@ -528,10 +528,6 @@ def build_report_content(
             })
     if conditional_groups:
         therapies.append({"kind": "heading", "text": "Approved options pending clinical confirmation"})
-        therapies.append(paragraph(
-            "These disease-matched options depend on clinical results that were not supplied. "
-            "RNA findings do not establish their required biomarkers."
-        ))
         for group in conditional_groups:
             options = "; ".join(
                 f"**{report_literal(a['agent'])}** ({therapy_source_markdown(a)})"
