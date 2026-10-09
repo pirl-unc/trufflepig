@@ -1,11 +1,15 @@
 """Reader conclusions must retain evidence boundaries and usable figure links."""
 
 import pandas as pd
+import pytest
 from PIL import Image
 from pypdf import PdfReader
 
 from trufflepig import brief
-from trufflepig.report_content import ReportContent, build_report_content, render_report_summary
+from trufflepig.report_content import (
+    ReportContent, build_report_content, conditional_therapy_groups, render_report_summary,
+)
+from trufflepig.report_language import report_literal
 from trufflepig.report_document import write_report_document, load_report_document
 from trufflepig.report_pdf import build_interpretive_report_pdf
 from trufflepig.report_takeaways import therapeutic_lead_basis
@@ -24,6 +28,77 @@ def test_rna_msi_lead_has_drug_and_citation_without_shortlisting(monkeypatch):
     assert "MSI-like RNA prioritizes testing; clinical MSI-H/dMMR is unconfirmed" in summary
     assert "pembrolizumab" in summary and "https://pubmed.ncbi.nlm.nih.gov/33264544/" in summary
     assert "Vulnerabilities worth investigating" in summary
+    conditional = conditional_therapy_groups(content.therapy_assessments, analysis,
+                                             already_discussed={assessment["id"]})
+    assert all(a["agent"] != "pembrolizumab" for group in conditional for a in group["assessments"])
+
+
+def test_missing_clinical_results_keep_colorectal_options_visible_without_rna(monkeypatch):
+    monkeypatch.setattr(brief, "mismatch_repair_rna_state", lambda _: "Discordant")
+    analysis = {"cancer_type": "COAD", "sample_mode": "solid", "purity": {}}
+    content = build_report_content(analysis, pd.DataFrame(), "COAD", "",
+                                   report_view=build_report_view(analysis))
+    groups = conditional_therapy_groups(content.therapy_assessments, analysis)
+    assert len(groups) == 5  # Shared KRAS and EGFR criteria each form one group.
+    assert sum(len(group["assessments"]) for group in groups) == 7
+    assert not any(a["selected"] or a["eligibility"]["permits_review"] for a in content.therapy_assessments)
+    therapy = next(s for s in content.sections if s["id"] == "therapies")
+    text = " ".join(b.get("text", "") for b in therapy["blocks"])
+    assert "Approved options pending clinical confirmation" in text
+    assert "Vulnerabilities worth investigating" not in text
+    assert "No therapy" not in text
+    assert "not a complete treatment plan" in text
+    for term in ("BRAF V600E", "KRAS G12C", "HER2-positive", "RAS wild-type", "MSI-H/dMMR"):
+        assert term in text
+    for assessment in content.therapy_assessments:
+        assert report_literal(assessment["agent"]) in text
+        assert assessment["source_url"] in text
+    assert "210496s021lbl.pdf" in text  # Current label accompanies the earlier trial citation.
+
+
+@pytest.mark.parametrize("result", ["MSS", "pending", "conflicting"])
+def test_conditional_options_do_not_override_clinical_mmr_results(result):
+    from trufflepig.clinical_context import ClinicalAssay, ClinicalContext, ClinicalSource
+
+    def assay(value):
+        return ClinicalAssay(kind="msi", result=value, method="PCR", specimen_id="sample",
+                             scope="current", validity="validated", reportability="reportable",
+                             source=ClinicalSource(title="Synthetic clinical report"))
+
+    assays = (assay("MSI-H"), assay("MSS")) if result == "conflicting" else (assay(result),)
+    analysis = {"cancer_type": "COAD", "sample_mode": "solid", "purity": {},
+                "clinical_context": ClinicalContext(specimen_id="sample", assays=assays).public_dict()}
+    content = build_report_content(analysis, pd.DataFrame(), "COAD", "",
+                                   report_view=build_report_view(analysis))
+    groups = conditional_therapy_groups(content.therapy_assessments, analysis)
+    assert all(a["agent"] != "pembrolizumab" for group in groups for a in group["assessments"])
+    assert not next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")["selected"]
+
+
+def test_conditional_options_preserve_scope_conflicts_and_hla_criteria():
+    from trufflepig.report_content import assess_therapy
+
+    row = dict(symbol="MAGEA4", agent="afamitresgene autoleucel", phase="approved",
+               indication="synovial sarcoma", subtype="synovial_sarcoma",
+               eligibility_note="requires the indicated antigen assay", hla_restriction="A*02:01")
+    analysis = {"cancer_type": "SARC"}
+    assessment = assess_therapy(row, analysis=analysis)
+    assert conditional_therapy_groups([assessment], analysis) == []
+    analysis["cancer_type"] = "SARC_SYN"
+    assessment = assess_therapy(row, analysis=analysis)
+    groups = conditional_therapy_groups([assessment], analysis)
+    assert "high-resolution HLA" in " ".join(groups[0]["criteria"])
+    assert "A*02:01" in " ".join(groups[0]["criteria"])
+    analysis["analysis_constraints"] = {"hla_types": ["A*01:01", "A*03:01"]}
+    assert conditional_therapy_groups([assess_therapy(row, analysis=analysis)], analysis) == []
+    assert conditional_therapy_groups([assessment], {"cancer_type_abstention": {"reason": "muscle"}}) == []
+
+    row = dict(symbol="KRAS", agent="sotorasib", cancer_code="COAD", phase="approved",
+               indication="KRAS G12C colorectal cancer", requires_verified_alteration=True)
+    analysis = {"cancer_type": "COAD", "variant_inputs_supplied": True, "variant_records": [
+        {"gene": "KRAS", "variant": "p.G12D", "variant_type": "mutation", "status": "detected"},
+    ]}
+    assert conditional_therapy_groups([assess_therapy(row, analysis=analysis)], analysis) == []
 
 
 def test_abundant_gene_rna_cannot_create_mutation_or_background_leads():

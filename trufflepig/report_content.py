@@ -214,6 +214,51 @@ def therapy_source_markdown(assessment: dict) -> str:
     return label or "—"
 
 
+def conditional_therapy_groups(assessments, analysis, *, already_discussed=()):
+    """Show established options awaiting tests without changing eligibility.
+
+    Missing evidence can support a conditional discussion. A known exclusion,
+    conflicting result or unestablished disease scope cannot. RNA abundance and
+    source attribution deliberately do not determine this disease-level list.
+    """
+    if analysis.get("cancer_type_abstention"):
+        return []
+    groups = {}
+    for assessment in assessments:
+        requirements = assessment["eligibility"]["requirements"]
+        if (
+            assessment["selected"]
+            or assessment["id"] in already_discussed
+            or assessment["phase"] != "Approved"
+            or not any(r["status"] == "missing" for r in requirements)
+            or any(r["status"] in {"blocked", "unresolved"} for r in requirements)
+            or any(r["kind"] == "scope" and r["status"] != "satisfied" for r in requirements)
+        ):
+            continue
+        curation = assessment["curation"]
+        note = curation["eligibility_note"]
+        criteria = [assessment["indication"], note]
+        # Keep additional HLA criteria visible even when the molecular assay
+        # note describes only the target. MSI/MMR assay logistics remain in the
+        # information section; the curated note states the required result.
+        criteria.extend(
+            report_plain_text(r["description"]) for r in requirements
+            if r["status"] == "missing" and r["kind"] == "hla"
+        )
+        criteria.extend(
+            r["question"] for r in requirements
+            if r["status"] == "missing" and (not note or r["kind"] == "hla")
+        )
+        setting = curation["clinical_setting_note"]
+        if setting and setting.rstrip(". ").casefold() not in note.casefold():
+            criteria.append(setting)
+        criteria = tuple(dict.fromkeys(text.rstrip(". ") for text in criteria if text))
+        # Group only identical indications and confirmation requirements.
+        key = (criteria, tuple((r["kind"], r["key"], r["status"], r["question"]) for r in requirements))
+        groups.setdefault(key, {"criteria": criteria, "assessments": []})["assessments"].append(assessment)
+    return list(groups.values())
+
+
 def build_report_content(
     analysis,
     ranges_df,
@@ -419,6 +464,9 @@ def build_report_content(
     ]
     leads = [(assessment, basis) for assessment, basis in leads if basis]
     leads.sort(key=lambda item: not any(r["kind"] == "msi_high" for r in item[0]["eligibility"]["requirements"]))
+    conditional_groups = conditional_therapy_groups(
+        assessments, analysis, already_discussed={a["id"] for a, _ in leads}
+    )
 
     if selected_assessments:
         therapies.append({
@@ -476,19 +524,43 @@ def build_report_content(
                 + ("Confirm: " + "; ".join(report_literal(r) for r in requirements) + "." if requirements else ""),
                 "figure_suffixes": [] if target == "MSI/MMR" else ["priority-target-context.png"],
             })
+    if conditional_groups:
+        therapies.append({"kind": "heading", "text": "Approved options pending clinical confirmation"})
+        therapies.append(paragraph(
+            "These disease-matched options depend on clinical results that were not supplied. "
+            "RNA findings do not establish their required biomarkers."
+        ))
+        for group in conditional_groups:
+            options = "; ".join(
+                f"**{report_literal(a['agent'])}** ({therapy_source_markdown(a)})"
+                for a in group["assessments"]
+            )
+            criteria = ". ".join(
+                report_literal(text[:1].upper() + text[1:]) for text in group["criteria"]
+            )
+            sources = list(dict.fromkeys(
+                r["source"] for a in group["assessments"]
+                for r in a["eligibility"]["requirements"]
+                if r.get("source", "").startswith(("https://", "http://"))
+            ))
+            therapies.append({
+                "kind": "bullet",
+                "text": options + ": " + criteria + "."
+                + (" " + " · ".join(f"[Eligibility source]({markdown_url(source)})" for source in sources) + "." if sources else ""),
+            })
     if assessments and not identity_unresolved:
         therapies.append({
             "kind": "paragraph",
-            "text": "Target ranking and RNA-source evidence are shown in the figures.",
+            "text": "This curated target panel is not a complete treatment plan. Target ranking and RNA-source evidence are shown in the figures.",
             "figure_suffixes": ["priority-targets.png", "priority-target-context.png", "actionable-targets.png"],
         })
-    if not selected_assessments and not identity_unresolved:
+    if not selected_assessments and not conditional_groups and not leads and not identity_unresolved:
         unmet = any(
             r["status"] in {"blocked", "missing", "unresolved"}
             for a in assessments for r in a["eligibility"]["requirements"]
         )
         therapies.append(paragraph(
-            "No therapy meets the current shortlisting criteria. The confirmation steps below may change that."
+            "No therapy can be shortlisted from the supplied evidence. Missing or conflicting requirements are detailed below."
             if unmet else brief.empty_therapy_shortlist_message(panel, ranges_df)
         ))
     blocked = [

@@ -51,6 +51,17 @@ target keys and shared assay questions are merged transitively, so a later
 requirement cannot recreate a duplicate request. Clinical-setting questions
 use this same collector.
 
+The therapy section also names approved, disease-matched options awaiting missing
+clinical results, with their curated indication, confirmation criteria and sources.
+These conditional options do not change `selected` or `permits_review`, and do not
+require tumor-attributed RNA support. Known exclusions, conflicting results and
+unestablished disease scope remain excluded from this list. Missing HLA typing
+stays explicit. Already discussed sample-supported leads are not duplicated.
+Identical criteria share one entry, while the information section retains the
+complete assay requests. The report states that its curated target panel is not
+a complete treatment plan; an empty eligibility shortlist does not imply that no
+treatments exist.
+
 RNA abundance does not establish a mutation. Exact protein requirements for the
 covered KRAS/BRAF drugs come from the packaged
 `therapy-protein-change-requirements.csv`, which cites each label; a
