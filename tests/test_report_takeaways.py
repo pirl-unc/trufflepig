@@ -102,6 +102,19 @@ def test_conditional_options_preserve_scope_conflicts_and_hla_criteria():
     assert conditional_therapy_groups([assess_therapy(row, analysis=analysis)], analysis) == []
 
 
+def test_identical_brca_options_are_stated_once_without_fabricated_citations():
+    analysis = {"cancer_type": "BRCA", "sample_mode": "solid", "purity": {}}
+    content = build_report_content(analysis, pd.DataFrame(), "BRCA", "",
+                                   report_view=build_report_view(analysis))
+    therapy = next(s for s in content.sections if s["id"] == "therapies")
+    text = " ".join(b.get("text", "") for b in therapy["blocks"])
+    assert text.count("olaparib / talazoparib") == 1
+    assert "(—)" not in text
+    assessments = [a for a in content.therapy_assessments if a["agent"] == "olaparib / talazoparib"]
+    assert len(assessments) == 2
+    assert not any(a["selected"] for a in assessments)
+
+
 def test_abundant_gene_rna_cannot_create_mutation_or_background_leads():
     assessment = {
         "eligibility": {"requirements": [{"kind": "mutation", "status": "missing"}]},

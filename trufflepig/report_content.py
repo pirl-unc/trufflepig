@@ -530,7 +530,8 @@ def build_report_content(
         therapies.append({"kind": "heading", "text": "Approved options pending clinical confirmation"})
         for group in conditional_groups:
             options = "; ".join(
-                f"**{report_literal(a['agent'])}** ({therapy_source_markdown(a)})"
+                f"**{report_literal(a['agent'])}**"
+                + (f" ({therapy_source_markdown(a)})" if therapy_source_markdown(a) != "—" else "")
                 for a in group["assessments"]
             )
             criteria = ". ".join(
@@ -541,15 +542,21 @@ def build_report_content(
                 for r in a["eligibility"]["requirements"]
                 if r.get("source", "").startswith(("https://", "http://"))
             ))
-            therapies.append({
+            block = {
                 "kind": "bullet",
                 "text": options + ": " + criteria + "."
                 + (" " + " · ".join(f"[Eligibility source]({markdown_url(source)})" for source in sources) + "." if sources else ""),
-            })
+            }
+            # Separate gene-gate assessments can describe the same clinical
+            # option (e.g. a BRCA1/2 indication). Keep their audit records while
+            # stating identical reader text only once.
+            if block not in therapies:
+                therapies.append(block)
     if assessments and not identity_unresolved:
         therapies.append({
             "kind": "paragraph",
-            "text": "This curated target panel is not a complete treatment plan. Target ranking and RNA-source evidence are shown in the figures.",
+            "text": ("This curated target panel is not a complete treatment plan. " if conditional_groups else "")
+            + "Target ranking and RNA-source evidence are shown in the figures.",
             "figure_suffixes": ["priority-targets.png", "priority-target-context.png", "actionable-targets.png"],
         })
     if not selected_assessments and not conditional_groups and not leads and not identity_unresolved:
