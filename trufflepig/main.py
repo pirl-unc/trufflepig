@@ -1047,7 +1047,10 @@ def _tumor_tpm_by_symbol_from_ranges(ranges_df) -> dict[str, float]:
 
     mapping: dict[str, float] = {}
     from .common import ranges_records
+    from .reporting import tumor_attribution_context
     for row in ranges_records(ranges_df):
+        if tumor_attribution_context(row)["source_uncertain"]:
+            continue
         symbol = str(row.get("symbol") or "").strip()
         if not symbol or symbol.lower() == "nan":
             continue
@@ -1071,6 +1074,8 @@ def _store_variant_effect_reasoning(
     tumor_tpm_by_symbol = _tumor_tpm_by_symbol_from_ranges(ranges_df)
     if tumor_tpm_by_symbol:
         analysis["tumor_tpm_by_symbol"] = tumor_tpm_by_symbol
+    else:
+        analysis.pop("tumor_tpm_by_symbol", None)
     try:
         from .fusion_effects import (
             infer_fusion_expression_hypotheses,
@@ -10029,6 +10034,8 @@ def _build_target_report(
             return []
 
         capped_n = int(sub["_cap_applied"].sum())
+        if capped_n == 0:
+            return []
         lines_out = [
             "### Low-purity cap audit\n",
             "When estimated tumor fraction is low, the RNA attribution model caps "

@@ -94,6 +94,21 @@ def test_her2_proxy_carries_low_estimated_tumor_fraction_caveat(monkeypatch):
     assert any("low estimated tumor fraction" in caveat.lower() for caveat in result.caveats)
 
 
+def test_uncapped_low_purity_residual_does_not_establish_her2_source(monkeypatch):
+    _reference(monkeypatch)
+    from trufflepig.main import _tumor_tpm_by_symbol_from_ranges
+
+    ranges = pd.DataFrame([{
+        "symbol": "ERBB2", "attr_tumor_tpm": 30.0, "observed_tpm": 30.0,
+        "attr_tumor_fraction": 1.0, "attribution_low_purity": True,
+    }])
+    result = score_her2_rna_proxy(_high_sample(), "BRCA", ranges_df=ranges)
+    assert result.status == "indeterminate"
+    assert "tumor source is uncertain" in result.decision_basis
+    assert not result.eligibility_established
+    assert _tumor_tpm_by_symbol_from_ranges(ranges) == {}
+
+
 def test_her2_proxy_non_support_does_not_claim_her2_negative(monkeypatch):
     _reference(monkeypatch, value=5.0)
     sample = {gene: 0.5 for gene in HER2_PANEL_GENES}

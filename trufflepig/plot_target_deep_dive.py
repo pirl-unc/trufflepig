@@ -1097,6 +1097,10 @@ def _priority_target_rows(
         return max(0.25, base)
 
     def _source_component(source, row):
+        if source["source_uncertain"]:
+            # A large residual at low purity is not independent evidence
+            # of tumor origin. Do not reward its uncalibrated precision.
+            return 0.5
         score = {
             "tumor_supported": 4.0,
             "mixed_source": 2.6,
@@ -1113,6 +1117,8 @@ def _priority_target_rows(
         return max(0.1, score)
 
     def _strength_component(source, row):
+        if source["source_uncertain"]:
+            return 0.0
         tcga_percentile = 0.0
         try:
             tcga_percentile = float(row.get("tcga_percentile") or 0.0)
@@ -1520,20 +1526,24 @@ def plot_priority_target_context(
     )
     teal, gray = "#087e8b", "#dce2e6"
     has_fraction_bar = False
+    has_tumor_estimate = False
     for i, row in enumerate(rows):
-        ax.hlines(i + 0.12, row["low"], row["high"], color=teal, linewidth=3)
-        ax.scatter(row["mid"], i + 0.12, marker="D", color=teal, s=42,
-                   label="Tumor contribution (modeled)" if i == 0 else None, zorder=3)
+        source = row["source"]
+        if source["quantifiable"]:
+            ax.hlines(i + 0.12, row["low"], row["high"], color=teal, linewidth=3)
+            ax.scatter(row["mid"], i + 0.12, marker="D", color=teal, s=42,
+                       label="Tumor contribution (estimated)" if not has_tumor_estimate else None,
+                       zorder=3)
+            has_tumor_estimate = True
         ax.scatter(row["observed"], i - 0.13, color="#172b3a", s=32,
                    label="Bulk sample (measured)" if i == 0 else None, zorder=3)
-        source = row["source"]
         fraction = max(0, min(1, float(source.get("attr_tumor_fraction", 0))))
-        if source["low_purity_cap_applied"]:
-            fraction_ax.text(0.02, i, "Cap-limited\nsource unresolved", va="center",
-                             fontsize=10, color="#72531b")
-        elif fraction == 0:
-            fraction_ax.text(0.02, i, "No tumor residual\nin this model", va="center",
+        if source["tier"] == "background_dominant" or fraction == 0:
+            fraction_ax.text(0.02, i, "Non-tumor source\nplausible", va="center",
                              fontsize=10, color="#536471")
+        elif not source["quantifiable"]:
+            fraction_ax.text(0.02, i, "Tumor source\nuncertain", va="center",
+                             fontsize=10, color="#72531b")
         else:
             has_fraction_bar = True
             fraction_ax.barh(i, 1, height=0.40, color=gray)

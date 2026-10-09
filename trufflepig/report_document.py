@@ -49,9 +49,10 @@ FIGURE_REGISTRY = [
     (
         "priority-target-context.png",
         "Target RNA source and healthy-tissue context",
-        "Left: measured bulk RNA (black dot) and modeled tumor contribution (teal diamond; line = model range). "
-        "Middle: estimated tumor share, or a model limitation. 'Cap-limited' means a low-purity "
-        "safeguard limits the estimate; it is not a measured share. 'No tumor residual' does not prove absence. "
+        "Left: measured bulk RNA (black dot); tumor contribution is shown only when sufficiently resolved "
+        "(teal diamond; line = estimated range). Middle: evidence for the RNA's source. "
+        "'Tumor source uncertain' means the expressing cells cannot be reliably identified. "
+        "'Non-tumor source plausible' means other cells could explain the signal; tumor expression is not excluded. "
         "Right: healthy-tissue overlap. TPM values use a compressed scale above 1. "
         "These estimates do not establish tumor-cell protein expression or clinical safety.",
     ),

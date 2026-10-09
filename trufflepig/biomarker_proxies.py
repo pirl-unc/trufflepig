@@ -267,6 +267,9 @@ def score_her2_rna_proxy(
     )
 
     erbb2_estimate = range_rows.get(HER2_CORE_GENE) or {}
+    from .reporting import tumor_attribution_context
+
+    source_uncertain = tumor_attribution_context(erbb2_estimate)["source_uncertain"]
     # This is the fraction of the *measured ERBB2 RNA* assigned to the
     # estimated tumor component.  It is not the sample's tumor fraction.
     erbb2_tumor_attributed_fraction = _finite_float(
@@ -300,6 +303,13 @@ def score_her2_rna_proxy(
             f"{reference_cancer_type or 'the selected cancer type'}."
         )
         priority = "standard"
+    elif bulk_pattern and source_uncertain:
+        status = "indeterminate"
+        basis = (
+            "Measured bulk ERBB2/17q12 RNA is elevated, but its tumor source "
+            "is uncertain. Clinical HER2 testing is needed."
+        )
+        priority = "high"
     elif source_conflict:
         status = "discordant"
         basis = (

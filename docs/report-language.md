@@ -85,6 +85,31 @@ curated eligibility note. They refer to the summary's consolidated information l
 must describe measured or modeled RNA patterns and their uncertainty; they must
 not assert treatment exposure, receptor-assay status or a mutation from expression.
 
+Per-gene tumor RNA share is distinct from the sample's overall tumor RNA fraction.
+For a mixture `bulk_g = p * tumor_g + (1 - p) * background_g`, the gene's tumor
+share is `p * tumor_g / bulk_g`. If `background_g = 0`, that share can be 100%
+even when `p` is small. This follows from the weighted-mixture model used in
+[expression deconvolution](https://www.nature.com/articles/s41467-017-02289-3);
+it does not establish tumor specificity in an individual specimen.
+
+The inherited `observed * purity * 3` ceiling was introduced in pirlygenes
+commit `ca1c604` to damp apparently excessive residual attribution in a low-purity
+prostate sample. Its before/after examples did not calibrate the multiplier
+against gene-level source truth. That numerical ceiling is retired. Fitted
+background subtraction, healthy-tissue breadth and lineage-marker checks remain.
+Deprecated cap audit columns stay in the TSV schema with false/empty values.
+
+When the purity interval includes values below 25%, source attribution is flagged
+as uncertain; this is a conservative reporting threshold, not a validated accuracy
+boundary or an expression ceiling. Low sample-purity confidence, an over-predicting
+background reference and legacy capped analyses also prevent precise source
+claims. These rows cannot receive confident tumor-source status or quantitative
+source/strength bonuses in target prioritization. The reader figure retains
+measured bulk RNA and omits uncertain tumor TPM estimates and percentages.
+It uses "Tumor source uncertain" and "Non-tumor source plausible"; the latter
+does not establish absence of tumor expression. Technical estimates remain in
+the evidence tables for audit, with uncertainty carried into reader summaries.
+
 An optional LLM language editor remains a separate feature. It may eventually
 improve phrasing over these fixed facts, with review and deterministic output
 available. It must preserve decisions, negation, uncertainty, identifiers, values

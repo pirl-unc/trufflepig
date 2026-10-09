@@ -1007,14 +1007,22 @@ def tumor_attribution_context(row):
     )
     support_fraction = max(0.0, min(1.0, support_fraction))
 
+    # Old saved analyses may still contain the retired numerical ceiling.
+    # Never interpret that ceiling as evidence for either RNA source.
+    legacy_cap = _truthy(row.get("low_purity_cap_applied"))
+    low_purity = (
+        _truthy(row.get("attribution_low_purity"))
+        or _truthy(row.get("sample_low_purity"))
+    )
+    source_uncertain = (
+        legacy_cap or low_purity or _truthy(row.get("matched_normal_over_predicted"))
+    )
     notes = []
     if _truthy(row.get("matched_normal_over_predicted")):
         notes.append(
             "the external tissue reference predicts more RNA than was measured"
         )
-    if _truthy(row.get("low_purity_cap_applied")):
-        notes.append("low-purity cap is active")
-    if _truthy(row.get("sample_low_purity")):
+    if low_purity or legacy_cap:
         notes.append(
             "low estimated tumor fraction — the tumor expression estimate is less certain "
             "(small tumor fraction amplifies attribution noise)"
@@ -1027,10 +1035,14 @@ def tumor_attribution_context(row):
         )
     if _truthy(row.get("tme_explainable")) and support_fraction < 1.0:
         notes.append("non-tumor tissue explanations remain plausible")
-    if _truthy(row.get("tme_dominant")):
+    if _truthy(row.get("tme_dominant")) and not legacy_cap:
         notes.append("most fitted signal remains non-tumor")
 
-    if high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
+    if legacy_cap:
+        tier = "mixed_source"
+        label = "tumor source uncertain"
+        summary = "RNA does not reliably distinguish tumor from non-tumor sources"
+    elif high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
         tier = "background_dominant"
         label = "mostly background"
         summary = "non-tumor compartments remain the simpler explanation"
@@ -1040,6 +1052,7 @@ def tumor_attribution_context(row):
         and support_fraction >= 0.67
         and not _truthy(row.get("matched_normal_over_predicted"))
         and not source_marker
+        and not source_uncertain
     ):
         tier = "tumor_supported"
         label = "mostly tumor"
@@ -1049,7 +1062,10 @@ def tumor_attribution_context(row):
         label = "mixed tumor and background"
         summary = "both tumor and benign/background sources remain plausible"
 
-    if observed > 0:
+    quantifiable = not source_uncertain and mid_tpm > 0 and mid_frac > 0
+    if source_uncertain:
+        band = "tumor contribution uncertain"
+    elif observed > 0:
         band = (
             f"{mid_tpm:.0f} estimated tumor TPM (RNA model; "
             f"model interval {low_tpm:.0f}-{high_tpm:.0f}; "
@@ -1072,7 +1088,8 @@ def tumor_attribution_context(row):
         "attr_tumor_fraction_low": low_frac,
         "attr_tumor_fraction_high": high_frac,
         "attr_support_fraction": support_fraction,
-        "low_purity_cap_applied": _truthy(row.get("low_purity_cap_applied")),
+        "source_uncertain": source_uncertain,
+        "quantifiable": quantifiable,
     }
 
 
@@ -1783,6 +1800,8 @@ def tumor_band_cell(row):
     if not tumor_band_available(row):
         return "—"
     ctx = tumor_attribution_context(row)
+    if ctx["source_uncertain"]:
+        return "Uncertain"
     return (
         f"{ctx['attr_tumor_tpm']:.0f} "
         f"({ctx['attr_tumor_tpm_low']:.0f}-{ctx['attr_tumor_tpm_high']:.0f})"
@@ -1805,8 +1824,8 @@ def target_reliability_reasons(row, *, category=None):
         reasons.append("could come from healthy tissue")
     if _truthy(row.get("source_marker_non_tumor_prior")):
         reasons.append("non-tumor lineage marker")
-    if _truthy(row.get("low_purity_cap_applied")):
-        reasons.append("low-purity capped")
+    if source["source_uncertain"]:
+        reasons.append("tumor contribution uncertain")
     return reasons
 
 

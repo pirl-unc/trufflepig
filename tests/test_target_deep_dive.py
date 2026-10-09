@@ -476,10 +476,11 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     assert len(fig.axes) == 3
     assert fig.axes[1].get_title(loc="left") == "RNA source"
     assert fig.axes[2].get_title(loc="left") == "Healthy-tissue overlap"
-    # The fraction bars preserve modeled tumor share (not tumor-cell-equivalent
-    # TPM, nor the global specimen purity).
+    # The estimable target retains its modeled share. The stromal target gets
+    # a source caveat rather than a precise share next to contradictory text.
     import pytest
-    assert [bar.get_width() for bar in fig.axes[1].patches] == pytest.approx([1, 0.39, 1, 0.39])
+    assert [bar.get_width() for bar in fig.axes[1].patches] == pytest.approx([1, 0.39])
+    assert "Non-tumor source\nplausible" in [text.get_text() for text in fig.axes[1].texts]
     assert not fig.texts
     assert out.with_suffix(".pdf").exists()
     fig.canvas.draw()
@@ -603,5 +604,6 @@ def test_priority_source_does_not_present_caps_or_zero_residual_as_measured_shar
     monkeypatch.setattr(plots, '_priority_target_rows', lambda *a, **kw: ('COAD', rows))
     fig = plots.plot_priority_target_context(pd.DataFrame(), 'COAD')
     labels = [text.get_text() for text in fig.axes[1].texts]
-    assert labels == ['Cap-limited\nsource unresolved', 'No tumor residual\nin this model']
+    assert labels == ['Tumor source\nuncertain', 'Non-tumor source\nplausible']
     assert not fig.axes[1].patches  # neither a 23% share nor a fully background bar
+    assert len(fig.axes[0].collections) == 2  # measured points only, no unsupported tumor estimates
