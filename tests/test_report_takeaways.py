@@ -54,6 +54,7 @@ def test_missing_clinical_results_keep_colorectal_options_visible_without_rna(mo
         assert report_literal(assessment["agent"]) in text
         assert assessment["source_url"] in text
     assert "210496s021lbl.pdf" in text  # Current label accompanies the earlier trial citation.
+    assert text.count("reconcile prior checkpoint therapy and immune toxicity") == 1
 
 
 @pytest.mark.parametrize("result", ["MSS", "pending", "conflicting"])

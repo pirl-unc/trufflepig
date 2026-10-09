@@ -250,7 +250,9 @@ def conditional_therapy_groups(assessments, analysis, *, already_discussed=()):
             if r["status"] == "missing" and (not note or r["kind"] == "hla")
         )
         setting = curation["clinical_setting_note"]
-        if setting and setting.rstrip(". ").casefold() not in note.casefold():
+        # Prefer the concise eligibility note; retain full setting curation in
+        # JSON. Clinical setting remains a report-wide confirmation requirement.
+        if setting and not note:
             criteria.append(setting)
         criteria = tuple(dict.fromkeys(text.rstrip(". ") for text in criteria if text))
         # Group only identical indications and confirmation requirements.
