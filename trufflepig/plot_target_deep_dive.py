@@ -1100,7 +1100,7 @@ def _priority_target_rows(
         if source["source_uncertain"]:
             # A large residual at low purity is not independent evidence
             # of tumor origin. Do not reward its uncalibrated precision.
-            return 0.5
+            return 0.0
         score = {
             "tumor_supported": 4.0,
             "mixed_source": 2.6,

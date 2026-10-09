@@ -607,3 +607,17 @@ def test_priority_source_does_not_present_caps_or_zero_residual_as_measured_shar
     assert labels == ['Tumor source\nuncertain', 'Non-tumor source\nplausible']
     assert not fig.axes[1].patches  # neither a 23% share nor a fully background bar
     assert len(fig.axes[0].collections) == 2  # measured points only, no unsupported tumor estimates
+
+
+def test_uncertain_residual_does_not_add_tumor_priority_points():
+    from trufflepig.plot_target_deep_dive import _priority_target_rows
+
+    ranges = pd.DataFrame([{
+        "symbol": "EGFR", "observed_tpm": 100, "attr_tumor_tpm": 90,
+        "attr_tumor_fraction": 0.9, "attribution_low_purity": True,
+        "therapies": "antibody", "tcga_percentile": 0.99,
+    }])
+    _, rows = _priority_target_rows(ranges, "COAD")
+    assert len(rows) == 1
+    assert rows[0]["source_points"] == 0
+    assert rows[0]["strength_points"] == 0
