@@ -20,7 +20,7 @@ jobs:
       # on the first failure.
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout repository
@@ -91,8 +91,8 @@ jobs:
 
       - name: Run cancer-type evidence tests
         # The evidence tests populate several large model/reference caches.
-        # Give them a fresh serial process; Python 3.9 runners were repeatedly
-        # killed while retaining those caches alongside earlier test state.
+        # Give them a fresh serial process; runners can be killed while
+        # retaining those caches alongside earlier test state.
         # Both invocations retain the wrapper's lock and thread limits.
         run: bash test.sh -v -n 0 tests/test_cancer_type_evidence.py
 

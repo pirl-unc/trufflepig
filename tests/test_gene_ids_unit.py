@@ -77,6 +77,8 @@ def test_lookup_functions_with_fake_genomes(monkeypatch):
     monkeypatch.setattr(gi, "_transcript_id_to_gene_name", {})
     monkeypatch.setattr(gi, "_gene_id_miss_cache", set())
     monkeypatch.setattr(gi, "_transcript_id_miss_cache", set())
+    monkeypatch.setattr(gi, "_load_index_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gi, "_store_index_cache", lambda *_args, **_kwargs: None)
 
     assert gi.find_gene_name_from_ensembl_gene_id("ENSGA", verbose=False) == "GENEA"
     assert (
@@ -109,6 +111,8 @@ def test_lookup_functions_fall_back_to_older_release_on_latest_miss(monkeypatch)
     monkeypatch.setattr(gi, "_transcript_id_to_gene_name", {})
     monkeypatch.setattr(gi, "_gene_id_miss_cache", set())
     monkeypatch.setattr(gi, "_transcript_id_miss_cache", set())
+    monkeypatch.setattr(gi, "_load_index_cache", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(gi, "_store_index_cache", lambda *_args, **_kwargs: None)
 
     assert gi.find_gene_name_from_ensembl_gene_id("ENSGOLD", verbose=False) == "OLDER"
     assert (
