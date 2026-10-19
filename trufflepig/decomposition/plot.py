@@ -26,7 +26,7 @@ _COMPOSITION_PALETTE = [
 def _render_composition_bar(
     ax,
     best,
-    title="Estimated patient RNA composition",
+    title="Estimated sample RNA composition",
 ):
     """Horizontal stacked bar of conditional RNA-mixture model weights."""
     raw_items = sorted(best.fractions.items(), key=lambda item: item[1], reverse=True)
@@ -551,7 +551,7 @@ def plot_decomposition_summary(
     _render_composition_bar(
         ax_frac,
         best,
-        title="Estimated patient RNA composition",
+        title="Estimated sample RNA composition",
     )
 
     # --- Panel 3: TME component breakdown ---

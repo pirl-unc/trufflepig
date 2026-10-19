@@ -50,6 +50,7 @@ What downstream steps use the context for:
 from __future__ import annotations
 
 import math
+from numbers import Real
 from dataclasses import dataclass, field
 
 from .common import without_dataframe_attrs
@@ -146,10 +147,18 @@ def heuristic_support_label(value: float | int | None) -> str:
         return "support unknown"
 
 
+def length_pair_index_available(sample_context: "SampleContext") -> bool:
+    """Whether a finite reported index exists, independent of its severity."""
+    value = sample_context.degradation_index
+    return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
 def length_pair_display_label(sample_context: "SampleContext") -> str:
     index = sample_context.degradation_index
     severity = str(sample_context.degradation_severity or "none")
-    if index is not None and index > _THRESHOLDS["degradation_pair_biased_upper"]:
+    if not length_pair_index_available(sample_context):
+        return "unavailable" + (f"; orthogonal {severity}" if severity != "none" else "")
+    if index > _THRESHOLDS["degradation_pair_biased_upper"]:
         label = "capture-biased"
         if severity and severity != "none":
             label += f"; orthogonal {severity}"
@@ -157,9 +166,7 @@ def length_pair_display_label(sample_context: "SampleContext") -> str:
         label = "no degradation signal"
     else:
         label = severity
-    if index is not None:
-        label += f" ({index:.2f})"
-    return label
+    return f"{label} ({index:.2f})"
 
 
 # ── Thresholds ────────────────────────────────────────────────────────────
@@ -1111,9 +1118,9 @@ def plot_sample_context(
     }.get(sample_context.degradation_severity, "#666666")
 
     header_lines = [
-        (
-            f"Library:       {prep_label} "
-            f"({heuristic_support_label(sample_context.library_prep_confidence)})"
+        "Library:       " + prep_label + (
+            f" ({heuristic_support_label(sample_context.library_prep_confidence)})"
+            if sample_context.library_prep != "unknown" else ""
         ),
         f"Preservation:  {pres_label}",
         f"Length-pair:   {length_pair_display_label(sample_context)}",
@@ -1138,7 +1145,7 @@ def plot_sample_context(
             fontsize=11,
             va="top",
             family="monospace",
-            color=severity_color if i == 2 else "black",
+            color=(severity_color if length_pair_index_available(sample_context) else "#666666") if i == 2 else "black",
         )
     if concentration_line:
         ax_text.text(
@@ -1151,15 +1158,19 @@ def plot_sample_context(
         )
 
     # Bottom panel: diagnostic bars
-    signals = sample_context.signals
-    hist_frac = signals.get("histone_fraction", 0.0) or 0.0
-    mt_frac = signals.get("mt_fraction", 0.0) or 0.0
-    mt_rrna_frac = signals.get("mt_rrna_fraction_of_mt") or 0.0
+    signals = sample_context.signals or {}
+    hist_frac = signals.get("histone_fraction")
+    mt_frac = signals.get("mt_fraction")
+    mt_rrna_frac = signals.get("mt_rrna_fraction_of_mt")
 
     bars = []
     signal_keys = []
 
     def _append_bar(label, value, threshold, threshold_name, signal_key):
+        # A missing/undefined fraction has no numeric bar or range judgment.
+        # Keep an explicit observed zero; never coerce absent data into it.
+        if not isinstance(value, Real) or isinstance(value, bool) or not math.isfinite(value) or not 0 <= value <= 1:
+            value = None
         bars.append((label, value, threshold, threshold_name))
         signal_keys.append(signal_key)
 
@@ -1197,7 +1208,7 @@ def plot_sample_context(
     if top_10_share is not None:
         _append_bar(
             "Top-10 TPM share\n(expression concentration QC)",
-            float(top_10_share),
+            top_10_share,
             0.60,
             "QC flag",
             "top_10_share_of_total_tpm",
@@ -1238,7 +1249,6 @@ def plot_sample_context(
     # apply to every prep.
     expectations = _load_artifact_expectations()
     bar_bands = []
-    in_band_count = 0
     for yi, sig_key in zip(y, signal_keys):
         gene_class = _GENE_CLASS_TO_SIGNAL.get(sig_key)
         band = (
@@ -1248,20 +1258,12 @@ def plot_sample_context(
                 sample_context.preservation,
                 gene_class,
             )
-            if gene_class
+            if gene_class and values[yi] is not None
             else None
         )
         bar_bands.append(band)
         if band is not None:
             lo, hi, _ = band
-            ax_bars.axhspan(
-                yi - 0.35,
-                yi + 0.35,
-                xmin=0.0,
-                xmax=1.0,
-                facecolor="none",
-                edgecolor="none",  # no-op placeholder
-            )
             # Use axvspan-shape-per-row: draw a narrow patch via bar
             # on a secondary layer to keep implementation simple.
             ax_bars.barh(
@@ -1274,25 +1276,17 @@ def plot_sample_context(
                 height=0.75,
                 zorder=0,
             )
-            val = (
-                values[yi]
-                if sig_key
-                in ("histone_fraction", "mt_fraction", "mt_rrna_fraction_of_mt")
-                else None
-            )
-            if val is not None and lo <= val <= hi:
-                in_band_count += 1
-
-    ax_bars.barh(y, values, color="#4682b4", alpha=0.85)
+    observed = [(yi, value) for yi, value in zip(y, values) if value is not None]
+    ax_bars.barh([yi for yi, _ in observed], [value for _, value in observed], color="#4682b4", alpha=0.85)
     ax_bars.set_yticks(y)
     label_fontsize = 8 if len(bars) > 4 else 9
     ax_bars.set_yticklabels(labels, fontsize=label_fontsize)
-    ax_bars.invert_yaxis()
+    ax_bars.set_ylim(len(bars) - 0.5, -0.65)
     # #102: with exome-capture samples every value is ~0 and a raw axis
     # (xlim = 1.0) produces a chart that looks empty. Give a minimum axis
     # width tied to the thresholds so bars remain readable, and annotate
     # the "all near zero" case with the plausible library-prep explanation.
-    max_value = max(values) if values else 0.0
+    max_value = max((value for _, value in observed), default=0.0)
     max_threshold = max((b[2] for b in bars), default=0.0)
     max_band_hi = max((band[1] for band in bar_bands if band is not None), default=0.0)
     if max_value < 0.01:
@@ -1312,6 +1306,10 @@ def plot_sample_context(
             ha="left",
         )
     for yi, val, band in zip(y, values, bar_bands):
+        if val is None:
+            ax_bars.text(0.01, yi, "unavailable", va="center", fontsize=9, color="#666666",
+                         transform=ax_bars.get_yaxis_transform())
+            continue
         if band is not None:
             lo, hi, _ = band
             status = (
@@ -1341,27 +1339,26 @@ def plot_sample_context(
             val, yi, f"  {val:.3f} {status}", va="center", fontsize=9, color=text_color
         )
 
-    if max_value < 0.01:
-        # Show the user what "all near zero" means rather than leaving a
-        # visually empty plot. Exome / hybrid-capture library prep strips
-        # non-polyadenylated RNAs (histones, mitochondrial), so near-zero
-        # values are the expected pattern — not a quality problem.
+    diagnostic_values = values[:3]
+    all_diagnostics_observed = all(value is not None for value in diagnostic_values)
+    if all_diagnostics_observed and max(diagnostic_values) < 0.01:
         explanation = (
-            "All diagnostic signals are near zero — consistent with\n"
-            "exome / hybrid-capture library prep (non-polyadenylated\n"
-            "RNAs are filtered). Interpret MT / histone fractions\n"
-            "relative to the expected floor for this prep, not as\n"
-            "degradation evidence."
+            "Observed diagnostic fractions are near zero.\n"
+            + (
+                "This is consistent with the inferred RNA capture\nlibrary preparation."
+                if sample_context.library_prep == "exome_capture" else
+                "These fractions alone do not establish library\npreparation or degradation."
+            )
         )
         ax_bars.text(
             0.98,
-            0.05,
+            -0.30,
             explanation,
             transform=ax_bars.transAxes,
             fontsize=8,
             color="#444444",
             ha="right",
-            va="bottom",
+            va="top",
             bbox=dict(
                 boxstyle="round,pad=0.4",
                 facecolor="#f5f5dc",

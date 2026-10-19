@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 import hashlib
+import math
 import re
 from typing import Any
 
@@ -143,6 +144,105 @@ def msi_mmr_requirement(analysis, *, rna_triage: bool = False) -> EvidenceRequir
     )
 
 
+def tmb_criterion_for_therapy(target_row):
+    """Resolve a supplied criterion or the sourced pembrolizumab TMB criterion.
+
+    This does not assign the pembrolizumab threshold to other agents, regimens
+    or biomarker paths. Uncurated TMB criteria remain unresolved.
+    """
+    from .clinical_context import TmbCriterion, validated_fields
+    from .therapeutic_agents import resolve_therapy_identity
+
+    if indication_biomarker(target_row) != "tmb_high":
+        return None
+    supplied = target_row.get("tmb_criterion")
+    if isinstance(supplied, TmbCriterion):
+        return supplied
+    if clean_therapy_value(supplied):
+        return TmbCriterion(**validated_fields(TmbCriterion, supplied))
+    identity = resolve_therapy_identity(target_row.get("agent"))
+    if identity.registered and identity.canonical_name.casefold() == "pembrolizumab":
+        return TmbCriterion(
+            minimum=10, unit="mut/Mb", specimen_type="tissue",
+            accepted_test_ids=("FDA:P170019",),
+            source="https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P170019S016",
+        )
+    return None
+
+
+def tmb_requirement(target_row, analysis=None) -> EvidenceRequirement:
+    """One absolute-assay decision for TMB selection, rationale and requests."""
+    from .clinical_context import clinical_context_for_analysis, evaluate_tmb
+    from .report_language import render_report_paragraph
+
+    criterion = tmb_criterion_for_therapy(target_row)
+    decision = evaluate_tmb(clinical_context_for_analysis(analysis), criterion=criterion)
+    status = {"positive": "satisfied", "negative": "blocked", "conflicting": "unresolved",
+              "unresolved": "unresolved", "missing": "missing"}[decision.status]
+    evidence = {**decision.public_dict(), "criterion": criterion.public_dict() if criterion else None}
+    question = (
+        "Supply the clinical TMB result with its absolute value in mutations/Mb, test identifier, specimen material, validity, reportability and source."
+        if decision.status == "missing" else
+        "Reconcile the clinical TMB measurement, source, assay validity and reportability with the required test, specimen and threshold."
+    )
+    if criterion:
+        question += f" Required criterion: at least {criterion.minimum:g} {criterion.unit}; {criterion.specimen_type}; accepted test IDs: {', '.join(criterion.accepted_test_ids)}."
+    else:
+        question += " Supply a sourced treatment-specific TMB criterion; no threshold is assumed."
+    if decision.specimen_id:
+        question += f" Required specimen: {decision.specimen_id}."
+    # The requested fact is one TMB report. Per-path thresholds remain in the
+    # deduplicated request's evidence and affected-treatment details.
+    return EvidenceRequirement(
+        "tmb_high", "tmb_high", status,
+        render_report_paragraph("clinical_assay_decision", decision=evidence), question,
+        ("--clinical-context JSON: assays[kind=tmb]", "clinical TMB assay report with absolute value and units"),
+        source=criterion.source if criterion else "",
+        evidence=evidence, priority="high" if decision.status == "conflicting" else "routine",
+    )
+
+
+def clinical_assay_requirements(target_row, analysis=None) -> tuple[EvidenceRequirement, ...]:
+    """Evaluate the qualitative companion criteria declared on the therapy row.
+
+    The analyte and clinical result are independent of the drug-target symbol.
+    Every declared criterion remains a separate requirement, so one assay cannot
+    establish another assay or a combined wild-type molecular requirement.
+    """
+    from .clinical_context import (
+        ClinicalAssayCriterion, clinical_context_for_analysis, evaluate_clinical_assay, validated_fields,
+    )
+    from .report_language import render_report_paragraph
+
+    declared = target_row.get("clinical_assay_criteria") if target_row is not None else None
+    if declared is None or (not isinstance(declared, (list, tuple)) and not clean_therapy_value(declared)):
+        return ()
+    if not isinstance(declared, (list, tuple)):
+        raise ValueError("Therapy clinical_assay_criteria must be an array")
+    context = clinical_context_for_analysis(analysis)
+    requirements = []
+    for item in declared:
+        criterion = item if isinstance(item, ClinicalAssayCriterion) else ClinicalAssayCriterion(
+            **validated_fields(ClinicalAssayCriterion, item)
+        )
+        decision = evaluate_clinical_assay(context, criterion=criterion)
+        status = {"positive": "satisfied", "negative": "blocked", "conflicting": "unresolved",
+                  "unresolved": "unresolved", "missing": "missing"}[decision.status]
+        evidence = {**decision.public_dict(), "criterion": criterion.public_dict()}
+        question = render_report_paragraph(
+            "clinical_assay_request", decision=evidence,
+            pending=bool(decision.assays) and all(a["result"] == "pending" for a in decision.assays),
+        )
+        requirements.append(EvidenceRequirement(
+            f"{criterion.kind}:{criterion.analyte}", "clinical_target_assay", status,
+            render_report_paragraph("clinical_assay_decision", decision=evidence), question,
+            (f"--clinical-context JSON: assays[kind={criterion.kind}, analyte={criterion.analyte}]",
+             "clinical companion-assay report"), criterion.source, evidence,
+            priority="high" if decision.status == "conflicting" else "routine",
+        ))
+    return tuple(requirements)
+
+
 def evaluate_therapy_eligibility(
     target_row, analysis=None, *, panel_subtype=None
 ) -> TherapyEligibility:
@@ -156,7 +256,13 @@ def evaluate_therapy_eligibility(
     supported_history = treatment_history_supports_review(target_row, analysis)
     variant_match = bool(supplied_variant_supports_target_row(target_row, analysis))
     biomarker = indication_biomarker(target_row)
-    direct_match = direct_eligibility_evidence_supported(analysis, biomarker)
+    assay_requirements = clinical_assay_requirements(target_row, analysis)
+    direct_match = (
+        all(r.status == "satisfied" for r in assay_requirements)
+        if assay_requirements and biomarker in {"clinical_target_assay", "target_expression"}
+        else direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row)
+    )
+    requirements.extend(assay_requirements)
     history_text = treatment_history_context(target_row, analysis)
     if treatment_history_blocks_row(target_row, analysis) or treatment_history_marks_current(
         target_row, analysis
@@ -184,6 +290,8 @@ def evaluate_therapy_eligibility(
             "mismatched": "blocked",
             "excluded": "blocked",
             "insufficient_resolution": "unresolved",
+            "conflicting": "unresolved",
+            "unresolved": "unresolved",
             "unknown": "missing",
         }[hla["status"]]
         requirements.append(
@@ -192,16 +300,23 @@ def evaluate_therapy_eligibility(
                 "hla",
                 status,
                 hla_eligibility_context(target_row, analysis=analysis),
-                "Supply or reconcile high-resolution HLA typing, including all reported allele fields and annotations.",
-                ("HLA typing report", "--hla-types"),
+                hla["reason"] + " Supply the clinical HLA typing report with alleles, complete loci, source, specimen and assay quality."
+                if hla["status"] in {"conflicting", "unresolved", "insufficient_resolution"} else
+                "Supply the clinical HLA typing report, including all allele fields and annotations, complete loci, source, specimen and assay quality.",
+                ("--clinical-context JSON: assays[kind=hla]", "clinical HLA typing report"),
                 hla.get("source", ""),
                 evidence=hla,
+                priority="high" if hla["status"] == "conflicting" else "routine",
             )
         )
 
     if biomarker == "msi_high":
         requirements.append(msi_mmr_requirement(analysis))
-    elif therapy_row_requires_confirmed_eligibility(target_row):
+    elif biomarker == "tmb_high":
+        requirements.append(tmb_requirement(target_row, analysis))
+    elif therapy_row_requires_confirmed_eligibility(target_row) and not (
+        assay_requirements and biomarker in {"clinical_target_assay", "target_expression"}
+    ):
         gene = canonical_target_symbol(target_row.get("symbol"))
         label = indication_biomarker_label(target_row)
         alleles = required_protein_changes_for_therapy(target_row)
@@ -216,17 +331,11 @@ def evaluate_therapy_eligibility(
         accepted = {
             "mutation": ("clinical variant report", "normalized variant table", "--variants"),
             "wildtype": ("clinical molecular report with assay coverage and negative results",),
-            "msi_high": (
-                "MSI-PCR result",
-                "MMR IHC report",
-                "validated clinical sequencing result",
-            ),
-            "tmb_high": ("clinical TMB result with absolute mutations/Mb and assay method",),
             "clinical_target_assay": ("validated protein or companion-assay report",),
             "imaging": ("required target-imaging report",),
             "histology_only": ("pathology report", "confirmed disease and treatment setting"),
         }.get(biomarker, ("indication-specific clinical report",))
-        key = biomarker if biomarker in {"msi_high", "tmb_high"} else f"{biomarker}:{gene}"
+        key = f"{biomarker}:{gene}"
         from .variants import variant_evidence_records
 
         supplied_gene_records = [
@@ -270,6 +379,85 @@ def evaluate_therapy_eligibility(
             )
         )
     return TherapyEligibility(tuple(requirements), supported_history, variant_match, direct_match)
+
+
+@dataclass(frozen=True)
+class TherapyReviewDecision:
+    """Clinical and RNA review outcome before ranking or shortlist truncation.
+
+    ``status`` and ``reason`` identify the first unmet selection criterion.
+    Complete clinical requirements and the independent RNA observation remain
+    available even when that criterion prevents review.
+    """
+
+    status: str
+    reason: str
+    eligibility: TherapyEligibility
+    observation: dict[str, Any]
+    reliability_status: str
+
+    @property
+    def permits_review(self) -> bool:
+        return self.status == "reviewable"
+
+
+def evaluate_therapy_review(
+    target_row, expression=None, *, analysis=None, panel_subtype=None,
+    ranges_df=None, disease_state=None,
+) -> TherapyReviewDecision:
+    """Apply the shortlist's clinical, disease-state and RNA criteria once.
+
+    Ranking and authored reports consume this same decision. RNA-independent
+    indications and supplied prior benefit retain the established RNA exceptions;
+    neither exception overrides a clinical exclusion or conflicting evidence.
+    """
+    from .reporting import (
+        expression_independent_indication,
+        interval_material_target_candidate,
+        same_lineage_material_target_candidate,
+        target_reliability_status,
+        target_rna_observation,
+        therapy_row_rna_context_inactive,
+    )
+
+    eligibility = evaluate_therapy_eligibility(target_row, analysis, panel_subtype=panel_subtype)
+    observation = target_rna_observation(
+        expression, symbol=canonical_target_symbol(target_row.get("symbol")), ranges_df=ranges_df
+    )
+    evidence = expression if expression is not None else {}
+    reliability = target_reliability_status(evidence, target_row=target_row)
+    independent = expression_independent_indication(target_row)
+    history = eligibility.history_supported
+    status, reason = "reviewable", "The row meets the criteria for ranked clinical review."
+    if not eligibility.permits_review:
+        status = "clinical_blocker" if eligibility.has_known_blocker else "eligibility_pending"
+        unmet = [r for r in eligibility.requirements if r.status == "blocked"]
+        if not unmet:
+            unmet = [r for r in eligibility.requirements if r.status in {"missing", "unresolved"}]
+        reason = " ".join(dict.fromkeys(r.description for r in unmet))
+    elif therapy_row_rna_context_inactive(
+        target_row, analysis=analysis, disease_state=disease_state
+    ) and not history:
+        status, reason = "inactive_disease_context", "The RNA disease-state context does not support this pathway."
+    elif not (independent or history):
+        if observation["state"] in {"invalid", "unknown", "not_in_input"}:
+            status, reason = "rna_unavailable", "Usable target RNA evidence is unavailable for this RNA-dependent pathway."
+        elif (observation["observed_tpm"] or 0.0) < 1.0:
+            status, reason = "rna_below_threshold", "Target RNA is below the 1 TPM discovery threshold; this is not a clinical contraindication."
+        else:
+            try:
+                fraction = float(evidence.get("attr_tumor_fraction", 0.0))
+            except (TypeError, ValueError):
+                fraction = 0.0
+            if not math.isfinite(fraction):
+                fraction = 0.0
+            lineage = same_lineage_material_target_candidate(evidence, target_row=target_row)
+            interval = interval_material_target_candidate(evidence, target_row=target_row)
+            if (fraction < 0.30 and not lineage and not interval) or (
+                reliability == "unsupported" and not interval
+            ):
+                status, reason = "rna_source_unsupported", "Target RNA does not meet the shortlist's tumor-source support criteria."
+    return TherapyReviewDecision(status, reason, eligibility, observation, reliability)
 
 
 def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
@@ -344,6 +532,12 @@ def collect_evidence_requests(assessments: list[dict]) -> list[dict]:
                 request["priority"] = "high"
     for request in groups:
         del request["question_signatures"]
+        labels = list(dict.fromkeys(
+            e["criterion"]["label"] for e in request["evidence"]
+            if e.get("criterion") and e["criterion"].get("label")
+        ))
+        if labels:
+            request["label"] = " / ".join(labels)
         details = request["details"]
         request["details"] = [
             {

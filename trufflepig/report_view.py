@@ -9,18 +9,100 @@ it with later values from the analysis dictionary.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import math
 from numbers import Real
 from typing import Any, Optional, Tuple
 
 from .confidence import (
+    BULK_PURITY_REFERENCE_SOURCES,
     ConfidenceTier,
     compute_call_confidence,
+    purity_fraction,
     purity_confidence_for_analysis,
+    sample_purity_is_low,
 )
 
 
 PurityScenario = Tuple[str, Optional[float], Optional[float], Optional[float]]
+
+
+@dataclass(frozen=True)
+class PurityMethodEstimate:
+    """One displayed method estimate, separate from the adopted report value.
+
+    Shared inputs and enrichment-derived estimates are not independent assays.
+    ``family`` retains that distinction in the figure and structured report.
+    """
+
+    label: str
+    estimate: float
+    lower: Optional[float] = None
+    upper: Optional[float] = None
+    family: str = ""
+    genes: int = 0
+    note: str = ""
+
+
+def purity_method_estimates(purity: Mapping[str, Any], decomposition=None) -> Tuple[PurityMethodEstimate, ...]:
+    """Collect the existing quantitative figure rows without refitting a model.
+
+    Tumor-only lineage references cannot measure admixture. ESTIMATE components
+    retain the existing bulk-reference odds conversion and are labeled derived.
+    Missing/invalid values cannot supply a method or establish agreement.
+    """
+    components = purity.get("components") or {}
+    bulk_reference = purity.get("reference_expression_source") in BULK_PURITY_REFERENCE_SOURCES
+    methods = []
+    for family, label in (("signature", "Tumor-specific signature"), ("lineage", "Lineage panel")):
+        component = components.get(family) or {}
+        point = purity_fraction(component.get("purity"))
+        if point is None or (family == "lineage" and not bulk_reference):
+            continue
+        note = " (deprioritized)" if family == "signature" and (
+            components.get("integration") or {}).get("signature_deprioritized") else ""
+        methods.append(PurityMethodEstimate(
+            label, point, purity_fraction(component.get("lower")), purity_fraction(component.get("upper")),
+            family, len(component.get("genes") or []), note,
+        ))
+    residual = components.get("decomposition") or {}
+    residual_fraction = purity_fraction(residual.get("residual_fraction"))
+    if residual_fraction is not None:
+        methods.append(PurityMethodEstimate(
+            "Background-residual fraction", residual_fraction, family="decomposition",
+            note=f" [{residual.get('mode', 'lineage-routed')}]",
+        ))
+    elif decomposition is not None:
+        point = purity_fraction(getattr(decomposition, "purity", None))
+        warnings = getattr(decomposition, "warnings", None) or []
+        if point is not None and not any("No non-tumor" in str(warning) for warning in warnings):
+            methods.append(PurityMethodEstimate(
+                "Decomposition (NNLS)", point, family="decomposition",
+                note=f" [{getattr(decomposition, 'cancer_type', '')} / {getattr(decomposition, 'template', '')}]",
+            ))
+    median = purity_fraction(purity.get("tcga_median_purity"))
+    if bulk_reference and median is not None and median > 0:
+        odds_nontumor = (1 - median) / max(median, 1e-6)
+        for family in ("stromal", "immune"):
+            component = components.get(family) or {}
+            enrichment = component.get("enrichment")
+            if enrichment is None or isinstance(enrichment, bool):
+                continue
+            try:
+                enrichment = float(enrichment)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(enrichment):
+                continue
+            point = 1 / (1 + odds_nontumor * max(enrichment, 0))
+            methods.append(PurityMethodEstimate(
+                f"ESTIMATE {family} (derived)", point, family="estimate",
+                genes=component.get("n_genes", 0),
+            ))
+    combined = purity_fraction(components.get("estimate_purity"))
+    if combined is not None:
+        methods.append(PurityMethodEstimate("ESTIMATE combined (derived)", combined, family="estimate"))
+    return tuple(methods)
 
 
 @dataclass(frozen=True)
@@ -35,6 +117,34 @@ class Purity:
     status: str
     scenarios: Tuple[PurityScenario, ...]
     unresolved_reason: Optional[str] = None
+    methods: Tuple[PurityMethodEstimate, ...] = ()
+
+    @property
+    def is_unresolved(self) -> bool:
+        return self.status == "discordant_estimators"
+
+    @property
+    def at_ceiling(self) -> bool:
+        return self.estimate is not None and self.estimate >= 0.995
+
+    @property
+    def is_low(self) -> bool:
+        return sample_purity_is_low(self.confidence)
+
+    @property
+    def has_wide_interval(self) -> bool:
+        return self.lower is not None and self.upper is not None and self.upper - self.lower >= 0.35
+
+    @property
+    def method_range(self) -> Optional[Tuple[float, float]]:
+        points = [method.estimate for method in self.methods]
+        return (min(points), max(points)) if points else None
+
+    @property
+    def methods_exceed_interval(self) -> bool:
+        bounds = self.method_range
+        return bool(bounds and len(self.methods) > 1 and self.lower is not None and self.upper is not None
+                    and (bounds[0] < self.lower or bounds[1] > self.upper))
 
     @classmethod
     def from_analysis(cls, analysis: Mapping[str, Any]) -> "Purity":
@@ -99,6 +209,9 @@ class Purity:
                 if purity.get("quantitative_unresolved_reason")
                 else None
             ),
+            methods=purity_method_estimates(
+                purity, next(iter(analysis.get("decomposition_results") or ()), None),
+            ),
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -109,9 +222,11 @@ class Purity:
             "purity_hi": self.upper,
             "purity_method": self.method,
             "purity_confidence": self.confidence.tier,
+            "purity_confidence_reasons": list(self.confidence.reasons),
             "purity_status": self.status,
             "purity_scenarios": self.scenarios,
             "purity_unresolved_reason": self.unresolved_reason,
+            "purity_methods": [asdict(method) for method in self.methods],
         }
 
 

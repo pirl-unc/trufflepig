@@ -61,7 +61,8 @@ from .analyze import (
 from .decomposition import CancerTypeDecision
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
-from .report_view import ReportView
+from .report_view import Purity, ReportView
+from .report_language import render_report_paragraph
 from .sample_context import (
     heuristic_support_label,
     library_prep_clause,
@@ -499,8 +500,18 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
         from .therapy_eligibility import msi_mmr_requirement
 
         return _with_proxy(msi_mmr_requirement(analysis).description)
+    if biomarker == "tmb_high":
+        from .therapy_eligibility import tmb_requirement
+
+        return _with_proxy(tmb_requirement(target_row, analysis).description)
+    if biomarker in {"clinical_target_assay", "target_expression"}:
+        from .therapy_eligibility import clinical_assay_requirements
+
+        requirements = clinical_assay_requirements(target_row, analysis)
+        if requirements:
+            return _with_proxy(" ".join(r.description for r in requirements))
     if biomarker == "histology_only":
-        if direct_eligibility_evidence_supported(analysis, biomarker):
+        if direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row):
             return _with_proxy("")
         return _with_proxy(
             "eligibility evidence not supplied to this run: confirm diagnosis/"
@@ -516,7 +527,7 @@ def _expression_independent_evidence_gap(target_row, analysis) -> str:
             "target-specific supporting call was recognized for this row; "
             f"confirm {label} before treating as eligible"
         )
-    if biomarker != "mutation" and direct_eligibility_evidence_supported(analysis, biomarker):
+    if biomarker != "mutation" and direct_eligibility_evidence_supported(analysis, biomarker, target_row=target_row):
         return _with_proxy(
             f"required eligibility evidence was supplied to this run; verify the "
             f"{label} call matches the indication"
@@ -587,8 +598,7 @@ def recommend_therapies(
     id_to_row = ranges_by_gene_id(ranges_df)
     sym_to_row = ranges_by_symbol(ranges_df)
 
-    from .therapy_eligibility import evaluate_therapy_eligibility
-    from .reporting import target_rna_observation
+    from .therapy_eligibility import evaluate_therapy_review
 
     phase_priority = {
         "approved": 0,
@@ -607,60 +617,19 @@ def recommend_therapies(
         if expr is None:
             expr = sym_to_row.get(sym)
         expr_independent = expression_independent_indication(t)
-        eligibility = evaluate_therapy_eligibility(t, analysis, panel_subtype=panel_subtype)
-        history_supported = eligibility.history_supported
-        if not eligibility.permits_review:
+        review = evaluate_therapy_review(
+            t, expr, analysis=analysis, panel_subtype=panel_subtype,
+            ranges_df=ranges_df, disease_state=disease_state,
+        )
+        if not review.permits_review:
             continue
-        if therapy_row_rna_context_inactive(
-            t,
-            analysis=analysis,
-            disease_state=disease_state,
-        ) and not history_supported:
-            continue
-        supplied_variant_match = eligibility.supplied_variant_supported
-        direct_eligibility_match = eligibility.direct_evidence_supported
+        eligibility = review.eligibility
         supplied_variant_rank = (
-            0 if supplied_variant_match or direct_eligibility_match else 1
+            0 if eligibility.supplied_variant_supported or eligibility.direct_evidence_supported else 1
         )
-        if expr is None and not (expr_independent or history_supported):
-            continue
         expression = expr if expr is not None else {}
-        observation = target_rna_observation(expr, symbol=sym, ranges_df=ranges_df)
-        if observation["state"] in {"invalid", "unknown"} and not (expr_independent or history_supported):
-            continue
-        observed = observation["observed_tpm"] or 0.0
-        if observed < 1.0 and not expr_independent and not history_supported:
-            # Low RNA abundance does not meet this discovery threshold.
-            # The full landscape in targets.md has the absence noted.
-            continue
         attr_tumor = float(expression.get("attr_tumor_tpm") or 0.0)
-        attr_fraction = _brief_float(expression.get("attr_tumor_fraction"), 0.0)
-        lineage_material = same_lineage_material_target_candidate(
-            expression,
-            target_row=t,
-        )
-        interval_material = interval_material_target_candidate(expression, target_row=t)
-        # Drop rows that are mostly non-tumor from the top-3 — they
-        # don't belong in the clinician handoff per #79 semantics.
-        # Same-lineage clinical targets are a special case: a prostate
-        # lineage marker assigned partly to matched-normal prostate is
-        # source-ambiguous, not equivalent to an immune/stromal target.
-        if (
-            attr_fraction < 0.30
-            and not expr_independent
-            and not history_supported
-            and not lineage_material
-            and not interval_material
-        ):
-            continue
-        reliability_status = target_reliability_status(expression, target_row=t)
-        if (
-            reliability_status == "unsupported"
-            and not interval_material
-            and not history_supported
-            and not expr_independent
-        ):
-            continue
+        reliability_status = review.reliability_status
         # Note (#128): we deliberately do NOT filter on
         # ``broadly_expressed`` here. The caller's ``targets_df`` is
         # the **curated** cancer-key-genes panel (#110) — every row
@@ -968,7 +937,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
         "is a caveat, not an automatic exclusion; supplied patient evidence, "
         "clinical outcomes, eligibility, and maturity set priority before RNA.*",
         "",
-        "| Gene | Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
+        "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
     ]
     for row in rows:
@@ -1064,35 +1033,18 @@ def _curated_target_panel_for_sample(cancer_code, analysis, ranges_df=None):
     return panel_code, panel_subtype, targets_df.reset_index(drop=True)
 
 
-def _caveats_from_purity_tier(
-    purity_tier,
+def report_interpretation_limits(
+    purity: Purity,
     sample_context,
     analysis=None,
 ) -> List[str]:
-    """User-facing caveat lines for the brief.
-
-    Converts the ``purity_tier.reasons`` (which are short internal
-    strings) into full sentences without internal jargon.
-    """
-    if purity_tier is None:
-        return []
-    reasons = getattr(purity_tier, "reasons", []) or []
-    out = []
+    """Render interpretation limits from frozen purity and sample-QC evidence."""
+    reasons = purity.confidence.reasons
+    attribution = render_report_paragraph("purity_attribution", purity=purity)
+    out = [attribution] if attribution else []
     for reason in reasons:
         r = str(reason)
-        if "wide purity CI" in r:
-            out.append(
-                "Purity range is wide — target TPMs "
-                "could be over- or under-stated depending on the true "
-                "purity."
-            )
-        elif "low-purity regime" in r:
-            out.append(
-                "Sample is in a low-purity regime — raw target TPMs "
-                "tend to overstate tumor presence. Prefer the tumor-"
-                "attributed values."
-            )
-        elif "severe RNA degradation" in r:
+        if "severe RNA degradation" in r:
             out.append(
                 "RNA is severely degraded — long-transcript targets "
                 "are systematically under-counted; interpret "
@@ -1109,24 +1061,6 @@ def _caveats_from_purity_tier(
                 "whole-transcriptome — relative expression estimates "
                 "should be interpreted within the panel only."
             )
-        elif "single-method purity reading uncorroborated" in r:
-            out.append(
-                "One purity method read much higher than the others "
-                "with no independent support, so the reported purity "
-                "reflects the agreement of the remaining methods rather "
-                "than that single high reading."
-            )
-    purity = (analysis or {}).get("purity") or {}
-    try:
-        purity_point = float(purity.get("overall_estimate"))
-    except (TypeError, ValueError):
-        purity_point = None
-    if purity_point is not None and purity_point >= 0.995:
-        out.append(
-            "The RNA model reached its purity ceiling because it did not resolve "
-            "a separable non-tumor fraction. Do not interpret this as literal 100% "
-            "tumor cellularity."
-        )
     # Library prep / preservation note from sample_context.
     if sample_context is not None:
         prep = getattr(sample_context, "library_prep", None)
@@ -1981,43 +1915,6 @@ def mismatch_repair_rna_state(analysis: dict) -> str:
     return "MSI-like" if probability >= threshold else "MSS-like"
 
 
-# MLH1 at/above this fraction of the cohort-typical (median tumor) MLH1 counts as
-# "retained" RNA. This is an expression-context threshold, not a methylation or
-# protein-function assay; background cells can contribute bulk MLH1 RNA.
-# Within-sample rank cannot see cohort-relative expression loss —
-# MLH1 is moderately expressed, so a silenced MLH1 still sits above the sample median.
-_MLH1_RETAINED_COHORT_RATIO = 0.5
-
-
-def _mlh1_msi_tension_clause(mmr: dict) -> str:
-    """Flag the tension when the ensemble calls MSI-like yet MLH1 mRNA is retained.
-
-    Retained bulk MLH1 does not establish tumor MMR function: other MMR defects
-    need not lower MLH1 RNA, and non-tumor cells may contribute the signal.
-    POLE proofreading defects can cause hypermutation without MSI (PMID:28404093)
-    and must not be narrated as an inferred MSI mechanism. Retention is
-    judged against the cohort-typical MLH1 (``cohort_ratio``, added in
-    ``cancer_type_evidence``); absent that ratio the clause does not fire.
-    """
-    mlh1 = mmr.get("mlh1_expression") or {}
-    ratio = mlh1.get("cohort_ratio")
-    if (
-        not isinstance(ratio, (int, float))
-        or not math.isfinite(ratio)
-        or ratio < _MLH1_RETAINED_COHORT_RATIO
-    ):
-        return ""
-    tpm = mlh1.get("tpm")
-    tpm_clause = f"{tpm:.0f} TPM, " if isinstance(tpm, (int, float)) else ""
-    return (
-        f" However, bulk MLH1 mRNA is retained ({tpm_clause}{round(ratio * 100)}% of the "
-        "cohort-typical level), so this profile does not show an MLH1-low RNA pattern. "
-        "Other MMR defects can leave MLH1 expression intact, and background cells "
-        "can contribute MLH1 RNA; retained bulk expression does not exclude MSI "
-        "or tumor-specific MLH1 loss."
-    )
-
-
 def mismatch_repair_summary_line(
     analysis: dict,
     *,
@@ -2037,25 +1934,25 @@ def mismatch_repair_summary_line(
     if not state_label:
         return ""
     state = "MSI" if state_label == "MSI-like" else "MSS"
-    tension_clause = _mlh1_msi_tension_clause(mmr) if state == "MSI" else ""
-    context = str(mmr.get("context_group") or "").strip()
-    context_clause = f"{context} " if context else ""
+    mlh1 = mmr.get("mlh1_expression") or {}
+    observed = {
+        key: value for key, value in mlh1.items()
+        if key in {"tpm", "cohort_ratio"}
+        and isinstance(value, (int, float)) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
+    }
     subtype_state = _mismatch_repair_state_from_code(winning_subtype)
-    subtype_clause = ""
-    if subtype_state and subtype_state != state:
-        subtype_clause = (
-            f" This conflicts with the candidate-trace subtype "
-            f"{winning_subtype}; treat MSI/MSS as unresolved RNA context."
-        )
-    elif subtype_state:
-        subtype_clause = (
-            f" This agrees with the candidate-trace subtype {winning_subtype}."
-        )
-    return (
-        f"**Mismatch-repair RNA context:** {context_clause}MMR ensemble favors "
-        f"{state_label} expression state (MSI-like probability {p_msi:.2f})."
-        f"{tension_clause}{subtype_clause} RNA expression does not establish "
-        "clinical MSI/MMR status or immunotherapy eligibility."
+
+    return render_report_paragraph(
+        "mismatch_repair_rna",
+        context=str(mmr.get("context_group") or "").strip(),
+        state_label=state_label,
+        probability=f"{p_msi:.2f}",
+        mlh1_tpm=f"{observed['tpm']:.3g}" if "tpm" in observed else "",
+        mlh1_cohort_percent=str(round(observed["cohort_ratio"] * 100))
+        if "tpm" in observed and "cohort_ratio" in observed else "",
+        subtype=winning_subtype if subtype_state else "",
+        subtype_agrees=subtype_state == state,
     )
 
 
@@ -2273,7 +2170,7 @@ def _notable_cta_outliers(ranges_df, *, top_n: int = 3):
     CTAs are flagged on each ``ranges_df`` row via ``is_cta`` from
     ``estimate_tumor_expression_ranges``; the row already incorporates
     a tumor-attribution context. Require a measurable bulk signal, then rank
-    by the estimated patient tumor contribution so abundant background does
+    by the estimated tumor contribution so abundant background does
     not outrank a smaller but more consistently tumor-attributed signal.
     """
     if ranges_df is None or len(ranges_df) == 0:
@@ -2314,8 +2211,8 @@ def _format_cta_outlier_bullet(row: dict) -> str:
     tumor_high = row["tumor_tpm_high"]
     pct = row["tcga_percentile"]
     parts: list[str] = [
-        f"{obs:.0f} patient bulk TPM",
-        f"{tumor:.0f} estimated patient tumor TPM "
+        f"{obs:.0f} sample bulk TPM",
+        f"{tumor:.0f} estimated tumor TPM "
         f"(RNA model interval {tumor_low:.0f}-{tumor_high:.0f})",
     ]
     if pct >= _OUTLIER_HIGH_PERCENTILE:
@@ -2325,129 +2222,6 @@ def _format_cta_outlier_bullet(row: dict) -> str:
         + "; ".join(parts)
         + " (exploratory CTA RNA signal; protein/peptide presentation and treatment eligibility are not established)"
     )
-
-
-def _empty_therapy_shortlist_message(targets_df, ranges_df) -> str:
-    """Differentiated message when the top-therapy block is empty.
-
-    The original single line ("No approved or trialed agents with a
-    measured, tumor-supported target") collapsed three clinically
-    distinct situations into one wording:
-
-      (a) most curated targets are in the input but expression-suppressed
-          (real biological negative — e.g. ERBB2 = 0 TPM on a TNBC line);
-      (b) curated targets are not present in the input file at all
-          (RNA-seq coverage gap — symbol-mapping / pipeline issue, not
-          biology);
-      (c) curated targets are HLA-restricted or subtype-locked out.
-
-    Surface the actual distribution so the clinician knows which kind
-    of "no shortlist" they're reading.
-    """
-    if (
-        targets_df is None
-        or len(targets_df) == 0
-        or ranges_df is None
-    ):
-        return (
-            "*No curated agents available for this cancer type — see the "
-            "full Therapy Landscape table for raw expression rankings.*\n"
-        )
-    from .common import (
-        ranges_by_gene_id,
-        ranges_by_symbol,
-        panel_symbols_to_gene_ids,
-    )
-    target_records = targets_df.to_dict("records")
-    sym_to_id = panel_symbols_to_gene_ids(
-        str(t.get("symbol") or "").strip() for t in target_records
-    )
-    id_to_row = ranges_by_gene_id(ranges_df)
-    sym_to_row = ranges_by_symbol(ranges_df)  # fallback for ID-less frames
-    from collections import Counter
-    from .reporting import target_rna_observation
-
-    counts = Counter()
-    for target in target_records:
-        symbol = canonical_target_symbol(target.get("symbol"))
-        if not symbol:
-            if expression_independent_indication(target):
-                counts["agent_only"] += 1
-            continue
-        expression = id_to_row.get(sym_to_id.get(symbol))
-        if expression is None:
-            expression = sym_to_row.get(symbol)
-        observation = target_rna_observation(expression, symbol=symbol, ranges_df=ranges_df)
-        state = observation["state"]
-        if state == "measured" and observation["observed_tpm"] < 1.0:
-            state = "below_detection"  # shortlist discovery floor is 1 TPM
-        counts[state] += 1
-    n_total = sum(counts.values())
-    n_in_input_present = counts["measured"]
-    n_in_input_low = counts["below_detection"]
-    n_not_in_input = counts["not_in_input"]
-    n_agent_only = counts["agent_only"]
-    if n_total == 0:
-        return (
-            "*No curated agents available for this cancer type — see the "
-            "full Therapy Landscape table for raw expression rankings.*\n"
-        )
-    parts: list[str] = []
-    if n_in_input_present:
-        parts.append(
-            f"{n_in_input_present} measured and present but did not meet the "
-            "shortlist's clinical eligibility, treatment-history, subtype, HLA, "
-            "disease-state, or RNA-support criteria"
-        )
-    if n_in_input_low:
-        parts.append(
-            f"{n_in_input_low} below 1 TPM (low target RNA does not by itself "
-            "establish clinical ineligibility)"
-        )
-    if n_not_in_input:
-        parts.append(
-            f"{n_not_in_input} not present in input file (coverage gap, "
-            "investigate symbol mapping)"
-        )
-    if n_agent_only:
-        parts.append(
-            f"{n_agent_only} agent-only / histology-indication rows without "
-            "a direct RNA target"
-        )
-    if counts["invalid"]:
-        parts.append(f"{counts['invalid']} with invalid or unresolved RNA values")
-    if counts["unknown"]:
-        parts.append(f"{counts['unknown']} with unavailable RNA observation state")
-    body = "; ".join(parts) if parts else "no qualifying rows"
-    return (
-        f"*Therapy shortlist is empty: of {n_total} curated agents, "
-        f"{body}. See the full Therapy Landscape table for details.*\n"
-    )
-
-
-def purity_estimator_scenario_text(scenarios) -> str:
-    """Render source-preserving purity scenarios without implying one CI.
-
-    Different decomposition templates can invoke different quantitative
-    estimators. This formatter deliberately names each estimator and keeps its
-    own interval, rather than presenting their union as uncertainty around one
-    point estimate.
-    """
-    labels = {
-        "background_residual": "background-residual decomposition",
-        "lineage_panel": "healthy-tissue lineage reference model",
-        "signature": "upstream expression model",
-    }
-    rendered = []
-    for source, estimate, lower, upper in scenarios or ():
-        source = str(source or "unspecified")
-        if not isinstance(estimate, (int, float)):
-            continue
-        value = f"{float(estimate):.0%}"
-        if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-            value += f" [{float(lower):.0%}–{float(upper):.0%}]"
-        rendered.append(f"{labels.get(source, source.replace('_', ' '))}: {value}")
-    return "; ".join(rendered)
 
 
 def summary_conclusion_paragraphs(
@@ -2589,7 +2363,6 @@ def summary_conclusion_paragraphs(
     if variant_line:
         lines.append(variant_line)
     from .infantile_spindle import infantile_spindle_guidance
-    from .report_language import render_report_paragraph
 
     spindle_guidance = infantile_spindle_guidance(cancer_code, analysis)
     if spindle_guidance:
@@ -2649,45 +2422,7 @@ def summary_conclusion_paragraphs(
     if subtype_line:
         lines.append(subtype_line)
 
-    # Purity is one frozen value: estimate, interval, status, and scenarios can
-    # never be mixed with mutable analysis state.
-    overall, lower, upper = conclusion.estimate, conclusion.lower, conclusion.upper
-    if conclusion.status == "discordant_estimators" and overall is not None:
-        operational_range = (
-            f" [{lower:.0%}–{upper:.0%}]"
-            if lower is not None and upper is not None
-            else ""
-        )
-        if conclusion.unresolved_reason == "cancer_type_unresolved":
-            lines.append(
-                "**Estimated tumor fraction (RNA model):** unresolved because tumor "
-                "identity has not been established. The exploratory subtraction "
-                f"model uses {overall:.0%}{operational_range}; this fraction may "
-                "include benign muscle or stroma."
-            )
-        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
-            lines.append(
-                "**Estimated tumor fraction (RNA model):** quantitatively unresolved; "
-                f"the selected model uses {overall:.0%}{operational_range} as an "
-                "operating estimate. Tumor and benign bone/mesenchymal cells share "
-                "the RNA programs used for subtraction, so one bulk sample cannot "
-                "cleanly separate them."
-            )
-        else:
-            scenarios = purity_estimator_scenario_text(conclusion.scenarios)
-            scenario_clause = f" Scenarios: {scenarios}." if scenarios else ""
-            lines.append(
-                "**Estimated tumor fraction (RNA model):** quantitatively unresolved; "
-                "the selected operational "
-                f"model uses {overall:.0%}{operational_range}, not a consensus estimate."
-                f"{scenario_clause}"
-            )
-    elif overall is not None and lower is not None and upper is not None:
-        lines.append(
-            f"**Estimated tumor fraction (RNA model):** {overall:.0%} "
-            f"(model interval {lower:.0%}–{upper:.0%}, "
-            f"{conclusion.confidence.tier} confidence)."
-        )
+    lines.append(render_report_paragraph("purity_summary", purity=conclusion))
     rescue_line = _cancer_call_rescue_summary_line(analysis)
     if rescue_line:
         lines.append(rescue_line)
@@ -2785,7 +2520,6 @@ def build_actionable(
     internal jargon.
     """
     conclusion = report_view.purity
-    purity_tier = conclusion.confidence
     sample_context = analysis.get("sample_context")
     cancer_name = analysis.get("cancer_name") or cancer_code
 
@@ -2825,56 +2559,7 @@ def build_actionable(
     if rescue_line:
         lines.append("\n" + rescue_line)
 
-    overall = conclusion.estimate
-    lower = conclusion.lower
-    upper = conclusion.upper
-    tier_label = conclusion.confidence.tier
-    tier_reasons = getattr(purity_tier, "reasons", []) if purity_tier else []
-    if conclusion.status == "discordant_estimators" and overall is not None:
-        operational_range = (
-            f" (within-estimator interval {lower:.0%}–{upper:.0%})"
-            if lower is not None and upper is not None
-            else ""
-        )
-        if conclusion.unresolved_reason == "cancer_type_unresolved":
-            lines.append(
-                "\nTumor fraction is **unresolved** because tumor identity has not "
-                "been established. The exploratory subtraction model uses "
-                f"{overall:.0%}{operational_range}; this fraction may include "
-                "benign muscle or stroma."
-            )
-        elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
-            lines.append(
-                "\nEstimated tumor fraction is **quantitatively unresolved**. The "
-                f"selected model uses {overall:.0%}{operational_range} as an "
-                "operating estimate because tumor and benign bone/mesenchymal cells "
-                "share the RNA programs used for subtraction."
-            )
-        else:
-            scenarios = purity_estimator_scenario_text(conclusion.scenarios)
-            scenario_clause = (
-                f" The incompatible scenarios are {scenarios}." if scenarios else ""
-            )
-            lines.append(
-                "\nPurity is **quantitatively unresolved**. The selected model uses "
-                f"{overall:.0%}{operational_range} for downstream calculations only; "
-                "it is not a consensus tumor-purity estimate."
-                f"{scenario_clause}"
-            )
-    elif overall is not None:
-        confidence_clause = f"**{tier_label}** confidence"
-        if tier_reasons and tier_label in {"low", "moderate"}:
-            confidence_clause += " (" + "; ".join(tier_reasons) + ")"
-        # Render a bare point when this estimator did not produce both bounds.
-        interval_clause = (
-            f" (model interval {lower:.0%}–{upper:.0%})"
-            if lower is not None and upper is not None
-            else ""
-        )
-        lines.append(
-            f"\nPurity point estimate: **{overall:.0%}**{interval_clause}. "
-            f"{confidence_clause.capitalize()}."
-        )
+    lines.append("\n" + render_report_paragraph("purity_summary", purity=conclusion))
 
     lines.append("")
 
@@ -2940,7 +2625,7 @@ def build_actionable(
     if history_lines:
         lines.append("## Supplied treatment history\n")
         lines.append(
-            "Clinical input for this patient takes priority over RNA-based target "
+            "Supplied clinical history takes priority over RNA-based target "
             "attribution. It still does not establish current eligibility or make "
             "retreatment appropriate."
         )
@@ -2978,7 +2663,7 @@ def build_actionable(
                 "Supplied patient treatment evidence is considered first, then "
                 "sourced clinical outcomes, treatment-path maturity, eligibility, "
                 "and RNA support. Interpretation separates "
-                "estimated patient tumor support from external healthy-tissue reference context so "
+                "estimated tumor support from external healthy-tissue reference context so "
                 "lineage markers are not confused with tumor-exclusive "
                 "targets. Treatment-path context flags standard options, "
                 "later-line requirements, trial follow-ups, and possible "
@@ -3199,7 +2884,7 @@ def build_actionable(
             def _render_therapy_records(records):
                 lines.append(
                     "| Target | Agent | Class | Phase | Indication | "
-                    "Patient bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Interpretation |"
+                    "Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Interpretation |"
                 )
                 lines.append(
                     "|--------|-------|-------|-------|------------|"
@@ -3238,7 +2923,7 @@ def build_actionable(
                 lines.append(
                     "These rows remain visible for prioritization and audit. Some "
                     "lack the required clinical eligibility assay; others lack "
-                    "estimated patient tumor support. Read the row-level "
+                    "estimated tumor support. Read the row-level "
                     "interpretation before carrying a target or therapy forward.\n"
                 )
                 _render_therapy_records(audit_records)
@@ -3326,7 +3011,7 @@ def build_actionable(
         lines.append(trace + "\n")
 
     # Interpretation limits
-    caveats = _caveats_from_purity_tier(purity_tier, sample_context, analysis)
+    caveats = report_interpretation_limits(conclusion, sample_context, analysis)
     if caveats:
         lines.append("## Caveats\n")
         for c in caveats:

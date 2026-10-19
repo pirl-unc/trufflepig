@@ -14,7 +14,6 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
-    CondPageBreak,
     Image,
     KeepTogether,
     LongTable,
@@ -25,7 +24,7 @@ from reportlab.platypus import (
 )
 
 from .report_document import find_figure, load_report_document
-from .report_language import report_inline_tokens
+from .report_language import report_inline_tokens, report_literal
 
 
 def report_inline_html(text: str) -> str:
@@ -132,17 +131,13 @@ def report_pdf_flowables(document: dict, analyze_dir: Path) -> list:
         raise ValueError("The PDF requires report schema 2 with authored sections; rerun analysis.")
     styles = report_pdf_styles()
     content_width = letter[0] - 88
-    title = document.get("sample_id") or document["prefix"]
-    story = [Paragraph(report_inline_html(str(title)), styles["title"])]
+    title = (document.get("identity") or {}).get("title") or document.get("sample_id") or document["prefix"]
+    story = [Paragraph(report_inline_html(report_literal(title)), styles["title"])]
     for section in document["sections"]:
-        story.extend(
-            [CondPageBreak(72), Paragraph(report_inline_html(section["title"]), styles["section"])]
-        )
+        story.append(Paragraph(report_inline_html(section["title"]), styles["section"]))
         for block in section["blocks"]:
             kind = block["kind"]
             if kind in {"paragraph", "heading", "bullet"}:
-                if kind == "heading":
-                    story.append(CondPageBreak(60))
                 style = styles["body"] if kind == "paragraph" else styles[kind]
                 story.append(
                     Paragraph(
@@ -222,7 +217,7 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
         rightMargin=44,
         topMargin=42,
         bottomMargin=44,
-        title=str(document.get("sample_id") or document["prefix"]),
+        title=str((document.get("identity") or {}).get("title") or document.get("sample_id") or document["prefix"]),
         author="trufflepig",
         subject="RNA evidence and therapeutic review",
     )
@@ -233,7 +228,11 @@ def build_interpretive_report_pdf(analyze_dir: Path, output: Path | None = None)
         canvas.line(44, 31, letter[0] - 44, 31)
         canvas.setFont("Report", 8)
         canvas.setFillColor(colors.HexColor("#536471"))
-        canvas.drawString(44, 20, "trufflepig | RNA evidence and therapeutic review")
+        identity = document.get("identity") or {}
+        label = "trufflepig | " + identity["document_id"] if identity else "trufflepig | RNA evidence and therapeutic review"
+        if identity.get("purpose") == "research":
+            label += " | Research only"
+        canvas.drawString(44, 20, label)
         canvas.drawRightString(letter[0] - 44, 20, str(doc.page))
         canvas.restoreState()
 

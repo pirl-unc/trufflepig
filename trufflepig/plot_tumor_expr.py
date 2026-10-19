@@ -1965,7 +1965,7 @@ def plot_matched_normal_attribution(
         color="#3498db",
         label=(
             "Expected lineage-normal component (external reference panel; "
-            "estimated by RNA model; not patient-matched)"
+            "estimated by RNA model; not specimen-matched)"
         ),
     )
     ax.barh(
@@ -2014,7 +2014,7 @@ def plot_matched_normal_attribution(
                 )
 
     ax.set_xlabel(
-        "Estimated attribution of patient bulk TPM (stacked)",
+        "Estimated attribution of sample bulk TPM (stacked)",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)
@@ -2046,7 +2046,7 @@ def plot_matched_normal_attribution(
     if mn_tissue:
         tissue_label = component_display_label(f"matched_normal_{mn_tissue}")
         title += (
-            f"\n({tissue_label}; not a patient-matched normal; "
+            f"\n({tissue_label}; not a specimen-matched normal; "
             "black tick = selected cancer reference prior)"
         )
     ax.set_title(title, fontsize=11, fontweight="bold")

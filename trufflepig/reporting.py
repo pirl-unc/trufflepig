@@ -15,11 +15,10 @@ import re
 
 from .cancer_ontology import cancer_codes_context_compatible
 from .hla import (
-    evaluate_hla_eligibility,
     extract_hla_types_from_text,
     parse_hla_types,
 )
-from .therapeutic_agents import hla_requirements_for_agent
+from .therapeutic_agents import canonical_target_symbol, hla_requirements_for_agent
 
 
 def _truthy(value) -> bool:
@@ -90,7 +89,7 @@ def component_display_label(value, *, include_model_role: bool = False) -> str:
     if lowered.startswith("matched normal "):
         tissue = text[len("matched normal ") :].strip()
         suffix = (
-            " reference (external panel; RNA model; not patient matched)"
+            " reference (external panel; RNA model; not specimen matched)"
             if include_model_role
             else " reference (external panel)"
         )
@@ -296,6 +295,27 @@ def _current_therapy_row_overrides(target_row) -> dict:
     """
     cancer_code = _clean_text(target_row.get("cancer_code")).upper()
     agent = _clean_text(target_row.get("agent")).lower()
+
+    if cancer_code in {"SARC", "SARC_SYN"} and canonical_target_symbol(target_row.get("symbol")) == "MAGEA4":
+        from .therapeutic_agents import resolve_therapy_identity
+
+        if resolve_therapy_identity(agent).canonical_name == "afamitresgene autoleucel":
+            return {
+                "indication_biomarker": "clinical_target_assay",
+                "eligibility_basis": "clinical_assay",
+                "clinical_assay_criteria": [{
+                    "kind": "ihc", "analyte": "MAGEA4", "label": "MAGE-A4 IHC",
+                    "positive_results": ["positive"], "negative_results": ["negative"],
+                    "accepted_test_ids": ["FDA:P230016"], "specimen_type": "tissue",
+                    "source": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P230016",
+                }],
+                "eligibility_note": "requires MAGE-A4 positivity by the approved tissue companion assay, compatible clinical HLA typing, and the labeled synovial-sarcoma setting after prior chemotherapy",
+                "clinical_setting_note": (
+                    "confirm the labeled age and unresectable or metastatic "
+                    "synovial-sarcoma setting, prior chemotherapy, and fitness "
+                    "for lymphodepletion and cell therapy"
+                ),
+            }
 
     if cancer_code == "COAD" and agent == "sotorasib":
         return {
@@ -677,6 +697,14 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
                 "cancer_code": "PRAD",
                 "symbol": "PTEN",
                 "agent": "capivasertib + abiraterone + prednisone",
+                "indication_biomarker": "clinical_target_assay",
+                "clinical_assay_criteria": [{
+                    "kind": "ihc", "analyte": "PTEN", "label": "PTEN deficiency by IHC",
+                    "positive_results": ["lost", "deficient"],
+                    "negative_results": ["retained", "not_deficient"],
+                    "accepted_test_ids": ["FDA:P250031"], "specimen_type": "tissue",
+                    "source": "https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P250031",
+                }],
                 "phase": "approved",
                 "indication": (
                     "PTEN-deficient metastatic androgen-pathway-modulation-"
@@ -692,6 +720,11 @@ def _current_therapy_supplement_rows(cancer_code: object) -> list[dict]:
                     "requires PTEN deficiency by the authorized VENTANA PTEN "
                     "SP218 tissue IHC assay plus the label-specific metastatic "
                     "hormone-sensitive setting; PTEN RNA is not the assay"
+                ),
+                "clinical_setting_note": (
+                    "confirm the label-specific metastatic hormone-sensitive "
+                    "setting, prior androgen-pathway treatment and response, "
+                    "and fitness for the capivasertib combination"
                 ),
             },
             {
@@ -769,25 +802,21 @@ def therapy_withdrawal_note(target_row) -> str:
 
 
 def filter_current_therapy_targets(targets_df):
-    """Drop stale rows and apply verified current-status report corrections."""
-    import pandas as pd
-
+    """Apply current clinical curation; invalid corrections must fail visibly."""
     if targets_df is None:
         return None
-    if len(targets_df) == 0:
-        return targets_df.reset_index(drop=True)
+    import pandas as pd
+
     keep = [
         not therapy_filter_note(row)
         for row in targets_df.to_dict("records")
     ]
-    current = targets_df.loc[keep].copy().reset_index(drop=True)
+    # Curation can replace text placeholders with booleans or assay records.
+    current = targets_df.loc[keep].astype(object).reset_index(drop=True)
     for index, row in current.iterrows():
         for column, value in _current_therapy_row_overrides(row).items():
             if column not in current.columns:
-                # Corrections contain both text and boolean clinical gates.
-                current[column] = pd.Series(None, index=current.index, dtype=object)
-            elif not pd.api.types.is_object_dtype(current[column].dtype):
-                current[column] = current[column].astype(object)
+                current[column] = pd.Series("", index=current.index, dtype=object)
             current.at[index, column] = value
     return current
 
@@ -1086,11 +1115,11 @@ def context_expression_band_cell(row):
 def tpm_semantics_note() -> str:
     """One reader-facing explanation of bulk vs modeled TPM columns."""
     return (
-        "**Expression provenance:** Patient bulk TPM is measured RNA abundance in "
+        "**Expression provenance:** Sample bulk TPM is measured RNA abundance in "
         "the mixed specimen. Estimated tumor TPM is the RNA model's estimate of the "
         "tumor share of that measured bulk signal; it is not a purified tumor assay. "
         "Healthy-tissue, stromal, and immune components are fitted from external "
-        "reference panels; no separate normal sample from this patient was analyzed. "
+        "reference panels; no separate matched normal sample was analyzed. "
         "Estimated tumor context TPM is a broader RNA model estimate used only for "
         "pathway and relative-expression comparisons. Reference percentiles and "
         "medians come from external cancer/healthy-tissue panels. Do not treat "
@@ -1295,19 +1324,6 @@ def expression_independent_rna_context(expression_row, *, observation_state="unk
     return render_report_paragraph("rna_observation", **observation, context_only=True)
 
 
-_TARGET_SYMBOL_ALIASES = {
-    "MAGE-A4": "MAGEA4",
-}
-
-
-def canonical_target_symbol(sym) -> str:
-    """Return the expression-table gene symbol for curated target labels."""
-    text = _clean_text(sym)
-    if not text or text == "—":
-        return text
-    return _TARGET_SYMBOL_ALIASES.get(text, text)
-
-
 def target_observation_state(sym, ranges_df) -> str:
     """Three-state observation classifier for a target symbol.
 
@@ -1487,7 +1503,12 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     """
     from .variants import classify_variant_type, normalize_protein_substitution
 
-    if indication_biomarker(target_row) in {"msi_high", "tmb_high"}:
+    biomarker = indication_biomarker(target_row)
+    if biomarker in {"msi_high", "tmb_high"} or (
+        biomarker in {"clinical_target_assay", "target_expression"}
+        and isinstance(target_row.get("clinical_assay_criteria"), (list, tuple))
+        and target_row.get("clinical_assay_criteria")
+    ):
         return []
 
     sym = _clean_text(target_row.get("symbol") if hasattr(target_row, "get") else "")
@@ -1507,9 +1528,8 @@ def supplied_variant_supports_target_row(target_row, analysis) -> list[dict]:
     eligibility_basis = _clean_text(target_row.get("eligibility_basis")).lower()
     required_types: set[str] = set()
     if "alk_positive" in eligibility_basis:
-        # Trufflepig currently accepts variant files, not an IHC
-        # result channel. An activating ALK rearrangement is therefore the only
-        # supplied evidence that can satisfy an ALK-positive row here.
+        # This ALK-positive row has no curated companion-assay criterion.
+        # An activating rearrangement supplies its molecular support here.
         required_types.add("fusion")
     elif re.search(r"\b(kdd|kinase\s+domain\s+duplication)\b", text):
         required_types.update({"kdd", "internal_tandem_duplication"})
@@ -1580,7 +1600,7 @@ def therapy_row_requires_confirmed_eligibility(target_row) -> bool:
     return bool(eligibility_basis and eligibility_basis != "histology")
 
 
-def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
+def direct_eligibility_evidence_supported(analysis, biomarker: str, *, target_row=None) -> bool:
     """Whether supplied evidence satisfies a typed clinical eligibility gate."""
     if not isinstance(analysis, dict):
         return False
@@ -1594,13 +1614,20 @@ def direct_eligibility_evidence_supported(analysis, biomarker: str) -> bool:
 
         return evaluate_msi_mmr(clinical_context_for_analysis(analysis)).satisfied
     if biomarker == "tmb_high":
-        # TMB does not yet have a validated structured assay input.
-        # Unvalidated dictionary values and RNA surrogates cannot open a gate.
-        return False
+        from .clinical_context import clinical_context_for_analysis, evaluate_tmb
+        from .therapy_eligibility import tmb_criterion_for_therapy
+
+        criterion = tmb_criterion_for_therapy(target_row) if target_row is not None else None
+        return evaluate_tmb(clinical_context_for_analysis(analysis), criterion=criterion).satisfied
     if biomarker == "histology_only":
         return bool(constraints.get("cancer_type")) or str(
             analysis.get("cancer_type_source") or ""
         ).strip() == "user-specified"
+    if biomarker in {"clinical_target_assay", "target_expression"} and target_row is not None:
+        from .therapy_eligibility import clinical_assay_requirements
+
+        requirements = clinical_assay_requirements(target_row, analysis)
+        return bool(requirements) and all(r.status == "satisfied" for r in requirements)
     return False
 
 
@@ -2710,15 +2737,13 @@ def hla_restrictions_for_target_row(target_row) -> list[str]:
 
 
 def target_hla_eligibility(target_row, *, analysis=None) -> dict:
-    """Classify supplied HLA types against a row's HLA restriction."""
+    """Reconcile clinical typing and apply a row's sourced HLA restriction."""
+    from .clinical_context import clinical_context_for_analysis, evaluate_clinical_hla
+
     restrictions = hla_restrictions_for_target_row(target_row)
-    supplied = []
-    if isinstance(analysis, dict):
-        constraints = analysis.get("analysis_constraints") or {}
-        supplied = parse_hla_types(constraints.get("hla_types"))
     policy = hla_requirements_for_agent(target_row.get("agent")) if hasattr(target_row, "get") else {}
-    result = evaluate_hla_eligibility(
-        supplied, restrictions, excluded=policy.get("excluded", ()),
+    result = evaluate_clinical_hla(
+        clinical_context_for_analysis(analysis), required=restrictions, excluded=policy.get("excluded", ()),
     ).public_dict()
     result["source"] = policy.get("source", "")
     result["reviewed_at"] = policy.get("reviewed_at", "")

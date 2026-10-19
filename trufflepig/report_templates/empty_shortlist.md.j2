@@ -1,0 +1,7 @@
+{% if total %}
+No therapy was shortlisted. Of {{ total }} curated therapy {{ 'row' if total == 1 else 'rows' }},
+{% for group in groups %}{{ group.count }} {{ 'is' if group.count == 1 else 'are' }} {{ group.description }}{% if not loop.last %}; {% else %}.{% endif %}{% endfor %}
+Specific limitations are listed below and retained in the detailed evidence tables.
+{% else %}
+No applicable named therapies are available in the curated panel.
+{% endif %}

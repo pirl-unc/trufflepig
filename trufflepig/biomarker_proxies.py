@@ -4,7 +4,7 @@
 
 These results may prioritize confirmatory testing and add context to downstream
 therapy reasoning.  They must never be promoted to assay-defined eligibility.
-Every value is tagged as measured patient bulk RNA, an RNA-model estimate,
+Every value is tagged as measured sample bulk RNA, an RNA-model estimate,
 or an external reference-panel statistic.
 """
 
@@ -177,7 +177,7 @@ def score_her2_rna_proxy(
 ) -> RNABiomarkerProxy:
     """Score an exploratory ERBB2/17q12 RNA pattern from one bulk sample.
 
-    The decision uses measured patient bulk TPM relative to the selected cancer
+    The decision uses measured sample bulk TPM relative to the selected cancer
     reference.  Estimated tumor attribution is a source check, not a replacement
     measurement.  Thresholds are intentionally conservative and explicitly
     marked as heuristic until outcome-linked validation is available.
@@ -287,14 +287,14 @@ def score_her2_rna_proxy(
     if not enough_panel:
         status = "indeterminate"
         basis = (
-            "Insufficient gene coverage in the patient's measured bulk RNA: "
+            "Insufficient gene coverage in the sample's measured bulk RNA: "
             f"measured {len(measured)}/{len(HER2_PANEL_GENES)} panel genes."
         )
         priority = "standard"
     elif not enough_reference:
         status = "indeterminate"
         basis = (
-            f"All {len(measured)} panel genes were measured in patient bulk RNA, "
+            f"All {len(measured)} panel genes were measured in sample bulk RNA, "
             "but the external observed cancer-cohort reference covered only "
             f"{len(reference_genes)}/{len(HER2_PANEL_GENES)} panel genes for "
             f"{reference_cancer_type or 'the selected cancer type'}."
@@ -304,7 +304,7 @@ def score_her2_rna_proxy(
         status = "discordant"
         basis = (
             "Measured bulk ERBB2/17q12 RNA is elevated, but the RNA source estimate "
-            "does not cleanly attribute ERBB2 to the patient tumor component."
+            "does not cleanly attribute ERBB2 to the modeled tumor component."
         )
         priority = "high"
     elif bulk_pattern:
@@ -317,7 +317,7 @@ def score_her2_rna_proxy(
             else "; tumor/background source model unavailable"
         )
         basis = (
-            f"Measured patient bulk ERBB2 is {erbb2_fold:.1f}x the external "
+            f"Measured sample bulk ERBB2 is {erbb2_fold:.1f}x the external "
             f"selected-cancer reference panel and {companion_high}/4 companion "
             f"genes are at least 2x that reference{source_clause}."
         )

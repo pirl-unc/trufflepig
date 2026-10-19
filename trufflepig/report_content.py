@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from collections import Counter
 from typing import Any
 import hashlib
 import json
@@ -15,7 +16,6 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_rna_context,
     normal_expression_context,
-    target_rna_observation,
     therapy_state_caution,
     tumor_attribution_context,
     tumor_band_available,
@@ -26,7 +26,7 @@ from .therapy_eligibility import (
     EvidenceRequirement,
     clean_therapy_value,
     collect_evidence_requests,
-    evaluate_therapy_eligibility,
+    evaluate_therapy_review,
     msi_mmr_requirement,
 )
 from .treatment_history import treatment_history_summary_lines, treatment_records
@@ -43,6 +43,15 @@ class ReportContent:
     therapy: dict[str, Any] | None
     treatment_history: list[dict[str, Any]]
     clinical_context: dict[str, Any] = field(default_factory=dict)
+    identity: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def specimen_blocks(self) -> list[dict[str, Any]]:
+        """Reuse authored specimen context and provenance in detailed documents."""
+        return [
+            block for section in self.sections for block in section["blocks"]
+            if block.get("id") in {"specimen_context", "specimen_provenance"}
+        ]
 
     def public_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,11 +122,16 @@ def assess_therapy(
     agent = _therapy_agent_label(row)
     identity = resolve_therapy_identity(row.get("agent"))
     gene = canonical_target_symbol(row.get("symbol"))
-    observation = target_rna_observation(expr, symbol=gene, ranges_df=ranges_df)
+    review = evaluate_therapy_review(
+        row, expr, analysis=analysis, panel_subtype=panel_subtype,
+        ranges_df=ranges_df, disease_state=disease_state,
+    )
+    observation = review.observation
     state, observed = observation["state"], observation["observed_tpm"]
-    eligibility = evaluate_therapy_eligibility(row, analysis, panel_subtype=panel_subtype)
+    eligibility = review.eligibility
     rationale = []
-    rationale.extend(r.description for r in eligibility.requirements if r.kind == "msi_high")
+    rationale.extend(r.description for r in eligibility.requirements
+                     if r.kind in {"msi_high", "tmb_high", "clinical_target_assay"})
     if eligibility.supplied_variant_supported:
         from .reporting import supplied_variant_context_for_target_row
 
@@ -163,6 +177,11 @@ def assess_therapy(
         "indication": clean_therapy_value(row.get("indication")),
         "maturity": clinical_maturity_summary(row, target_panel=target_panel),
         "eligibility": eligibility.public_dict(),
+        "selection": {
+            "status": review.status,
+            "reason": review.reason,
+            "permits_review": review.permits_review,
+        },
         "rationale": rationale,
         "observation": observation,
         "tumor_band": tumor_band_cell(expr)
@@ -183,6 +202,32 @@ def assess_therapy(
     }
 
 
+def empty_shortlist_summary(assessments: list[dict]) -> str:
+    """Explain an empty shortlist from its recorded selection decisions.
+
+    Counts concern curated therapy rows, which can share an agent or target.
+    This formatter never reevaluates eligibility, reads RNA tables, or infers
+    an exclusion from an observation alone.
+    """
+    if any(a["selected"] for a in assessments):
+        raise ValueError("An empty-shortlist explanation requires no selected therapies")
+    descriptions = {
+        "clinical_blocker": "blocked by known clinical or disease-scope exclusions",
+        "eligibility_pending": "awaiting clinical eligibility evidence",
+        "inactive_disease_context": "not supported by the RNA disease-state context",
+        "rna_unavailable": "missing usable target RNA for an RNA-dependent pathway",
+        "rna_below_threshold": "below the target-RNA discovery threshold",
+        "rna_source_unsupported": "without sufficient tumor-source RNA support",
+        "reviewable": "reviewable but outside the reported shortlist",
+    }
+    counts = Counter(a["selection"]["status"] for a in assessments)
+    groups = [
+        {"count": counts[status], "description": description}
+        for status, description in descriptions.items() if counts[status]
+    ]
+    return render_report_paragraph("empty_shortlist", total=len(assessments), groups=groups)
+
+
 def build_report_content(
     analysis,
     ranges_df,
@@ -200,10 +245,9 @@ def build_report_content(
     no clinical meaning is recovered from generated Markdown.
     """
     from .brief import (
-        _caveats_from_purity_tier,
+        report_interpretation_limits,
         _curated_target_panel_for_sample,
         _display_sample_id,
-        _empty_therapy_shortlist_message,
         _format_biomarker_outlier_bullet,
         _format_cta_outlier_bullet,
         _notable_biomarker_outliers,
@@ -215,11 +259,18 @@ def build_report_content(
         _format_trace_tpm,
     )
     from .common import ranges_by_symbol, ranges_by_gene_id, panel_symbols_to_gene_ids
+    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr, report_identity
 
     cancer_code = report_view.cancer_type
     analysis = {**analysis, "cancer_type": cancer_code, "cancer_name": report_view.cancer_type_name}
     sample_id = _display_sample_id(sample_id) or report_view.sample_id or ""
     prefix = prefix or sample_id or "report"
+    clinical_context = clinical_context_for_analysis(analysis)
+    identity = report_identity(
+        clinical_context, **(analysis.get("report_input") or {}),
+        output_prefix=prefix, fallback_label=sample_id,
+    )
+    research = identity["purpose"] == "research"
     conclusion = [
         paragraph(text)
         for text in summary_conclusion_paragraphs(
@@ -232,6 +283,10 @@ def build_report_content(
         )
         if text.strip()
     ]
+    conclusion.insert(0, {
+        **paragraph(render_report_paragraph("specimen_context", context=clinical_context, identity=identity)),
+        "id": "specimen_context",
+    })
     panel_code, panel_subtype, panel = _curated_target_panel_for_sample(
         cancer_code,
         analysis,
@@ -279,13 +334,10 @@ def build_report_content(
 
     # Report-level questions join therapy requirements before deduplication.
     from .brief import mismatch_repair_summary_context, mismatch_repair_rna_state
-    from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr
-
-    clinical_context = clinical_context_for_analysis(analysis)
     clinical_mmr = evaluate_msi_mmr(clinical_context)
     rna_mmr = mismatch_repair_summary_context(analysis)
     rna_state = mismatch_repair_rna_state(analysis)
-    if clinical_context.assays:
+    if clinical_mmr.assays:
         conclusion.append(paragraph(
             "**Clinical MSI/MMR evidence:** " + msi_mmr_requirement(analysis).description
         ))
@@ -320,14 +372,16 @@ def build_report_content(
                 "diagnosis",
                 "unresolved",
                 "The disease call is based on RNA evidence and needs clinical reconciliation.",
-                "Reconcile the proposed disease and subtype with pathology, clinical history and any disease-defining molecular assay.",
-                ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
+                "Reconcile the RNA disease context with the sample's documented origin and disease-defining molecular evidence."
+                if research else "Reconcile the proposed disease and subtype with pathology, clinical history and any disease-defining molecular assay.",
+                ("sample provenance", "reference-material characterization", "disease-defining molecular result")
+                if research else ("pathology report", "confirmed cancer type", "disease-defining molecular result"),
             )
         )
-    if rna_mmr or clinical_context.assays:
+    if rna_mmr or clinical_mmr.assays:
         report_requirements.append(msi_mmr_requirement(analysis, rna_triage=rna_state == "MSI-like"))
     clinical_requirements = []
-    if selected_assessments:
+    if selected_assessments and not research:
         clinical_requirement = EvidenceRequirement(
             "clinical_setting",
             "clinical_setting",
@@ -372,9 +426,9 @@ def build_report_content(
         ]
     )
 
-    therapies = [
-        paragraph(render_report_paragraph("therapy_scope", scope=panel_code or cancer_code))
-    ]
+    therapies = [paragraph(render_report_paragraph(
+        "therapy_scope", scope=panel_code or cancer_code, purpose=identity["purpose"],
+    ))] if assessments else []
     identity_unresolved = bool(analysis.get("cancer_type_abstention"))
     if identity_unresolved:
         therapies = [paragraph(
@@ -421,61 +475,32 @@ def build_report_content(
         )
         therapies.extend(paragraph(text) for text in assessment["rationale"])
     if not selected_assessments and not identity_unresolved:
-        unmet = any(
-            r["status"] in {"blocked", "missing", "unresolved"}
-            for a in assessments for r in a["eligibility"]["requirements"]
-        )
-        therapies.append(paragraph(
-            "No therapy meets the current shortlisting criteria. Clinical blockers and "
-            "unresolved eligibility requirements are detailed below; RNA evidence alone "
-            "cannot resolve those requirements."
-            if unmet else _empty_therapy_shortlist_message(panel, ranges_df)
-        ))
-    blocked = [
-        a
-        for a in assessments
-        if any(r["status"] == "blocked" for r in a["eligibility"]["requirements"])
-    ]
-    if blocked:
-        therapies.append({"kind": "heading", "text": "Known blockers and current treatments"})
-        for assessment in blocked:
-            descriptions = [
-                r["description"]
-                for r in assessment["eligibility"]["requirements"]
-                if r["status"] == "blocked"
-            ]
-            therapies.append(
-                {"kind": "bullet", "text": f"**{assessment['agent']}:** " + " ".join(descriptions)}
+        therapies.append(paragraph(empty_shortlist_summary(assessments)))
+    for title, statuses in (
+        ("Known blockers and current treatments", {"clinical_blocker"}),
+        ("Eligibility pending", {"eligibility_pending"}),
+        ("Sample support not established", {
+            "inactive_disease_context", "rna_unavailable", "rna_below_threshold", "rna_source_unsupported",
+        }),
+    ):
+        excluded = [
+            a for a in assessments
+            if not identity_unresolved and a["selection"]["status"] in statuses
+        ]
+        if excluded:
+            therapies.append({"kind": "heading", "text": title})
+            therapies.extend(
+                {"kind": "bullet", "text": f"**{a['agent']}:** {a['selection']['reason']}"}
+                for a in excluded
             )
 
-    pending = [
-        a
-        for a in assessments
-        if not a["selected"]
-        and not any(r["status"] == "blocked" for r in a["eligibility"]["requirements"])
-        and any(r["status"] in {"missing", "unresolved"} for r in a["eligibility"]["requirements"])
-    ]
-    if pending:
-        therapies.append({"kind": "heading", "text": "Eligibility pending"})
-        for assessment in pending:
-            descriptions = list(
-                dict.fromkeys(
-                    r["description"]
-                    for r in assessment["eligibility"]["requirements"]
-                    if r["status"] in {"missing", "unresolved"}
-                )
-            )
-            therapies.append(
-                {"kind": "bullet", "text": f"**{assessment['agent']}:** " + " ".join(descriptions)}
-            )
-
-    request_blocks = []
+    request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
     for request in requests:
-        label = {"msi_high": "MSI/MMR"}.get(
+        label = request.get("label") or {"msi_high": "MSI/MMR", "tmb_high": "TMB", "hla": "HLA"}.get(
             request["kind"], request["kind"].replace("_", " ").capitalize()
         )
         request_blocks.append(
-            paragraph(render_report_paragraph("evidence_request", label=label, **request))
+            paragraph(render_report_paragraph("evidence_request", **{**request, "label": label}))
         )
         # Different therapies can require distinct tests for one evidence kind.
         # Keep those specifications visible even when the request is deduplicated.
@@ -497,9 +522,17 @@ def build_report_content(
             f"[Full interpreted analysis]({prefix}-analysis.md) · [Detailed evidence tables]({prefix}-evidence.md)"
         )
     ]
+    detail.append({"kind": "heading", "text": "Specimen provenance"})
+    detail.append({
+        **paragraph(render_report_paragraph("specimen_provenance", context=clinical_context, identity=identity)),
+        "id": "specimen_provenance",
+    })
     source_rows = source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})
+        attribution = render_report_paragraph("purity_attribution", purity=report_view.purity)
+        if attribution:
+            detail.append(paragraph(attribution))
         for row in source_rows:
             detail.append(
                 paragraph(
@@ -520,10 +553,12 @@ def build_report_content(
         detail.append({"kind": "heading", "text": "Supplied treatment history"})
         detail.extend({"kind": "bullet", "text": line.removeprefix("- ")} for line in history)
     if clinical_context.assays:
+        from .clinical_context import clinical_assay_records
+
         detail.append({"kind": "heading", "text": "Supplied clinical assays"})
         detail.extend(
             paragraph(render_report_paragraph("clinical_assay_record", assay=assay))
-            for assay in clinical_mmr.assays
+            for assay in clinical_assay_records(clinical_context)
         )
     if identity_unresolved:
         detail.append(paragraph(
@@ -549,16 +584,17 @@ def build_report_content(
             detail.extend(
                 {"kind": "bullet", "text": formatter(item).removeprefix("- ")} for item in items
             )
-    caveats = _caveats_from_purity_tier(
-        report_view.purity.confidence, analysis.get("sample_context"), analysis
+    caveats = report_interpretation_limits(
+        report_view.purity, analysis.get("sample_context"), analysis
     )
     from .report_language import report_plain_text
 
-    conclusion_text = " ".join(report_plain_text(block["text"]) for block in conclusion).casefold()
+    existing_text = " ".join(report_plain_text(block["text"]) for block in [*conclusion, *detail]
+                             if "text" in block).casefold()
     caveats = [
         text
         for text in caveats
-        if report_plain_text(text).split(": ", 1)[-1].rstrip(". ").casefold() not in conclusion_text
+        if report_plain_text(text).split(": ", 1)[-1].rstrip(". ").casefold() not in existing_text
     ]
     if caveats:
         detail.append({"kind": "heading", "text": "Interpretation limits"})
@@ -568,7 +604,7 @@ def build_report_content(
         therapy_table = {
             "columns": [
                 ["Target", 15],
-                ["Recommendation", 38],
+                ["Research candidate" if research else "Recommendation", 38],
                 ["Estimated tumor TPM (RNA model)", 25],
                 ["Eligibility / RNA provenance", 39],
             ],
@@ -605,9 +641,13 @@ def build_report_content(
         therapy_table,
         [record.public_dict() for record in treatment_records(analysis)],
         clinical_context.public_dict(),
+        identity,
     )
 
 
 def render_report_summary(content: ReportContent) -> str:
     """Render the same authored sections retained in the structured report."""
-    return render_report_template("report", sample_id=content.sample_id, sections=content.sections)
+    return render_report_template(
+        "report", sample_id=content.identity.get("title") or content.sample_id,
+        sections=content.sections,
+    )

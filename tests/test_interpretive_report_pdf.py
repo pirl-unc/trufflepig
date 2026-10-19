@@ -10,15 +10,20 @@ from trufflepig import report_document as rd
 from trufflepig.report_pdf import build_interpretive_report_pdf, report_inline_html
 
 
-def test_figure_registry_entries_are_suffix_title_interpretation_triples():
+def test_figure_registry_entries_render_complete_interpretations(tmp_path):
+    from trufflepig.report_view import build_report_view
+
+    view = build_report_view({"cancer_type": "SARC", "sample_mode": "solid", "purity": {}})
     for entry in rd.FIGURE_REGISTRY:
         assert len(entry) == 3, f"expected (suffix, title, interpretation): {entry!r}"
         suffix, title, interpretation = entry
         assert suffix.endswith(".png")
         assert title and not title.endswith(".png")  # a title, never a filename
-        assert (
-            interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
-        )
+        if interpretation is None:
+            assert suffix == "purity-methods.png"
+    for figure in rd.build_figure_manifest(tmp_path, "synthetic", purity=view.purity):
+        interpretation = figure["caption"]
+        assert interpretation and interpretation[0].isupper() and interpretation.rstrip().endswith(".")
 
 
 def test_reader_manifest_keeps_final_analyses_and_excludes_preliminary_views():
@@ -147,6 +152,34 @@ def test_figure_caption_and_image_are_rendered_with_authored_evidence(tmp_path):
     assert "Estimator disagreement limits interpretation." in text
     assert "purity-methods.png" not in text
     assert sum(len(page.images) for page in pdf.pages) == 1
+
+
+@pytest.mark.parametrize("filler_lines", [32, 35, 38, 41])
+@pytest.mark.parametrize("long_body", [False, True])
+def test_section_and_therapy_headings_stay_with_their_first_content(tmp_path, filler_lines, long_body):
+    doc = document()
+    doc["sections"] = [
+        {"id": "conclusion", "title": "Conclusion", "blocks": [
+            {"kind": "paragraph", "text": "\n".join(f"Evidence line {i}." for i in range(filler_lines))},
+        ]},
+        {"id": "therapies", "title": "Therapy rationale", "blocks": [
+            {"kind": "heading", "text": "A conditional candidate"},
+            {"kind": "paragraph", "text": "RATIONALE-START. " + "Supporting evidence. " * (300 if long_body else 20)},
+        ]},
+        {"id": "information", "title": "Information needed", "blocks": [
+            {"kind": "paragraph", "text": "REQUEST-START. " + "Reconcile the supplied assay with the clinical report. " * 8},
+        ]},
+    ]
+    write_document(tmp_path, doc)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pages = [page.extract_text() for page in pdf.pages]
+    for heading, start in [
+        ("Therapy rationale", "RATIONALE-START"),
+        ("A conditional candidate", "RATIONALE-START"),
+        ("Information needed", "REQUEST-START"),
+    ]:
+        page = next(text for text in pages if heading in text)
+        assert start in page, f"Orphaned heading: {heading}"
 
 
 def test_declared_figure_cannot_disappear_silently(tmp_path):

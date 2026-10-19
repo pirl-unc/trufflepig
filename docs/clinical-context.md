@@ -1,6 +1,6 @@
-# Clinical assay input
+# Clinical and specimen input
 
-Supply an existing clinical MSI/MMR result through the same versioned
+Supply existing clinical MSI/MMR, absolute TMB, HLA or IHC/ISH results through the same versioned
 `ClinicalContext` contract in Python, the CLI or the web upload form:
 
 ```sh
@@ -46,7 +46,7 @@ have `scope: "current"`. Dates are optional ISO dates; unknown dates stay unknow
 
 | Field | Accepted values or meaning |
 |---|---|
-| `kind` | `msi` or `mmr` |
+| `kind` | `msi`, `mmr`, `tmb`, `hla`, `ihc` or `ish` (additional assay fields are described below) |
 | MSI `result` | `MSI-H`, `MSI-L`, `MSS`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | MMR `result` | `dMMR`, `pMMR`, `indeterminate`, `pending`, `not_tested`, `unknown` |
 | `method` | Clinical MSI: `PCR` or `NGS`; clinical MMR: `IHC` or `NGS`. Other/unknown methods are retained as unresolved. RNA expression and RNA-read evidence cannot satisfy this gate. |
@@ -84,6 +84,13 @@ unresolved clinical-assay request without opening eligibility. A usable clinical
 result resolves that request. If the clinical result and RNA proxy differ, the
 report shows the disagreement and retains the clinical decision.
 
+The RNA paragraph preserves measured MLH1 bulk TPM and its cohort comparison
+without assigning protein retention, promoter methylation or a mutation
+mechanism. POLE-associated hypermutation can occur in microsatellite-stable
+tumors ([primary sequencing study](https://pubmed.ncbi.nlm.nih.gov/31857678/));
+a POLE variant, absolute TMB and clinical MSI/MMR are distinct evidence.
+Supplying a POLE variant alone does not satisfy the MSI-H/dMMR requirement.
+
 ## Python and report contracts
 
 ```python
@@ -95,7 +102,7 @@ decision = evaluate_msi_mmr(context)
 analyze("gene_tpm.tsv", output_dir="output/specimen-A", clinical_context=context)
 ```
 
-`ClinicalContext`, `ClinicalAssay` and `ClinicalSource` also accept direct Python
+`ClinicalContext`, `ClinicalAssay`, `ClinicalMeasurement` and `ClinicalSource` also accept direct Python
 construction. `load_clinical_context` accepts these contexts, JSON mappings or
 JSON paths and rejects unknown fields. A missing file or invalid JSON raises an
 error that names the file. `AnalyzeConfig` validates and captures the input once;
@@ -110,12 +117,270 @@ containers through the shared dataclass serializer. The `public_dict` name marks
 the stable artifact/API projection: unlike a mechanical `to_dict`, it may omit
 internal fields or add derived public fields while preserving a versioned schema.
 
-The web form accepts the same JSON as “Clinical assay results”. It validates
+The web form accepts the same JSON as “Clinical assay results and specimen context”. It validates
 the upload before launching a run. Uploads are limited to 1 MB; a JSON scalar
 cannot be interpreted as a server-side file path. No clinical data is sent to an
 external model by this input path.
 
 RNA-only operation remains complete without this input. Other clinical facts,
-TMB, integration of existing variant/HLA/history inputs into this context and
-optional model extraction/editing remain in #163. Existing variant, fusion, HLA
-and treatment-history inputs continue to use their current contracts.
+integration of existing variant/history inputs into this context and
+optional model extraction/editing remain in #163. Existing variant, fusion
+and treatment-history inputs continue to use their current contracts. Supplied
+HLA alleles normalize into this context as described below.
+
+## Absolute TMB measurements
+
+TMB uses the same `assays` array, source and specimen rules:
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "tmb",
+    "result": "measured",
+    "measurement": {"value": 18, "unit": "mut/Mb"},
+    "method": "NGS",
+    "test_id": "FDA:P170019",
+    "specimen_type": "tissue",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "reported_at": "2026-08-01",
+    "validity": "validated",
+    "reportability": "reportable",
+    "source": {"title": "Synthetic molecular pathology report"}
+  }]
+}
+```
+
+`measurement.value` is a finite nonnegative number or null. Zero is measured
+zero; null is missing. The result states are `measured`, `indeterminate`,
+`pending`, `not_tested` and `unknown`. A high/low designation depends on the
+treatment criterion and is not inferred from a qualitative claim. Invalid
+numbers are rejected. Unsupported units, missing measurements, proposed
+assertions, historical results and quality limitations remain visible without
+satisfying a requirement. `mutations/Mb` and `mutations/megabase` normalize to
+`mut/Mb`; percentiles and raw mutation counts are never converted to TMB.
+
+`TmbCriterion` records a treatment's minimum, units, specimen material, accepted
+test identifiers and source. `evaluate_tmb(context, criterion=...)` evaluates
+only TMB assays, while `evaluate_msi_mmr` evaluates only MSI/MMR assays.
+`clinical_assay_records(context)` preserves all assay kinds for detailed reporting.
+Concordant usable results resolve the threshold comparison; usable results on
+opposite sides stay conflicting. Older, failed or unreviewed assertions do not
+override a usable current assay. Existing MSI/MMR record shapes and generated
+IDs are preserved when the optional measurement/test/material fields are absent.
+
+The public `tmb_criterion_for_therapy(row)` and `tmb_requirement(row, analysis)`
+APIs use one decision for recommendation eligibility, rationale and the
+deduplicated information list. A curated row may carry an explicit
+`tmb_criterion` mapping. Otherwise, the covered pembrolizumab TMB-specific path
+uses the [FDA FoundationOne CDx criterion](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P170019S016):
+at least 10 mut/Mb from tissue using test ID `FDA:P170019`. This is the tissue
+test, not FoundationOne Liquid CDx. The
+[FDA companion-diagnostic table](https://www.fda.gov/medical-devices/in-vitro-diagnostics/list-fda-authorized-companion-diagnostic-devices-in-vitro-and-imaging-tools)
+is the reference for test/biomarker/therapy scope. Uncurated treatments, combined
+regimens or missing criterion metadata remain unresolved instead of borrowing
+that threshold. This input does not create a new therapy row outside the report's
+curated panel.
+
+The [FDA TMB indication](https://www.fda.gov/drugs/drug-approvals-and-databases/fda-approves-pembrolizumab-adults-and-children-tmb-h-solid-tumors)
+also specifies unresectable/metastatic disease, prior progression and no
+satisfactory alternatives. Satisfying the assay requirement does not establish
+those conditions; the separate clinical-setting request remains. Negative or
+conflicting results and supplied treatment contraindications retain their
+blockers. RNA scores, POLE variants and cohort TMB reference values cannot
+substitute for the specimen's absolute clinical measurement.
+
+## Specimen identity and purpose
+
+The same context accepts optional `specimen` metadata for its top-level
+`specimen_id`. This does not select a row or column from the expression table:
+keep using `--sample-id-col` and `--sample-id-value` for that purpose.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "reference-001",
+  "specimen": {
+    "display_label": "Reference culture α — replicate 1",
+    "purpose": "research",
+    "cell_line_id": "synthetic-reference-line",
+    "collected_at": "2026-07-29",
+    "site": "supplied tissue of origin",
+    "source": {
+      "title": "Research sample manifest",
+      "reference": "manifest-row-1",
+      "review_status": "supplied"
+    }
+  }
+}
+```
+
+`purpose` is `clinical`, `research` or `unknown` (the default). Filenames, cell-line
+labels, RNA similarities and missing clinical metadata do not establish purpose.
+Proposed or rejected source assertions remain in the context; their purpose is
+not applied until a supplied or confirmed assertion replaces them. Collection
+date is optional and must use `YYYY-MM-DD`; site and dates are never inferred.
+Python callers can construct `SpecimenMetadata` directly.
+
+Research reports prominently identify their purpose and describe therapy
+candidates as research hypotheses and reference assay context. Molecular facts,
+curated clinical requirements, assay status and ranked candidate identities stay
+the same. The information section retains characterization questions and omits
+the personal treatment-fitness request. Clinical treatment-setting criteria stay
+in each assessment's curation for interpreting the reference pathway.
+
+Display labels and specimen identity are preserved in the normal report JSON,
+Markdown and PDF. The opening states the specimen context concisely; complete
+metadata sources and excerpts remain in the detailed evidence section. The public `report_identity` API keeps the original source path
+and sample selector separate from the display title. Each document has a stable
+`RPT-…` identifier based on its source, selector and output prefix. The PDF footer
+uses this concise identifier on every page; the complete Unicode title wraps at
+the start. When no explicit identity is supplied, the title includes that
+document identifier, so files with the same basename remain distinguishable.
+This identifier is not a verified biological specimen identity.
+
+## Clinical HLA typing
+
+Use the same `assays` array for HLA reports. `alleles` contains the reported
+human class-I alleles; `mhcgnomes` preserves every field and expression/group
+annotation. `complete_loci` is an explicit assertion that the source contains
+complete typing for those loci. An omitted allele is not a negative result,
+and the number of reported alleles does not establish completeness.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "hla",
+    "result": "typed",
+    "alleles": ["A*02:01:01:01", "A*24:02"],
+    "complete_loci": ["A"],
+    "method": "NGS",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "validity": "validated",
+    "reportability": "reportable",
+    "reported_at": "2026-08-01",
+    "source": {
+      "title": "Clinical HLA typing report",
+      "reference": "report-A, page 2",
+      "excerpt": "HLA-A*02:01:01:01, A*24:02; complete HLA-A typing",
+      "review_status": "supplied"
+    }
+  }]
+}
+```
+
+HLA results may also be `indeterminate`, `pending`, `not_tested`, or `unknown`.
+Use an empty allele array when no alleles are available. Clinical assay
+method, validity, reportability, source and specimen binding must be supplied
+before typing can establish a clinical eligibility requirement. A negative
+compatibility decision needs complete typing of the relevant locus; an
+excluded allele can be detected in partial typing. Clearing an exclusion
+requires complete typing of the locus containing that exclusion.
+
+Public `evaluate_clinical_hla` reconciles these reports and calls the existing
+`evaluate_hla_eligibility` nomenclature/policy matcher. Incompatible usable
+reports produce `conflicting`, with each source and its compatibility result
+retained. Historical, failed, proposed and unverified reports remain visible
+without overriding a usable current report. Source conflicts are not resolved
+by concatenating alleles into one genotype. `target_hla_eligibility`, therapy
+selection and the report's requests consume this one decision.
+
+`normalize_clinical_inputs` also accepts the existing `--hla-types` input.
+It stores the canonical allele list as a supplied HLA assay in `ClinicalContext`
+without inventing a method, clinical validation, complete loci or specimen ID.
+**Behavior change:** a bare list now leaves clinical HLA eligibility unresolved.
+The report retains any reported match, mismatch or excluded allele, and asks
+for the source and missing assay information. Answer with an HLA assay in
+`--clinical-context`; the same stable request is resolved on the next run.
+Python, CLI and web uploads use the same context. A raw allele list remains
+valid input to the public nomenclature matcher for compatibility-only checks.
+
+The current context requires an explicit binding to the run specimen. It does
+not infer that a different blood/tumor specimen belongs to the same person;
+cross-assay identity binding remains part of #153. HLA input does not create an
+MSI/MMR result or request, and does not satisfy a separate antigen/protein assay.
+
+## Reported IHC and ISH results
+
+The same assay array accepts qualitative clinical companion-assay results.
+The tested `analyte` is independent of the therapy's drug-target gene. A
+pathologist-reported PTEN-deficient result, for example, concerns PTEN protein
+loss; it is not positive PTEN expression or a PTEN sequence variant.
+
+```json
+{
+  "schema_version": 1,
+  "specimen_id": "specimen-A",
+  "assays": [{
+    "kind": "ihc",
+    "analyte": "PTEN",
+    "result": "deficient",
+    "method": "IHC",
+    "test_id": "FDA:P250031",
+    "specimen_type": "tissue",
+    "specimen_id": "specimen-A",
+    "scope": "current",
+    "validity": "validated",
+    "reportability": "reportable",
+    "reported_at": "2026-08-01",
+    "source": {
+      "title": "Synthetic companion-assay report",
+      "reference": "page 2",
+      "excerpt": "PTEN-deficient by the specified companion assay"
+    }
+  }]
+}
+```
+
+Supply the actual reported endpoint and source. These fields record the report's
+assertions; their presence does not independently validate a laboratory test.
+
+| Kind | Reported result states | Additional fields |
+|---|---|---|
+| `ihc` | `positive`, `negative`, `lost`, `retained`, `deficient`, `not_deficient`, `indeterminate`, `pending`, `not_tested`, `unknown` | `analyte`, `test_id`, `specimen_type`; method `IHC` |
+| `ish` | `amplified`, `not_amplified`, `indeterminate`, `pending`, `not_tested`, `unknown` | `analyte`, `test_id`, `specimen_type`; method `ISH`, `FISH`, `CISH` or `SISH` |
+
+The result states are assay endpoints, not interchangeable synonyms. The PTEN
+criterion accepts `lost` or `deficient` and treats `retained` or `not_deficient`
+as negative for that pathway. A generic `positive` PTEN result does not establish
+PTEN deficiency. MAGE-A4 positivity uses the explicit `positive` endpoint.
+Target symbols normalize case and surrounding whitespace through the same
+public normalizer used by therapy and RNA tables: `MAGE-A4` becomes `MAGEA4`
+and `HER2` becomes `ERBB2`. Source excerpts preserve the original wording.
+
+A public `ClinicalAssayCriterion` declares kind, analyte, display label, positive
+and negative result sets, accepted test identifiers, specimen material and
+source. `evaluate_clinical_assay(context, criterion=...)` evaluates only matching
+assay/analyte records. `clinical_assay_requirements(row, analysis)` evaluates the
+criterion array declared in the normal therapy row's `clinical_assay_criteria`.
+All declared requirements must be addressed. Different assays retain distinct
+request keys, while repeated requests for the same analyte preserve each
+therapy's criterion and source in the shared request evidence.
+
+Current sourced declarations cover:
+
+- MAGE-A4 IHC positivity for the afami-cel synovial-sarcoma row, using the
+  [MAGE-A4 IHC 1F9 pharmDx assay](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P230016),
+  test ID `FDA:P230016`, on tissue. The separate HLA requirement remains.
+- PTEN deficiency for the prostate capivasertib/abiraterone/prednisone row, using
+  the [VENTANA PTEN SP218 assay](https://www.accessdata.fda.gov/scripts/cdrh/cfdocs/cfpma/pma.cfm?id=P250031),
+  test ID `FDA:P250031`, on tissue. The [label-specific disease and treatment setting](https://www.fda.gov/drugs/resources-information-approved-drugs/fda-approves-capivasertib-abiraterone-and-prednisone-pten-deficient-androgen-pathway-modulation)
+  remains a separate clinical requirement.
+
+Other qualitative IHC/ISH criteria require explicit sourced row declarations.
+An accepted assay result cannot satisfy a separate RAS wild-type requirement,
+resolve another protein assay, or establish diagnosis and treatment setting.
+The software does not calculate clinical positivity from raw staining scores,
+RNA expression, or a gene variant. Missing, pending and unavailable results stay
+unresolved; opposite usable current results require reconciliation. Older,
+failed, unreviewed or inadequately scoped reports remain visible with their
+limitations and cannot override a usable current result.
+
+These decisions populate the same therapy assessment, rationale, information
+list, detailed evidence and Markdown/JSON/PDF contract. MSI/MMR, TMB and HLA
+continue to evaluate their own assay kinds. No external model is required.

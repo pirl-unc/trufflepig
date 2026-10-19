@@ -20,10 +20,14 @@ The main APIs are:
 |---|---|
 | `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
 | `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `therapy_eligibility.evaluate_therapy_review` | Apply clinical and sample-support criteria before ranking; retain the exclusion reason |
 | `clinical_context.evaluate_msi_mmr` | Evaluate specimen-scoped clinical assay results and preserve conflicts |
 | `reporting.target_rna_observation` | Preserve measured, below-detection, missing and invalid RNA states |
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
+| `report_content.empty_shortlist_summary` | Explain an empty shortlist from recorded selection decisions |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
+| `report_view.purity_method_estimates` | Collect method estimates with source families and their own intervals |
+| `brief.report_interpretation_limits` | Render limits from frozen purity evidence and sample quality |
 | `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
 | `report_language.render_report_template` | Render the complete Markdown layout |
 | `report_document.write_report_document` | Serialize authored content, headline and figure provenance |
@@ -34,6 +38,14 @@ Python owns matching, status, ranking and request deduplication. Packaged Jinja
 facts raise an error. Supplied text is a value; it is never executed as template
 code. The PDF escapes HTML and preserves HLA tokens using the same mhcgnomes
 nomenclature boundary as other HLA operations.
+
+Each therapy assessment retains a `selection` status, reason and `permits_review`
+flag from the same review decision used by ranking. Clinical eligibility remains
+separate from RNA observation. Empty-shortlist counts describe actual clinical
+exclusions, pending evidence, disease-state context or RNA discovery/support
+limits; missing RNA on an expression-independent pathway is not an exclusion.
+The `empty_shortlist` template consumes those recorded decisions without another
+eligibility evaluation. Counts refer to curated rows, which may share an agent.
 
 Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
 `blocked`. Prior benefit can support review while an assay remains missing; it
@@ -60,8 +72,9 @@ flag; MET exon 14 skipping, for example, cannot be satisfied by another MET
 mutation or amplification. Broad altered-gene indications can accept compatible
 fusions. These rules do not
 constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
-remains context for confirmation. [Clinical MSI/MMR input](clinical-context.md)
-can satisfy the corresponding biomarker gate; RNA alone cannot. VCF/MAF adapters remain tracked in #140/#141. The
+remains context for confirmation. [Clinical MSI/MMR and absolute TMB input](clinical-context.md)
+can satisfy the corresponding assay criterion; RNA alone cannot. TMB thresholds,
+test identity and specimen material are treatment-specific. VCF/MAF adapters remain tracked in #140/#141. The
 current accepted variant input is a normalized table or an explicit symbolic
 call; requests can also name the clinical report needed for reconciliation.
 
@@ -79,6 +92,22 @@ The detailed analysis and evidence tables retain broader curation and source
 attribution. They refer to the summary's consolidated information list. Figures
 must describe measured or modeled RNA patterns and their uncertainty; they must
 not assert treatment exposure, receptor-assay status or a mutation from expression.
+
+Purity is frozen once in `ReportView.purity`, including the method estimates used
+by the comparison figure. The adopted value is distinct from the method rows;
+it must not count as another method. The public `purity_method_estimates` collector
+retains the existing enrichment-to-purity calibration without fitting a model.
+Missing or invalid fractions stay unavailable, and measured zero stays zero.
+
+The named `purity_summary`, `purity_methods` and `purity_attribution` paragraphs
+use that snapshot across the summary, actionable report, full analysis and figure
+captions. They distinguish a selected model interval from disagreement between
+methods, identify a lone estimate, place the model-ceiling qualification beside
+the headline and make unresolved tumor/background separation explicit before
+presenting tumor-attributed expression. Missing estimates or intervals do not
+establish deterministic input or agreement. The JSON headline retains method
+estimates, method families, individual intervals and confidence reasons so a
+consumer does not have to recover these facts from prose.
 
 An optional LLM language editor remains a separate feature. It may eventually
 improve phrasing over these fixed facts, with review and deterministic output

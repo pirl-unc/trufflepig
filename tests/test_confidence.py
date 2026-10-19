@@ -1,10 +1,13 @@
 """Tests for the confidence-tier module (#109)."""
 
+import pytest
+
 from trufflepig.confidence import (
     ConfidenceTier,
     concise_confidence_reasons,
     compute_purity_confidence,
     compute_target_confidence,
+    purity_fraction,
 )
 
 
@@ -20,6 +23,38 @@ def test_tight_ci_high_tier():
     tier = compute_purity_confidence(_purity(0.64, 0.58, 0.70))
     assert tier.tier == "high"
     assert tier.badge == ""
+
+
+@pytest.mark.parametrize("value", [None, False, True, float("nan"), float("inf"), -0.1, 1.1, "unknown"])
+def test_unavailable_purity_is_not_a_zero_or_a_deterministic_estimate(value):
+    assert purity_fraction(value) is None
+    tier = compute_purity_confidence(_purity(value, 0.1, 0.3))
+    assert tier.tier == "unknown"
+    assert tier.reasons == ["no purity estimate available"]
+
+
+@pytest.mark.parametrize("result", [{}, None, {"overall_estimate": 0.4},
+                                   _purity(0.4, None, 0.5), _purity(0.4, 0.3, None)])
+def test_absent_purity_or_interval_cannot_establish_high_or_degenerate_confidence(result):
+    tier = compute_purity_confidence(result)
+    assert tier.tier == "unknown"
+    assert not any("deterministic" in reason for reason in tier.reasons)
+
+
+def test_measured_zero_is_not_unavailable():
+    assert purity_fraction(0.0) == 0.0
+    tier = compute_purity_confidence(_purity(0.0, 0.0, 0.1))
+    assert tier.tier == "low"
+    assert "low-purity regime (0%)" in tier.reasons
+
+
+def test_missing_interval_keeps_known_unresolved_and_degradation_limits():
+    for changes in ({"quantitative_status": "discordant_estimators"}, {}):
+        tier = compute_purity_confidence({"overall_estimate": 0.4, **changes},
+                                         degradation_severity="severe")
+        assert tier.tier == "low"
+        assert "severe RNA degradation" in tier.reasons
+        assert "purity model interval is unavailable or invalid" in tier.reasons
 
 
 def test_moderate_ci_span_moderate_tier():
@@ -43,6 +78,8 @@ def test_discordant_estimators_force_low_confidence_without_fake_wide_interval()
 
     assert tier.tier == "low"
     assert any("quantitatively unresolved" in reason for reason in tier.reasons)
+    assert "reported estimators support incompatible scenarios" in tier.inline_note
+    assert "independent" not in tier.inline_note
 
 
 def test_concise_call_confidence_reasons_keep_summary_skimmable():
