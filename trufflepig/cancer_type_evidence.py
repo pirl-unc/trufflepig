@@ -6224,9 +6224,9 @@ def _persistent_report_label_blockers(
     """Return vetoes that expression-only adjudication must never clear.
 
     Ordinary admission blockers can be overcome by genuinely independent RNA
-    evidence.  Explicit molecular negatives and registry-declared orthogonal
-    molecular/status states cannot: they require matching direct evidence, not
-    a stronger expression consensus.  Keep this distinction structural so a
+    evidence. Explicit molecular negatives, registry-declared orthogonal
+    states, and curated mutually exclusive identity conflicts cannot be
+    cleared by a stronger generic expression score. Keep this structural so a
     later selector cannot accidentally erase a safety decision by calling
     ``consider_for_report_label(can_select=True)``.
     """
@@ -9202,6 +9202,20 @@ def _add_rare_marker_features(
             0.5 * marker_context_support + 0.5 * hypothesis.fine_reference_support,
             priority_strength,
         )
+    if (
+        code == "NUTM"
+        and fusion_defined_code
+        and rule_promotes
+        and not has_direct_fusion
+        and bool(strong_rna_surrogate.get("strong"))
+        and not blockers
+    ):
+        # NUTM1 is the curated discriminating RNA axis for NUT carcinoma
+        # versus squamous/ADCC look-alikes. MYB alone is not an equivalent
+        # ADCC anchor because NUT carcinoma can also express MYB.
+        priority_class = 3
+        priority_strength = max(priority_strength, marker_support)
+        hypothesis.details["fusion_defined_rna_anchor"] = dict(strong_rna_surrogate)
 
     hypothesis.admit_adjudication_support(
         _ENTITY_CONSENSUS_MARKER_AXIS,
@@ -10746,6 +10760,47 @@ def _fused_evidence_eligible(
     return not blockers, blockers
 
 
+def _apply_nutm_adcc_surrogate_conflict(
+    hypotheses: dict[str, CancerTypeEvidence],
+) -> None:
+    """Withhold a no-fusion ADCC label when an admitted NUTM1 axis conflicts.
+
+    The ADCC local-reference panel can score highly on MYB and NFIB in a NUT
+    carcinoma. The curated NUTM/squamous pair instead uses ectopic NUTM1 as
+    its discriminator. Require a strong, context-admitted NUTM hypothesis;
+    a directly observed ADCC fusion remains definitive.
+    """
+
+    nutm = hypotheses.get("NUTM")
+    adcc = hypotheses.get("ADCC")
+    if nutm is None or adcc is None or adcc.direct_fusion_support > 0:
+        return
+    anchor = nutm.details.get("fusion_defined_rna_anchor") or {}
+    if not (
+        nutm.can_select_report_label
+        and nutm.details.get("rare_marker_can_select")
+        and anchor.get("strong")
+        and _clean(anchor.get("gene")) == "NUTM1"
+    ):
+        return
+    reason = (
+        "no-fusion ADCC RNA label conflicts with a strong NUTM1 surrogate "
+        "in an admitted NUT carcinoma expression context"
+    )
+    declared = adcc.details.get("hard_report_label_blockers") or ()
+    blockers = [declared] if isinstance(declared, str) else list(declared)
+    if reason not in blockers:
+        blockers.append(reason)
+    adcc.details["hard_report_label_blockers"] = blockers
+    adcc.details["nutm1_competitor_conflict"] = {
+        "competitor_code": "NUTM",
+        "gene": "NUTM1",
+        "tpm": anchor.get("tpm"),
+        "threshold_tpm": anchor.get("threshold_tpm"),
+        "context_codes": nutm.details.get("context_codes") or [],
+    }
+
+
 def _add_fused_evidence_features(
     hypotheses: dict[str, CancerTypeEvidence],
     analysis: Mapping[str, Any],
@@ -10987,6 +11042,7 @@ def select_report_scope_from_evidence(
         hypotheses,
         sample_tpm_by_symbol,
     )
+    _apply_nutm_adcc_surrogate_conflict(hypotheses)
 
     # One whole-profile centroid pass.  Correlations become selection evidence
     # only when the associated compartment call is confident; otherwise they

@@ -29,12 +29,9 @@ dependencies = [
     # Pirlygenes pins the exact compatible oncoref wheel within this range.
     "oncoref>=1.8.193,<2",
     "numpy>=2.0.0",
-    # Cap below pandas 3: the suite is written against pandas 2.x and does not yet
-    # support the 3.0 breaking changes (Copy-on-Write by default, the object-dtype
-    # fillna downcast change, removed legacy APIs). Without this cap a fresh
-    # `pip install` resolves pandas 3.x and breaks at import/runtime. Lifting the
-    # cap is a deliberate pandas-3 migration, tracked separately.
-    "pandas>=2.0,<3",
+    # pandas 3 requires Python >=3.11; the resolver keeps pandas 2.3 on the
+    # supported Python 3.9/3.10 runtimes.
+    "pandas>=2.3,<4",
     "matplotlib>=3.5.0",
     "Pillow>=9.1",
     "mhcgnomes>=3.64.1,<4",

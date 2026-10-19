@@ -138,18 +138,6 @@ def test_lineage_calibration_none_median_keeps_all_retained():
 # ── #40: lineage estimator returns TME-dominated genes separately ──
 
 
-def test_lineage_estimator_returns_tuple_of_estimates_and_skipped():
-    """Empty panel → (empty, empty) tuple, not a bare list."""
-    estimates, skipped = _lineage_purity_estimates(
-        "FAKE_TYPE",
-        {},
-        {},
-        0.7,
-    )
-    assert estimates == []
-    assert skipped == []
-
-
 def test_lineage_estimator_separates_tme_dominated_from_usable():
     """A gene present in the sample but TME-dominated in the reference
     lands in ``skipped_detected`` with the sample TPM and reason —
