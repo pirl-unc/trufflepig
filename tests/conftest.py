@@ -18,6 +18,39 @@ memory/CPU cost of re-loading reference matrices.
 import pytest
 
 
+@pytest.fixture
+def clinical_hla_context():
+    """Explicit synthetic clinical evidence for tests of HLA compatibility gates."""
+    from trufflepig.clinical_context import ClinicalAssay, ClinicalContext, ClinicalSource
+
+    def context(alleles):
+        assays = () if not alleles else (ClinicalAssay(
+            kind="hla", result="typed", alleles=tuple(alleles), complete_loci=("A",),
+            method="NGS", specimen_id="synthetic-specimen", scope="current",
+            validity="validated", reportability="reportable",
+            source=ClinicalSource(title="Synthetic clinical HLA report"),
+        ),)
+        return ClinicalContext(specimen_id="synthetic-specimen", assays=assays).public_dict()
+
+    return context
+
+
+@pytest.fixture
+def clinical_magea4_assay():
+    """Explicit positive companion result when isolating other afami gates."""
+    from trufflepig.clinical_context import ClinicalAssay, ClinicalSource
+
+    def assay(specimen_id="synthetic-specimen"):
+        return ClinicalAssay(
+            kind="ihc", analyte="MAGEA4", result="positive", method="IHC",
+            test_id="FDA:P230016", specimen_type="tissue", specimen_id=specimen_id,
+            scope="current", validity="validated", reportability="reportable",
+            source=ClinicalSource(title="Synthetic MAGE-A4 companion report"),
+        )
+
+    return assay
+
+
 @pytest.fixture(autouse=True)
 def _isolate_reference_discovery_caches(request):
     yield

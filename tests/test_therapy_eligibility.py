@@ -6,7 +6,9 @@ import pytest
 from trufflepig.brief import recommend_therapies
 from trufflepig.report_content import assess_therapy
 from trufflepig.reporting import cancer_therapy_panel_for_analysis, target_observation_state
-from trufflepig.therapy_eligibility import collect_evidence_requests, evaluate_therapy_eligibility
+from trufflepig.therapy_eligibility import (
+    collect_evidence_requests, evaluate_therapy_eligibility, evaluate_therapy_review,
+)
 from trufflepig.variants import normalize_protein_substitution
 
 
@@ -24,6 +26,64 @@ def mutation_context(gene, variant):
             },
         ],
     }
+
+
+@pytest.mark.parametrize(
+    "expression, expected",
+    [
+        (None, "rna_unavailable"),
+        ({"observed_tpm": 0.0}, "rna_below_threshold"),
+        ({"observed_tpm": 0.2}, "rna_below_threshold"),
+        ({"observed_tpm": 35.0, "attr_tumor_tpm": 3.5, "attr_tumor_fraction": 0.1,
+          "tme_dominant": True, "tme_explainable": True}, "rna_source_unsupported"),
+        ({"observed_tpm": 35.0, "attr_tumor_tpm": 33.0, "attr_tumor_fraction": 0.95,
+          "attr_support_fraction": 0.95, "tme_dominant": False, "tme_explainable": False}, "reviewable"),
+    ],
+)
+def test_one_review_decision_drives_rna_selection_and_empty_explanation(expression, expected):
+    from trufflepig.report_content import empty_shortlist_summary
+
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2",
+           "indication": "FAP-directed investigational therapy"}
+    ranges = pd.DataFrame([{**expression, "symbol": "FAP"}]) if expression else pd.DataFrame()
+    review = evaluate_therapy_review(row, expression, ranges_df=ranges)
+    assert review.status == expected
+    selected = recommend_therapies(pd.DataFrame([row]), ranges)
+    assert bool(selected) is (expected == "reviewable")
+    assessment = assess_therapy(row, expression, ranges_df=ranges, selected=bool(selected))
+    assert assessment["selection"]["status"] == expected
+    if not selected:
+        text = empty_shortlist_summary([assessment])
+        assert "clinical eligibility evidence" not in text
+        assert "No therapy was shortlisted" in text
+    else:
+        with pytest.raises(ValueError, match="no selected therapies"):
+            empty_shortlist_summary([assessment])
+
+
+def test_clinical_exclusion_precedes_missing_rna_but_prior_benefit_preserves_review():
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2"}
+    for status, expected in [("contraindicated", "clinical_blocker"), ("major_benefit", "reviewable")]:
+        analysis = {"treatment_history": [{"therapy": "177Lu-FAP-2286", "status": status}]}
+        decision = evaluate_therapy_review(row, analysis=analysis)
+        assert decision.status == expected
+        assert bool(recommend_therapies(pd.DataFrame([row]), pd.DataFrame(), analysis=analysis)) is (
+            expected == "reviewable"
+        )
+
+
+@pytest.mark.parametrize(
+    "input_symbols, expected",
+    [({"FAP"}, "rna_below_threshold"), ({"ACTB"}, "rna_unavailable")],
+)
+def test_absent_range_row_preserves_low_expression_versus_missing_input(input_symbols, expected):
+    row = {"symbol": "FAP", "agent": "177Lu-FAP-2286", "agent_class": "RLT", "phase": "phase_2"}
+    ranges = pd.DataFrame()
+    ranges.attrs["sample_input_symbols"] = input_symbols
+    review = evaluate_therapy_review(row, ranges_df=ranges)
+    assert review.status == expected
+    assert not recommend_therapies(pd.DataFrame([row]), ranges)
+    assert assess_therapy(row, ranges_df=ranges)["selection"]["status"] == expected
 
 
 @pytest.mark.parametrize(
@@ -65,8 +125,8 @@ def test_unrelated_variant_file_never_satisfies_a_target_requirement():
 @pytest.mark.parametrize(
     "hla_types, status", [(["A*24:02"], "blocked"), (["A*02:05"], "blocked"), ([], "missing")]
 )
-def test_known_hla_exclusions_are_blockers_and_unknown_typing_is_a_request(hla_types, status):
-    analysis = {"cancer_type": "SARC_SYN", "analysis_constraints": {"hla_types": hla_types}}
+def test_known_hla_exclusions_are_blockers_and_unknown_typing_is_a_request(hla_types, status, clinical_hla_context):
+    analysis = {"cancer_type": "SARC_SYN", "clinical_context": clinical_hla_context(hla_types)}
     _, subtype, panel = cancer_therapy_panel_for_analysis("SARC_SYN", analysis)
     row = next(row for row in panel.to_dict("records") if row["agent"] == "afami-cel (Tecelra)")
     assessment = assess_therapy(row, analysis=analysis, panel_subtype=subtype)
@@ -234,7 +294,7 @@ def test_spindle_diagnostic_workup_occurs_only_in_the_information_section():
     summary = render_report_summary(content)
     workup = "Review renal versus soft-tissue site and pathology"
     assert summary.count(workup) == 1
-    assert summary.index(workup) > summary.index("## Information needed")
+    assert summary.index(workup) > summary.index("## What would change the treatment options")
     assert any(r["key"] == "spindle_diagnostic_context" for r in content.evidence_requests)
 
 
@@ -341,7 +401,7 @@ def test_selected_therapy_clinical_criteria_survive_all_report_formats(tmp_path,
     assert any(a["agent"] == agent and a["selected"] for a in content.therapy_assessments)
     summary = render_report_summary(content)
     assert summary.count(phrase) == 1
-    assert summary.index(phrase) > summary.index("## Information needed")
+    assert summary.index(phrase) > summary.index("## What would change the treatment options")
     request = next(r for r in content.evidence_requests if r["key"] == "clinical_setting")
     detail = next(d for d in request["details"] if phrase in d["question"])
     assert agent in detail["affects"]
@@ -366,3 +426,193 @@ def test_selected_therapy_clinical_criteria_survive_all_report_formats(tmp_path,
     pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
     pdf_text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
     assert pdf_text.count(phrase) == 1
+
+
+def test_parsed_variant_file_satisfies_exact_allele_gates(tmp_path):
+    from trufflepig.variants import parse_variant_file
+
+    path = tmp_path / "variants.csv"
+    path.write_text("gene,variant\nKRAS,p.G12C\nBRAF,V600E\n")
+    analysis = {
+        "cancer_type": "COAD",
+        "variant_inputs_supplied": True,
+        "variant_records": [record.public_dict() for record in parse_variant_file(path)],
+    }
+    _, subtype, panel = cancer_therapy_panel_for_analysis("COAD", analysis)
+    for agent, label in [("sotorasib", "KRAS G12C"), ("encorafenib", "BRAF V600E")]:
+        row = next(row for row in panel.to_dict("records") if agent in row["agent"])
+        decision = evaluate_therapy_eligibility(row, analysis, panel_subtype=subtype)
+        requirement = next(r for r in decision.requirements if r.kind == "mutation")
+        assert decision.permits_review and requirement.status == "satisfied"
+        assert requirement.label == label
+        assert requirement.source.startswith("https://")
+
+
+def test_fusion_satisfies_an_altered_indication_but_amplification_not_a_named_mutation():
+    from trufflepig.reporting import supplied_variant_supports_target_row
+
+    fusion = {
+        "cancer_type": "BLCA",
+        "fusion_records": [{"gene_a": "FGFR3", "gene_b": "TACC3", "name": "FGFR3--TACC3"}],
+    }
+    _, _, panel = cancer_therapy_panel_for_analysis("BLCA", fusion)
+    erdafitinib = next(row for row in panel.to_dict("records") if "erdafitinib" in row["agent"])
+    assert supplied_variant_supports_target_row(erdafitinib, fusion)
+
+    _, _, panel = cancer_therapy_panel_for_analysis("LUAD", {"cancer_type": "LUAD"})
+    capmatinib = next(row for row in panel.to_dict("records") if "capmatinib" in row["agent"])
+    for variant, variant_type, expected in [
+        ("MET amplification", "amplification", False),
+        ("MET loss", "loss", False),
+        ("MET L1195V", "mutation", False),
+        ("MET exon 13 skipping", "mutation", False),
+        ("MET exon 14 deletion", "loss", False),
+        ("MET exon 14 skipping", "mutation", True),
+    ]:
+        analysis = {
+            "cancer_type": "LUAD",
+            "variant_records": [{"gene": "MET", "variant": variant, "variant_type": variant_type}],
+        }
+        assert bool(supplied_variant_supports_target_row(capmatinib, analysis)) is expected
+
+
+def test_named_mutation_event_is_required_for_eligibility_and_shortlisting():
+    _, subtype, panel = cancer_therapy_panel_for_analysis("LUAD", {"cancer_type": "LUAD"})
+    row = next(row for row in panel.to_dict("records") if "capmatinib" in row["agent"])
+    for variant, permits_review in [
+        ("MET L1195V", False),
+        ("MET exon 14 skipping", True),
+    ]:
+        analysis = {
+            "cancer_type": "LUAD",
+            "variant_records": [
+                {"gene": "MET", "variant": variant, "variant_type": "mutation"}
+            ],
+        }
+        decision = evaluate_therapy_eligibility(row, analysis, panel_subtype=subtype)
+        assert decision.permits_review is permits_review
+        recommendations = recommend_therapies(
+            pd.DataFrame([row]), pd.DataFrame(), analysis=analysis
+        )
+        assert bool(recommendations) is permits_review
+
+
+def test_mutation_indication_without_evidence_is_a_request_not_a_candidate():
+    analysis = {"cancer_type": "OV"}
+    _, subtype, panel = cancer_therapy_panel_for_analysis("OV", analysis)
+    row = next(row for row in panel.to_dict("records") if row["agent"] == "olaparib")
+    decision = evaluate_therapy_eligibility(row, analysis, panel_subtype=subtype)
+    assert not decision.permits_review
+    assert [r.status for r in decision.requirements] == ["missing"]
+    assert not recommend_therapies(pd.DataFrame([row]), pd.DataFrame(), analysis=analysis)
+    requests = collect_evidence_requests([assess_therapy(row, analysis=analysis)])
+    assert requests[0]["label"] == f"{row['symbol']} mutation / fusion / amplification"
+
+
+def test_unestablished_subtype_is_requested_rather_than_listed_as_a_blocker():
+    analysis = {"cancer_type": "SARC"}
+    row = {
+        "symbol": "KIT",
+        "agent": "imatinib",
+        "cancer_code": "SARC",
+        "subtype": "SARC_GIST",
+        "indication": "gastrointestinal stromal tumor",
+        "phase": "approved",
+    }
+    decision = evaluate_therapy_eligibility(row, analysis)
+    scope = next(r for r in decision.requirements if r.kind == "scope")
+    assert scope.status == "missing" and not decision.permits_review
+    assert not decision.has_known_blocker
+    requests = collect_evidence_requests([assess_therapy(row, analysis=analysis)])
+    assert any(request["label"] == "Disease subtype" for request in requests)
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        ("G12C;", ("G12C",)),
+        ("G12C ;; G12D", ("G12C", "G12D")),
+        ("KRAS G12C", ("G12C",)),
+        ("g12c", ("G12C",)),
+        ("exon 14 skipping", ("exon 14 skipping",)),
+    ],
+)
+def test_curated_protein_change_spellings_normalize_or_fail_closed(value, expected):
+    from trufflepig.reporting import required_protein_changes_for_therapy
+
+    row = {"symbol": "KRAS", "agent": "sotorasib", "required_protein_changes": value}
+    assert required_protein_changes_for_therapy(row) == expected
+
+
+@pytest.mark.parametrize(
+    "agent, gene, code, expected",
+    [
+        ("sotorasib + panitumumab", "KRAS", "COAD", ("G12C",)),
+        ("adagrasib", "KRAS", "LUAD", ("G12C",)),
+        ("dabrafenib + trametinib", "BRAF", "SKCM", ("V600E", "V600K")),
+        ("dabrafenib + trametinib", "BRAF", "THCA", ("V600E",)),
+        ("encorafenib + binimetinib", "BRAF", "SKCM", ("V600E", "V600K")),
+        ("vemurafenib", "BRAF", "SKCM", ("V600E",)),
+        ("MRTX1133", "KRAS", "PAAD", ()),
+    ],
+)
+def test_packaged_protein_change_table_keeps_label_scopes(agent, gene, code, expected):
+    from trufflepig.reporting import required_protein_changes_for_therapy
+
+    row = {"symbol": gene, "agent": agent, "cancer_code": code}
+    assert required_protein_changes_for_therapy(row) == expected
+
+
+def test_input_symbol_membership_never_scans_the_whole_input():
+    class MembershipOnly(frozenset):
+        def __iter__(self):
+            raise AssertionError("the input symbol set must not be scanned")
+
+    frame = pd.DataFrame()
+    frame.attrs["sample_input_symbols"] = MembershipOnly({"EGFR", "MAGE-A4"})
+    assert target_observation_state("EGFR", frame) == "below_detection"
+    assert target_observation_state("MAGEA4", frame) == "below_detection"
+    assert target_observation_state("ERBB2", frame) == "not_in_input"
+
+
+@pytest.mark.parametrize("hla_types", [["A*02:01"], []])
+def test_landscape_cell_states_each_hla_sentence_once_with_escaped_alleles(hla_types):
+    from trufflepig.reporting import therapy_path_context
+    from trufflepig.therapy_eligibility import requirement_descriptions
+
+    row = {
+        "symbol": "MAGEA4",
+        "agent": "afamitresgene autoleucel",
+        "cancer_code": "SARC",
+        "indication": "synovial sarcoma",
+        "treatment_path_tier": "approved_indication_matched",
+        "eligibility_note": "requires HLA-A*02 typing and MAGE-A4 IHC",
+    }
+    analysis = {"cancer_type": "SARC", "analysis_constraints": {"hla_types": hla_types}}
+    cell = therapy_path_context(row, analysis=analysis)
+    decision = evaluate_therapy_eligibility(row, analysis)
+    assert requirement_descriptions(decision, stated=cell) == []
+    assert sum(cell.count(p) for p in ("HLA evidence unresolved", "HLA typing is unavailable")) == 1
+    assert "A\\*02" in cell and "A*02:0" not in cell
+    assert "Curated eligibility note: requires HLA-A\\*02 typing" in cell
+
+
+def test_report_clauses_and_guards_tolerate_sentences_and_missing_rows():
+    from trufflepig.reporting import join_report_clauses, therapy_path_context, therapy_rationale_paragraphs
+
+    assert join_report_clauses(["Sentence one.", "", "clause two;", "clause three"]) == (
+        "Sentence one; clause two; clause three"
+    )
+    assert therapy_path_context(None) == ""
+    assert therapy_rationale_paragraphs(None) == []
+
+
+def test_request_labels_name_the_evidence_not_the_internal_kind():
+    rows = [
+        {"symbol": "MAGEA4", "agent": "afami-cel", "phase": "phase_2", "hla_restriction": "A*02:01"},
+        {"symbol": "KRAS", "agent": "sotorasib", "cancer_code": "LUAD", "indication": "KRAS G12C LUAD"},
+    ]
+    assessments = [assess_therapy(row, analysis={"cancer_type": "LUAD"}) for row in rows]
+    labels = {request["label"] for request in collect_evidence_requests(assessments)}
+    assert {"HLA typing", "KRAS G12C"} <= labels
+    assert not any(label in {"Hla", "Mutation", "Tmb high"} for label in labels)

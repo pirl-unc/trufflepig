@@ -284,3 +284,111 @@ def test_full_report_audit_requires_authored_content_to_match_summary(tmp_path):
         if issue["category"] == "authored_summary_mismatch"
     )
     assert issue["severity"] == "error"
+
+
+def _with_structured_report(paths, tmp_path, document, summary_text=None):
+    report = tmp_path / "sample-report.json"
+    report.write_text(json.dumps(document))
+    if summary_text is not None:
+        paths["summary"].write_text(summary_text, encoding="utf-8")
+    return {**paths, "report": report}
+
+
+def _audit(paths):
+    return {
+        issue["category"]
+        for issue in _sample_issues(sample_id="sample", expected="READ", paths=paths, compat=_compat())
+    }
+
+
+def test_legacy_report_schema_is_flagged_instead_of_failing_every_summary(tmp_path):
+    paths = _write_report_tree(tmp_path, "**Working cancer call**: READ (Rectum Adenocarcinoma).\n")
+    paths = _with_structured_report(paths, tmp_path, {"schema_version": 1, "sample_id": "sample"})
+    categories = _audit(paths)
+    assert "legacy_structured_report" in categories
+    assert "authored_summary_mismatch" not in categories
+
+
+def test_audit_requires_selected_therapies_citations_and_requests_in_the_summary(tmp_path):
+    from trufflepig.report_language import markdown_url, render_report_template
+
+    paths = _write_report_tree(tmp_path, "**Working cancer call**: READ (Rectum Adenocarcinoma).\n")
+    url = "https://example.org/label(2026).pdf"
+    decisions = {
+        "schema_version": 2,
+        "sample_id": "sample",
+        "therapy_assessments": [
+            {
+                "agent": "sotorasib + panitumumab",
+                "selected": True,
+                "source_url": url,
+                "eligibility": {"permits_review": True},
+            }
+        ],
+        "evidence_requests": [
+            {"key": "msi_high", "keys": ["msi_high"], "question": "Supply the clinical MSI result."}
+        ],
+    }
+    uncited = [{"id": "therapies", "title": "Therapies", "blocks": [{"kind": "paragraph", "text": "None."}]}]
+    document = {**decisions, "sections": uncited}
+    summary = render_report_template("report", sample_id="sample", sections=uncited)
+    categories = _audit(_with_structured_report(paths, tmp_path, document, summary))
+    assert "authored_summary_mismatch" not in categories
+    assert {
+        "selected_therapy_missing_from_summary",
+        "therapy_source_missing_from_summary",
+        "evidence_request_missing_from_summary",
+    } <= categories
+
+    cited = [
+        {
+            "id": "therapies",
+            "title": "Therapies",
+            "blocks": [
+                {
+                    "kind": "table",
+                    "headers": ["Recommendation", "Evidence source"],
+                    "rows": [["sotorasib \\+ panitumumab", f"[FDA label]({markdown_url(url)})"]],
+                },
+                {"kind": "paragraph", "text": "**MSI/MMR:** Supply the clinical MSI result."},
+            ],
+        }
+    ]
+    document = {**decisions, "sections": cited}
+    summary = render_report_template("report", sample_id="sample", sections=cited)
+    categories = _audit(_with_structured_report(paths, tmp_path, document, summary))
+    assert not categories & {
+        "authored_summary_mismatch",
+        "selected_therapy_missing_from_summary",
+        "therapy_source_missing_from_summary",
+        "evidence_request_missing_from_summary",
+    }
+
+
+def test_audit_checks_each_source_when_a_therapy_has_multiple_citations():
+    from scripts.audit_generated_reports import _authored_report_issues
+    from trufflepig.report_language import render_report_template
+
+    first = "https://example.org/first"
+    second = "https://example.org/second"
+    document = {
+        "sample_id": "sample",
+        "therapy_assessments": [{
+            "agent": "example drug",
+            "selected": True,
+            "source_url": "",
+            "sources": [{"url": first}, {"url": second}],
+        }],
+        "sections": [{"id": "therapies", "title": "Therapies", "blocks": [{
+            "kind": "paragraph", "text": f"example drug [first]({first})",
+        }]}],
+    }
+    summary = render_report_template(
+        "report", sample_id="sample", sections=document["sections"],
+    )
+    issues = _authored_report_issues("sample", document, summary)
+    assert issues == [{
+        "sample": "sample", "severity": "error",
+        "category": "therapy_source_missing_from_summary",
+        "detail": f"example drug: {second}",
+    }]

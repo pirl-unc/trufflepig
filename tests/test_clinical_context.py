@@ -11,8 +11,10 @@ from trufflepig.clinical_context import (
     ClinicalAssay,
     ClinicalContext,
     ClinicalSource,
+    SpecimenMetadata,
     evaluate_msi_mmr,
     load_clinical_context,
+    report_identity,
 )
 
 
@@ -186,6 +188,58 @@ def test_config_captures_context_before_source_file_changes(tmp_path):
     assert config.public_dict()["clinical_context"] == original.public_dict()
 
 
+@pytest.mark.parametrize("fields", [
+    {"purpose": "patient"}, {"display_label": 42}, {"collected_at": "2026-02-30"},
+    {"collected_at": "20260909"}, {"unexpected": "not silently ignored"},
+])
+def test_specimen_metadata_rejects_invalid_or_unknown_fields(fields):
+    with pytest.raises(ValueError):
+        load_clinical_context({"specimen": fields})
+
+
+def test_filename_and_cell_line_label_do_not_establish_specimen_purpose():
+    ctx = ClinicalContext(specimen=SpecimenMetadata(cell_line_id="HCC1395"))
+    identity = report_identity(ctx, source_path="HCC1395/research/gene_tpm.tsv")
+    assert identity["purpose"] == "unknown"
+    assert load_clinical_context(ctx.public_dict()) == ctx
+    proposed = replace(ctx, specimen=SpecimenMetadata(
+        purpose="research", source=ClinicalSource(review_status="proposed"),
+    ))
+    assert report_identity(proposed)["purpose"] == "unknown"
+
+
+def test_display_identity_is_independent_of_table_selection_and_source_basename():
+    a = report_identity(ClinicalContext(), source_path="source-A/gene_tpm.tsv", sample_selector="column-1")
+    b = report_identity(ClinicalContext(), source_path="source-B/gene_tpm.tsv", sample_selector="column-1")
+    c = report_identity(ClinicalContext(), source_path="source-A/gene_tpm.tsv", sample_selector="column-2")
+    assert len({r["title"] for r in (a, b, c)}) == 3
+    ctx = ClinicalContext(specimen_id="specimen-A", specimen=SpecimenMetadata(display_label="Display label"))
+    named = report_identity(ctx, source_path="source-A/gene_tpm.tsv", sample_selector="column-2")
+    assert named["title"] == "Display label"
+    assert named["sample_selector"] == "column-2"
+    assert named["specimen_id"] == "specimen-A"
+
+
+def test_specimen_display_label_does_not_select_rows_from_a_multisample_table(tmp_path, monkeypatch):
+    from trufflepig.analyze.models import AnalyzeConfig
+    from trufflepig import load_expression as le
+
+    monkeypatch.setattr(le, "find_gene_name_from_ensembl_gene_id", lambda _: "GENE_A")
+    source = tmp_path / "expression.csv"
+    source.write_text("analysis_id,ensembl_gene,gene_tpm_cognizant_corrector\nS1,ENSG1,5\nS2,ENSG1,99\n")
+    config = AnalyzeConfig(
+        input_path=str(source), sample_id_col="analysis_id", sample_id_value="S2",
+        clinical_context={"specimen_id": "specimen-A", "specimen": {"display_label": "S1"}},
+    )
+    expression = le.load_expression_data(
+        config.input_path, sample_id_col=config.sample_id_col, sample_id_value=config.sample_id_value,
+        verbose=False, progress=False,
+    )
+    assert expression["TPM"].tolist() == [99.0]
+    identity = report_identity(config.clinical_context, source_path=config.input_path, sample_selector=config.sample_id_value)
+    assert identity["title"] == "S1" and identity["sample_selector"] == "S2"
+
+
 def colorectal_analysis(ctx=None):
     return {
         "cancer_type": "COAD",
@@ -341,12 +395,15 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert followup[0]["evidence"][0]["assays"][0]["result"] == result
     candidate = next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")
     assert candidate["selected"] is (result == "MSI-H")
+    assert candidate["selection"]["status"] == {
+        "MSI-H": "reviewable", "MSS": "clinical_blocker", "pending": "eligibility_pending",
+    }[result]
     if candidate["selected"]:
         assert any(r["kind"] == "clinical_setting" for r in content.evidence_requests)
     prefix = "synthetic-clinical-assay"
     summary = render_report_summary(content)
     if candidate["selected"]:
-        information = summary.split("## Information needed", 1)[1].split("## ", 1)[0]
+        information = summary.split("## What would change the treatment options", 1)[1].split("## ", 1)[0]
         assert "unresectable or metastatic colorectal cancer" in information
         assert "requires validated MSI-H/dMMR" not in information
     elif followup:
@@ -367,6 +424,10 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert phrase in summary and phrase in pdf_text
     if result == "MSS":
         assert "does not satisfy an MSI-H/dMMR indication" in summary
+        assert "Known blockers and current treatments" in summary
+    if result == "pending":
+        assert "Approved options pending clinical confirmation" in summary
+    assert "missing usable target RNA" not in summary
 
 
 def test_rna_triage_changes_request_priority_without_opening_gate(monkeypatch):
@@ -393,11 +454,65 @@ def test_rna_triage_changes_request_priority_without_opening_gate(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("result", [None, "MSI-H", "MSS", "pending"])
+def test_pole_and_mlh1_rna_preserve_independent_clinical_msi_decision(tmp_path, monkeypatch, result):
+    from pypdf import PdfReader
+    import trufflepig.brief as brief
+    from trufflepig.analyze.models import AnalyzeConfig, AnalyzeRun, AnalyzePaths, InputResolution
+    from trufflepig.analyze.flow import write_analysis_output_records
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_view import build_report_view
+    from trufflepig.variants import VariantRecord, variant_evidence_records
+
+    ctx = context(assay(result)) if result else context()
+    analysis = colorectal_analysis(ctx)
+    variant = VariantRecord(gene="POLE", variant="p.P286R", variant_type="missense",
+                            result_status="positive", source_path="synthetic-clinical-variant.tsv")
+    analysis["variant_records"] = [variant.public_dict()]
+    assert variant_evidence_records(analysis)[0]["gene"] == "POLE"
+    channel = {"details": {"mismatch_repair": {
+        "context_group": "CRC", "msi_probability": 0.81,
+        "mlh1_expression": {"tpm": 18.0, "cohort_ratio": 1.01},
+    }}}
+    monkeypatch.setattr(brief, "mismatch_repair_summary_context", lambda analysis: channel)
+    view = build_report_view(analysis, sample_id="synthetic-mlh1-observation")
+    content = build_report_content(analysis, pd.DataFrame(), "COAD", "", report_view=view)
+    candidate = next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")
+    assert candidate["selected"] is (result == "MSI-H")
+    requirement = next(r for r in candidate["eligibility"]["requirements"] if r["kind"] == "msi_high")
+    assert requirement["status"] == {None: "missing", "MSI-H": "satisfied", "MSS": "blocked", "pending": "unresolved"}[result]
+    assert any(r["key"] == "msi_high" for r in content.evidence_requests) is (result in {None, "pending"})
+
+    prefix = "synthetic-mlh1-observation"
+    summary = render_report_summary(content)
+    (tmp_path / f"{prefix}-summary.md").write_text(summary)
+    run = AnalyzeRun(AnalyzeConfig(input_path="synthetic.tsv", clinical_context=ctx),
+                     InputResolution("synthetic.tsv", None, False, "gene"),
+                     AnalyzePaths(tmp_path, prefix, prefix))
+    write_analysis_output_records(run, view, content=content)
+    document = json.loads((tmp_path / f"{prefix}-report.json").read_text())
+    paragraph = next(b["text"] for s in document["sections"] for b in s["blocks"]
+                     if "Mismatch-repair RNA context:" in b.get("text", ""))
+    pdf = PdfReader(tmp_path / f"{prefix}-interpretive-report.pdf")
+    pdf_text = " ".join(" ".join(p.extract_text() for p in pdf.pages).split())
+    for phrase in ["MSI-like probability 0.81", "MLH1 bulk RNA measures 18 TPM (101% of the cohort-typical level)",
+                   "does not establish MLH1 protein retention", "clinical MSI/MMR status or immunotherapy eligibility"]:
+        assert phrase in summary and phrase in paragraph and phrase in pdf_text
+    assert "POLE proofreading mutation" not in paragraph
+    assert "mRNA is retained" not in paragraph
+    assert document["clinical_context"] == ctx.public_dict()
+    if result == "MSS":
+        assert "Clinical/RNA discordance" in summary and "Clinical/RNA discordance" in pdf_text
+
+
 def test_cli_context_round_trip(tmp_path, monkeypatch):
     from trufflepig import cli, main
     from trufflepig.analyze.models import AnalyzeConfig
 
-    ctx = context(assay("dMMR"))
+    ctx = replace(context(assay("dMMR")), specimen=SpecimenMetadata(
+        purpose="research", display_label="Explicit CLI identity",
+        source=ClinicalSource(title="Synthetic sample manifest"),
+    ))
     path = tmp_path / "clinical.json"
     path.write_text(json.dumps(ctx.public_dict()))
     captured = {}
@@ -436,7 +551,10 @@ def test_web_upload_normalizes_the_same_context(tmp_path, monkeypatch):
     monkeypatch.setattr("trufflepig.web.runs._spawn", capture)
     settings = WebSettings(runs_root=tmp_path / "runs", uploads_root=tmp_path / "uploads")
     client = TestClient(create_app(settings))
-    ctx = context(assay())
+    ctx = replace(context(assay()), specimen=SpecimenMetadata(
+        purpose="research", display_label="Reference α", cell_line_id="Synthetic-line",
+        source=ClinicalSource(title="Reference-material catalog"),
+    ))
     response = client.post(
         "/api/run",
         files={
@@ -458,6 +576,70 @@ def test_web_upload_normalizes_the_same_context(tmp_path, monkeypatch):
         },
     )
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize("purpose", ["clinical", "research", "unknown"])
+def test_specimen_purpose_changes_framing_without_changing_molecular_facts(tmp_path, purpose):
+    from pypdf import PdfReader
+    from trufflepig.analyze.models import AnalyzeConfig, AnalyzeRun, AnalyzePaths, InputResolution
+    from trufflepig.analyze.flow import write_analysis_output_records
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_view import build_report_view
+
+    baseline = colorectal_analysis(context(assay()))
+    view = build_report_view(baseline, sample_id="table-column-A")
+    before = build_report_content(baseline, pd.DataFrame(), "COAD", "", report_view=view)
+    # Literal punctuation and Unicode must survive full title wrapping.
+    label = "Léa α | specimen [A] * reference " * 8
+    ctx = replace(context(assay()), specimen=SpecimenMetadata(
+        display_label=label, purpose=purpose, cell_line_id="Synthetic-line",
+        collected_at="2026-07-29", site="supplied site",
+        source=ClinicalSource(title="Specimen metadata source"),
+    ))
+    analysis = {**baseline, "clinical_context": ctx.public_dict(), "report_input": {
+        "source_path": "source-A/gene_tpm.tsv", "sample_selector": "table-column-A",
+        "selector_column": "sample",
+    }}
+    content = build_report_content(analysis, pd.DataFrame(), "COAD", "", report_view=view)
+    assert content.therapy_assessments == before.therapy_assessments
+    assert content.clinical_context["assays"] == before.clinical_context["assays"]
+    assert content.identity["sample_selector"] == "table-column-A"
+    assert content.identity["purpose"] == purpose
+    conclusion = next(s for s in content.sections if s["id"] == "conclusion")
+    evidence = next(s for s in content.sections if s["id"] == "evidence")
+    assert not any("Specimen metadata source" in b.get("text", "") for b in conclusion["blocks"])
+    assert any("Specimen metadata source" in b.get("text", "") for b in evidence["blocks"])
+    assert len(content.specimen_blocks) == 2
+    assert any(r["kind"] == "clinical_setting" for r in content.evidence_requests) is (purpose != "research")
+    assert [r for r in content.evidence_requests if r["kind"] != "clinical_setting"] == [
+        r for r in before.evidence_requests if r["kind"] != "clinical_setting"
+    ]
+    prefix = "specimen-context"
+    summary = render_report_summary(content)
+    (tmp_path / f"{prefix}-summary.md").write_text(summary)
+    run = AnalyzeRun(
+        AnalyzeConfig(input_path="source-A/gene_tpm.tsv", sample_id_col="sample",
+                      sample_id_value="table-column-A", clinical_context=ctx),
+        InputResolution("source-A/gene_tpm.tsv", None, False, "gene"),
+        AnalyzePaths(tmp_path, prefix, prefix),
+    )
+    write_analysis_output_records(run, view, content=content)
+    doc = json.loads((tmp_path / f"{prefix}-report.json").read_text())
+    manifest = json.loads((tmp_path / f"{prefix}-manifest.json").read_text())
+    assert doc["clinical_context"] == manifest["config"]["clinical_context"] == ctx.public_dict()
+    assert doc["headline"] == json.loads(json.dumps(view.public_dict()))
+    reader = PdfReader(tmp_path / f"{prefix}-interpretive-report.pdf")
+    text = " ".join(" ".join(p.extract_text() for p in reader.pages).split())
+    assert label.strip() in text
+    for required in ["MSI-H", "specimen-A", "2026-07-29", "Specimen metadata source"]:
+        assert required in summary and required in text
+    for page in reader.pages:
+        assert content.identity["document_id"] in page.extract_text()
+    framing = {"clinical": "Supplied clinical specimen", "research": "Research-only sample", "unknown": "Specimen purpose is unknown"}[purpose]
+    assert framing in summary and framing in text
+    if purpose == "research":
+        assert "research hypotheses" in summary
+        assert "Reconcile the supplied clinical assay reports, current disease setting" not in summary
 
 
 def test_clinical_provenance_renders_literally(tmp_path):

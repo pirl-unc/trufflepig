@@ -24,11 +24,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional
 
 if TYPE_CHECKING:
-    from .report_view import ReportView
+    from .report_view import Purity, ReportView
 
 SCHEMA_VERSION = 2
 
-# Reader-facing figure manifest: (filename-suffix, title, interpretation sentence).
+# Reader-facing figure manifest: (filename-suffix, title, static caption or None).
+# A None caption is authored from the frozen evidence when the manifest is built.
 # The interpretation is what the figure *means* for the decision — it replaces
 # captioning a figure with its PNG filename. Figures are gated on existence at
 # emit time (a belief that never fired never wrote its plot), so a manifest entry's
@@ -40,44 +41,74 @@ SCHEMA_VERSION = 2
 # and the evidence tables retain them for technical review.
 FIGURE_REGISTRY = [
     (
+        "priority-targets.png",
+        "Targets to prioritize for follow-up",
+        "Curated treatment pathways and exploratory RNA targets are shown separately. "
+        "Ranking combines evidence, estimated RNA source and normal-tissue context; "
+        "it is not a drug-response score. Mutation-specific therapies still require the exact molecular result.",
+    ),
+    (
+        "priority-target-context.png",
+        "Target RNA source and healthy-tissue context",
+        "Left: measured bulk RNA (black dot); tumor contribution is shown only when sufficiently resolved "
+        "(teal diamond; line = estimated range). Middle: evidence for the RNA's source. "
+        "'Tumor source uncertain' means the expressing cells cannot be reliably identified. "
+        "'Non-tumor source plausible' means other cells could explain the signal; tumor expression is not excluded. "
+        "Right: healthy-tissue overlap. TPM values use a compressed scale above 1. "
+        "These estimates do not establish tumor-cell protein expression or clinical safety.",
+    ),
+    (
+        "actionable-targets.png",
+        "Expression of candidate targets",
+        "Observed bulk RNA, modeled tumor-cell-equivalent TPM and healthy-tissue references. "
+        "Tumor-cell-equivalent values adjust for tumor RNA fraction; source-attribution values "
+        "elsewhere describe contributions to bulk RNA. "
+        "Expression supports a follow-up hypothesis; it does not establish a target mutation, "
+        "clinical target positivity or treatment benefit.",
+    ),
+    (
         "sample-context.png",
         "Sample quality context",
-        "Compact library, preservation, and expression-concentration checks used "
-        "to judge whether the sample is suitable for interpretation.",
+        "The main quality findings and their effect on interpretation. Library and RNA condition "
+        "are inferred from expression; they do not replace laboratory quality measurements. "
+        "Detailed diagnostic signals remain in the analysis tables.",
     ),
     (
         "degradation-index.png",
         "RNA degradation check",
-        "Long-to-short transcript ratios show the sample-specific degradation signal "
-        "that informs uncertainty in downstream estimates.",
+        "Each row compares a long/short gene-expression ratio with its reference: "
+        "below 1 means less long-transcript RNA; above 1 means more. "
+        "A broad downward shift can support degradation. An upward shift can reflect library bias "
+        "and does not establish intact RNA. Labels list the long gene first.",
     ),
     (
         "decomposition-composition.png",
         "Estimated RNA composition",
-        "Conditional RNA-mixture model weights for the estimated patient tumor "
+        "Conditional RNA-mixture model weights for the estimated tumor "
         "contribution and fitted external normal, immune, and stromal references. "
-        "These are not per-gene subtraction percentages.",
+        "These are not cell counts or per-gene subtraction percentages. "
+        "Normal references are external panels, not a matched specimen from this patient.",
     ),
     (
         "decomposition-components.png",
         "Tumor microenvironment components",
         "The selected final-call model partitions its non-tumor RNA weight among "
         "external stromal and immune references; each gene can have a different "
-        "source attribution.",
+        "source attribution. All entries are RNA-model estimates, not measured cell counts.",
     ),
     (
         "purity-methods.png",
-        "Purity method agreement",
-        "Several RNA-derived tumor-fraction estimates and their agreement. Some methods "
-        "share inputs, so this is a consistency check rather than an independent "
-        "measurement; the reported interval widens when they disagree.",
+        "Purity estimates and uncertainty",
+        None,  # The named caption uses the same frozen methods as the figure.
     ),
     (
         "therapy-pathway-state.png",
         "Therapy pathway state",
-        "Expression state of therapy-relevant pathways provides biological context "
-        "for the candidate recommendations. These cohort-relative RNA panels do not "
-        "establish prior treatment, drug sensitivity, or resistance.",
+        "Left: pathway and its inferred state. Middle: whether the measured gene panel normally rises "
+        "or falls when that pathway is active. Right: observed RNA relative to the cancer-cohort median (1x). "
+        "Genes that rise with activity support activation when high; genes that fall with activity "
+        "support activation when low. Values are measured expression, not predictions of treatment response. "
+        "Bulk muscle or stromal RNA can contribute to these patterns.",
     ),
     (
         "subtype-signature.png",
@@ -128,8 +159,7 @@ def build_figure_manifest(
     analyze_dir: Path,
     prefix: str,
     *,
-    purity_status: str = "resolved",
-    purity_unresolved_reason: Optional[str] = None,
+    purity: "Purity",
 ) -> List[dict]:
     """The belief-gated reader-figure manifest: every registry figure, each with a
     ``present`` flag (True iff the pipeline actually emitted the plot — which it
@@ -144,18 +174,14 @@ def build_figure_manifest(
             "Components from the selected operational model; not a resolved "
             "sample-composition measurement."
         ),
-        "purity-methods.png": (
-            "Independent purity estimators support incompatible scenarios; the "
-            "operational value is not a fused consensus estimate."
-        ),
     }
-    if purity_unresolved_reason == "cancer_type_unresolved":
+    if purity.unresolved_reason == "cancer_type_unresolved":
         unresolved_captions = dict.fromkeys(
             unresolved_captions,
             "Exploratory subtraction model only. Tumor identity is unresolved; "
             "the modeled fraction may include benign muscle or stroma.",
         )
-    elif purity_unresolved_reason == "same_lineage_not_identifiable":
+    elif purity.unresolved_reason == "same_lineage_not_identifiable":
         unresolved_captions = {
             "decomposition-composition.png": (
                 "Selected operating model for target attribution. Tumor and benign "
@@ -165,23 +191,32 @@ def build_figure_manifest(
                 "External reference weights from the selected operating model; not "
                 "a resolved malignant-versus-benign cell composition."
             ),
-            "purity-methods.png": (
-                "RNA tumor-fraction methods are structurally limited because tumor "
-                "and benign same-lineage cells share the modeled programs."
-            ),
         }
+    number = 0
     for suffix, title, caption in FIGURE_REGISTRY:
-        if purity_status == "discordant_estimators":
+        if purity.is_unresolved:
             caption = unresolved_captions.get(suffix, caption)
+        if suffix == "purity-methods.png":
+            from .report_language import render_report_paragraph
+
+            caption = render_report_paragraph("purity_methods", purity=purity)
         figure = find_figure(analyze_dir, prefix, suffix)
+        if purity.unresolved_reason == "cancer_type_unresolved" and suffix in {
+            "priority-targets.png", "priority-target-context.png", "actionable-targets.png",
+        }:
+            figure = None
         present = figure is not None
+        if present:
+            number += 1
         manifest.append(
             {
                 "suffix": suffix,
-                "title": title,
+                "title": f"Figure {number}. {title}" if present else title,
+                "number": number if present else None,
+                "anchor": f"figure-{number}" if present else None,
                 "caption": caption,
                 "present": present,
-                "path": figure.name if present else None,
+                "path": figure.relative_to(analyze_dir).as_posix() if present else None,
             }
         )
     return manifest
@@ -212,14 +247,21 @@ def build_report_document(
         "figures": build_figure_manifest(
             analyze_dir,
             prefix,
-            purity_status=report_view.purity.status,
-            purity_unresolved_reason=report_view.purity.unresolved_reason,
+            purity=report_view.purity,
         ),
     }
+    figures_by_suffix = {f["suffix"]: f for f in document["figures"] if f["present"]}
+    for section in document["sections"]:
+        for block in section["blocks"]:
+            references = [figures_by_suffix[s] for s in block.get("figure_suffixes", []) if s in figures_by_suffix]
+            if references:
+                block["text"] += " See " + ", ".join(
+                    f"[Figure {f['number']}](#{f['anchor']})" for f in references
+                ) + "."
     detail = next(section for section in document["sections"] if section["id"] == "evidence")
-    for figure in document["figures"]:
-        if figure["present"]:
-            detail["blocks"].append({"kind": "figure", **figure})
+    detail["blocks"] = [
+        {"kind": "figure", **figure} for figure in document["figures"] if figure["present"]
+    ] + detail["blocks"]
     return document
 
 
@@ -240,6 +282,13 @@ def write_report_document(
     )
     path = analyze_dir / f"{prefix}-report.json"
     path.write_text(json.dumps(document, indent=2, ensure_ascii=False))
+    # Resolve references only after plots have been emitted, then render both
+    # reader formats from this final document. --no-figures cannot leave dangling links.
+    from .report_language import render_report_template
+
+    (analyze_dir / f"{prefix}-summary.md").write_text(render_report_template(
+        "report", sample_id=document["sample_id"], sections=document["sections"],
+    ))
     return path
 
 

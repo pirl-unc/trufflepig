@@ -259,7 +259,7 @@ def build_provenance_md(
                     subtype_notes.append(
                         f"{_compartment_label(comp).capitalize()} present at "
                         f"{frac:.0%} — this comes from an external healthy-tissue "
-                        "reference panel, not a separate normal sample from this patient, and is "
+                        "reference panel, not a separately measured matched normal sample, and is "
                         "subtracted before target-expression ranking."
                     )
                 elif any(k in comp.lower() for k in ("caf", "tam", "mdsc", "treg")):
@@ -389,7 +389,7 @@ def plot_provenance_funnel(
         ax.text(
             0.5,
             0,
-            "Estimated patient tumor / non-tumor\ncomposition unresolved",
+            "Estimated tumor / non-tumor\ncomposition unresolved",
             ha="center",
             va="center",
             fontsize=10,
@@ -422,7 +422,7 @@ def plot_provenance_funnel(
     )
     rest_frac = sum(f for c, f in fractions.items() if f <= 0.005 and f > 0)
 
-    labels = ["Patient tumor contribution (estimated by RNA model)"] + [
+    labels = ["Tumor contribution (estimated by RNA model)"] + [
         _compartment_label(c) for c, _ in non_tumor
     ]
     values = [tumor_frac] + [f for _, f in non_tumor]

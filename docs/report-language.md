@@ -6,9 +6,9 @@ its sections in the same order:
 
 1. **Conclusion and supporting evidence:** disease call, confidence, competing
    evidence, tumor-fraction uncertainty and specimen context.
-2. **Therapy rationale and blockers:** a cited table of ranked candidates,
-   followed by patient and population evidence, known exclusions and treatments
-   awaiting eligibility.
+2. **Therapy rationale and blockers:** a compact table of ranked candidates with
+   estimated tumor RNA and linked evidence sources, then each candidate's patient
+   and population evidence, known exclusions and treatments awaiting eligibility.
 3. **Information needed:** one list grouped by evidence requirement, retaining
    every affected therapy and the specific results needed.
 4. **Detailed evidence and figures:** supplied history, attribution explanations,
@@ -20,10 +20,14 @@ The main APIs are:
 |---|---|
 | `brief.recommend_therapies` | Rank candidates using clinical requirements and RNA support |
 | `therapy_eligibility.evaluate_therapy_eligibility` | Evaluate history, disease scope, HLA and molecular requirements |
+| `therapy_eligibility.evaluate_therapy_review` | Apply clinical and sample-support criteria before ranking; retain the exclusion reason |
 | `clinical_context.evaluate_msi_mmr` | Evaluate specimen-scoped clinical assay results and preserve conflicts |
 | `reporting.target_rna_observation` | Preserve measured, below-detection, missing and invalid RNA states |
 | `report_content.assess_therapy` | Explain one selected or excluded therapy without reranking it |
+| `report_content.empty_shortlist_summary` | Explain an empty shortlist from recorded selection decisions |
 | `report_content.build_report_content` | Author the report and deduplicate information requests |
+| `report_view.purity_method_estimates` | Collect method estimates with source families and their own intervals |
+| `brief.report_interpretation_limits` | Render limits from frozen purity evidence and sample quality |
 | `report_language.render_report_paragraph` | Render a named paragraph from explicit facts |
 | `report_language.render_report_template` | Render the complete Markdown layout |
 | `report_document.write_report_document` | Serialize authored content, headline and figure provenance |
@@ -35,15 +39,23 @@ facts raise an error. Supplied text is a value; it is never executed as template
 code. The PDF escapes HTML and preserves HLA tokens using the same mhcgnomes
 nomenclature boundary as other HLA operations.
 
+Each therapy assessment retains a `selection` status, reason and `permits_review`
+flag from the same review decision used by ranking. Clinical eligibility remains
+separate from RNA observation. Empty-shortlist counts describe actual clinical
+exclusions, pending evidence, disease-state context or RNA discovery/support
+limits; missing RNA on an expression-independent pathway is not an exclusion.
+The `empty_shortlist` template consumes those recorded decisions without another
+eligibility evaluation. Counts refer to curated rows, which may share an agent.
+
 Eligibility requirements distinguish `satisfied`, `missing`, `unresolved` and
 `blocked`. Prior benefit can support review while an assay remains missing; it
 does not confirm that assay or override conflicting molecular evidence. A known HLA mismatch or exclusion remains a blocker; it does not become
-a request for new typing. A missing disease subtype remains an information
-request and prevents selection; it is not a known clinical exclusion. A matching
-drug-target variant does not establish the required histologic subtype.
-Curation errors stop therapy filtering instead of restoring withdrawn or
-diagnostic-only rows. Mixed text and boolean corrections retain their types.
-An explicitly contraindicated component blocks its
+a request for new typing. A therapy curated for a disease subtype the report has
+not established awaits eligibility with a request to establish that subtype; it
+is not listed as a known exclusion. A matching drug-target variant does not
+establish the required histologic subtype. Curation errors stop therapy filtering
+instead of restoring withdrawn or diagnostic-only rows. Mixed text and boolean
+corrections retain their types. An explicitly contraindicated component blocks its
 containing regimen. Requests on an already excluded treatment remain in the audit
 assessment without generating a new testing task. Sharing a request does not
 merge different treatments or erase different assay requirements. Overlapping
@@ -51,17 +63,33 @@ target keys and shared assay questions are merged transitively, so a later
 requirement cannot recreate a duplicate request. Clinical-setting questions
 use this same collector.
 
-RNA abundance does not establish a mutation. Exact protein requirements on the
-covered KRAS/BRAF drugs reject another amino-acid change, imprecise nomenclature,
-a nucleotide-only assertion and an unrelated variant file. Parsed protein
-substitutions retain their sequence-variant identity. A named molecular
-indication requires that evidence even when upstream curation omits its gate
-flag; MET exon 14 skipping, for example, cannot be satisfied by another MET
-mutation or amplification. Broad altered-gene indications can accept compatible
-fusions. These rules do not
+The therapy section also names approved, disease-matched options awaiting missing
+clinical results, with their curated indication, confirmation criteria and sources.
+These conditional options do not change `selected` or `permits_review`, and do not
+require tumor-attributed RNA support. Known exclusions, conflicting results and
+unestablished disease scope remain excluded from this list. Missing HLA typing
+stays explicit. Already discussed sample-supported leads are not duplicated.
+Identical criteria share one entry, while the information section retains the
+complete assay requests. The report states that its curated target panel is not
+a complete treatment plan; an empty eligibility shortlist does not imply that no
+treatments exist.
+
+RNA abundance does not establish a mutation. Exact protein requirements for the
+covered KRAS/BRAF drugs come from the packaged
+`therapy-protein-change-requirements.csv`, which cites each label; a
+disease-specific row replaces the general one. They reject another amino-acid
+change, imprecise nomenclature, a nucleotide-only assertion and an unrelated
+variant file. Parsed protein substitutions retain their sequence-variant identity.
+A named molecular indication requires that evidence even when upstream curation
+omits its gate flag; MET exon 14 skipping, for example, cannot be satisfied by
+another MET mutation or amplification. Broad altered-gene indications can accept
+compatible fusions or amplifications. A curated protein-change value that cannot
+be parsed stays visible as an unmet requirement instead of stopping the report.
+These rules do not
 constitute an exhaustive molecular eligibility database. MSI/MMR/TMB inference
-remains context for confirmation. [Clinical MSI/MMR input](clinical-context.md)
-can satisfy the corresponding biomarker gate; RNA alone cannot. VCF/MAF adapters remain tracked in #140/#141. The
+remains context for confirmation. [Clinical MSI/MMR and absolute TMB input](clinical-context.md)
+can satisfy the corresponding assay criterion; RNA alone cannot. TMB thresholds,
+test identity and specimen material are treatment-specific. VCF/MAF adapters remain tracked in #140/#141. The
 current accepted variant input is a normalized table or an explicit symbolic
 call; requests can also name the clinical report needed for reconciliation.
 
@@ -76,9 +104,50 @@ references support development phase without implying an available enrollment
 slot; recruitment and protocol eligibility remain explicit follow-up questions.
 
 The detailed analysis and evidence tables retain broader curation and source
-attribution. They refer to the summary's consolidated information list. Figures
+attribution. Each row states its unmet requirements once, alongside the row's
+curated eligibility note. They refer to the summary's consolidated information list. Figures
 must describe measured or modeled RNA patterns and their uncertainty; they must
 not assert treatment exposure, receptor-assay status or a mutation from expression.
+
+Purity is frozen once in `ReportView.purity`, including the method estimates used
+by the comparison figure. The adopted value is distinct from the method rows;
+it must not count as another method. The public `purity_method_estimates` collector
+retains the existing enrichment-to-purity calibration without fitting a model.
+Missing or invalid fractions stay unavailable, and measured zero stays zero.
+
+The named `purity_summary`, `purity_methods` and `purity_attribution` paragraphs
+use that snapshot across the summary, actionable report, full analysis and figure
+captions. They distinguish a selected model interval from disagreement between
+methods, identify a lone estimate, place the model-ceiling qualification beside
+the headline and make unresolved tumor/background separation explicit before
+presenting tumor-attributed expression. Missing estimates or intervals do not
+establish deterministic input or agreement. The JSON headline retains method
+estimates, method families, individual intervals and confidence reasons so a
+consumer does not have to recover these facts from prose.
+Per-gene tumor RNA share is distinct from the sample's overall tumor RNA fraction.
+For a mixture `bulk_g = p * tumor_g + (1 - p) * background_g`, the gene's tumor
+share is `p * tumor_g / bulk_g`. If `background_g = 0`, that share can be 100%
+even when `p` is small. This follows from the weighted-mixture model used in
+[expression deconvolution](https://www.nature.com/articles/s41467-017-02289-3);
+it does not establish tumor specificity in an individual specimen.
+
+The inherited `observed * purity * 3` ceiling was introduced in pirlygenes
+commit `ca1c604` to damp apparently excessive residual attribution in a low-purity
+prostate sample. Its before/after examples did not calibrate the multiplier
+against gene-level source truth. That numerical ceiling is retired. Fitted
+background subtraction, healthy-tissue breadth and lineage-marker checks remain.
+Deprecated cap audit columns stay in the TSV schema with false/empty values.
+
+When the purity interval includes values below 25%, source attribution is flagged
+as uncertain; this is a conservative reporting threshold, not a validated accuracy
+boundary or an expression ceiling. Low sample-purity confidence, an over-predicting
+background reference and legacy capped analyses also prevent precise source
+claims. These rows cannot receive confident tumor-source status or quantitative
+source/strength bonuses in target prioritization. The reader figure retains
+measured bulk RNA and omits uncertain tumor TPM estimates and percentages.
+It uses "Tumor source uncertain" and "Non-tumor source plausible"; the latter
+does not establish absence of tumor expression. Technical estimates remain in
+the evidence tables for audit, with uncertainty carried into reader summaries.
 
 An optional LLM language editor remains a separate feature. It may eventually
 improve phrasing over these fixed facts, with review and deterministic output

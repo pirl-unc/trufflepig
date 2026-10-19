@@ -382,8 +382,18 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
             "families": ["PROSTATE"],
         },
     )
+    # The detailed writer is stubbed above: it cannot attach context as a side
+    # effect before the shared report is authored. The normal evidence producer
+    # must supply it to every consumer, including the serialized table.
+    synthetic_ranges = pd.DataFrame([{
+        "symbol": "AR", "gene_id": "ENSG00000169083",
+        "observed_tpm": 50.0, "attr_tumor_tpm": 25.0,
+        "attr_tumor_tpm_low": 10.0, "attr_tumor_tpm_high": 40.0,
+        "attr_tumor_fraction": 0.5, "attr_tumor_fraction_low": 0.2,
+        "attr_tumor_fraction_high": 0.8, "attr_support_fraction": 0.5,
+    }])
     monkeypatch.setattr(
-        cli_mod, "estimate_tumor_expression_ranges", lambda *a, **k: pd.DataFrame()
+        cli_mod, "estimate_tumor_expression_ranges", lambda *a, **k: synthetic_ranges.copy()
     )
     monkeypatch.setattr(cli_mod, "plot_tumor_expression_ranges", lambda *a, **k: None)
 
@@ -442,6 +452,11 @@ def test_cli_plot_expression_and_main(monkeypatch, tmp_path):
     assert len(target_report_calls) == 1
     assert (tmp_path / "test-output" / "out-summary.md").exists()
     assert (tmp_path / "test-output" / "out-evidence.md").exists()
+    ranges_output = pd.read_csv(tmp_path / "test-output" / "out-tumor-expression-ranges.tsv", sep="\t")
+    assert ranges_output["sample_low_purity"].tolist() == [True]
+    document = json.loads((tmp_path / "test-output" / "out-report.json").read_text())
+    ar_assessment = next(a for a in document["therapy_assessments"] if a["target"] == "AR")
+    assert "low estimated tumor fraction" in " ".join(ar_assessment["rationale"])
     assert not (tmp_path / "test-output" / "out-actionable.md").exists()
     assert not (tmp_path / "test-output" / "out-targets.md").exists()
     assert not (tmp_path / "test-output" / "out-provenance.md").exists()
@@ -1180,7 +1195,7 @@ def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_pat
     assert "Retained alternatives" in text
     assert "downstream target and biomarker interpretation below uses the working label" in text
     assert "colon healthy-tissue reference" in text
-    assert "no separate normal sample from this patient was analyzed" in text
+    assert "no separate matched normal sample was analyzed" in text
     assert "CEACAM5" in text
     assert "MAGEA4" in text
     assert "WT1" in text
@@ -1285,6 +1300,9 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
         fig.axes[0].get_title()
         == "Sample composition — SARC (Sarcoma) (host context indeterminate)"
     )
+    legend = fig.axes[1].get_legend()
+    assert legend._ncols == 1
+    assert all("RNA model" not in label.get_text() for label in legend.get_texts())
     component_fig = plot_decomposition_component_breakdown(
         best,
         title="TME cell-type breakdown — SARC (Sarcoma)",
@@ -1292,6 +1310,8 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
     component_text = {text.get_text() for text in component_fig.axes[0].texts}
     assert component_text == {"9%"}
     assert "1.20" not in component_text
+    assert all("RNA model" not in label.get_text()
+               for label in component_fig.axes[0].get_yticklabels())
 
     row = SimpleNamespace(
         purity=0.80,

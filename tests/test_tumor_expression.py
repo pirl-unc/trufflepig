@@ -816,6 +816,42 @@ def test_source_attribution_invariants_on_low_purity_prad_stroma_mix():
         ).all()
 
 
+def test_low_purity_does_not_bound_a_tumor_only_genes_rna_share(monkeypatch):
+    """A 5% tumor mixture can contain a gene expressed only by tumor cells."""
+    import trufflepig.plot_tumor_expr as ranges_module
+    import trufflepig.decomposition.signature as signature
+    from trufflepig.reporting import tumor_attribution_context
+
+    monkeypatch.setattr(ranges_module, "_cached_healthy_reference_metrics",
+                        lambda *args: ({"ERBB2": 0.0}, {"ERBB2": 0}, {"ERBB2": 0.0}))
+    monkeypatch.setattr(signature, "build_signature_matrix", lambda *args, **kwargs: (
+        ["ENSG00000141736"], ["ERBB2"], np.array([[0.0]]), ["fibroblast"],
+    ))
+
+    class Result:
+        fractions = {"tumor": 0.05, "fibroblast": 0.95}
+        matched_normal_tissue = None
+        matched_normal_fraction = 0.0
+
+    expression = pd.DataFrame({"ensembl_gene_id": ["ENSG00000141736"],
+                               "gene_symbol": ["ERBB2"], "TPM": [100.0]})
+    ranges = ranges_module.estimate_tumor_expression_ranges(
+        expression, "COAD",
+        {"overall_lower": 0.05, "overall_estimate": 0.05, "overall_upper": 0.05},
+        decomposition_results=[Result()],
+    )
+    row = ranges.set_index("symbol").loc["ERBB2"]
+    assert row["attr_tumor_tpm"] == 100.0
+    assert row["attr_tumor_fraction"] == 1.0
+    assert not row["low_purity_cap_applied"]
+    assert row["attribution_low_purity"]
+    # This algebraic possibility is not a validated source assignment in a
+    # real sample: low purity still prevents a confident report claim.
+    context = tumor_attribution_context(row)
+    assert context["tier"] == "mixed_source"
+    assert not context["quantifiable"]
+
+
 def test_ranges_empty_input():
     """Empty expression data should produce empty DataFrame."""
     from trufflepig.plot import estimate_tumor_expression_ranges

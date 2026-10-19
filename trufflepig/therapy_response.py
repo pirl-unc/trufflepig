@@ -332,8 +332,11 @@ def _candidate_sources_from_rna(ranges_df, *, max_sources: int = 4) -> list[dict
 
     rows: list[dict[str, Any]] = []
     from .common import ranges_records
+    from .reporting import tumor_attribution_context
 
     for row in ranges_records(ranges_df):
+        if tumor_attribution_context(row)["source_uncertain"]:
+            continue
         symbol = _clean_symbol(row.get("symbol"))
         if symbol not in _MAPK_RNA_SOURCE_GENES:
             continue
@@ -382,7 +385,7 @@ def _candidate_sources_from_rna(ranges_df, *, max_sources: int = 4) -> list[dict
                 "kind": "rna_high_source_gene",
                 "gene": row["symbol"],
                 "label": (
-                    f"RNA-high {row['symbol']} ({row['tpm']:.0f} patient "
+                    f"RNA-high {row['symbol']} ({row['tpm']:.0f} sample "
                     "estimated tumor TPM (RNA model)"
                     f"{fold_clause}{percentile_clause})"
                 ),

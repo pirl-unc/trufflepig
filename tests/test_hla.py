@@ -63,11 +63,13 @@ def test_prose_restrictions_use_the_same_nomenclature():
     (["A*24:02"], "mismatched"),
     ([], "unknown"),
 ])
-def test_real_afami_panel_enforces_hla_policy(supplied, status):
+def test_real_afami_panel_enforces_hla_policy(supplied, status, clinical_hla_context, clinical_magea4_assay):
+    context = clinical_hla_context(supplied)
+    context["assays"].append(clinical_magea4_assay().public_dict())
     analysis = {
         "cancer_type": "SARC_SYN",
         "cancer_type_source": "user-specified",
-        "analysis_constraints": {"hla_types": supplied},
+        "clinical_context": context,
     }
     _, subtype, panel = cancer_therapy_panel_for_analysis("SARC_SYN", analysis)
     ranges = pd.DataFrame([{
@@ -88,8 +90,11 @@ def test_real_afami_panel_enforces_hla_policy(supplied, status):
     selected = recommend_therapies(panel, ranges, analysis=analysis, panel_subtype=subtype)
     assert any(r.therapy["agent"] == row.agent for r in selected) == (status == "matched")
     if status == "excluded":
+        from trufflepig.report_language import report_plain_text
+
         context = hla_eligibility_context(row, analysis=analysis)
-        assert "HLA exclusion" in context and "A*02:05P" in context
+        # Alleles are Markdown-escaped; the rendered text keeps the nomenclature.
+        assert "HLA exclusion" in context and "A*02:05P" in report_plain_text(context)
         assert result["source"] in context
 
 

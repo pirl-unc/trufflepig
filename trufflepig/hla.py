@@ -157,12 +157,46 @@ class HlaEligibility:
     matched_required: str | None = None
     reason: str = ""
     nomenclature_version: str = ""
+    assays: tuple[dict, ...] = ()
 
     def public_dict(self) -> dict:
         result = asdict(self)
-        for key in ("required", "supplied", "excluded"):
+        for key in ("required", "supplied", "excluded", "assays"):
             result[key] = list(result[key])
         return result
+
+
+def hla_typings_conflict(
+    left: Iterable[str] | str, right: Iterable[str] | str, *,
+    left_complete: Iterable[str] = (), right_complete: Iterable[str] = (),
+) -> bool:
+    """Detect incompatible reported alleles within an explicitly complete locus.
+
+    Partial typing is not a complete genotype. More fields may refine a coarse
+    call; a P-group assertion is compared through the published membership
+    matcher. Nomenclature comes exclusively from mhcgnomes.
+    """
+    left = [hla_allele(a) for a in parse_hla_types(left)]
+    right = [hla_allele(a) for a in parse_hla_types(right)]
+
+    def compatible(a, b):
+        if a == b:
+            return True
+        if a.gene != b.gene:
+            return False
+        if set(a.annotations + b.annotations) & {"P", "G"}:
+            matches = {hla_requirement_match(x, y) for x, y in ((a, b), (b, a))}
+            # A known non-member conflicts even when the reverse comparison
+            # cannot expand a group into one specific allele.
+            return "matched" in matches or "mismatched" not in matches
+        depth = min(len(a.allele_fields), len(b.allele_fields))
+        return a.annotations == b.annotations and a.allele_fields[:depth] == b.allele_fields[:depth]
+
+    for complete, other, loci in ((left, right, left_complete), (right, left, right_complete)):
+        for allele in other:
+            if allele.gene_name in loci and not any(compatible(allele, a) for a in complete):
+                return True
+    return False
 
 
 def evaluate_hla_eligibility(supplied, required, *, excluded=()) -> HlaEligibility:

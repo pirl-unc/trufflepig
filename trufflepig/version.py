@@ -1,4 +1,4 @@
-__version__ = "1.27.0"
+__version__ = "1.28.0"
 
 version_string = f"v{__version__}"
 

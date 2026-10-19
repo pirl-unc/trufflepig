@@ -49,6 +49,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     prefix = str(tmp_path / "case")
     output = tmp_path / "case-therapy-pathway-state.png"
     output.write_text("old cancer")
+    output.with_suffix(".pdf").write_text("old vector")
     monkeypatch.setattr(
         plot_therapy,
         "plot_therapy_pathway_state",
@@ -65,6 +66,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     )
 
     assert missing is None
+    assert not output.with_suffix(".pdf").exists()
     assert not output.exists()
 
     def render_new(**kwargs):
@@ -90,7 +92,7 @@ def test_report_renderer_refreshes_path_and_removes_stale_artifact(
     assert output.read_text() == "new cancer"
 
 
-def test_renders_dumbbell_and_caption(tmp_path):
+def test_renders_panels_with_plain_labels_and_vector_output(tmp_path):
     out = tmp_path / "tps.png"
     fig = plot_therapy_pathway_state(
         therapy_response_scores=_crpc_scores(),
@@ -102,13 +104,18 @@ def test_renders_dumbbell_and_caption(tmp_path):
     assert out.exists() and out.stat().st_size > 1000
 
     ax = fig.axes[0]
-    labels = [t.get_text() for t in ax.get_yticklabels()]
+    labels = [t.get_text() for t in fig.axes[1].texts]
     assert any("AR signaling" in label for label in labels)
     assert any("NE differentiation" in label for label in labels)
     assert any("EMT" in label for label in labels)
-    assert any("expected-up genes" in label for label in labels)
-    assert any("expected-down genes" in label for label in labels)
-    assert len(labels) == 5
+    panels = [t.get_text() for t in fig.axes[2].texts]
+    assert any("Rise with activity" in label for label in panels)
+    assert any("Fall with activity" in label for label in panels)
+    assert len(panels) == 5
+    assert len(labels) == 6  # one name and one state per pathway, not per gene panel
+    assert len(fig.axes) == 3
+    assert not ax.get_yticklabels()
+    assert out.with_suffix(".pdf").exists()
 
 
 def test_state_tag_matches_direction(tmp_path):
@@ -119,9 +126,9 @@ def test_state_tag_matches_direction(tmp_path):
         disease_state_caption="",
         save_to_filename=str(tmp_path / "tps2.png"),
     )
-    labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
-    ar_label = next(lbl for lbl in labels if "AR signaling" in lbl)
-    ne_label = next(lbl for lbl in labels if "NE differentiation" in lbl)
+    labels = [t.get_text() for t in fig.axes[1].texts]
+    ar_label = labels[labels.index("AR signaling") + 1]
+    ne_label = labels[labels.index("NE differentiation") + 1]
     assert "suppressed" in ar_label
     assert "active" in ne_label
 
@@ -174,7 +181,7 @@ def test_mapk_axis_uses_activity_label(tmp_path):
         cancer_code="SARC",
         save_to_filename=str(tmp_path / "mapk.png"),
     )
-    labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
+    labels = [t.get_text() for t in fig.axes[1].texts]
     assert any("MAPK / ERK activity" in label for label in labels)
 
 
@@ -200,9 +207,9 @@ def test_state_ordering_active_suppressed_first(tmp_path):
         cancer_code="",
         save_to_filename=str(tmp_path / "tps_order.png"),
     )
-    labels = [t.get_text() for t in fig.axes[0].get_yticklabels()]
+    labels = [t.get_text() for t in fig.axes[1].texts]
     assert "suppressed axis" in labels[0]
-    assert "near cohort median" in labels[2]
+    assert "near cohort median" in labels[3]
 
 
 def test_indeterminate_enrichment_is_labeled_mild_not_baseline(tmp_path):
@@ -220,14 +227,14 @@ def test_indeterminate_enrichment_is_labeled_mild_not_baseline(tmp_path):
         save_to_filename=str(tmp_path / "tps_mild.png"),
     )
     ax = fig.axes[0]
-    labels = [t.get_text() for t in ax.get_yticklabels()]
-    assert "mild enrichment" in labels[0]
-    assert "near baseline" not in labels[0]
-    assert ax.get_title(loc="left") == "Therapy-response pathway RNA — READ"
+    labels = [t.get_text() for t in fig.axes[1].texts]
+    assert "mild enrichment" in labels[1]
+    assert "near baseline" not in labels[1]
+    assert fig._suptitle.get_text() == "Therapy-response pathway RNA — READ"
     assert "selected cancer-cohort median" in ax.get_xlabel()
     legend_labels = [
         text.get_text()
-        for legend in [ax.get_legend()]
+        for legend in fig.legends
         if legend is not None
         for text in legend.get_texts()
     ]

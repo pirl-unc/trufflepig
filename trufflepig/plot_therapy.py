@@ -1629,9 +1629,8 @@ def plot_therapy_pathway_state(
     Renders the disease-state narrative visually: one row per therapy-
     response axis (AR / NE / EMT / hypoxia / IFN / ER / HER2 / MAPK-ERK
     where applicable), dumbbell showing up-panel vs down-panel fold-vs-
-    cohort, with state label + color. A caption underneath restates
-    the disease-state sentence so the figure is self-contained for
-    tumor-board review.
+    cohort, with state label + color. Explanatory prose belongs in the report
+    caption, outside the figure canvas, so it cannot shrink the plot.
 
     Parameters
     ----------
@@ -1641,9 +1640,8 @@ def plot_therapy_pathway_state(
     cancer_code : str
         Displayed in the title for context.
     disease_state_caption : str
-        Text to display under the plot (typically the output of
-        :func:`compose_disease_state_narrative`). Empty-caption calls
-        just skip the caption row.
+        Retained for caller compatibility; narrative is rendered in the report,
+        not embedded as tiny text in the figure.
     save_to_filename : str, optional
         Write PNG here (and print the saved-path line for the CLI
         progress log).
@@ -1696,7 +1694,7 @@ def plot_therapy_pathway_state(
                     "fold": item["up_fold"],
                     "n": item["up_n"],
                     "marker": "o",
-                    "panel_label": "expected-up genes",
+                    "panel_label": "Genes rising with activity",
                     "legend_label": "genes expected up when pathway active",
                 }
             )
@@ -1707,7 +1705,7 @@ def plot_therapy_pathway_state(
                     "fold": item["down_fold"],
                     "n": item["down_n"],
                     "marker": "s",
-                    "panel_label": "expected-down genes",
+                    "panel_label": "Genes falling with activity",
                     "legend_label": "genes expected down when pathway active",
                 }
             )
@@ -1725,20 +1723,12 @@ def plot_therapy_pathway_state(
 
     n_rows = len(plot_rows)
     if figsize is None:
-        # Reserve vertical room for the caption wrap. Width accommodates
-        # fold labels without the legend overflowing. Up- and down-panel
-        # folds are separate rows because they are opposite evidence streams.
-        figsize = (12, max(4.0, 0.55 * n_rows + 2.8))
-
+        figsize = (11, max(4.5, 0.72 * n_rows + 2.1))
     fig = plt.figure(figsize=figsize)
-    # Top area for the dumbbells, bottom for the narrative caption.
-    if disease_state_caption:
-        ax = fig.add_axes([0.07, 0.38, 0.88, 0.52])
-        ax_caption = fig.add_axes([0.07, 0.02, 0.88, 0.18])
-        ax_caption.axis("off")
-    else:
-        ax = fig.add_axes([0.07, 0.24, 0.88, 0.66])
-        ax_caption = None
+    grid = fig.add_gridspec(1, 3, width_ratios=[2.5, 1.65, 4.1], wspace=0.10)
+    ax = fig.add_subplot(grid[0, 2])
+    pathway_ax = fig.add_subplot(grid[0, 0], sharey=ax)
+    panel_ax = fig.add_subplot(grid[0, 1], sharey=ax)
 
     # --- Dumbbell plot ---
     y_positions = np.arange(n_rows)
@@ -1784,13 +1774,14 @@ def plot_therapy_pathway_state(
             f"{fold:.2f}\u00d7",
             ha=ha,
             va="center",
-            fontsize=8,
-            color=color,
+            fontsize=11,
+            color="#243340",
             fontweight="bold",
         )
 
         if row["axis_last_row"] and i < n_rows - 1:
-            ax.axhline(i + 0.5, color="#eeeeee", linewidth=0.8, zorder=0)
+            for column in (ax, pathway_ax, panel_ax):
+                column.axhline(i + 0.5, color="#dbe3e8", linewidth=0.8, zorder=0)
 
     ax.axvline(1.0, color="#888888", linestyle="--", linewidth=1.0, alpha=0.7, zorder=1)
     ax.axvline(0.5, color="#ea580c", linestyle=":", linewidth=1.0, alpha=0.55, zorder=1)
@@ -1802,107 +1793,58 @@ def plot_therapy_pathway_state(
         if f is not None and f > 0:
             x_vals.append(f)
     if x_vals:
-        lo = min(0.1, min(x_vals) * 0.7)
-        hi = max(10.0, max(x_vals) * 1.4)
+        lo = min(0.1, min(x_vals) * 0.30)
+        hi = max(10.0, max(x_vals) * 2.3)
         ax.set_xlim(lo, hi)
     ax.set_xlabel(
-        "Fold vs selected cancer-cohort median TPM (log scale; 1.0 = cohort median)",
+        "RNA fold vs selected cancer-cohort median (1 = typical)",
         fontsize=10,
     )
 
-    # Y-axis: label + state tag (color-coded)
+    # Pathway identity/state and gene-panel direction occupy distinct columns.
+    # A falling panel belongs to its parent pathway, not another pathway.
     ax.set_yticks(y_positions)
-    labels = []
-    for row in plot_rows:
-        state_tag = _axis_state_tag(row)
-        n_info = f" ({row['n']})" if row["n"] else ""
-        panel_text = f"{row['panel_label']}{n_info}"
+    ax.tick_params(axis="y", left=False, labelleft=False)
+    from textwrap import fill
+    row_height_points = fig.get_size_inches()[1] * 72 * 0.74 / (n_rows + 0.15)
+    for i, row in enumerate(plot_rows):
         if row["axis_first_row"]:
-            labels.append(f"{row['label']}  \u2014  {state_tag}\n  {panel_text}")
-        else:
-            labels.append(f"  \u21b3 {panel_text}")
-    ax.set_yticklabels(labels, fontsize=10)
-    ax.invert_yaxis()
+            center = i + (row["axis_panel_count"] - 1) / 2
+            name = fill(row["label"], 25)
+            name_height = 11 * 1.2 * len(name.splitlines())
+            top = center - (name_height + 15) / (2 * row_height_points)
+            pathway_ax.text(0.02, top, name, va="top",
+                            fontsize=11, fontweight="bold", color="#243340")
+            pathway_ax.text(0.02, top + (name_height + 3) / row_height_points,
+                            _axis_state_tag(row), va="top",
+                            fontsize=10, color="#536471")
+        direction = "Rise" if row["panel"] == "up" else "Fall"
+        n_info = (f"\n{row['n']} " + ("gene" if row["n"] == 1 else "genes")) if row["n"] else ""
+        panel_ax.text(0.04, i, f"{direction} with activity{n_info}", va="center",
+                      fontsize=10, color="#536471")
+    ax.set_ylim(n_rows - 0.45, -0.6)
+    for column, heading in ((pathway_ax, "Pathway / state"), (panel_ax, "Gene panel")):
+        column.set_xlim(0, 1)
+        column.set_axis_off()
+        column.set_title(heading, fontsize=11, fontweight="bold", loc="left", pad=16)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
     title = "Therapy-response pathway RNA"
     if cancer_code:
         title += f" \u2014 {cancer_code}"
-    ax.set_title(title, fontsize=12, fontweight="bold", loc="left", pad=32)
-    ax.text(
-        0.0,
-        1.03,
-        "Background: per-gene median TPM in the selected cancer cohort; dotted lines mark reporting thresholds at 0.5x and 2.0x.",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=8.5,
-        color="#555555",
-    )
+    fig.suptitle(title, fontsize=14, fontweight="bold", x=0.02, ha="left", y=0.995)
+    ax.set_title("Measured RNA", fontsize=11, fontweight="bold", loc="left", pad=16)
     band_handles = [
         Line2D([0], [0], color=color, linewidth=5, label=label)
         for label, _lo, _hi, color in _FOLD_BANDS
     ]
-    shape_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            color="#475569",
-            markerfacecolor="#475569",
-            linestyle="",
-            markersize=8,
-            label="expected-up panel",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="s",
-            color="#475569",
-            markerfacecolor="#475569",
-            linestyle="",
-            markersize=7,
-            label="expected-down panel",
-        ),
-    ]
-    ax.legend(
-        handles=band_handles + shape_handles,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.13),
-        fontsize=7.5,
-        frameon=False,
-        markerscale=0.9,
-        handletextpad=0.5,
-        ncol=4,
-    )
-
-    # --- Caption ---
-    if ax_caption is not None and disease_state_caption:
-        # Single wrapped paragraph underneath. Narrow to ~130 chars per
-        # line so wrapping matches the figure width.
-        import textwrap
-
-        wrapped = "\n".join(
-            textwrap.wrap(
-                disease_state_caption,
-                width=130,
-                break_long_words=False,
-                break_on_hyphens=True,
-            )
-        )
-        ax_caption.text(
-            0.0,
-            1.0,
-            wrapped,
-            ha="left",
-            va="top",
-            fontsize=9,
-            color="#222222",
-            wrap=True,
-        )
+    fig.legend(handles=band_handles, loc="lower center", bbox_to_anchor=(0.5, 0.005),
+               fontsize=10, frameon=False, ncol=3, title="RNA abundance relative to cohort")
+    fig.subplots_adjust(left=0.02, right=0.98, top=0.90, bottom=0.16)
 
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        from .report_figures import save_report_figure
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
         print(f"Saved {save_to_filename}")
     return fig

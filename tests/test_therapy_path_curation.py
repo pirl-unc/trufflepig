@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from trufflepig._data import DATA_DIR as _DATA_DIR
 from trufflepig.reporting import (
@@ -159,6 +160,39 @@ def test_diagnostic_fapi_tracer_does_not_replace_therapeutic_lutetium_agent():
 
     assert list(filtered["agent"]) == ["[177Lu]FAPI-46"]
     assert therapy_withdrawal_note(targets.iloc[0]) == ""
+
+
+@pytest.mark.parametrize("existing_metadata", [False, True])
+@pytest.mark.parametrize("string_storage", ["python", "pyarrow"])
+def test_curation_preserves_structured_values_with_string_inference(existing_metadata, string_storage):
+    if string_storage == "pyarrow":
+        pytest.importorskip("pyarrow")
+    with pd.option_context("future.infer_string", True, "mode.string_storage", string_storage):
+        targets = pd.DataFrame([
+            {"cancer_code": "SARC", "subtype": "synovial_sarcoma", "symbol": "MAGE-A4",
+             "agent": "afami-cel (Tecelra)", "indication": "synovial sarcoma"},
+            {"cancer_code": "COAD", "subtype": "", "symbol": "KRAS",
+             "agent": "sotorasib", "indication": "colorectal cancer"},
+            {"cancer_code": "UNLISTED", "subtype": "", "symbol": "OTHER",
+             "agent": "unchanged agent", "indication": "unchanged indication"},
+        ], index=[9, 4, 2])
+        if existing_metadata:
+            targets["clinical_assay_criteria"] = ""
+            targets["requires_verified_alteration"] = ""
+        original = targets.copy(deep=True)
+
+        filtered = filter_current_therapy_targets(targets)
+
+        pd.testing.assert_frame_equal(targets, original)
+        assert list(filtered.index) == [0, 1, 2]
+        criterion, = filtered.iloc[0]["clinical_assay_criteria"]
+        assert criterion["analyte"] == "MAGEA4"
+        assert criterion["accepted_test_ids"] == ["FDA:P230016"]
+        assert filtered.iloc[1]["requires_verified_alteration"] is True
+        assert filtered.iloc[1]["agent"] == "sotorasib + panitumumab"
+        assert filtered.iloc[2]["agent"] == "unchanged agent"
+        assert filtered.iloc[2]["clinical_assay_criteria"] == ""
+        assert filtered.iloc[2]["requires_verified_alteration"] == ""
 
 
 def test_withdrawn_disease_specific_rows_are_filtered_from_reports():
@@ -565,7 +599,7 @@ def test_her2_rows_remain_prioritizable_when_sample_rna_context_is_her2_up():
     assert therapy_rna_context_conflict(row, analysis=analysis) == ""
 
 
-def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
+def test_hla_restricted_therapy_rows_use_supplied_hla_gate(clinical_hla_context):
     row = {
         "symbol": "TEST4",
         "agent": "example TCR-T",
@@ -576,8 +610,8 @@ def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
         "treatment_path_tier": "trial_follow_up",
         "eligibility_note": "clinical-trial follow-up; not default standard",
     }
-    matched = {"analysis_constraints": {"hla_types": ["A*02:01"]}}
-    mismatched = {"analysis_constraints": {"hla_types": ["A*24:02"]}}
+    matched = {"clinical_context": clinical_hla_context(["A*02:01"])}
+    mismatched = {"clinical_context": clinical_hla_context(["A*24:02"])}
 
     assert "HLA match" in hla_eligibility_context(row, analysis=matched)
     assert hla_restricted_target_supported(row, analysis=matched) is True
@@ -585,7 +619,7 @@ def test_hla_restricted_therapy_rows_use_supplied_hla_gate():
     assert hla_restricted_target_supported(row, analysis=mismatched) is False
 
 
-def test_low_resolution_hla_does_not_match_exact_allele_requirement():
+def test_low_resolution_hla_does_not_match_exact_allele_requirement(clinical_hla_context):
     row = {
         "symbol": "TEST5",
         "agent": "example pMHC bispecific",
@@ -596,7 +630,7 @@ def test_low_resolution_hla_does_not_match_exact_allele_requirement():
         "treatment_path_tier": "approved_biomarker_matched",
         "eligibility_note": "confirm biomarker/indication-specific eligibility",
     }
-    low_resolution = {"analysis_constraints": {"hla_types": ["A*02"]}}
+    low_resolution = {"clinical_context": clinical_hla_context(["A*02"])}
 
     eligibility = target_hla_eligibility(row, analysis=low_resolution)
     context = hla_eligibility_context(row, analysis=low_resolution)
@@ -609,7 +643,7 @@ def test_low_resolution_hla_does_not_match_exact_allele_requirement():
     assert hla_restricted_target_supported(row, analysis=low_resolution) is False
 
 
-def test_low_resolution_hla_matches_broad_requirement_only():
+def test_low_resolution_hla_matches_broad_requirement_only(clinical_hla_context):
     row = {
         "symbol": "TEST6",
         "agent": "example broad TCR-T",
@@ -620,7 +654,7 @@ def test_low_resolution_hla_matches_broad_requirement_only():
         "treatment_path_tier": "trial_follow_up",
         "eligibility_note": "clinical-trial follow-up; not default standard",
     }
-    low_resolution = {"analysis_constraints": {"hla_types": ["A*02"]}}
+    low_resolution = {"clinical_context": clinical_hla_context(["A*02"])}
 
     assert target_hla_eligibility(row, analysis=low_resolution)["status"] == "matched"
     assert "HLA match" in hla_eligibility_context(row, analysis=low_resolution)
@@ -683,14 +717,14 @@ def test_subtype_call_falls_back_to_parent_therapy_panel():
     of its own (HNSC_HPVneg, LAML_ELNfav) must fall back to the parent cohort's
     curated panel instead of emptying the shortlist (recovers HNSC's
     PD-1/EGFR and AML's CD33/FLT3/IDH/venetoclax)."""
-    from trufflepig.brief import _curated_target_panel_for_sample, _parent_code_for
+    from trufflepig.brief import curated_target_panel_for_sample, _parent_code_for
 
     assert _parent_code_for("HNSC_HPVneg") == "HNSC"
     assert _parent_code_for("LAML_ELNfav") == "LAML"
     assert _parent_code_for("BRCA") == ""  # top-level: no parent, not "nan"
 
     for code, parent in [("HNSC_HPVneg", "HNSC"), ("LAML_ELNfav", "LAML")]:
-        panel_code, panel_subtype, targets_df = _curated_target_panel_for_sample(
+        panel_code, panel_subtype, targets_df = curated_target_panel_for_sample(
             code, {"cancer_type": code}
         )
         assert panel_code == parent, f"{code} did not fall back to {parent}"
@@ -699,9 +733,9 @@ def test_subtype_call_falls_back_to_parent_therapy_panel():
 
 def test_crc_grouping_uses_colorectal_child_therapy_union():
     """A decomposition-supported CRC parent call still needs the mCRC panel."""
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, targets = curated_target_panel_for_sample(
         "CRC",
         {
             "cancer_type": "CRC",
@@ -735,9 +769,9 @@ def test_crc_wildtype_eligibility_language_is_grammatical():
 
 
 def test_current_nutm_panel_adds_recruiting_bet_cdk46_trial():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    panel_code, panel_subtype, targets = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, targets = curated_target_panel_for_sample(
         "NUTM",
         {"cancer_type": "NUTM"},
     )
@@ -751,9 +785,9 @@ def test_current_nutm_panel_adds_recruiting_bet_cdk46_trial():
 
 
 def test_current_blca_panel_names_approved_ev_pembrolizumab_combination():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "BLCA",
         {"cancer_type": "BLCA"},
     )
@@ -767,9 +801,9 @@ def test_current_blca_panel_names_approved_ev_pembrolizumab_combination():
 
 
 def test_current_brca_panel_includes_parp_and_tnbc_immunotherapy_gates():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "BRCA",
         {"cancer_type": "BRCA"},
     )
@@ -787,9 +821,9 @@ def test_current_brca_panel_includes_parp_and_tnbc_immunotherapy_gates():
 
 
 def test_current_prad_panel_includes_2025_2026_biomarker_approvals():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "PRAD",
         {"cancer_type": "PRAD"},
     )
@@ -844,9 +878,9 @@ def test_directed_target_wording_is_not_misread_as_negative_assay_status():
 
 
 def test_current_osteosarcoma_panel_does_not_describe_suspended_trial_as_open():
-    from trufflepig.brief import _curated_target_panel_for_sample
+    from trufflepig.brief import curated_target_panel_for_sample
 
-    _, _, targets = _curated_target_panel_for_sample(
+    _, _, targets = curated_target_panel_for_sample(
         "SARC_OS",
         {"cancer_type": "SARC_OS"},
     )
