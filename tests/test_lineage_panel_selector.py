@@ -105,11 +105,8 @@ def test_selector_proposes_parent_cohort_not_panel_name():
         "GAPDH": 200.0,
     }
     cte._add_lineage_panel_features(hyps, sample, _empty_analysis())
-    # BRCA hypothesis should exist with lineage_panel source. If the
-    # panel framework is unavailable (e.g. cohort medians missing in
-    # the test env), the selector early-returns — accept that.
-    if not hyps:
-        return  # selector graceful no-op is also a pass
+    # The bundled reference and fixed marker values must produce BRCA.
+    assert hyps, "Fixed BRCA_BASAL fixture produced no panel hypothesis"
     assert "BRCA" in hyps, (
         f"Expected BRCA hypothesis from BRCA_BASAL panel, got: "
         f"{list(hyps.keys())}"
@@ -188,7 +185,7 @@ def test_selector_returns_summary_with_promotion_block():
         _empty_analysis(),
     )
     if summary is None:
-        return  # selector early-returned (no panel hit threshold)
+        pytest.skip("Housekeeping-only sample produced no evaluable panel summary")
     assert "promotion" in summary
     promotion = summary["promotion"]
     assert "promoted" in promotion
@@ -870,11 +867,9 @@ def test_gate_allows_same_code_reinforcement():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     brca = hyps.get("BRCA")
-    if brca is None:
-        return  # panel framework unavailable; selector early-returned
+    assert brca is not None, "Fixed BRCA_BASAL fixture produced no BRCA hypothesis"
     public = brca.public_dict() or {}
-    if "lineage_panel" not in set(public.get("evidence_sources", [])):
-        return
+    assert "lineage_panel" in set(public.get("evidence_sources", []))
     assert public.get("can_select_report_label") is True, (
         "Same-code lineage_panel reinforcement was blocked — BRCA "
         "panel firing on a sample broad already called BRCA should be "
@@ -1007,11 +1002,9 @@ def test_gate_allows_cross_family_when_broad_explicitly_weak():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     brca = hyps.get("BRCA")
-    if brca is None:
-        return
+    assert brca is not None, "Fixed BRCA_BASAL fixture produced no BRCA hypothesis"
     public = brca.public_dict() or {}
-    if "lineage_panel" not in set(public.get("evidence_sources", [])):
-        return
+    assert "lineage_panel" in set(public.get("evidence_sources", []))
     # broad is weak AND BRCA is in broad top-5 → promotion allowed
     assert public.get("can_select_report_label") is True
 
@@ -1031,8 +1024,7 @@ def test_gate_blocks_when_proposed_code_outside_broad_top_5():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     brca = hyps.get("BRCA")
-    if brca is None:
-        return
+    assert brca is not None, "Fixed BRCA_BASAL fixture produced no BRCA hypothesis"
     public = brca.public_dict() or {}
     assert public.get("can_select_report_label") is False, (
         "Panel promoted BRCA even though BRCA is not in broad top-5 "
@@ -1238,8 +1230,7 @@ def test_id_path_and_symbol_path_produce_equivalent_scores():
         sample_by_symbol,
         {"candidate_trace": [{"code": "BRCA"}]},
     )
-    if summary is None:
-        return
+    assert summary is not None, "Symbol fallback produced no panel summary"
 
     # Both paths' top_panel and top_score must match.
     assert summary.get("top_panel") == direct[0].panel_name, (
@@ -1272,10 +1263,8 @@ def test_same_code_reinforcement_uses_class_rank_2():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     brca = hyps.get("BRCA")
-    if brca is None:
-        return
-    if "lineage_panel" not in brca.evidence_sources:
-        return
+    assert brca is not None, "Fixed BRCA_BASAL fixture produced no BRCA hypothesis"
+    assert "lineage_panel" in brca.evidence_sources
     cls, _strength, _tb = brca.selection_priority
     assert cls == 2, (
         f"Same-code reinforcement should be class_rank=2 so it can "
@@ -1299,10 +1288,8 @@ def test_cross_code_uncertainty_stays_at_class_rank_1():
     }
     cte._add_lineage_panel_features(hyps, _HCC1395_SAMPLE, analysis)
     brca = hyps.get("BRCA")
-    if brca is None:
-        return
-    if "lineage_panel" not in brca.evidence_sources:
-        return
+    assert brca is not None, "Fixed BRCA_BASAL fixture produced no BRCA hypothesis"
+    assert "lineage_panel" in brca.evidence_sources
     cls, _strength, _tb = brca.selection_priority
     decision = brca.public_dict().get("label_decision", {})
     if decision.get("status") == "blocked":

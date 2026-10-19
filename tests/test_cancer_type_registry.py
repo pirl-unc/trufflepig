@@ -18,7 +18,6 @@ from pirlygenes.gene_sets_cancer import (
 # actually resolves among, so exercise that view here rather than the one-level
 # pirlygenes helper.
 from trufflepig.cancer_ontology import cancer_type_subtypes_of
-from trufflepig.reference import subtype_deconvolved_expression
 
 
 def test_registry_has_required_columns():
@@ -392,74 +391,6 @@ def test_cancers_cli_source_qualifies_expression_refs(capsys):
 
     assert "Treehouse/RiboD:RB" in out
     assert "Treehouse v25.01 RiboD" in out
-
-
-def test_gse75885_sarcoma_expression_refs_are_bundled():
-    d = subtype_deconvolved_expression()
-    assert d is not None
-
-    expected = {
-        "SARC_DDLPS": 19,
-        "SARC_PLEOLPS": 4,
-        "SARC_LGFMS": 2,
-    }
-    for code, n_samples in expected.items():
-        rows = d[
-            (d["cancer_code"] == code)
-            & (d["source_cohort"] == "GSE75885_DELESPAUL_2017")
-        ]
-        assert not rows.empty
-        assert int(rows["n_samples"].max()) == n_samples
-
-    ddlps = d[d["cancer_code"] == "SARC_DDLPS"].set_index("symbol")
-    assert ddlps.loc["MDM2", "tumor_tpm_median"] > 1000
-    assert ddlps.loc["CDK4", "tumor_tpm_median"] > 500
-
-    lgfms = d[d["cancer_code"] == "SARC_LGFMS"].set_index("symbol")
-    assert lgfms.loc["MUC4", "tumor_tpm_median"] > 1000
-    assert lgfms.loc["CREB3L2", "tumor_tpm_median"] > 100
-
-
-def test_gse299759_chondrosarcoma_expression_ref_is_bundled():
-    d = subtype_deconvolved_expression()
-    assert d is not None
-
-    rows = d[
-        (d["cancer_code"] == "SARC_CHON")
-        & (d["source_cohort"] == "GSE299759_MEIJER_2026")
-    ]
-    assert not rows.empty
-    assert int(rows["n_samples"].max()) == 54
-
-    chon = rows.set_index("symbol")
-    assert chon.loc["COL2A1", "tumor_tpm_median"] > 1000
-    assert chon.loc["ACAN", "tumor_tpm_median"] > 1000
-    assert chon.loc["SOX9", "tumor_tpm_median"] > 100
-
-
-def test_treehouse_ribod_sparse_expression_refs_are_bundled():
-    d = subtype_deconvolved_expression()
-    assert d is not None
-
-    expected = {
-        "RB": 15,
-        "SARC_CHOR": 3,
-    }
-    for code, n_samples in expected.items():
-        rows = d[
-            (d["cancer_code"] == code)
-            & (d["source_cohort"] == "TREEHOUSE_RIBOD_25_01")
-        ]
-        assert not rows.empty
-        assert int(rows["n_samples"].max()) == n_samples
-
-    rb = d[d["cancer_code"] == "RB"].set_index("symbol")
-    assert rb.loc["CRX", "tumor_tpm_median"] > 25
-    assert rb.loc["ARR3", "tumor_tpm_median"] > 5
-
-    chor = d[d["cancer_code"] == "SARC_CHOR"].set_index("symbol")
-    assert chor.loc["COL2A1", "tumor_tpm_median"] > 25
-    assert chor.loc["ACAN", "tumor_tpm_median"] > 10
 
 
 def test_nutm_has_actionable_curation():

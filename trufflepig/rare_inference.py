@@ -461,10 +461,10 @@ def infer_rare_cancer_report_scope_from_rna(df_expr, analysis):
 
 
 def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict[str, Any]]:
-    """Return non-promoting rare-cancer RNA marker hypotheses.
+    """Return RNA marker hypotheses with each rule's promotion policy.
 
-    These markers are useful testing prompts but are not specific enough to
-    replace the RNA classifier/report scope by themselves.
+    The unified evidence selector still checks context, competing evidence,
+    and confirmation caveats before any rule can change the report label.
     """
     try:
         from .common import build_sample_tpm_by_symbol
@@ -513,7 +513,10 @@ def infer_rare_cancer_marker_hypotheses_from_rna(df_expr, analysis) -> list[dict
                     evidence.get("context_support_fraction_of_top") or 0.0
                 ),
                 context_match_reason=str(evidence.get("context_match_reason") or ""),
-                promote_report_scope=False,
+                promote_report_scope=_safe_bool(
+                    rule.get("promote_report_scope"),
+                    default=True,
+                ),
             ).public_dict()
         )
     confidence_rank = {"high": 2, "moderate": 1, "low": 0}

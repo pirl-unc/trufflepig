@@ -299,6 +299,96 @@ def test_nutm_rare_marker_outranks_generic_squamous_marker_program(monkeypatch):
     assert result["selected"]["selected_by"] == "rare_marker"
 
 
+def _nutm_adcc_competition(monkeypatch, *, nutm1_tpm, fusion_scope_inference=None):
+    import trufflepig.cancer_type_evidence as evidence
+    from trufflepig.rare_inference import infer_rare_cancer_marker_hypotheses_from_rna
+
+    local_reference = evidence._add_local_expression_reference_features
+    _isolate_public_selector_test(monkeypatch, evidence)
+    monkeypatch.setattr(evidence, "_add_local_expression_reference_features", local_reference)
+    adcc_markers = ("MYB", "NFIB", "NOTCH1", "KRT7", "SOX10", "KIT")
+    monkeypatch.setattr(
+        evidence,
+        "_local_expression_reference_panels",
+        lambda *args, **kwargs: {
+            "ADCC": {
+                "markers": adcc_markers,
+                "ref_medians": {gene: 40.0 for gene in adcc_markers},
+                "context_codes": ("HNSC",),
+                "parent_code": "",
+                "family": "salivary",
+                "primary_tissue": "salivary_gland",
+                "source_cohort": "GSE294016_BARTL_2025_SGC",
+                "reference_kind": "observed_bulk_reference",
+                "fusion_driven": "defining",
+                "fusion_driver": "MYB-NFIB; MYBL1-NFIB",
+            }
+        },
+    )
+    sample = {
+        "NUTM1": nutm1_tpm,
+        "TP63": 65.0,
+        "SOX2": 55.0,
+        "KRT5": 75.0,
+        "MYC": 120.0,
+        "MYB": 87.0,
+        "NFIB": 93.0,
+        "NOTCH1": 92.0,
+        "KRT7": 55.0,
+        "SOX10": 48.0,
+        "KIT": 13.0,
+    }
+    df = _expression_frame(sample)
+    analysis = _analysis(("LUSC", 1.0), ("HNSC", 0.95), ("ESCA", 0.90))
+    findings = infer_rare_cancer_marker_hypotheses_from_rna(df, analysis)
+    result = evidence.select_report_scope_from_evidence(
+        df,
+        analysis,
+        rare_marker_hypotheses=findings,
+        fusion_scope_inference=fusion_scope_inference,
+    )
+    return result, findings
+
+
+def test_generated_nutm_anchor_beats_no_fusion_adcc_reference(monkeypatch):
+    result, findings = _nutm_adcc_competition(monkeypatch, nutm1_tpm=68.0)
+
+    nutm_finding = next(row for row in findings if row["rule_id"] == "nutm_nutm1")
+    assert nutm_finding["promote_report_scope"] is True
+    assert result["selected"]["cancer_type"] == "NUTM"
+    assert result["selected"]["fusion_defined_rna_anchor"]["gene"] == "NUTM1"
+    assert "fusion" in result["selected"]["confirmatory_tests"].lower()
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert "local_expression_reference" in adcc["evidence_sources"]
+    assert adcc["can_select_report_label"] is False
+    assert adcc["nutm1_competitor_conflict"]["tpm"] == 68.0
+
+
+def test_weak_nutm1_does_not_veto_adcc_reference(monkeypatch):
+    result, _findings = _nutm_adcc_competition(monkeypatch, nutm1_tpm=2.0)
+
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert "nutm1_competitor_conflict" not in adcc
+    assert adcc["can_select_report_label"] is True
+
+
+def test_direct_adcc_fusion_survives_nutm1_rna_conflict(monkeypatch):
+    result, _findings = _nutm_adcc_competition(
+        monkeypatch,
+        nutm1_tpm=68.0,
+        fusion_scope_inference={
+            "cancer_type": "ADCC",
+            "fusion": {"pair": "MYB--NFIB"},
+            "expected_pair": "MYB--NFIB",
+        },
+    )
+
+    assert result["selected"]["cancer_type"] == "ADCC"
+    assert result["selected"]["selected_by"] == "direct_fusion"
+    adcc = next(row for row in result["evidence"] if row["cancer_type"] == "ADCC")
+    assert "nutm1_competitor_conflict" not in adcc
+
+
 def test_registry_molecular_children_are_orthogonal_axes():
     from trufflepig.cancer_type_evidence import (
         _lineage_path_for_code,
