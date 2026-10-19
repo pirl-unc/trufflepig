@@ -36,7 +36,7 @@ def _render_composition_bar(
         frac_items.append(("other_minor", minor_total))
     left = 0.0
     for idx, (name, value) in enumerate(frac_items):
-        label_name = component_display_label(name, include_model_role=True)
+        label_name = component_display_label(name)
         ax.barh(
             [0],
             [value * 100],
@@ -50,7 +50,7 @@ def _render_composition_bar(
     ax.set_xlim(0, 100)
     ax.set_yticks([])
     ax.set_xlabel("Estimated share of the RNA-mixture model (%)")
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(textwrap.fill(title, 65), fontweight="bold")
     ax.legend(
         bbox_to_anchor=(0.0, -0.25),
         loc="upper left",
@@ -94,13 +94,13 @@ def _render_component_breakdown(
     ax.set_yticks(y)
     ax.set_yticklabels(
         [
-            component_display_label(value, include_model_role=True)
+            component_display_label(value)
             for value in comp_df["component"]
         ],
         fontsize=9,
     )
     ax.set_xlabel("Estimated share of the RNA-mixture model (%)")
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(textwrap.fill(title, 65), fontweight="bold")
     for idx, row in comp_df.iterrows():
         if row["fraction"] < 0.005:
             continue  # skip labels for sub-0.5% components (#96)
@@ -127,15 +127,27 @@ def plot_decomposition_composition(
     larger as its own figure for inclusion in slide decks or focused
     reports.
     """
-    fig, ax = plt.subplots(figsize=(12, 3.5))
+    n_entries = sum(value >= 0.005 for value in best.fractions.values())
+    n_entries += int(any(0 < value < 0.005 for value in best.fractions.values()))
+    legend_height = max(1.6, 0.36 * n_entries)
+    fig, (ax, legend_ax) = plt.subplots(
+        2, 1, figsize=(9, 2.1 + legend_height),
+        gridspec_kw={"height_ratios": [1.2, legend_height]},
+    )
     _render_composition_bar(
         ax,
         best,
         title=title or f"Sample composition — {best.cancer_type} / {best.template}",
     )
-    fig.subplots_adjust(bottom=0.35)
+    handles, labels = ax.get_legend_handles_labels()
+    ax.get_legend().remove()
+    legend_ax.axis("off")
+    legend_ax.legend(handles, labels, loc="upper left", ncol=1, frameon=False,
+                     fontsize=11, labelspacing=0.8, borderaxespad=0)
+    fig.tight_layout()
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        from ..report_figures import save_report_figure
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
         print(f"Saved {save_to_filename}")
     return fig
 
@@ -163,7 +175,8 @@ def plot_decomposition_component_breakdown(
     )
     fig.tight_layout()
     if save_to_filename:
-        fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
+        from ..report_figures import save_report_figure
+        save_report_figure(fig, save_to_filename, dpi=save_dpi)
         print(f"Saved {save_to_filename}")
     return fig
 

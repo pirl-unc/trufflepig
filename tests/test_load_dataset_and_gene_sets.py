@@ -206,11 +206,12 @@ def test_cta_partition():
     # The exclusion catalog spans annotation vintages and noncoding genes;
     # the partition's non-CTA universe is protein-coding Ensembl release 112.
     from pyensembl import EnsemblRelease
-    from tsarina.gene_sets import is_coding_gene
 
     excluded_ids = gsc.CTA_excluded_gene_ids()
     coding_ids = {
-        gene.gene_id for gene in EnsemblRelease(112).genes() if is_coding_gene(gene)
+        gene.gene_id
+        for gene in EnsemblRelease(112).genes()
+        if gene.biotype == "protein_coding"
     }
     assert not excluded_ids.intersection(p.cta | p.cta_never_expressed)
     assert (excluded_ids & coding_ids).issubset(p.non_cta)

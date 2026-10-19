@@ -403,7 +403,7 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
     prefix = "synthetic-clinical-assay"
     summary = render_report_summary(content)
     if candidate["selected"]:
-        information = summary.split("## Information needed", 1)[1].split("## ", 1)[0]
+        information = summary.split("## What would change the treatment options", 1)[1].split("## ", 1)[0]
         assert "unresectable or metastatic colorectal cancer" in information
         assert "requires validated MSI-H/dMMR" not in information
     elif followup:
@@ -424,10 +424,10 @@ def test_answering_request_updates_shared_markdown_json_pdf_and_manifest(tmp_pat
         assert phrase in summary and phrase in pdf_text
     if result == "MSS":
         assert "does not satisfy an MSI-H/dMMR indication" in summary
-        assert "1 is blocked by known clinical or disease-scope exclusions" in summary
-    if result != "MSI-H":
-        assert "No therapy was shortlisted" in summary and "No therapy was shortlisted" in pdf_text
-        assert "missing usable target RNA" not in summary
+        assert "Known blockers and current treatments" in summary
+    if result == "pending":
+        assert "Approved options pending clinical confirmation" in summary
+    assert "missing usable target RNA" not in summary
 
 
 def test_rna_triage_changes_request_priority_without_opening_gate(monkeypatch):

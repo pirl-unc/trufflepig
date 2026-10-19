@@ -51,7 +51,7 @@ def _content():
         [
             {
                 "id": "conclusion",
-                "title": "Conclusion and supporting evidence",
+                "title": "What we learned about this sample",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -62,7 +62,7 @@ def _content():
             },
             {
                 "id": "therapies",
-                "title": "Therapy rationale and blockers",
+                "title": "Therapeutic directions",
                 "blocks": [
                     {
                         "kind": "paragraph",
@@ -70,7 +70,7 @@ def _content():
                     },
                 ],
             },
-            {"id": "information", "title": "Information needed", "blocks": []},
+            {"id": "information", "title": "What would change the treatment options", "blocks": []},
             {"id": "evidence", "title": "Detailed evidence and figures", "blocks": []},
         ],
         [{"agent": "FAP radioligand", "selected": True, "rationale": ["major prior benefit"]}],
@@ -258,3 +258,55 @@ def test_output_finalization_writes_structured_records_without_figures(tmp_path)
     assert json.loads(report_path.read_text())["treatment_history"] == history
     assert manifest["steps"]["output"]["outputs"]["report_pdf"] == outputs["report_pdf"]
     assert not any(artifact["kind"] == "figure" for artifact in manifest["artifacts"])
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["FoundationOne&reg; CDx MSI report", "A&amp;B lab", "HLA-A*02:01 and A*02:06", "a | b [c] *d*"],
+)
+def test_literal_markdown_round_trips_entities_and_identifiers(text):
+    from trufflepig.report_language import report_literal
+
+    assert report_plain_text(report_literal(text)) == text
+
+
+def test_table_blocks_render_as_contiguous_markdown_tables():
+    from trufflepig.report_language import render_report_template
+
+    summary = render_report_template(
+        "report",
+        sample_id="S",
+        sections=[{"title": "T", "blocks": [
+            {"kind": "table", "headers": ["A", "B"], "rows": [["1", "2"], ["3", "4"]]},
+        ]}],
+    )
+    lines = summary.splitlines()
+    header = lines.index("| A | B |")
+    assert lines[header + 1:header + 4] == ["| --- | --- |", "| 1 | 2 |", "| 3 | 4 |"]
+
+
+def test_selected_therapies_render_a_cited_table_in_markdown_and_pdf(tmp_path):
+    import pandas as pd
+    from pypdf import PdfReader
+
+    from trufflepig.report_content import build_report_content, render_report_summary
+    from trufflepig.report_language import markdown_url
+    from trufflepig.report_pdf import build_interpretive_report_pdf
+    from trufflepig.report_view import build_report_view
+
+    analysis = {"cancer_type": "SARC_OS", "sample_mode": "solid", "purity": {}}
+    view = build_report_view(analysis, sample_id="synthetic-cited-table")
+    content = build_report_content(analysis, pd.DataFrame(), "SARC_OS", "", report_view=view)
+    selected = [a for a in content.therapy_assessments if a["selected"]]
+    assert selected and all(a["source_url"] for a in selected)
+    summary = render_report_summary(content)
+    assert "| Target | Recommendation | Estimated tumor TPM (RNA model) | Evidence source |" in summary
+    for assessment in selected:
+        assert f"({markdown_url(assessment['source_url'])})" in summary
+    assert not hasattr(content, "therapy")
+    rd.write_report_document(tmp_path, "synthetic-cited-table", report_view=view, content=content)
+    (tmp_path / "synthetic-cited-table-summary.md").write_text(summary)
+    pdf = PdfReader(build_interpretive_report_pdf(tmp_path))
+    pdf_text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
+    assert "Evidence source" in pdf_text
+    assert all(a["agent"] in pdf_text for a in selected)

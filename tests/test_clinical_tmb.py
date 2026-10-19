@@ -236,7 +236,7 @@ def test_answering_tmb_request_updates_main_report_records_and_pdf(tmp_path, mon
     from trufflepig.report_view import build_report_view
 
     row = tmb_row()
-    monkeypatch.setattr(brief, "_curated_target_panel_for_sample", lambda *args, **kwargs: ("COAD", None, pd.DataFrame([row])))
+    monkeypatch.setattr(brief, "curated_target_panel_for_sample", lambda *args, **kwargs: ("COAD", None, pd.DataFrame([row])))
     analysis = tmb_analysis(tmb_context())
     view = build_report_view(analysis, sample_id="synthetic-tmb")
     initial = build_report_content(analysis, pd.DataFrame(), "COAD", "", report_view=view)

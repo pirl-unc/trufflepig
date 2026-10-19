@@ -9,7 +9,14 @@ import hashlib
 import json
 import re
 
-from .report_language import markdown_url, report_literal, render_report_paragraph, render_report_template
+from . import brief
+from .report_language import (
+    markdown_url,
+    render_report_paragraph,
+    render_report_template,
+    report_literal,
+    report_plain_text,
+)
 from .reporting import (
     canonical_target_symbol,
     clinical_maturity_summary,
@@ -27,9 +34,11 @@ from .therapy_eligibility import (
     clean_therapy_value,
     collect_evidence_requests,
     evaluate_therapy_review,
+    evaluate_therapy_eligibility,
     msi_mmr_requirement,
 )
 from .treatment_history import treatment_history_summary_lines, treatment_records
+from .report_takeaways import sample_takeaways, therapeutic_lead_basis
 
 
 @dataclass
@@ -40,7 +49,6 @@ class ReportContent:
     sections: list[dict[str, Any]]
     therapy_assessments: list[dict[str, Any]]
     evidence_requests: list[dict[str, Any]]
-    therapy: dict[str, Any] | None
     treatment_history: list[dict[str, Any]]
     clinical_context: dict[str, Any] = field(default_factory=dict)
     identity: dict[str, Any] = field(default_factory=dict)
@@ -111,15 +119,14 @@ def assess_therapy(
     ranges_df=None,
     disease_state="",
     selected=False,
+    eligibility=None,
 ) -> dict:
     """Explain one curated treatment with its identity, requirements and RNA evidence.
 
     This function does not select a treatment. Call ``recommend_therapies`` for
     ranking; use this assessment to inspect selected and excluded alternatives.
     """
-    from .brief import _therapy_agent_label, _phase_label
-
-    agent = _therapy_agent_label(row)
+    agent = brief.therapy_agent_label(row)
     identity = resolve_therapy_identity(row.get("agent"))
     gene = canonical_target_symbol(row.get("symbol"))
     review = evaluate_therapy_review(
@@ -130,6 +137,7 @@ def assess_therapy(
     state, observed = observation["state"], observation["observed_tpm"]
     eligibility = review.eligibility
     rationale = []
+    source, normal = {}, {}
     rationale.extend(r.description for r in eligibility.requirements
                      if r.kind in {"msi_high", "tmb_high", "clinical_target_assay"})
     if eligibility.supplied_variant_supported:
@@ -139,8 +147,10 @@ def assess_therapy(
     from .reporting import therapy_rationale_paragraphs
 
     rationale.extend(therapy_rationale_paragraphs(row, analysis=analysis))
+    reader_rationale = list(rationale)
     if expression_independent_indication(row):
         rationale.append(expression_independent_rna_context(expr, observation_state=state))
+        reader_rationale.append("Target RNA is context only; target expression is not the eligibility criterion.")
     if state in {"measured", "below_detection"} and expr is not None and tumor_band_available(expr):
         source = tumor_attribution_context(expr)
         normal = normal_expression_context(expr)
@@ -156,15 +166,22 @@ def assess_therapy(
                 notes=[note.rstrip(". ") for note in notes],
             )
         )
+        reader_rationale.append(
+            f"{gene}: {source['band']}. Source: {source['label']}; "
+            f"healthy-tissue context: {normal['label']}."
+            + (" Attribution limits: " + "; ".join(notes) + "." if notes else "")
+        )
     elif not expression_independent_indication(row):
         rationale.append(
             render_report_paragraph(
                 "rna_observation", state=state, observed_tpm=observed, context_only=False
             )
         )
+        reader_rationale.append(rationale[-1])
     caution = therapy_state_caution(row, analysis=analysis, disease_state=disease_state)
     if caution:
         rationale.append("Current-treatment context: " + caution.rstrip(". ") + ".")
+        reader_rationale.append(rationale[-1])
     sources = therapy_evidence_sources(row)
     return {
         "id": therapy_assessment_id(row),
@@ -173,7 +190,7 @@ def assess_therapy(
         "canonical_agent": identity.canonical_name,
         "target": gene or "Clinical pathway",
         "selected": selected,
-        "phase": _phase_label(clean_therapy_value(row.get("phase"))),
+        "phase": brief.phase_label(clean_therapy_value(row.get("phase"))),
         "indication": clean_therapy_value(row.get("indication")),
         "maturity": clinical_maturity_summary(row, target_panel=target_panel),
         "eligibility": eligibility.public_dict(),
@@ -183,7 +200,10 @@ def assess_therapy(
             "permits_review": review.permits_review,
         },
         "rationale": rationale,
+        "reader_rationale": reader_rationale,
         "observation": observation,
+        "rna_source": source,
+        "normal_context": normal,
         "tumor_band": tumor_band_cell(expr)
         if state in {"measured", "below_detection"}
         and expr is not None
@@ -226,6 +246,62 @@ def empty_shortlist_summary(assessments: list[dict]) -> str:
         for status, description in descriptions.items() if counts[status]
     ]
     return render_report_paragraph("empty_shortlist", total=len(assessments), groups=groups)
+def therapy_source_markdown(assessment: dict) -> str:
+    """Citation cell for one therapy assessment, linked when a source URL is curated."""
+    if assessment.get("sources"):
+        return _evidence_source_cell(assessment)
+    label = report_literal(assessment.get("source") or "")
+    url = markdown_url(assessment.get("source_url"))
+    if url:
+        return f"[{label or 'Evidence source'}]({url})"
+    return label or "—"
+
+
+def conditional_therapy_groups(assessments, analysis, *, already_discussed=()):
+    """Show established options awaiting tests without changing eligibility.
+
+    Missing evidence can support a conditional discussion. A known exclusion,
+    conflicting result or unestablished disease scope cannot. RNA abundance and
+    source attribution deliberately do not determine this disease-level list.
+    """
+    if analysis.get("cancer_type_abstention"):
+        return []
+    groups = {}
+    for assessment in assessments:
+        requirements = assessment["eligibility"]["requirements"]
+        if (
+            assessment["selected"]
+            or assessment["id"] in already_discussed
+            or assessment["phase"] != "Approved"
+            or not any(r["status"] == "missing" for r in requirements)
+            or any(r["status"] in {"blocked", "unresolved"} for r in requirements)
+            or any(r["kind"] == "scope" and r["status"] != "satisfied" for r in requirements)
+        ):
+            continue
+        curation = assessment["curation"]
+        note = curation["eligibility_note"]
+        criteria = [assessment["indication"], note]
+        # Keep additional HLA criteria visible even when the molecular assay
+        # note describes only the target. MSI/MMR assay logistics remain in the
+        # information section; the curated note states the required result.
+        criteria.extend(
+            report_plain_text(r["description"]) for r in requirements
+            if r["status"] == "missing" and r["kind"] == "hla"
+        )
+        criteria.extend(
+            r["question"] for r in requirements
+            if r["status"] == "missing" and (not note or r["kind"] == "hla")
+        )
+        setting = curation["clinical_setting_note"]
+        # Prefer the concise eligibility note; retain full setting curation in
+        # JSON. Clinical setting remains a report-wide confirmation requirement.
+        if setting and not note:
+            criteria.append(setting)
+        criteria = tuple(dict.fromkeys(text.rstrip(". ") for text in criteria if text))
+        # Group only identical indications and confirmation requirements.
+        key = (criteria, tuple((r["kind"], r["key"], r["status"], r["question"]) for r in requirements))
+        groups.setdefault(key, {"criteria": criteria, "assessments": []})["assessments"].append(assessment)
+    return list(groups.values())
 
 
 def build_report_content(
@@ -244,26 +320,12 @@ def build_report_content(
     selection. JSON retains exact identities, observation state and requirements;
     no clinical meaning is recovered from generated Markdown.
     """
-    from .brief import (
-        report_interpretation_limits,
-        _curated_target_panel_for_sample,
-        _display_sample_id,
-        _format_biomarker_outlier_bullet,
-        _format_cta_outlier_bullet,
-        _notable_biomarker_outliers,
-        _notable_cta_outliers,
-        _therapy_agent_label,
-        recommend_therapies,
-        summary_conclusion_paragraphs,
-        source_attribution_rows,
-        _format_trace_tpm,
-    )
     from .common import ranges_by_symbol, ranges_by_gene_id, panel_symbols_to_gene_ids
     from .clinical_context import clinical_context_for_analysis, evaluate_msi_mmr, report_identity
 
     cancer_code = report_view.cancer_type
     analysis = {**analysis, "cancer_type": cancer_code, "cancer_name": report_view.cancer_type_name}
-    sample_id = _display_sample_id(sample_id) or report_view.sample_id or ""
+    sample_id = brief.display_sample_id(sample_id) or report_view.sample_id or ""
     prefix = prefix or sample_id or "report"
     clinical_context = clinical_context_for_analysis(analysis)
     identity = report_identity(
@@ -271,33 +333,36 @@ def build_report_content(
         output_prefix=prefix, fallback_label=sample_id,
     )
     research = identity["purpose"] == "research"
-    conclusion = [
-        paragraph(text)
-        for text in summary_conclusion_paragraphs(
-            analysis,
-            ranges_df,
-            cancer_code,
-            disease_state,
-            sample_id,
-            report_view=report_view,
-        )
-        if text.strip()
-    ]
+    takeaways = sample_takeaways(analysis, ranges_df, report_view, disease_state)
+    conclusion = [block for block in takeaways if not block.get("detail")]
+    supporting_context = [block for block in takeaways if block.get("detail")]
     conclusion.insert(0, {
         **paragraph(render_report_paragraph("specimen_context", context=clinical_context, identity=identity)),
         "id": "specimen_context",
     })
-    panel_code, panel_subtype, panel = _curated_target_panel_for_sample(
+    panel_code, panel_subtype, panel = brief.curated_target_panel_for_sample(
         cancer_code,
         analysis,
         ranges_df=ranges_df,
     )
-    recommended = recommend_therapies(
+    eligibility_by_row: dict[str, Any] = {}
+
+    def eligibility_for(row):
+        # Selection and assessment read the same rows; evaluate each row once.
+        key = therapy_assessment_id(row)
+        if key not in eligibility_by_row:
+            eligibility_by_row[key] = evaluate_therapy_eligibility(
+                row, analysis, panel_subtype=panel_subtype
+            )
+        return eligibility_by_row[key]
+
+    recommended = brief.recommend_therapies(
         panel,
         ranges_df,
         analysis=analysis,
         disease_state=disease_state,
         panel_subtype=panel_subtype,
+        eligibility_for=eligibility_for,
     )
     selected = {therapy_assessment_id(row.therapy) for row in recommended}
     expression = ranges_by_symbol(ranges_df) if ranges_df is not None else {}
@@ -306,7 +371,7 @@ def build_report_content(
     rows = panel.to_dict("records") if panel is not None else []
     gene_ids = panel_symbols_to_gene_ids(canonical_target_symbol(row.get("symbol")) for row in rows)
     for row in rows:
-        agent = _therapy_agent_label(row)
+        agent = brief.therapy_agent_label(row)
         if not agent:
             continue
         gene = canonical_target_symbol(row.get("symbol"))
@@ -322,6 +387,7 @@ def build_report_content(
             ranges_df=ranges_df,
             disease_state=disease_state,
             selected=therapy_assessment_id(row) in selected,
+            eligibility=eligibility_for(row),
         )
         assessments.append(assessment)
 
@@ -359,6 +425,7 @@ def build_report_content(
                 "Overlapping kinase events do not establish the exact spindle-cell diagnosis.",
                 spindle_guidance["workup"],
                 ("pathology and primary-site report", "RNA/DNA structural-variant report"),
+                label="Spindle-cell diagnosis",
             )
         )
     constraints = analysis.get("analysis_constraints") or {}
@@ -393,6 +460,7 @@ def build_report_content(
                 "treatment and toxicity history",
                 "relevant laboratory and imaging results",
             ),
+            label="Clinical setting",
         )
         clinical_requirements = [
             {
@@ -445,16 +513,31 @@ def build_report_content(
     if spindle_guidance:
         therapies.append(paragraph(spindle_guidance["therapy"]))
 
+    leads = [
+        (assessment, therapeutic_lead_basis(assessment, analysis))
+        for assessment in assessments if not assessment["selected"]
+    ]
+    leads = [(assessment, basis) for assessment, basis in leads if basis]
+    leads.sort(key=lambda item: not any(r["kind"] == "msi_high" for r in item[0]["eligibility"]["requirements"]))
+    conditional_groups = conditional_therapy_groups(
+        assessments, analysis, already_discussed={a["id"] for a, _ in leads}
+    )
+
     if selected_assessments:
         therapies.append({
             "kind": "table",
-            "headers": ["Target", "Recommendation", "Estimated tumor TPM (RNA model)", "Evidence source"],
+            "headers": [
+                "Target",
+                "Recommendation",
+                "Estimated tumor TPM (RNA model)",
+                "Evidence source",
+            ],
             "rows": [
                 [
                     report_literal(a["target"]),
-                    report_literal(a["agent"] + " · " + a["phase"]),
-                    a["tumor_band"],
-                    _evidence_source_cell(a),
+                    report_literal(f"{a['agent']} · {a['phase']}"),
+                    report_literal(a["tumor_band"]),
+                    therapy_source_markdown(a),
                 ]
                 for a in selected_assessments
             ],
@@ -473,42 +556,127 @@ def build_report_content(
                 )
             )
         )
-        therapies.extend(paragraph(text) for text in assessment["rationale"])
-    if not selected_assessments and not identity_unresolved:
+        therapies.extend(paragraph(text) for text in assessment["reader_rationale"])
+    if leads:
+        therapies.append({"kind": "heading", "text": "Vulnerabilities worth investigating"})
+        grouped = {}
+        for assessment, basis in leads:
+            vulnerability = "MSI/MMR" if any(r["kind"] == "msi_high" for r in assessment["eligibility"]["requirements"]) else assessment["target"]
+            grouped.setdefault((vulnerability, basis), []).append(assessment)
+        for (target, basis), group in grouped.items():
+            options = "; ".join(
+                f"{report_literal(a['agent'])} ({report_literal(a['phase'])}; {therapy_source_markdown(a)})"
+                for a in group
+            )
+            requirements = list(dict.fromkeys(
+                r["label"] or r["kind"].replace("_", " ")
+                for a in group for r in a["eligibility"]["requirements"]
+                if r["status"] in {"missing", "unresolved"}
+            ))
+            therapies.append({
+                "kind": "bullet",
+                "text": f"**{report_literal(target)}:** {basis} Options to investigate: {options}. "
+                + ("Confirm: " + "; ".join(report_literal(r) for r in requirements) + "." if requirements else ""),
+                "figure_suffixes": [] if target == "MSI/MMR" else ["priority-target-context.png"],
+            })
+    if conditional_groups:
+        therapies.append({"kind": "heading", "text": "Approved options pending clinical confirmation"})
+        for group in conditional_groups:
+            options = "; ".join(
+                f"**{report_literal(a['agent'])}**"
+                + (f" ({therapy_source_markdown(a)})" if therapy_source_markdown(a) != "—" else "")
+                for a in group["assessments"]
+            )
+            criteria = ". ".join(
+                report_literal(text[:1].upper() + text[1:]) for text in group["criteria"]
+            )
+            sources = list(dict.fromkeys(
+                r["source"] for a in group["assessments"]
+                for r in a["eligibility"]["requirements"]
+                if r.get("source", "").startswith(("https://", "http://"))
+            ))
+            block = {
+                "kind": "bullet",
+                "text": options + ": " + criteria + "."
+                + (" " + " · ".join(f"[Eligibility source]({markdown_url(source)})" for source in sources) + "." if sources else ""),
+            }
+            # Separate gene-gate assessments can describe the same clinical
+            # option (e.g. a BRCA1/2 indication). Keep their audit records while
+            # stating identical reader text only once.
+            if block not in therapies:
+                therapies.append(block)
+    if assessments and not identity_unresolved:
+        therapies.append({
+            "kind": "paragraph",
+            "text": ("This curated target panel is not a complete treatment plan. " if conditional_groups else "")
+            + "Target ranking and RNA-source evidence are shown in the figures.",
+            "figure_suffixes": ["priority-targets.png", "priority-target-context.png", "actionable-targets.png"],
+        })
+    if not selected_assessments and not conditional_groups and not leads and not identity_unresolved:
         therapies.append(paragraph(empty_shortlist_summary(assessments)))
-    for title, statuses in (
-        ("Known blockers and current treatments", {"clinical_blocker"}),
-        ("Eligibility pending", {"eligibility_pending"}),
-        ("Sample support not established", {
-            "inactive_disease_context", "rna_unavailable", "rna_below_threshold", "rna_source_unsupported",
-        }),
-    ):
-        excluded = [
-            a for a in assessments
-            if not identity_unresolved and a["selection"]["status"] in statuses
-        ]
-        if excluded:
-            therapies.append({"kind": "heading", "text": title})
-            therapies.extend(
-                {"kind": "bullet", "text": f"**{a['agent']}:** {a['selection']['reason']}"}
-                for a in excluded
+    blocked = [
+        a
+        for a in assessments
+        if any(r["status"] == "blocked" for r in a["eligibility"]["requirements"])
+    ]
+    if blocked:
+        therapies.append({"kind": "heading", "text": "Known blockers and current treatments"})
+        for assessment in blocked:
+            descriptions = [
+                r["description"]
+                for r in assessment["eligibility"]["requirements"]
+                if r["status"] == "blocked"
+            ]
+            therapies.append(
+                {"kind": "bullet", "text": f"**{assessment['agent']}:** " + " ".join(descriptions)}
             )
 
-    request_blocks = [paragraph(render_report_paragraph("research_information"))] if research else []
+    request_blocks = []
+    citations_by_agent = {}
+    for assessment in assessments:
+        citations_by_agent.setdefault(assessment["agent"], [])
+        citation = therapy_source_markdown(assessment)
+        if citation != "—" and citation not in citations_by_agent[assessment["agent"]]:
+            citations_by_agent[assessment["agent"]].append(citation)
+
+    def affected_options(agents):
+        return "; ".join(
+            report_literal(agent)
+            + (" (" + "; ".join(citations_by_agent.get(agent, [])) + ")" if citations_by_agent.get(agent) else "")
+            for agent in agents
+        )
+
     for request in requests:
-        label = request.get("label") or {"msi_high": "MSI/MMR", "tmb_high": "TMB", "hla": "HLA"}.get(
-            request["kind"], request["kind"].replace("_", " ").capitalize()
-        )
-        request_blocks.append(
-            paragraph(render_report_paragraph("evidence_request", **{**request, "label": label}))
-        )
+        # Missing data can be summarized by the requested test; conflicting
+        # supplied evidence must retain the actual mismatch, not just the test name.
+        for description in dict.fromkeys(
+            r["description"] for a in assessments for r in a["eligibility"]["requirements"]
+            if r["key"] in request["keys"] and r.get("evidence")
+            and (r["status"] == "unresolved" or r["kind"] == "hla")
+        ):
+            request_blocks.append(paragraph(description))
+        request_blocks.append(paragraph(render_report_paragraph(
+            "evidence_request", **request,
+            affected_options=affected_options(request["details"][0]["affects"]),
+        )))
+        sources = list(dict.fromkeys(
+            r["source"] for a in assessments for r in a["eligibility"]["requirements"]
+            if r["key"] in request["keys"] and r.get("source", "").startswith(("https://", "http://"))
+        ))
+        if sources:
+            request_blocks[-1]["text"] += " " + " · ".join(
+                f"[Eligibility source]({markdown_url(source)})" for source in sources
+            ) + "."
         # Different therapies can require distinct tests for one evidence kind.
         # Keep those specifications visible even when the request is deduplicated.
         for detail in request["details"]:
             if detail["question"] != request["question"]:
                 request_blocks.append({
                     "kind": "bullet",
-                    "text": render_report_paragraph("evidence_request_detail", **detail),
+                    "text": render_report_paragraph(
+                        "evidence_request_detail", **detail,
+                        affected_options=affected_options(detail["affects"]),
+                    ),
                 })
     if not requests:
         request_blocks.append(
@@ -527,7 +695,10 @@ def build_report_content(
         **paragraph(render_report_paragraph("specimen_provenance", context=clinical_context, identity=identity)),
         "id": "specimen_provenance",
     })
-    source_rows = source_attribution_rows(panel, ranges_df, recommended)
+    if supporting_context:
+        detail.append({"kind": "heading", "text": "Additional sample context"})
+        detail.extend(supporting_context)
+    source_rows = brief.source_attribution_rows(panel, ranges_df, recommended)
     if source_rows:
         detail.append({"kind": "heading", "text": "Where target RNA signal appears to come from"})
         attribution = render_report_paragraph("purity_attribution", purity=report_view.purity)
@@ -539,11 +710,11 @@ def build_report_content(
                     render_report_paragraph(
                         "target_attribution",
                         symbol=row["symbol"],
-                        bulk=_format_trace_tpm(row["bulk"]),
-                        tumor=_format_trace_tpm(row["tumor"]),
+                        bulk=brief.format_trace_tpm(row["bulk"]),
+                        tumor=brief.format_trace_tpm(row["tumor"]),
                         fraction=f"{row['fraction']:.0%}",
                         component=row["component"] if row["component"] != "—" else "none estimated",
-                        component_tpm=_format_trace_tpm(row["component_tpm"]),
+                        component_tpm=brief.format_trace_tpm(row["component_tpm"]),
                         reason=row["reason"],
                     )
                 )
@@ -569,22 +740,22 @@ def build_report_content(
     for title, items, formatter in (
         (
             "Notable biomarker outliers",
-            _notable_biomarker_outliers(
+            brief.notable_biomarker_outliers(
                 ranges_df,
                 panel_code,
                 panel_subtype,
                 excluded_symbols={a["target"] for a in selected_assessments},
             ),
-            _format_biomarker_outlier_bullet,
+            brief.format_biomarker_outlier_bullet,
         ),
-        ("Notable CTA RNA signals", _notable_cta_outliers(ranges_df), _format_cta_outlier_bullet),
+        ("Notable CTA RNA signals", brief.notable_cta_outliers(ranges_df), brief.format_cta_outlier_bullet),
     ):
         if items:
             detail.append({"kind": "heading", "text": title})
             detail.extend(
                 {"kind": "bullet", "text": formatter(item).removeprefix("- ")} for item in items
             )
-    caveats = report_interpretation_limits(
+    caveats = brief.report_interpretation_limits(
         report_view.purity, analysis.get("sample_context"), analysis
     )
     from .report_language import report_plain_text
@@ -599,46 +770,20 @@ def build_report_content(
     if caveats:
         detail.append({"kind": "heading", "text": "Interpretation limits"})
         detail.extend({"kind": "bullet", "text": text} for text in dict.fromkeys(caveats))
-    therapy_table = None
-    if selected_assessments:
-        therapy_table = {
-            "columns": [
-                ["Target", 15],
-                ["Research candidate" if research else "Recommendation", 38],
-                ["Estimated tumor TPM (RNA model)", 25],
-                ["Eligibility / RNA provenance", 39],
-            ],
-            "rows": [
-                [
-                    a["target"],
-                    a["agent"] + " · " + a["phase"],
-                    a["tumor_band"],
-                    " ".join(a["rationale"]) + " Indication: " + a["indication"],
-                ]
-                for a in selected_assessments
-            ],
-            "sources": [
-                source
-                for a in selected_assessments
-                for source in a["sources"]
-                if source["url"]
-            ],
-        }
     return ReportContent(
         sample_id,
         [
             {
                 "id": "conclusion",
-                "title": "Conclusion and supporting evidence",
+                "title": "What we learned about this sample",
                 "blocks": conclusion,
             },
-            {"id": "therapies", "title": "Therapy rationale and blockers", "blocks": therapies},
-            {"id": "information", "title": "Information needed", "blocks": request_blocks},
+            {"id": "therapies", "title": "Therapeutic directions", "blocks": therapies},
+            {"id": "information", "title": "What would change the treatment options", "blocks": request_blocks},
             {"id": "evidence", "title": "Detailed evidence and figures", "blocks": detail},
         ],
         assessments,
         requests,
-        therapy_table,
         [record.public_dict() for record in treatment_records(analysis)],
         clinical_context.public_dict(),
         identity,

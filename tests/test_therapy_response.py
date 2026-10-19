@@ -230,6 +230,19 @@ def test_mapk_source_reasoning_uses_dedicated_fusion_evidence():
     assert "KIF5B--RET" in sources[0]["label"]
 
 
+def test_uncertain_rna_source_does_not_nominate_a_tumor_mapk_driver():
+    import pandas as pd
+    from trufflepig.therapy_response import _candidate_sources_from_rna
+
+    row = {"symbol": "EGFR", "observed_tpm": 100, "attr_tumor_tpm": 90,
+           "attr_tumor_fraction": 0.9, "pct_cancer_median": 5,
+           "tcga_percentile": 0.99}
+    assert _candidate_sources_from_rna(pd.DataFrame([row]))
+    assert not _candidate_sources_from_rna(pd.DataFrame([
+        {**row, "attribution_low_purity": True},
+    ]))
+
+
 def test_fold_uses_pseudocount_to_avoid_division_by_zero():
     # When cohort median is zero for a gene, the fold should still be
     # finite thanks to the pseudocount.

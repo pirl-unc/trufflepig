@@ -353,6 +353,19 @@ def _all_wide_tpm_value_cols(df: pd.DataFrame) -> list[str]:
     return _raw_value_cols(df) + _clean_companion_value_cols(df) + _analysis_value_cols(df)
 
 
+def _renormalize_wide_columns_to_million(
+    df: pd.DataFrame, value_cols: list[str]
+) -> pd.DataFrame:
+    """Pin complete wide-reference columns to a one-million total."""
+    out = df.copy()
+    for col in value_cols:
+        values = pd.to_numeric(out[col], errors="coerce")
+        total = float(values.sum(skipna=True))
+        if total > 0.0:
+            out[col] = values * (1_000_000.0 / total)
+    return out
+
+
 def _apply_trufflepig_pan_normalize(
     df: pd.DataFrame,
     normalize,
@@ -1274,6 +1287,22 @@ def pan_cancer_expression(
     wide_value_cols = _all_wide_tpm_value_cols(df)
     if wide_value_cols:
         df = collapse_proteoform_loci(df, value_cols=wide_value_cols)
+    clean_companion_cols = _clean_companion_value_cols(df)
+    analysis_cols = _analysis_value_cols(df)
+    complete_pan_reference = (
+        genes_tuple is None
+        and any(col.endswith("_TPM_clean") for col in clean_companion_cols)
+        and any(col.endswith("_nTPM_clean") for col in clean_companion_cols)
+    )
+    if complete_pan_reference:
+        # Upstream versions differ in whether clean companions are repinned to
+        # 1e6. Trufflepig's public full-reference contract is invariant: enforce
+        # it locally after proteoform summation. Gene-filtered slices retain the
+        # scale of the complete reference and must not be renormalized here.
+        df = _renormalize_wide_columns_to_million(
+            df,
+            list(dict.fromkeys(clean_companion_cols + analysis_cols)),
+        )
     df = _apply_trufflepig_pan_normalize(df, normalize, log_transform)
     clean_companion_cols = _clean_companion_value_cols(df)
     if not clean_companion_cols:

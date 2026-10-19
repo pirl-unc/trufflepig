@@ -11,6 +11,10 @@ htmlcov/
 /site/
 /docs/_build/
 
+# Generated sample reports, local review artifacts, and scratch worktrees.
+/output/
+/tmp/
+
 # macOS Finder metadata
 .DS_Store
 **/.DS_Store
