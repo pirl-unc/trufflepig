@@ -1,6 +1,6 @@
 [project]
 name = "pirl-trufflepig"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 authors = [ {name="Alex Rubinsteyn", email="alex.rubinsteyn@unc.edu" } ]
 description = "RNA tumor analysis, therapeutic evidence, and decision-aligned reports driven by pirlygenes gene sets."
 classifiers = [
@@ -29,9 +29,7 @@ dependencies = [
     # Pirlygenes pins the exact compatible oncoref wheel within this range.
     "oncoref>=1.8.193,<2",
     "numpy>=2.0.0",
-    # pandas 3 requires Python >=3.11; the resolver keeps pandas 2.3 on the
-    # supported Python 3.9/3.10 runtimes.
-    "pandas>=2.3,<4",
+    "pandas>=3,<4",
     "matplotlib>=3.5.0",
     "Pillow>=9.1",
     "mhcgnomes>=3.64.1,<4",
@@ -98,7 +96,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 # Keep the initial baseline focused on correctness and ordinary Python style.
