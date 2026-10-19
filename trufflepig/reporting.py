@@ -829,10 +829,13 @@ def filter_current_therapy_targets(targets_df):
     for index, row in current.iterrows():
         for column, value in _current_therapy_row_overrides(row).items():
             if column not in current.columns:
-                # ``None`` gives the new column object dtype, so both boolean
-                # gates and reader-facing strings can be assigned without a
-                # pandas incompatible-dtype error.
-                current[column] = pd.Series(None, index=current.index, dtype=object)
+                # These public metadata fields use an empty string for rows
+                # without an override. Keep object dtype for structured assay
+                # records and boolean gates under pandas string inference.
+                default = "" if column in {
+                    "clinical_assay_criteria", "requires_verified_alteration"
+                } else None
+                current[column] = pd.Series(default, index=current.index, dtype=object)
             elif not pd.api.types.is_object_dtype(current[column].dtype):
                 current[column] = current[column].astype(object)
             current.at[index, column] = value

@@ -629,6 +629,7 @@ def recommend_therapies(
         review = evaluate_therapy_review(
             t, expr, analysis=analysis, panel_subtype=panel_subtype,
             ranges_df=ranges_df, disease_state=disease_state,
+            eligibility=eligibility_for(t) if eligibility_for is not None else None,
         )
         if not review.permits_review:
             continue

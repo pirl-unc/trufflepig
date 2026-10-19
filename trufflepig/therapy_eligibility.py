@@ -464,7 +464,7 @@ class TherapyReviewDecision:
 
 def evaluate_therapy_review(
     target_row, expression=None, *, analysis=None, panel_subtype=None,
-    ranges_df=None, disease_state=None,
+    ranges_df=None, disease_state=None, eligibility=None,
 ) -> TherapyReviewDecision:
     """Apply the shortlist's clinical, disease-state and RNA criteria once.
 
@@ -481,7 +481,8 @@ def evaluate_therapy_review(
         therapy_row_rna_context_inactive,
     )
 
-    eligibility = evaluate_therapy_eligibility(target_row, analysis, panel_subtype=panel_subtype)
+    if eligibility is None:
+        eligibility = evaluate_therapy_eligibility(target_row, analysis, panel_subtype=panel_subtype)
     observation = target_rna_observation(
         expression, symbol=canonical_target_symbol(target_row.get("symbol")), ranges_df=ranges_df
     )

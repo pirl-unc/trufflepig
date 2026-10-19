@@ -131,7 +131,7 @@ def assess_therapy(
     gene = canonical_target_symbol(row.get("symbol"))
     review = evaluate_therapy_review(
         row, expr, analysis=analysis, panel_subtype=panel_subtype,
-        ranges_df=ranges_df, disease_state=disease_state,
+        ranges_df=ranges_df, disease_state=disease_state, eligibility=eligibility,
     )
     observation = review.observation
     state, observed = observation["state"], observation["observed_tpm"]
