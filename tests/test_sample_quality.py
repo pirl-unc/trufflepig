@@ -217,7 +217,16 @@ def test_unknown_library_prep_still_warns_on_missing_mt():
         library_prep=None,
     )
     assert any("Suspicious MT fraction" in f for f in result["flags"])
+    assert any("rows have valid TPM but none are detected" in f for f in result["flags"])
     assert result["degradation"]["level"] == "unknown"
+
+
+def test_quality_distinguishes_mt_rows_absent_from_measured_zero():
+    df = _tcga_sample("PRAD").copy()
+    df = df[~df["gene_symbol"].isin(_MT_GENES)]
+    result = assess_sample_quality(df, library_prep=None)
+    assert any("missing from the quant table" in f for f in result["flags"])
+    assert any("MT fraction: unavailable" in f for f in result["flags"])
 
 
 def test_nan_tpm_values_do_not_cause_errors():

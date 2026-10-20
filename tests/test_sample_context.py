@@ -52,7 +52,9 @@ def test_library_prep_polya_signature_is_detected():
     rows = [("ACTB", 500), ("GAPDH", 400), ("TUBB", 300)]
     # MT mRNAs present (typical poly-A capture keeps them)
     rows += [(sym, 50) for sym in _MT_MRNA_SYMBOLS]
-    # MT rRNAs absent. Histones absent.
+    # The quantified MT rRNAs and histones are zero, rather than absent rows.
+    rows += [(sym, 0) for sym in _MT_RRNA_SYMBOLS]
+    rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
     frame = _frame_from_pairs(rows)
 
     ctx = infer_sample_context(frame)
@@ -95,19 +97,22 @@ def test_library_prep_ribo_depleted_signature_is_detected():
     ]
     # MT rRNAs absent or very low; MT mRNAs present
     rows += [(sym, 40) for sym in _MT_MRNA_SYMBOLS]
+    rows += [(sym, 0) for sym in _MT_RRNA_SYMBOLS]
     frame = _frame_from_pairs(rows)
 
     ctx = infer_sample_context(frame)
     assert ctx.library_prep == "ribo_depleted"
 
 
-def test_library_prep_exome_capture_signature_is_detected():
-    """MT absent AND histones absent → exome capture."""
+def test_missing_mt_rows_do_not_imply_exome_capture():
+    """A sparse expression table cannot distinguish filtering from capture."""
     rows = [("ACTB", 500), ("GAPDH", 400), ("TUBB", 300), ("TP53", 20), ("BRCA1", 10)]
     # Nothing else — no MT, no histones.
     frame = _frame_from_pairs(rows)
     ctx = infer_sample_context(frame)
-    assert ctx.library_prep == "exome_capture"
+    assert ctx.library_prep == "unknown"
+    assert ctx.signals["mt_fraction"] is None
+    assert ctx.signals["mt_genes_present"] == 0
 
 
 def test_build_tpm_by_symbol_uses_gene_column_without_fallback(monkeypatch):
@@ -188,7 +193,7 @@ def test_missing_mt_flag_set_when_mt_genes_absent():
     frame = _frame_from_pairs(rows)
     ctx = infer_sample_context(frame)
     assert ctx.missing_mt is True
-    assert any("Mitochondrial genes missing" in f for f in ctx.flags)
+    assert any("Mitochondrial gene rows absent" in f for f in ctx.flags)
 
 
 # ── Downstream adjustment factors ─────────────────────────────────────────
@@ -271,8 +276,11 @@ def test_tempus_like_exome_capture_ffpe_detected_correctly():
         rows.append((f"FILLER{i}", 200))
     # Very small amounts of a few MT-mRNA genes (probe bleed-through).
     rows += [("MT-CO1", 0.1), ("MT-ND1", 0.1)]
+    rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)
+             if sym not in {"MT-CO1", "MT-ND1"}]
+    rows += [(f"PROFILE{i}", 2.0) for i in range(4000)]
     # Histones in the "limbo" band — ~0.3% of total.
-    total_bg = 1000 + 800 + 600 + 500 + 8 * 200 + 0.2
+    total_bg = sum(tpm for _, tpm in rows)
     target_histone = total_bg * 0.003 / (1 - 0.003)  # ≈ 0.3% of final total
     rows += [("H2BC1", target_histone / 6)] * 6
     # Degradation pairs: long transcripts over-represented ~3x.

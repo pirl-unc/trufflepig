@@ -24,16 +24,15 @@ def _frame_from_pairs(pairs):
     return pd.DataFrame([{"gene_symbol": s, "TPM": float(t)} for s, t in pairs])
 
 
+def _broad_profile(rows):
+    return rows + [(f"PROFILE{i}", 2.0) for i in range(4000)]
+
+
 # ── Histone limbo band ───────────────────────────────────────────────────
 
 
-def test_histone_limbo_band_with_zero_mt_yields_exome_capture():
-    """Histone fraction in the 0.1–0.5% 'limbo' band combined with
-    MT completely absent should yield exome_capture, not unknown.
-
-    This is the Tempus xT / Twist RNA Exome pattern (bug 2026-04-14):
-    capture probes include some histones but zero chrM coverage.
-    """
+def test_histone_limbo_band_with_absent_mt_is_unresolved():
+    """Low histones cannot turn unrepresented MT genes into capture evidence."""
     rows = [("ACTB", 500), ("GAPDH", 400), ("TUBB", 300)]
     # Histones present but in the limbo band (0.1-0.5% of total)
     # total background ≈ 1200; need histone ≈ 1.5–6 TPM
@@ -41,18 +40,20 @@ def test_histone_limbo_band_with_zero_mt_yields_exome_capture():
     # NO MT genes at all
     frame = _frame_from_pairs(rows)
     ctx = infer_sample_context(frame)
-    assert ctx.library_prep == "exome_capture"
+    assert ctx.library_prep == "unknown"
+    assert ctx.signals["mt_fraction"] is None
+    assert ctx.signals["histone_genes_valid"] == 3
 
 
-def test_histone_below_polya_ceiling_no_mt_yields_exome_capture():
-    """Very low histones (<0.2%) but MT completely absent → exome_capture."""
+def test_histone_below_polya_ceiling_no_mt_is_unresolved():
+    """One low histone observation and no MT rows cannot identify capture."""
     rows = [("ACTB", 500), ("GAPDH", 400)]
     # Tiny histone signal
     rows += [("H2BC1", 0.1)]
     # No MT
     frame = _frame_from_pairs(rows)
     ctx = infer_sample_context(frame)
-    assert ctx.library_prep == "exome_capture"
+    assert ctx.library_prep == "unknown"
 
 
 def test_histone_limbo_with_mt_present_not_exome():
@@ -70,21 +71,26 @@ def test_histone_limbo_with_mt_present_not_exome():
 
 
 def test_mt_rrna_exactly_zero_high_confidence_exome():
-    """MT-rRNA exactly zero with low MT overall → exome_capture at high confidence."""
+    """Measured zeros across the MT panel can support a capture call."""
     rows = [("ACTB", 1000), ("GAPDH", 800)]
-    # NO MT-rRNA, tiny MT-mRNA leakage
-    rows += [(list(_MT_MRNA_SYMBOLS)[0], 0.01)]
-    frame = _frame_from_pairs(rows)
+    # All MT features were quantified; only one mRNA has tiny leakage.
+    rows += [(sym, 0.01 if sym == "MT-CO1" else 0.0)
+             for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)]
+    frame = _frame_from_pairs(_broad_profile(rows))
     ctx = infer_sample_context(frame)
     assert ctx.library_prep == "exome_capture"
     assert ctx.library_prep_confidence >= 0.8
+    assert ctx.signals["mt_genes_present"] == ctx.signals["mt_genes_total"]
+    assert ctx.signals["mt_genes_detected"] == 1
 
 
 def test_low_mt_fraction_with_mt_mrnas_is_not_reported_as_mt_stripped():
     """Low chrM fraction can support RNA capture without inventing an MT-stripped class."""
     rows = [("ACTB", 50000), ("GAPDH", 45000), ("EEF1A1", 40000)]
     rows += [("MT-ND1", 5.0), ("MT-CO1", 4.0), ("MT-ATP6", 3.0)]
-    frame = _frame_from_pairs(rows)
+    rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)
+             if sym not in {"MT-ND1", "MT-CO1", "MT-ATP6"}]
+    frame = _frame_from_pairs(_broad_profile(rows))
     ctx = infer_sample_context(frame)
     assert ctx.library_prep == "exome_capture"
     assert ctx.signals["mt_genes_detected"] >= 3
@@ -106,14 +112,63 @@ def test_mt_rrna_near_zero_lower_confidence():
             0.01,
         )
     ]
-    frame = _frame_from_pairs(rows)
+    rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)
+             if sym != "MT-RNR1"]
+    rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
+    frame = _frame_from_pairs(_broad_profile(rows))
     tpm = _build_tpm_by_symbol(frame)
     signals = {}
     prep, conf = _infer_library_prep(tpm, signals)
     # With nonzero rRNA, the exact-zero path doesn't fire.
     # This should still yield exome_capture at lower confidence
     # or poly_a depending on histone level.
-    assert prep in ("exome_capture", "poly_a")
+    assert prep == "exome_capture"
+    assert conf == 0.6
+
+
+def test_mt_feature_coverage_separates_absent_invalid_zero_and_partial():
+    base = [("ACTB", 500), ("GAPDH", 400), ("TUBB", 300)]
+    cases = (
+        ([], 0, 0, None, "rows absent"),
+        ([(sym, float("nan")) for sym in _MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS],
+         15, 0, None, "TPM values are unavailable"),
+        ([(sym, 0) for sym in _MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS],
+         15, 15, 0.0, "none detected above zero"),
+        ([("MT-CO1", 0), ("MT-RNR1", 0)],
+         2, 2, 0.0, "none detected above zero"),
+    )
+    for mt_rows, present, valid, fraction, flag in cases:
+        for broad in (False, True):
+            rows = _broad_profile(base + mt_rows) if broad else base + mt_rows
+            ctx = infer_sample_context(_frame_from_pairs(rows))
+            assert ctx.signals["mt_genes_present"] == present
+            assert ctx.signals["mt_genes_valid"] == valid
+            assert ctx.signals["mt_genes_detected"] == 0
+            assert ctx.signals["mt_fraction"] == fraction
+            assert any(flag in text for text in ctx.flags)
+            assert ctx.library_prep == ("exome_capture" if broad and valid == 15 else "unknown")
+
+
+def test_invalid_mt_values_do_not_count_as_measured_zero():
+    rows = _broad_profile([("ACTB", 500), ("GAPDH", 400)])
+    rows += [("MT-RNR1", float("nan")), ("MT-RNR2", float("inf")),
+             ("MT-CO1", -1.0)]
+    ctx = infer_sample_context(_frame_from_pairs(rows))
+    assert ctx.library_prep == "unknown"
+    assert ctx.signals["mt_genes_present"] == 3
+    assert ctx.signals["mt_genes_valid"] == 0
+    assert ctx.signals["mt_fraction"] is None
+
+
+def test_partially_represented_positive_mt_panel_stays_unresolved():
+    rows = _broad_profile([("ACTB", 500), ("GAPDH", 400)])
+    rows += [("MT-CO1", 0.01), ("MT-CO2", 0.01), ("MT-ND1", 0.01)]
+    ctx = infer_sample_context(_frame_from_pairs(rows))
+    assert ctx.library_prep == "unknown"
+    assert ctx.missing_mt
+    assert ctx.signals["mt_genes_present"] == 3
+    assert ctx.signals["mt_genes_detected"] == 3
+    assert any("Only 3/15 mitochondrial gene TPM values are valid" in f for f in ctx.flags)
 
 
 # ── Expression distribution metrics ──────────────────────────────────────
