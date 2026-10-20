@@ -76,6 +76,7 @@ def test_mt_rrna_exactly_zero_high_confidence_exome():
     # All MT features were quantified; only one mRNA has tiny leakage.
     rows += [(sym, 0.01 if sym == "MT-CO1" else 0.0)
              for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)]
+    rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
     frame = _frame_from_pairs(_broad_profile(rows))
     ctx = infer_sample_context(frame)
     assert ctx.library_prep == "exome_capture"
@@ -90,6 +91,7 @@ def test_low_mt_fraction_with_mt_mrnas_is_not_reported_as_mt_stripped():
     rows += [("MT-ND1", 5.0), ("MT-CO1", 4.0), ("MT-ATP6", 3.0)]
     rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)
              if sym not in {"MT-ND1", "MT-CO1", "MT-ATP6"}]
+    rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
     frame = _frame_from_pairs(_broad_profile(rows))
     ctx = infer_sample_context(frame)
     assert ctx.library_prep == "exome_capture"
@@ -112,8 +114,9 @@ def test_mt_rrna_near_zero_lower_confidence():
             0.01,
         )
     ]
+    rows.append(("MT-CO1", 0.01))
     rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)
-             if sym != "MT-RNR1"]
+             if sym not in {"MT-RNR1", "MT-CO1"}]
     rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
     frame = _frame_from_pairs(_broad_profile(rows))
     tpm = _build_tpm_by_symbol(frame)
@@ -146,7 +149,27 @@ def test_mt_feature_coverage_separates_absent_invalid_zero_and_partial():
             assert ctx.signals["mt_genes_detected"] == 0
             assert ctx.signals["mt_fraction"] == fraction
             assert any(flag in text for text in ctx.flags)
-            assert ctx.library_prep == ("exome_capture" if broad and valid == 15 else "unknown")
+            assert ctx.library_prep == "unknown"
+
+
+def test_high_histone_mt_stripped_profile_does_not_imply_capture():
+    rows = _broad_profile([("ACTB", 500), ("GAPDH", 400)])
+    rows += [(sym, 0.01 if sym == "MT-CO1" else 0.0)
+             for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)]
+    rows += [(sym, 200) for sym in ("H2BC1", "H2AC1", "H3C1")]
+    ctx = infer_sample_context(_frame_from_pairs(rows))
+    assert ctx.library_prep == "unknown"
+
+
+def test_fully_measured_but_zero_mt_panel_stays_unresolved():
+    rows = _broad_profile([("ACTB", 500), ("GAPDH", 400)])
+    rows += [(sym, 0) for sym in (_MT_MRNA_SYMBOLS | _MT_RRNA_SYMBOLS)]
+    rows += [(sym, 0) for sym in ("H2BC1", "H2AC1", "H3C1")]
+    ctx = infer_sample_context(_frame_from_pairs(rows))
+    assert ctx.library_prep == "unknown"
+    assert ctx.signals["mt_genes_valid"] == 15
+    assert ctx.signals["mt_fraction"] == 0.0
+    assert any("none detected above zero" in f for f in ctx.flags)
 
 
 def test_invalid_mt_values_do_not_count_as_measured_zero():

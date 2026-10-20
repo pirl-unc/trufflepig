@@ -390,21 +390,29 @@ def _infer_library_prep(tpm_by_symbol, signals, *, represented_symbols=None):
     rrna_covered = len(rrna_valid) == len(_MT_RRNA_SYMBOLS)
     histone_covered = len(histone_valid) >= 3
     if (
-        broad_profile and mt_panel_covered and rrna_covered and mt_fraction is not None
+        broad_profile and mt_panel_covered and rrna_covered and histone_covered
+        and mt_fraction is not None and histone_frac is not None
         and mt_fraction < _THRESHOLDS["mt_fraction_exome_ceiling"]
         and mt_rrna_tpm == 0.0
+        and mt_mrna_tpm > 0.0
+        and histone_frac < _THRESHOLDS["histone_fraction_total_floor"]
     ):
         return "exome_capture", 0.9
     if (
         broad_profile and mt_panel_covered and rrna_valid and histone_covered
         and mt_fraction is not None
         and mt_fraction < _THRESHOLDS["mt_fraction_suspicious_floor"]
+        and mt_mrna_tpm > 0.0
         and histone_frac is not None
         and histone_frac < _THRESHOLDS["histone_fraction_polyA_ceiling"]
     ):
         return "exome_capture", 0.6
 
-    if histone_covered and rrna_covered and mt_rrna_fraction_of_mt is not None:
+    if (
+        histone_covered and mt_panel_covered and rrna_covered
+        and mt_rrna_fraction_of_mt is not None
+        and mt_fraction >= _THRESHOLDS["mt_fraction_suspicious_floor"]
+    ):
         if (
             histone_frac >= _THRESHOLDS["histone_fraction_total_floor"]
             and mt_rrna_fraction_of_mt >= _THRESHOLDS["mt_rrna_fraction_of_mt_total_floor"]

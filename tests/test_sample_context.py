@@ -78,6 +78,8 @@ def test_library_prep_total_rna_signature_is_detected():
     # MT rRNAs dominate MT signal (characteristic of total RNA libraries)
     rows += [(sym, 200) for sym in _MT_RRNA_SYMBOLS]
     rows += [(sym, 20) for sym in list(_MT_MRNA_SYMBOLS)[:5]]
+    rows += [(sym, 0) for sym in _MT_MRNA_SYMBOLS
+             if sym not in {name for name, _ in rows}]
     frame = _frame_from_pairs(rows)
 
     ctx = infer_sample_context(frame)
@@ -282,7 +284,7 @@ def test_tempus_like_exome_capture_ffpe_detected_correctly():
     # Histones in the "limbo" band — ~0.3% of total.
     total_bg = sum(tpm for _, tpm in rows)
     target_histone = total_bg * 0.003 / (1 - 0.003)  # ≈ 0.3% of final total
-    rows += [("H2BC1", target_histone / 6)] * 6
+    rows += [(sym, target_histone / 3) for sym in ("H2BC1", "H2AC1", "H3C1")]
     # Degradation pairs: long transcripts over-represented ~3x.
     from pirlygenes.gene_sets_cancer import degradation_gene_pairs
 
