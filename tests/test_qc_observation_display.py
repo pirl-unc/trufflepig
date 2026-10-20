@@ -42,7 +42,8 @@ def test_unavailable_diagnostic_fractions_do_not_become_quality_claims(rendered_
     axes = rendered_context(signals, library_prep="poly_a", missing_mt=True)
     assert len(axes) == 1
     text = "\n".join(label.get_text() for label in axes[0].texts)
-    assert "Mitochondrial genes missing" in text
+    assert "Mitochondrial signal limited" in text
+    assert "coverage was not recorded" in " ".join(text.split())
     assert "near zero" not in text and "0.000" not in text
     assert not axes[0].patches
 
@@ -50,7 +51,8 @@ def test_unavailable_diagnostic_fractions_do_not_become_quality_claims(rendered_
 def test_absent_measurements_do_not_suggest_capture_preparation(rendered_context):
     axes = rendered_context({}, missing_mt=True)
     text = "\n".join(label.get_text() for label in axes[0].texts)
-    assert "Unknown" in text and "Mitochondrial genes missing" in text
+    assert "Unknown" in text and "Mitochondrial signal limited" in text
+    assert "coverage was not recorded" in " ".join(text.split())
     assert "RNA capture library preparation" not in text
     assert "no degradation signal" not in text.casefold()
 
