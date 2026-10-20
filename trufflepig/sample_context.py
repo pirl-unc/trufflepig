@@ -688,6 +688,8 @@ def _represented_gene_symbols(df_gene_expr):
 
 def mt_signal_limit_label(signals):
     """Describe missing rows separately from measured non-detection."""
+    if "mt_genes_present" not in signals:
+        return "Mitochondrial feature coverage was not recorded"
     present = signals.get("mt_genes_present", 0)
     valid = signals.get("mt_genes_valid", 0)
     detected = signals.get("mt_genes_detected", 0)
