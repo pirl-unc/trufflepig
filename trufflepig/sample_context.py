@@ -325,106 +325,120 @@ class SampleContext:
 # ── Inference ─────────────────────────────────────────────────────────────
 
 
-def _sum_tpm_for_symbols(tpm_by_symbol, symbol_set) -> float:
-    total = 0.0
-    for sym in symbol_set:
-        v = tpm_by_symbol.get(sym)
-        if v is not None and not (isinstance(v, float) and math.isnan(v)) and v > 0:
-            total += float(v)
-    return total
+def _infer_library_prep(tpm_by_symbol, signals, *, represented_symbols=None):
+    """Infer preparation only from measured features, retaining panel coverage.
 
-
-def _sum_tpm_for_prefixes(tpm_by_symbol, prefixes) -> float:
-    total = 0.0
-    for sym, v in tpm_by_symbol.items():
-        if not isinstance(sym, str):
-            continue
-        if v is None or (isinstance(v, float) and math.isnan(v)) or v <= 0:
-            continue
-        if sym.startswith(prefixes):
-            total += float(v)
-    return total
-
-
-def _infer_library_prep(tpm_by_symbol, signals):
-    """Infer library prep from histone + MT rRNA signals. Records
-    evidence into ``signals`` and returns ``(library_prep, confidence)``.
+    ``represented_symbols`` includes rows whose TPM was invalid. It defaults to
+    the mapping keys for callers that already have a validated TPM dictionary.
     """
-    total_tpm = sum(
-        v
-        for v in tpm_by_symbol.values()
-        if v is not None and not (isinstance(v, float) and math.isnan(v)) and v > 0
+    represented = set(tpm_by_symbol) if represented_symbols is None else set(represented_symbols)
+    valid = {
+        symbol: float(value)
+        for symbol, value in tpm_by_symbol.items()
+        if isinstance(value, Real) and not isinstance(value, bool)
+        and math.isfinite(value) and value >= 0
+    }
+    total_tpm = sum(value for value in valid.values() if value > 0)
+    mt_symbols = _MT_RRNA_SYMBOLS | _MT_MRNA_SYMBOLS
+    mt_valid = mt_symbols & valid.keys()
+    rrna_valid = _MT_RRNA_SYMBOLS & valid.keys()
+    mrna_valid = _MT_MRNA_SYMBOLS & valid.keys()
+    histone_present = {s for s in represented if isinstance(s, str) and s.startswith(_HISTONE_SYMBOL_PREFIXES)}
+    histone_valid = histone_present & valid.keys()
+    signals.update({
+        "genes_with_valid_tpm": len(valid),
+        "feature_presence_source": (
+            "input_symbol_rows" if represented_symbols is not None else "resolved_valid_symbols"
+        ),
+        "histone_genes_present": len(histone_present),
+        "histone_genes_valid": len(histone_valid),
+        "histone_genes_detected": sum(valid[s] > 0 for s in histone_valid),
+        "mt_genes_present": len(mt_symbols & represented),
+        "mt_genes_valid": len(mt_valid),
+        "mt_genes_detected": sum(valid[s] > 0 for s in mt_valid),
+        "mt_genes_total": len(mt_symbols),
+        "mt_rrna_genes_valid": len(rrna_valid),
+        "mt_mrna_genes_valid": len(mrna_valid),
+    })
+    histone_tpm = sum(valid[s] for s in histone_valid)
+    mt_rrna_tpm = sum(valid[s] for s in rrna_valid)
+    mt_mrna_tpm = sum(valid[s] for s in mrna_valid)
+    mt_total_tpm = mt_rrna_tpm + mt_mrna_tpm
+    histone_frac = histone_tpm / total_tpm if total_tpm > 0 and histone_valid else None
+    mt_fraction = mt_total_tpm / total_tpm if total_tpm > 0 and mt_valid else None
+    mt_rrna_fraction_of_mt = (
+        mt_rrna_tpm / mt_total_tpm
+        if mt_total_tpm > 0 and len(rrna_valid) == len(_MT_RRNA_SYMBOLS) and mrna_valid
+        else None
+    )
+    signals["histone_fraction"] = round(histone_frac, 5) if histone_frac is not None else None
+    signals["mt_fraction"] = round(mt_fraction, 5) if mt_fraction is not None else None
+    signals["mt_rrna_fraction_of_mt"] = (
+        round(mt_rrna_fraction_of_mt, 4) if mt_rrna_fraction_of_mt is not None else None
     )
     if total_tpm <= 0:
         return "unknown", 0.0
 
-    histone_tpm = _sum_tpm_for_prefixes(tpm_by_symbol, _HISTONE_SYMBOL_PREFIXES)
-    histone_frac = histone_tpm / total_tpm
-
-    mt_rrna_tpm = _sum_tpm_for_symbols(tpm_by_symbol, _MT_RRNA_SYMBOLS)
-    mt_mrna_tpm = _sum_tpm_for_symbols(tpm_by_symbol, _MT_MRNA_SYMBOLS)
-    mt_total_tpm = mt_rrna_tpm + mt_mrna_tpm
-    mt_fraction = mt_total_tpm / total_tpm
-    mt_rrna_fraction_of_mt = mt_rrna_tpm / mt_total_tpm if mt_total_tpm > 0 else None
-
-    signals["histone_fraction"] = round(histone_frac, 5)
-    signals["mt_fraction"] = round(mt_fraction, 5)
-    signals["mt_rrna_fraction_of_mt"] = (
-        round(mt_rrna_fraction_of_mt, 4) if mt_rrna_fraction_of_mt is not None else None
-    )
-
-    # RNA hybrid-capture / RNA-exome style enrichment. The strong signal
-    # is absent MT-rRNA plus very low total chrM fraction, not proof that
-    # every MT transcript was removed. Clinical capture references may
-    # still quantify MT protein-coding transcripts at low TPM.
-    if mt_fraction < _THRESHOLDS["mt_fraction_exome_ceiling"] and (mt_rrna_tpm == 0.0):
-        # Very high confidence when MT-rRNA is exactly zero and total chrM
-        # is very low. This is a capture-enrichment signature, not a
-        # statement that MT mRNAs are unmeasurable.
-        return "exome_capture", 0.9
-
-    # Broader low-MT signal; call RNA capture at lower confidence only
-    # when histones are also poly-A-like.
+    # A nearly absent MT signal is evidence of capture only when the MT
+    # features were actually quantified. Sparse or invalid panels cannot
+    # distinguish upstream filtering from library preparation.
+    mt_panel_covered = len(mt_valid) >= len(mt_symbols) - 3
+    # Match the detection-breadth floor used by the targeted-panel QC
+    # heuristic: a narrow or mostly zero table cannot establish capture.
+    broad_profile = sum(value > 1 for value in valid.values()) >= 4000
+    signals["library_prep_broad_profile"] = broad_profile
+    rrna_covered = len(rrna_valid) == len(_MT_RRNA_SYMBOLS)
+    histone_covered = len(histone_valid) >= 3
     if (
-        mt_fraction < _THRESHOLDS["mt_fraction_suspicious_floor"]
+        broad_profile and mt_panel_covered and rrna_covered and histone_covered
+        and mt_fraction is not None and histone_frac is not None
+        and mt_fraction < _THRESHOLDS["mt_fraction_exome_ceiling"]
+        and mt_rrna_tpm == 0.0
+        and mt_mrna_tpm > 0.0
+        and histone_frac < _THRESHOLDS["histone_fraction_total_floor"]
+    ):
+        return "exome_capture", 0.9
+    if (
+        broad_profile and mt_panel_covered and rrna_valid and histone_covered
+        and mt_fraction is not None
+        and mt_fraction < _THRESHOLDS["mt_fraction_suspicious_floor"]
+        and mt_mrna_tpm > 0.0
+        and histone_frac is not None
         and histone_frac < _THRESHOLDS["histone_fraction_polyA_ceiling"]
     ):
         return "exome_capture", 0.6
 
-    # Total RNA: histones high AND MT rRNAs dominate MT signal
     if (
-        histone_frac >= _THRESHOLDS["histone_fraction_total_floor"]
+        histone_covered and mt_panel_covered and rrna_covered
         and mt_rrna_fraction_of_mt is not None
-        and mt_rrna_fraction_of_mt >= _THRESHOLDS["mt_rrna_fraction_of_mt_total_floor"]
-    ):
-        return "total_rna", 0.9
-
-    # Ribo-depleted: histones high AND MT rRNAs depleted
-    if (
-        histone_frac >= _THRESHOLDS["histone_fraction_total_floor"]
-        and mt_rrna_fraction_of_mt is not None
-        and mt_rrna_fraction_of_mt
-        <= _THRESHOLDS["mt_rrna_fraction_of_mt_depleted_ceiling"]
-    ):
-        return "ribo_depleted", 0.85
-
-    # Poly-A: histones absent AND MT rRNAs absent
-    if (
-        histone_frac <= _THRESHOLDS["histone_fraction_polyA_ceiling"]
-        and (
-            mt_rrna_fraction_of_mt is None
-            or mt_rrna_fraction_of_mt
-            <= _THRESHOLDS["mt_rrna_fraction_of_mt_depleted_ceiling"]
-        )
         and mt_fraction >= _THRESHOLDS["mt_fraction_suspicious_floor"]
     ):
-        return "poly_a", 0.8
+        if (
+            histone_frac >= _THRESHOLDS["histone_fraction_total_floor"]
+            and mt_rrna_fraction_of_mt >= _THRESHOLDS["mt_rrna_fraction_of_mt_total_floor"]
+        ):
+            return "total_rna", 0.9
+        if (
+            histone_frac >= _THRESHOLDS["histone_fraction_total_floor"]
+            and mt_rrna_fraction_of_mt <= _THRESHOLDS["mt_rrna_fraction_of_mt_depleted_ceiling"]
+        ):
+            return "ribo_depleted", 0.85
+        if (
+            histone_frac <= _THRESHOLDS["histone_fraction_polyA_ceiling"]
+            and mt_fraction is not None
+            and mt_fraction >= _THRESHOLDS["mt_fraction_suspicious_floor"]
+            and mt_rrna_fraction_of_mt <= _THRESHOLDS["mt_rrna_fraction_of_mt_depleted_ceiling"]
+        ):
+            return "poly_a", 0.8
 
-    # Ambiguous: histones low, MT signal mixed. Most clinical cohorts
-    # are poly-A so default there at low confidence.
-    if histone_frac <= _THRESHOLDS["histone_fraction_polyA_ceiling"]:
+    # Abundant measured MT mRNA and low measured histones can still suggest
+    # poly-A when the rRNA panel is incomplete, but not at high confidence.
+    if (
+        histone_covered and mrna_valid and mt_fraction is not None
+        and mt_fraction >= _THRESHOLDS["mt_fraction_suspicious_floor"]
+        and histone_frac <= _THRESHOLDS["histone_fraction_polyA_ceiling"]
+    ):
         return "poly_a", 0.5
-
     return "unknown", 0.2
 
 
@@ -643,7 +657,10 @@ def _build_tpm_by_symbol(df_gene_expr):
         with without_dataframe_attrs(df_gene_expr):
             syms = df_gene_expr[sym_col].astype(str)
             tpms = pd.to_numeric(df_gene_expr[tpm_col], errors="coerce")
-            valid = syms.ne("") & syms.ne("nan") & syms.ne("None") & tpms.notna()
+            valid = (
+                syms.ne("") & syms.ne("nan") & syms.ne("None")
+                & tpms.notna() & tpms.ge(0) & tpms.lt(float("inf"))
+            )
             return dict(
                 pd.DataFrame({"sym": syms[valid], "tpm": tpms[valid]})
                 .groupby("sym")["tpm"]
@@ -653,6 +670,43 @@ def _build_tpm_by_symbol(df_gene_expr):
     from .common import build_sample_tpm_by_symbol
 
     return build_sample_tpm_by_symbol(df_gene_expr)
+
+
+def _represented_gene_symbols(df_gene_expr):
+    """Return symbol rows, including rows with invalid TPM, when available."""
+    sym_col = next(
+        (c for c in ("gene_symbol", "gene", "Symbol", "symbol", "GeneName")
+         if c in df_gene_expr.columns),
+        None,
+    )
+    if sym_col is None:
+        # A gene-ID-only table has no direct symbol for an invalid TPM row.
+        return None
+    symbols = df_gene_expr[sym_col].dropna().astype(str).str.strip()
+    return {s for s in symbols if s and s not in {"nan", "None", "<NA>"}}
+
+
+def mt_signal_limit_label(signals):
+    """Describe missing rows separately from measured non-detection."""
+    present = signals.get("mt_genes_present", 0)
+    valid = signals.get("mt_genes_valid", 0)
+    detected = signals.get("mt_genes_detected", 0)
+    total = signals.get("mt_genes_total", len(_MT_RRNA_SYMBOLS | _MT_MRNA_SYMBOLS))
+    if present == 0:
+        if signals.get("feature_presence_source") == "resolved_valid_symbols":
+            return "No valid mitochondrial gene TPM values resolved from the input"
+        return "Mitochondrial gene rows absent from the quant table"
+    if valid == 0:
+        return "Mitochondrial gene rows present, but their TPM values are unavailable"
+    if valid < total - 3:
+        detail = f"Only {valid}/{total} mitochondrial gene TPM values are valid"
+        return detail + (
+            "; none detected above zero TPM" if detected == 0
+            else f"; {detected} detected above zero TPM"
+        )
+    if detected == 0:
+        return "Mitochondrial gene rows measured, but none detected above zero TPM"
+    return f"Only {detected} mitochondrial gene detected above zero TPM"
 
 
 def _summarise_expression_distribution(tpm_by_symbol, signals):
@@ -864,11 +918,14 @@ def infer_sample_context(df_gene_expr) -> SampleContext:
             missing_mt=True,
             flags=["Sample context inference skipped — input frame has no gene column"],
         )
-    # Drop NaN
+    # Keep symbol-row availability separate from valid TPM values. In
+    # particular, an invalid MT value is not an observed zero.
+    represented_symbols = _represented_gene_symbols(df_gene_expr)
     tpm_by_symbol = {
         s: v
         for s, v in tpm_by_symbol.items()
-        if v is not None and not (isinstance(v, float) and math.isnan(v))
+        if isinstance(v, Real) and not isinstance(v, bool)
+        and math.isfinite(v) and v >= 0
     }
 
     signals = {}
@@ -876,7 +933,9 @@ def infer_sample_context(df_gene_expr) -> SampleContext:
     print("[context]   expression distribution...")
     _summarise_expression_distribution(tpm_by_symbol, signals)
     print("[context]   library prep inference...")
-    library_prep, lp_conf = _infer_library_prep(tpm_by_symbol, signals)
+    library_prep, lp_conf = _infer_library_prep(
+        tpm_by_symbol, signals, represented_symbols=represented_symbols
+    )
     print("[context]   preservation / degradation...")
     preservation, pr_conf, severity, index = _infer_preservation_and_degradation(
         tpm_by_symbol, signals
@@ -902,17 +961,12 @@ def infer_sample_context(df_gene_expr) -> SampleContext:
     if refined_flags:
         pr_conf = max(pr_conf, 0.65)
 
-    # Missing-MT detection (#61). We check the count of MT symbols that
-    # map to any TPM > 0 in the sample. ``missing_mt`` is a distinct
-    # signal from preservation — it's about the quant table, not the RNA.
-    mt_found = sum(
-        1
-        for s in (_MT_RRNA_SYMBOLS | _MT_MRNA_SYMBOLS)
-        if s in tpm_by_symbol and tpm_by_symbol[s] > 0
+    # Keep the historical boolean for downstream MT-signal safeguards, but
+    # report whether the rows were absent, invalid, or measured as zero.
+    missing_mt = (
+        signals["mt_genes_valid"] < signals["mt_genes_total"] - 3
+        or signals["mt_genes_detected"] <= 1
     )
-    signals["mt_genes_detected"] = mt_found
-    signals["mt_genes_total"] = len(_MT_RRNA_SYMBOLS) + len(_MT_MRNA_SYMBOLS)
-    missing_mt = mt_found <= 1
 
     flags = []
     concentration_level = str(
@@ -944,13 +998,14 @@ def infer_sample_context(df_gene_expr) -> SampleContext:
         )
     if missing_mt:
         flags.append(
-            "Mitochondrial genes missing from quant table — degradation "
-            "signal from MT fraction is unreliable; FFPE detection falls "
-            "back to gene-length pair index only"
+            f"{mt_signal_limit_label(signals)} — degradation signal from MT "
+            "fraction is unreliable; FFPE detection falls back to "
+            "gene-length pair index only"
         )
     if library_prep == "unknown":
         flags.append(
-            "Library prep inconclusive — histone + MT-rRNA signals did not match any profile"
+            "Library prep inconclusive — measured histone and mitochondrial "
+            "features do not support a specific preparation"
         )
     else:
         flags.append(
@@ -1129,8 +1184,8 @@ def plot_sample_context(
         rows.append(("Technical RNA burden", f"Mitochondrial / rRNA-like: {burden:.1%}",
                      "These RNAs can dominate normalized abundance estimates."))
     if sample_context.missing_mt:
-        rows.append(("Measurement limit", "Mitochondrial genes missing",
-                     "Filtering or library capture can remove this quality signal."))
+        rows.append(("Measurement limit", "Mitochondrial signal limited",
+                     mt_signal_limit_label(signals) + "; MT-based quality inference is unreliable."))
 
     fig, ax = plt.subplots(figsize=(10, 1.18 * len(rows)))
     ax.set(xlim=(0, 1), ylim=(len(rows), 0))

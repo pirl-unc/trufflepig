@@ -36,7 +36,7 @@ from pirlygenes.gene_sets_cancer import (
     culture_stress_gene_names, degradation_gene_pairs, mitochondrial_gene_names, tme_marker_gene_names,
 
 )
-from .sample_context import library_prep_display_label
+from .sample_context import _represented_gene_symbols, library_prep_display_label
 
 
 # Mitochondrial-encoded gene symbols — short transcripts that survive
@@ -264,8 +264,12 @@ def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
     # ── 1. RNA degradation / FFPE ────────────────────────────────────────
 
     mt_vals, n_mt = _gene_tpm_lookup(clean_tpm, _MT_GENES)
+    n_mt_represented = sum(gene in clean_tpm for gene in _MT_GENES)
+    input_symbols = _represented_gene_symbols(df_gene_expr)
+    n_mt_input_rows = len(set(_MT_GENES) & input_symbols) if input_symbols is not None else None
     mt_total = sum(mt_vals)
     mt_fraction = mt_total / total_tpm
+    mt_fraction_display = f"{mt_fraction:.1%}" if n_mt_represented else "unavailable"
 
     rp_total = sum(
         tpm
@@ -507,7 +511,7 @@ def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
         # informational flag instead of a false alarm.
         prep_label = library_prep_display_label(library_prep)
         flags.append(
-            f"MT fraction {mt_fraction:.1%} — consistent with {prep_label} "
+            f"MT fraction {mt_fraction_display} — consistent with {prep_label} "
             "library prep; degradation assessed from length-pair index"
         )
     elif mt_near_zero:
@@ -520,11 +524,21 @@ def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
         # capture panel that under-samples MT contigs, or a genuine
         # low-MT tissue).
         if n_mt == 0:
+            if n_mt_represented:
+                detail = (
+                    f"{n_mt_represented} mitochondrial gene rows have valid TPM "
+                    "but none are detected above zero"
+                )
+            elif n_mt_input_rows is not None and n_mt_input_rows > 0:
+                detail = "mitochondrial gene rows present but TPM values invalid"
+            elif n_mt_input_rows == 0:
+                detail = "mitochondrial genes missing from the quant table (filtered or renamed upstream)"
+            else:
+                detail = "no valid mitochondrial gene TPMs resolved after gene-ID mapping"
             flags.append(
-                f"Suspicious MT fraction: {mt_fraction:.1%} "
-                f"(n_mt_found=0/{len(_MT_GENES)}) — mitochondrial genes "
-                "missing from the quant table (filtered or renamed "
-                "upstream); degradation signal is unreliable"
+                f"Suspicious MT fraction: {mt_fraction_display} "
+                f"(n_mt_found=0/{len(_MT_GENES)}) — {detail}; "
+                "degradation signal is unreliable"
             )
         else:
             flags.append(
@@ -536,7 +550,7 @@ def assess_sample_quality(df_gene_expr, tissue_scores=None, library_prep=None):
         degradation["level"] = "unknown"
         degradation["message"] = (
             "MT fraction too low for reliable degradation assessment "
-            f"(n_mt_found={n_mt}/{len(_MT_GENES)}, fraction={mt_fraction:.1%})"
+            f"(n_mt_found={n_mt}/{len(_MT_GENES)}, fraction={mt_fraction_display})"
         )
 
     if deg_level in ("severe", "moderate"):

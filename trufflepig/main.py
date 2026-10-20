@@ -117,6 +117,7 @@ from .sample_context import (
     length_pair_display_label,
     library_prep_clause,
     library_prep_display_label,
+    mt_signal_limit_label,
     plot_degradation_index,
     plot_expression_concentration_curve_qc,
     plot_expression_concentration_top_features_qc,
@@ -8695,7 +8696,7 @@ def _generate_text_reports(
             )
         if sample_context.missing_mt:
             lines.append(
-                "- **Mitochondrial genes missing** from quant table — "
+                f"- **Mitochondrial signal limited**: {mt_signal_limit_label(ctx_signals)}; "
                 "degradation signal from MT fraction is unreliable."
             )
         lines.append("")
@@ -8737,7 +8738,20 @@ def _generate_text_reports(
                 )
         else:
             lines.append(f"**RNA degradation**: {deg['level']}")
-        lines.append(f"- Mitochondrial fraction: {deg['mt_fraction']:.1%}")
+        if sample_context is not None and ctx_signals.get("mt_genes_valid", 0) == 0:
+            lines.append("- Mitochondrial fraction: unavailable (no valid MT gene TPM values)")
+        elif (
+            sample_context is not None
+            and ctx_signals.get("mt_genes_valid", 0)
+            < ctx_signals.get("mt_genes_total", 0) - 3
+        ):
+            lines.append(
+                f"- Mitochondrial fraction (partial MT panel, "
+                f"{ctx_signals['mt_genes_valid']}/{ctx_signals['mt_genes_total']} valid): "
+                f"{deg['mt_fraction']:.1%}; not used to infer library prep."
+            )
+        else:
+            lines.append(f"- Mitochondrial fraction: {deg['mt_fraction']:.1%}")
         lines.append(f"- Ribosomal protein fraction: {deg['rp_fraction']:.1%}")
         if deg.get("long_short_ratio") is not None:
             lines.append(
