@@ -118,6 +118,7 @@ class Purity:
     scenarios: Tuple[PurityScenario, ...]
     unresolved_reason: Optional[str] = None
     methods: Tuple[PurityMethodEstimate, ...] = ()
+    same_lineage_range: Optional[Tuple[float, float]] = None
 
     @property
     def is_unresolved(self) -> bool:
@@ -223,6 +224,10 @@ class Purity:
             methods=purity_method_estimates(
                 purity, next(iter(analysis.get("decomposition_results") or ()), None),
             ),
+            same_lineage_range=(
+                number("same-lineage scenario lower", (purity.get("same_lineage_limit") or {}).get("scenario_lower")),
+                number("same-lineage scenario upper", (purity.get("same_lineage_limit") or {}).get("scenario_upper")),
+            ) if (purity.get("same_lineage_limit") or {}).get("scenario_upper") is not None else None,
         )
 
     def public_dict(self) -> dict[str, Any]:
@@ -237,6 +242,7 @@ class Purity:
             "purity_status": self.status,
             "purity_scenarios": self.scenarios,
             "purity_unresolved_reason": self.unresolved_reason,
+            "purity_same_lineage_scenario_range": self.same_lineage_range,
             "purity_methods": [asdict(method) for method in self.methods],
         }
 

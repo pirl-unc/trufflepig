@@ -1052,7 +1052,16 @@ def tumor_attribution_context(row):
     source_uncertain = (
         legacy_cap or low_purity or _truthy(row.get("matched_normal_over_predicted"))
     )
+    lineage_status = _clean_text(row.get("same_lineage_scenario_status"))
+    if lineage_status:
+        source_uncertain = True
     notes = []
+    if lineage_status == "scenario_dependent":
+        notes.append("tumor source becomes material only under some same-lineage allocations")
+    elif lineage_status == "stable_material":
+        notes.append("tumor signal remains material across the modeled same-lineage allocations")
+    elif lineage_status == "not_material":
+        notes.append("tumor signal is not material across the modeled same-lineage allocations")
     if _truthy(row.get("matched_normal_over_predicted")):
         notes.append(
             "the external tissue reference predicts more RNA than was measured"
@@ -1077,6 +1086,10 @@ def tumor_attribution_context(row):
         tier = "mixed_source"
         label = "tumor source uncertain"
         summary = "RNA does not reliably distinguish tumor from non-tumor sources"
+    elif lineage_status == "scenario_dependent":
+        tier = "mixed_source"
+        label = "scenario-dependent source"
+        summary = "tumor attribution changes across same-lineage allocations"
     elif high_tpm < 1.0 or high_frac < 0.30 or _truthy(row.get("tme_dominant")):
         tier = "background_dominant"
         label = "mostly background"
@@ -1098,7 +1111,12 @@ def tumor_attribution_context(row):
         summary = "both tumor and benign/background sources remain plausible"
 
     quantifiable = not source_uncertain and mid_tpm > 0 and mid_frac > 0
-    if source_uncertain:
+    if lineage_status:
+        band = (
+            f"operating {mid_tpm:.0f} estimated tumor TPM; same-lineage stress "
+            f"range {low_tpm:.0f}-{high_tpm:.0f}"
+        )
+    elif source_uncertain:
         band = "tumor contribution uncertain"
     elif observed > 0:
         band = (
@@ -1124,6 +1142,7 @@ def tumor_attribution_context(row):
         "attr_tumor_fraction_high": high_frac,
         "attr_support_fraction": support_fraction,
         "source_uncertain": source_uncertain,
+        "same_lineage_scenario_status": lineage_status,
         "quantifiable": quantifiable,
     }
 
@@ -1830,6 +1849,11 @@ def tumor_band_cell(row):
     if not tumor_band_available(row):
         return "—"
     ctx = tumor_attribution_context(row)
+    if ctx["same_lineage_scenario_status"]:
+        return (
+            f"operating {ctx['attr_tumor_tpm']:.0f} "
+            f"(stress {ctx['attr_tumor_tpm_low']:.0f}-{ctx['attr_tumor_tpm_high']:.0f})"
+        )
     if ctx["source_uncertain"]:
         return "Uncertain"
     return (
@@ -1901,6 +1925,11 @@ def target_reliability_status(row, *, category=None, target_row=None):
     """Classify a row as ``supported``, ``provisional``, or ``unsupported``."""
     if target_row is not None and expression_independent_indication(target_row):
         return "provisional"
+    lineage_status = _clean_text(row.get("same_lineage_scenario_status"))
+    if lineage_status in {"stable_material", "scenario_dependent"}:
+        return "provisional"
+    if lineage_status == "not_material":
+        return "unsupported"
     source = tumor_attribution_context(row)
     if source["tier"] == "background_dominant":
         if same_lineage_material_target_candidate(row, target_row=target_row):

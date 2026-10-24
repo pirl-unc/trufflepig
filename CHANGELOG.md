@@ -8,6 +8,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.30.3 — 2026-10-24 — osteosarcoma same-lineage source stress test
+
+- Osteosarcoma reports with broad sarcoma purity calibration and a large
+  bone/mesenchymal reference fit now show the operating purity separately from
+  a same-lineage reallocation range. The range is an assumption stress test,
+  not a confidence interval or a patient-matched normal sample.
+- Target source bands and curated target RNA ranks now show whether material
+  tumor signal persists or changes across those allocations. Scenario-dependent
+  target attribution remains provisional while clinical eligibility retains
+  its separate requirements.
+
 ## 1.30.2 — 2026-10-23 — purity scenario context and pandas 3 input loading
 
 - When purity estimators disagree, the conclusion and composition captions now

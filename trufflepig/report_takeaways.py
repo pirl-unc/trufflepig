@@ -116,6 +116,13 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
                 f"{purity.estimate:.0%}{interval} for downstream decomposition and target attribution; "
                 "this is not a malignant-cell measurement."
             )
+        if purity.unresolved_reason == "same_lineage_not_identifiable" and purity.same_lineage_range:
+            lo, hi = purity.same_lineage_range
+            text += (
+                f" Same-lineage stress-test range {lo:.0%}–{hi:.0%} reallocates "
+                "shared external-reference signal; it is an assumption range, "
+                "not a confidence interval."
+            )
         if purity.unresolved_reason not in {"cancer_type_unresolved", "same_lineage_not_identifiable"}:
             scenarios = brief.purity_estimator_scenario_text(purity.scenarios)
             if scenarios:

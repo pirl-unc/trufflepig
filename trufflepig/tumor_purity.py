@@ -5257,6 +5257,12 @@ def plot_sample_summary(
             f"{detail_prefix}: quantitatively unresolved",
             operational + " (not consensus)",
         ]
+        if conclusion.same_lineage_range:
+            details.append(
+                "Same-lineage stress test: "
+                f"{conclusion.same_lineage_range[0]:.0%}–{conclusion.same_lineage_range[1]:.0%} "
+                "(assumption range)"
+            )
         if scenario_values:
             details.append("Scenarios: " + "; ".join(scenario_values))
     else:

@@ -656,6 +656,11 @@ def recommend_therapies(
             "supported": 0,
             "provisional": 1,
         }.get(reliability_status, 2)
+        lineage_rank = {
+            "stable_material": 0,
+            "scenario_dependent": 1,
+            "not_material": 2,
+        }.get(str(expression.get("same_lineage_scenario_status") or ""), 0)
         expression_rank = 1 if expr_independent else 0
         sort_key = (
             treatment_history_rank(t, analysis),
@@ -669,6 +674,7 @@ def recommend_therapies(
             phase_priority.get(phase, 99),
             expression_rank,
             reliability_rank,
+            lineage_rank,
             -attr_tumor,
             sym or therapy_agent_label(t),
         )
@@ -849,6 +855,14 @@ def _source_trace_reason(target_row, expression_row, *, in_shortlist: bool) -> s
         parts.append(source["label"])
     else:
         parts.append("ranked below top list")
+
+    lineage_status = str(expression_row.get("same_lineage_scenario_status") or "")
+    if lineage_status == "scenario_dependent":
+        parts.append("tumor-source support changes across same-lineage scenarios")
+    elif lineage_status == "stable_material":
+        parts.append("material signal persists across same-lineage scenarios")
+    elif lineage_status == "not_material":
+        parts.append("no material tumor signal across same-lineage scenarios")
 
     if expression_independent_indication(target_row):
         parts.append("RNA is context only; eligibility does not depend on target expression")

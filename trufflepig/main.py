@@ -3290,6 +3290,7 @@ def _analyze_body(run: AnalyzeRun):
         same_lineage_limit = _same_lineage_purity_limit(
             cancer_code,
             decomp_results,
+            purity,
         )
         if same_lineage_limit:
             analysis["same_lineage_purity_limit"] = same_lineage_limit
@@ -7221,7 +7222,7 @@ def _composition_highlights(decomp_result, *, top_n=3):
     return highlights
 
 
-def _same_lineage_purity_limit(cancer_code, decomp_results):
+def _same_lineage_purity_limit(cancer_code, decomp_results, purity_result=None):
     """Identify bulk-RNA purity fits dominated by a shared tumor/normal lineage.
 
     Osteosarcoma is the first explicit case: osteoblastic tumor cells and benign
@@ -7230,6 +7231,10 @@ def _same_lineage_purity_limit(cancer_code, decomp_results):
     malignant-versus-benign cell split from one bulk sample.
     """
     if str(cancer_code or "") != "SARC_OS" or not decomp_results:
+        return None
+    purity_result = purity_result or {}
+    reference_code = str(purity_result.get("reference_cancer_type") or "")
+    if reference_code and reference_code != "SARC":
         return None
     best = decomp_results[0]
     fractions = dict(getattr(best, "fractions", {}) or {})
@@ -7248,7 +7253,7 @@ def _same_lineage_purity_limit(cancer_code, decomp_results):
     shared_fraction = sum(material.values())
     if shared_fraction < 0.30:
         return None
-    return {
+    result = {
         "kind": "osteosarcoma_mesenchymal_lineage_overlap",
         "shared_reference_fraction": shared_fraction,
         "components": material,
@@ -7257,6 +7262,41 @@ def _same_lineage_purity_limit(cancer_code, decomp_results):
             "and osteogenic RNA programs"
         ),
     }
+    operating = float(purity_result.get("overall_estimate") or fractions.get("tumor", 0.0))
+    model_lower = float(purity_result.get("overall_lower") or operating)
+    model_upper = float(purity_result.get("overall_upper") or operating)
+    result["scenario_lower"] = max(0.0, min(model_lower, operating))
+    result["scenario_upper"] = min(1.0, max(model_upper, operating) + shared_fraction)
+    result["scenario_estimates"] = [
+        {"label": "selected subtraction", "fraction": round(operating, 4), "reallocated": 0.0},
+        {"label": "half shared lineage assigned to tumor", "fraction": round(min(1.0, operating + shared_fraction / 2), 4), "reallocated": 0.5},
+        {"label": "all shared lineage assigned to tumor", "fraction": round(min(1.0, operating + shared_fraction), 4), "reallocated": 1.0},
+    ]
+    return result
+
+
+def _same_lineage_target_rank_rows(symbols, row_lookup):
+    """Rank curated target RNA source under each shared-lineage allocation.
+
+    These are source-signal ranks among the supplied targets, not treatment
+    recommendations. Clinical eligibility and maturity retain their own order.
+    """
+    rows = []
+    for symbol in sorted(set(symbols)):
+        evidence = row_lookup.get(symbol)
+        values = evidence.get("same_lineage_scenario_tpm") if evidence is not None else None
+        if not isinstance(values, list) or len(values) != 3:
+            continue
+        rows.append({
+            "symbol": symbol,
+            "tpm": tuple(float(value) for value in values),
+            "status": str(evidence.get("same_lineage_scenario_status") or ""),
+        })
+    for scenario in range(3):
+        ranked = sorted(rows, key=lambda row: (-row["tpm"][scenario], row["symbol"]))
+        for rank, row in enumerate(ranked, 1):
+            row.setdefault("ranks", [0, 0, 0])[scenario] = rank
+    return sorted(rows, key=lambda row: row["ranks"][0])
 
 
 def _integrated_evidence_bullets(analysis, decomp_results=None):
@@ -7507,7 +7547,10 @@ def _integrated_evidence_bullets(analysis, decomp_results=None):
                 "osteoid, and osteoblast programs, so bulk RNA cannot cleanly divide "
                 "this shared signal into benign stroma/bone versus tumor. Treat the "
                 "reported tumor fraction as an operating estimate and prioritize "
-                "targets that remain material across its model interval."
+                "targets that remain material across the same-lineage stress-test range "
+                f"{same_lineage_limit['scenario_lower']:.0%}–"
+                f"{same_lineage_limit['scenario_upper']:.0%}. This is an assumption "
+                "range, not a confidence interval or a separate normal sample."
             )
 
     if hvt is not None and getattr(hvt, "top_tcga_cohorts", None):
@@ -8476,11 +8519,17 @@ def _generate_text_reports(
                 "is unestablished; the modeled residual may include benign muscle or stroma."
             )
         elif conclusion.unresolved_reason == "same_lineage_not_identifiable":
+            stress = (
+                f" Same-lineage stress-test range {conclusion.same_lineage_range[0]:.0%}–"
+                f"{conclusion.same_lineage_range[1]:.0%} (assumption range, not a confidence interval)."
+                if conclusion.same_lineage_range else ""
+            )
             lines.append(
                 f"- **{purity_heading}**: **quantitatively unresolved** because "
                 "tumor and benign bone/mesenchymal cells share the modeled RNA "
                 "programs; operating estimate "
                 f"{_format_purity_interval(conclusion.estimate, conclusion.lower, conclusion.upper)}."
+                + stress
             )
         else:
             lines.append(
@@ -9717,6 +9766,18 @@ def _build_target_report(
 
     lines = [f"# Therapeutic Target Analysis — {cancer_code} ({cancer_name})\n"]
     lines.append(_target_report_mode_intro(sample_mode, cancer_code, p_lo, p_mid, p_hi))
+    lineage_limit = purity_result.get("same_lineage_limit") or {}
+    if lineage_limit.get("scenario_upper") is not None:
+        lines.append(
+            "> **Same-lineage stress test**: the selected operating purity is "
+            f"{p_mid:.0%} (within-model interval {p_lo:.0%}–{p_hi:.0%}); "
+            f"reassigning shared external bone/mesenchymal reference signal gives "
+            f"an assumption range of {lineage_limit['scenario_lower']:.0%}–"
+            f"{lineage_limit['scenario_upper']:.0%}. Target source bands below "
+            "span those allocations. A target marked scenario-dependent is "
+            "provisional; the external reference is not a separate normal "
+            "sample from this patient.\n"
+        )
     from .infantile_spindle import (
         infantile_spindle_driver_spectrum_markdown,
         infantile_spindle_guidance_markdown,
@@ -10305,6 +10366,39 @@ def _build_target_report(
                 )
                 if canon and canon.lower() != "nan"
             }
+            if lineage_limit.get("scenario_upper") is not None:
+                rank_rows = _same_lineage_target_rank_rows(
+                    panel_target_symbols, sym_to_row
+                )
+                if rank_rows:
+                    lines.append("### Same-lineage target source stress test\n")
+                    lines.append(
+                        "RNA source ranks below compare the selected subtraction, "
+                        "half reallocation, and full reallocation of the shared "
+                        "external reference. They rank source signal among this "
+                        "curated panel only; clinical eligibility and treatment "
+                        "ranking remain separate. A shifting rank or materiality "
+                        "makes source support provisional.\n"
+                    )
+                    lines.append(
+                        "| Target | Selected rank | Half rank | Full rank | "
+                        "Material tumor signal |"
+                    )
+                    lines.append("|--------|--------------:|----------:|----------:|-----------------------|")
+                    labels = {
+                        "stable_material": "stable across scenarios",
+                        "scenario_dependent": "scenario-dependent",
+                        "not_material": "not material in modeled scenarios",
+                    }
+                    for row in rank_rows:
+                        status = labels.get(row["status"], "unclassified")
+                        if len(set(row["ranks"])) > 1:
+                            status += "; source rank shifts"
+                        lines.append(
+                            f"| {row['symbol']} | {row['ranks'][0]} | "
+                            f"{row['ranks'][1]} | {row['ranks'][2]} | {status} |"
+                        )
+                    lines.append("")
             if len(targets_df):
                 # Approved first, then phase_3, phase_2, phase_1,
                 # preclinical. Within phase, agent name for stability.
@@ -10406,6 +10500,18 @@ def _build_target_report(
                             expr,
                             target_panel=targets_df,
                         )
+                        lineage_status = str(expr.get("same_lineage_scenario_status") or "")
+                        if lineage_status == "scenario_dependent":
+                            interpretation_cell = (
+                                "Same-lineage stress test: tumor-source support changes "
+                                "across allocations; provisional. " + interpretation_cell
+                            )
+                        elif lineage_status == "stable_material":
+                            interpretation_cell = (
+                                "Material tumor-source signal persists across modeled "
+                                "same-lineage allocations; malignant-cell origin still unconfirmed. "
+                                + interpretation_cell
+                            )
                         reliability = target_reliability_status(
                             expr,
                             target_row=trow,

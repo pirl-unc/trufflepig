@@ -208,14 +208,22 @@ def build_figure_manifest(
             "the modeled fraction may include benign muscle or stroma.",
         )
     elif purity.unresolved_reason == "same_lineage_not_identifiable":
+        stress = (
+            f" Same-lineage stress-test range {purity.same_lineage_range[0]:.0%}–"
+            f"{purity.same_lineage_range[1]:.0%} is an assumption range, "
+            "not a confidence interval."
+            if purity.same_lineage_range else ""
+        )
         unresolved_captions = {
             "decomposition-composition.png": (
                 "Selected operating model for target attribution. Tumor and benign "
                 "same-lineage cells cannot be cleanly separated from this bulk RNA."
+                + stress
             ),
             "decomposition-components.png": (
                 "External reference weights from the selected operating model; not "
                 "a resolved malignant-versus-benign cell composition."
+                + stress
             ),
         }
     number = 0
@@ -226,6 +234,13 @@ def build_figure_manifest(
             from .report_language import render_report_paragraph
 
             caption = render_report_paragraph("purity_methods", purity=purity)
+        if purity.same_lineage_range and suffix in {
+            "priority-targets.png", "priority-target-context.png",
+        }:
+            caption += (
+                " Target source bands include the same-lineage reallocation stress test; "
+                "scenario-dependent targets have provisional source support."
+            )
         figure = find_figure(analyze_dir, prefix, suffix)
         if purity.unresolved_reason == "cancer_type_unresolved" and suffix in {
             "priority-targets.png", "priority-target-context.png", "actionable-targets.png",

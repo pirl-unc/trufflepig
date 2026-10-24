@@ -396,6 +396,7 @@ def test_ranges_use_fine_deconvolved_expression_reference(monkeypatch):
     monkeypatch.setattr(
         mod, "_deconvolved_tumor_tpm_reference", fake_deconvolved_reference
     )
+    mod._exact_expression_tpm_reference.cache_clear()
     df = pd.DataFrame(
         {
             "ensembl_gene_id": ["ENSG00000169398", "ENSG00000160752"],
@@ -409,16 +410,19 @@ def test_ranges_use_fine_deconvolved_expression_reference(monkeypatch):
         "overall_upper": 0.15,
     }
 
-    result = mod.estimate_tumor_expression_ranges(
-        df,
-        "SARC",
-        purity_result,
-        expression_reference_type="SARC_OS",
-    )
-    row = result[result["symbol"].eq("PTK2")].iloc[0]
-    assert row["cohort_prior_tpm"] == 123.0
-    assert row["expression_reference_code"] == "SARC_OS"
-    assert row["expression_reference_source"] == "subtype_deconvolved"
+    try:
+        result = mod.estimate_tumor_expression_ranges(
+            df,
+            "SARC",
+            purity_result,
+            expression_reference_type="SARC_OS",
+        )
+        row = result[result["symbol"].eq("PTK2")].iloc[0]
+        assert row["cohort_prior_tpm"] == 123.0
+        assert row["expression_reference_code"] == "SARC_OS"
+        assert row["expression_reference_source"] == "subtype_deconvolved"
+    finally:
+        mod._exact_expression_tpm_reference.cache_clear()
 
 
 def test_deconvolved_reference_preserves_source_cohort(monkeypatch):

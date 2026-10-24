@@ -494,7 +494,7 @@ def test_osteosarcoma_report_names_shared_bone_lineage_attribution_limit():
     assert "**Mesenchymal-lineage attribution limit**" in text
     assert "bone and marrow stroma proxy accounts for 48%" in text
     assert "bulk RNA cannot cleanly divide" in text
-    assert "prioritize targets that remain material across its model interval" in text
+    assert "prioritize targets that remain material across the same-lineage stress-test range" in text
 
 
 def test_osteosarcoma_fibroblast_dominance_blocks_resolved_purity_claim():
@@ -507,6 +507,8 @@ def test_osteosarcoma_fibroblast_dominance_blocks_resolved_purity_claim():
     assert limit is not None
     assert limit["kind"] == "osteosarcoma_mesenchymal_lineage_overlap"
     assert limit["shared_reference_fraction"] == 0.88
+    assert limit["scenario_lower"] == 0.12
+    assert limit["scenario_upper"] == 1.0
     assert _same_lineage_purity_limit("PRAD", [decomposition]) is None
 
 

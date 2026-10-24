@@ -8,6 +8,9 @@ quantitatively unresolved; the selected {{ purity.selected_source | purity_sourc
 Tumor identity is unresolved. The exploratory subtraction fraction may include benign muscle or stroma and cannot establish tumor cellularity.
 {% elif purity.unresolved_reason == 'same_lineage_not_identifiable' %}
 Tumor and benign bone/mesenchymal cells share the modeled RNA programs, so their contributions cannot be cleanly separated from this bulk sample.
+{% if purity.same_lineage_range %}
+Same-lineage stress-test range: {{ pct(purity.same_lineage_range[0]) }}–{{ pct(purity.same_lineage_range[1]) }} when the shared external reference signal is reassigned from benign background toward tumor. This is an assumption range, not a confidence interval or a second patient sample.
+{% endif %}
 {% else %}
 This is not a consensus estimate.
 {% if purity.scenarios %}Named scenarios:{% endif %}
