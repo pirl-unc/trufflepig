@@ -418,7 +418,7 @@ def test_reports_present_discordant_purity_estimators_as_separate_scenarios():
     )
 
     assert "**Estimated tumor fraction (RNA model):** quantitatively unresolved" in summary
-    assert "selected operational model uses 5% [1%–12%]" in summary
+    assert "selected healthy-tissue lineage reference model uses 5% [1%–12%]" in summary
     assert "healthy-tissue lineage reference model: 5% [1%–12%]" in summary
     assert "upstream expression model: 43% [32%–55%]" in summary
     assert "**Estimated tumor fraction (RNA model):** quantitatively unresolved" in actionable

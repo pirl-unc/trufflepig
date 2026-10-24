@@ -8,6 +8,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.30.2 — 2026-10-23 — purity scenario context and pandas 3 input loading
+
+- When purity estimators disagree, the conclusion and composition captions now
+  name the selected operational estimator, its downstream use, and each
+  competing estimate with its own interval. The report keeps the quantitative
+  tumor fraction unresolved instead of combining those intervals.
+- Fine osteosarcoma reports now identify broad sarcoma lineage-calibration
+  genes as a parent reference panel, without presenting them as an
+  osteosarcoma-specific purity panel.
+- Expression tables with missing Ensembl IDs load under pandas 3.1 instead of
+  failing during gene-ID consolidation.
+
 ## 1.26.2 — 2026-09-05 — external-reference and trial-eligibility clarity
 
 - Decomposition labels now call site-shaped normal-tissue matches external

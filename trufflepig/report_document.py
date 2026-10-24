@@ -175,7 +175,33 @@ def build_figure_manifest(
             "sample-composition measurement."
         ),
     }
-    if purity.unresolved_reason == "cancer_type_unresolved":
+    if purity.is_unresolved and purity.unresolved_reason not in {
+        "cancer_type_unresolved", "same_lineage_not_identifiable",
+    }:
+        from .brief import purity_estimator_scenario_text
+        from .report_language import purity_source_label
+
+        selected = f"Selected {purity_source_label(purity.selected_source)}"
+        if purity.estimate is not None:
+            selected += f": {purity.estimate:.0%}"
+            if purity.lower is not None and purity.upper is not None:
+                selected += f" [{purity.lower:.0%}–{purity.upper:.0%}]"
+        selected += " used for downstream decomposition and target attribution."
+        scenarios = purity_estimator_scenario_text(purity.scenarios)
+        disagreement = "Quantitative tumor fraction is unresolved because the estimators disagree."
+        if scenarios:
+            disagreement += f" Named estimator scenarios: {scenarios}."
+        unresolved_captions = {
+            "decomposition-composition.png": (
+                f"{selected} {disagreement} Displayed composition is conditional on "
+                "the selected model, not a resolved sample-composition measurement."
+            ),
+            "decomposition-components.png": (
+                f"{selected} {disagreement} Displayed component weights are conditional "
+                "on the selected model, not a resolved sample-composition measurement."
+            ),
+        }
+    elif purity.unresolved_reason == "cancer_type_unresolved":
         unresolved_captions = dict.fromkeys(
             unresolved_captions,
             "Exploratory subtraction model only. Tumor identity is unresolved; "

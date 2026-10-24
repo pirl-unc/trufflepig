@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from .report_language import report_literal
+from .report_language import purity_source_label, report_literal
 
 
 def finding(label, text, *figures):
@@ -111,7 +111,11 @@ def sample_takeaways(analysis, ranges_df, report_view, disease_state=""):
         text = f"quantitatively unresolved because {reason}."
         if purity.estimate is not None:
             interval = f" [{purity.lower:.0%}–{purity.upper:.0%}]" if purity.lower is not None and purity.upper is not None else ""
-            text += f" The selected operational model uses {purity.estimate:.0%}{interval}; this is not a malignant-cell measurement."
+            text += (
+                f" The selected {purity_source_label(purity.selected_source)} uses "
+                f"{purity.estimate:.0%}{interval} for downstream decomposition and target attribution; "
+                "this is not a malignant-cell measurement."
+            )
         if purity.unresolved_reason not in {"cancer_type_unresolved", "same_lineage_not_identifiable"}:
             scenarios = brief.purity_estimator_scenario_text(purity.scenarios)
             if scenarios:

@@ -33,7 +33,11 @@ def _clean_token(x) -> Optional[str]:
     return s if s and s.lower() not in {"none", "nan"} else None
 
 
-def _strip_ensembl_version(gid: str) -> str:
+def _strip_ensembl_version(gid) -> str:
+    # pandas 3 keeps missing values missing through astype(str), and Series.map
+    # can pass them here as float NaN instead of the literal string "nan".
+    if not isinstance(gid, str):
+        gid = "" if pd.isna(gid) else str(gid)
     m = _ENSG_WITH_VER.match(gid)
     return m.group(1) if m else gid
 
