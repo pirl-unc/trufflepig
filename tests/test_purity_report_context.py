@@ -4,10 +4,12 @@ from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytest
 
 from trufflepig.report_document import build_figure_manifest
 from trufflepig.report_language import render_report_paragraph
+from trufflepig.report_takeaways import sample_takeaways
 from trufflepig.report_view import build_report_view, purity_method_estimates
 from trufflepig.tumor_purity import plot_purity_method_comparison
 
@@ -153,6 +155,53 @@ def test_unresolved_attribution_guidance_takes_precedence_over_low_purity():
     assert "separation is unresolved" in guidance
     assert "conditional on the selected operating model" in guidance
     assert "Prefer" not in guidance
+
+
+def test_cross_estimator_disagreement_is_adjacent_to_headline_and_composition(tmp_path):
+    case = analysis({
+        "overall_estimate": 0.10, "overall_lower": 0.05, "overall_upper": 0.15,
+        "purity_source": "lineage_panel",
+        "quantitative_status": "discordant_estimators",
+        "estimator_scenarios": [
+            {"source": "lineage_panel", "estimate": 0.10, "lower": 0.05, "upper": 0.15},
+            {"source": "background_residual", "estimate": 0.75, "lower": 0.68, "upper": 0.82},
+        ],
+    })
+    view = build_report_view(case)
+    assert view.public_dict()["purity_method"] == "lineage_panel"
+    summary = render_report_paragraph("purity_summary", purity=view.purity)
+    takeaways = sample_takeaways(case, pd.DataFrame(), view)
+    headline = next(row["text"] for row in takeaways if "Estimated tumor fraction" in row["text"])
+    captions = {row["suffix"]: row["caption"] for row in build_figure_manifest(
+        tmp_path, "synthetic", purity=view.purity,
+    )}
+
+    for text in (summary, headline, captions["decomposition-composition.png"],
+                 captions["decomposition-components.png"]):
+        assert "healthy-tissue lineage reference model" in text
+        assert "10%" in text and "5%–15%" in text
+        assert "background-residual decomposition" in text
+        assert "75%" in text and "68%–82%" in text
+        assert "downstream decomposition and target attribution" in text
+        assert "5%–82%" not in text
+    assert "quantitatively unresolved" in headline
+    assert "estimators disagree" in captions["decomposition-composition.png"]
+    assert "not a resolved sample-composition measurement" in captions["decomposition-components.png"]
+
+
+def test_same_lineage_warning_stays_distinct_from_estimator_disagreement(tmp_path):
+    case = analysis({
+        "overall_estimate": 0.12, "overall_lower": 0.06, "overall_upper": 0.37,
+        "purity_source": "lineage_panel",
+        "quantitative_status": "discordant_estimators",
+        "quantitative_unresolved_reason": "same_lineage_not_identifiable",
+    })
+    view = build_report_view(case)
+    captions = {row["suffix"]: row["caption"] for row in build_figure_manifest(
+        tmp_path, "synthetic", purity=view.purity,
+    )}
+    assert "same-lineage cells cannot be cleanly separated" in captions["decomposition-composition.png"]
+    assert "estimators disagree" not in captions["decomposition-composition.png"]
 
 
 def test_ceiling_is_explicit_without_inventing_its_cause():

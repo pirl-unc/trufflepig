@@ -16,6 +16,17 @@ pytestmark = pytest.mark.filterwarnings(
 )
 
 
+def test_consolidate_gene_ids_accepts_missing_ids_with_pandas_string_conversion():
+    frame = pd.DataFrame({
+        "ensembl_gene_id": ["ENSG00000146648.3", float("nan")],
+        "canonical_gene_name": ["EGFR", ""],
+        "TPM": [3.0, 1.0],
+    })
+    result = le._consolidate_gene_ids(frame, verbose=False)
+    assert len(result) == 2
+    assert "_id_stripped" not in result.columns
+
+
 def test_empty_expression_file_raises_clear_error(tmp_path):
     """A header-only / empty expression file must fail loud at the load boundary
     with an actionable message — not surface later as a confusing

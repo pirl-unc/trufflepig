@@ -92,8 +92,10 @@ def test_flat_classifier_is_invariant_to_global_tpm_scaling():
 
     assert baseline
     assert [code for code, _ in rescaled] == [code for code, _ in baseline]
+    # One-ULP differences between nearly tied reference TPMs can become an
+    # exact tie after scaling; the resulting probability drift is <1e-6.
     assert [probability for _, probability in rescaled] == pytest.approx(
-        [probability for _, probability in baseline]
+        [probability for _, probability in baseline], abs=1e-6,
     )
 
 

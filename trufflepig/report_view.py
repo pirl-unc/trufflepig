@@ -124,6 +124,17 @@ class Purity:
         return self.status == "discordant_estimators"
 
     @property
+    def selected_source(self) -> Optional[str]:
+        """Name the operational estimator, inferring it from a unique matching scenario."""
+        if self.method:
+            return self.method
+        matches = {
+            source for source, estimate, lower, upper in self.scenarios
+            if estimate == self.estimate and lower == self.lower and upper == self.upper
+        }
+        return next(iter(matches)) if len(matches) == 1 else None
+
+    @property
     def at_ceiling(self) -> bool:
         return self.estimate is not None and self.estimate >= 0.995
 
@@ -220,7 +231,7 @@ class Purity:
             "purity": self.estimate,
             "purity_lo": self.lower,
             "purity_hi": self.upper,
-            "purity_method": self.method,
+            "purity_method": self.selected_source,
             "purity_confidence": self.confidence.tier,
             "purity_confidence_reasons": list(self.confidence.reasons),
             "purity_status": self.status,

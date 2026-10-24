@@ -23,6 +23,17 @@ def markdown_url(url: object) -> str:
     return str(url or "").strip().replace(" ", "%20").replace("(", "%28").replace(")", "%29")
 
 
+def purity_source_label(source: object) -> str:
+    """Name a purity estimator consistently in prose and figure captions."""
+    labels = {
+        "background_residual": "background-residual decomposition",
+        "lineage_panel": "healthy-tissue lineage reference model",
+        "signature": "upstream expression model",
+    }
+    source = str(source or "").strip()
+    return labels.get(source, source.replace("_", " ") if source else "RNA model")
+
+
 _ENVIRONMENT = Environment(
     loader=PackageLoader("trufflepig", "report_templates"),
     undefined=StrictUndefined,
@@ -32,6 +43,7 @@ _ENVIRONMENT = Environment(
 )
 _ENVIRONMENT.filters["literal"] = report_literal
 _ENVIRONMENT.filters["markdown_url"] = markdown_url
+_ENVIRONMENT.filters["purity_source_label"] = purity_source_label
 
 
 def render_report_template(name: str, **facts: object) -> str:

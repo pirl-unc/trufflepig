@@ -3,17 +3,16 @@
 {% if purity.estimate is none %}
 unavailable; no quantitative estimate was produced.
 {% elif purity.is_unresolved %}
-quantitatively unresolved; the selected model uses {{ pct(purity.estimate) }}{% if purity.lower is not none and purity.upper is not none %} (within-model interval {{ pct(purity.lower) }}–{{ pct(purity.upper) }}){% endif %} as an operating estimate.
+quantitatively unresolved; the selected {{ purity.selected_source | purity_source_label }} uses {{ pct(purity.estimate) }}{% if purity.lower is not none and purity.upper is not none %} (within-model interval {{ pct(purity.lower) }}–{{ pct(purity.upper) }}){% endif %} for downstream decomposition and target attribution.
 {% if purity.unresolved_reason == 'cancer_type_unresolved' %}
 Tumor identity is unresolved. The exploratory subtraction fraction may include benign muscle or stroma and cannot establish tumor cellularity.
 {% elif purity.unresolved_reason == 'same_lineage_not_identifiable' %}
 Tumor and benign bone/mesenchymal cells share the modeled RNA programs, so their contributions cannot be cleanly separated from this bulk sample.
 {% else %}
 This is not a consensus estimate.
-{% set labels = {'background_residual': 'background-residual decomposition', 'lineage_panel': 'healthy-tissue lineage reference model', 'signature': 'upstream expression model'} %}
 {% if purity.scenarios %}Named scenarios:{% endif %}
 {% for source, estimate, lower, upper in purity.scenarios if estimate is not none %}
-{{ labels.get(source, source.replace('_', ' ')) | literal }}: {{ pct(estimate) }}{% if lower is not none and upper is not none %} [{{ pct(lower) }}–{{ pct(upper) }}]{% endif %}{% if not loop.last %};{% else %}.{% endif %}
+{{ source | purity_source_label | literal }}: {{ pct(estimate) }}{% if lower is not none and upper is not none %} [{{ pct(lower) }}–{{ pct(upper) }}]{% endif %}{% if not loop.last %};{% else %}.{% endif %}
 {% endfor %}
 {% endif %}
 {% else %}

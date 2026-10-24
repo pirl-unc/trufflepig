@@ -9274,6 +9274,7 @@ def _generate_text_reports(
     # Lineage gene narrative
     lineage = components.get("lineage", {})
     lineage_genes = lineage.get("per_gene", [])
+    fine_lineage_fallback = bulk_purity_reference and reference_cancer_code != cancer_code
     if lineage_genes and conclusion.unresolved_reason == "cancer_type_unresolved":
         lines.append(
             "\nPer-gene lineage ratios are withheld as purity estimates because "
@@ -9284,14 +9285,25 @@ def _generate_text_reports(
         lines.append("")
         if bulk_purity_reference:
             lines.append("### Lineage Gene Calibration\n")
-            lines.append(
-                "Purity was refined using cancer-type lineage genes — genes with "
-                "known high expression in this tumor type and low external "
-                "stromal/immune reference background. "
-                "Each gene independently estimates purity by comparing the sample's "
-                "clean-TPM expression to the bulk cohort reference (adjusted for "
-                "the cohort's median purity).\n"
-            )
+            if fine_lineage_fallback:
+                lines.append(
+                    f"This calibration uses the broad {reference_cancer_code} "
+                    f"lineage panel because no separate {cancer_code} purity panel "
+                    "is available. Its genes are not specific to the fine report "
+                    "label. Each per-gene ratio compares sample clean-TPM "
+                    "expression with the broad bulk cohort reference (adjusted "
+                    "for that cohort's median purity); none can independently "
+                    "resolve malignant cells from benign cells of the same lineage.\n"
+                )
+            else:
+                lines.append(
+                    "Purity was refined using cancer-type lineage genes — genes with "
+                    "known high expression in this tumor type and low external "
+                    "stromal/immune reference background. "
+                    "Each gene independently estimates purity by comparing the sample's "
+                    "clean-TPM expression to the bulk cohort reference (adjusted for "
+                    "the cohort's median purity).\n"
+                )
         else:
             lines.append("### Lineage Identity Genes\n")
             lines.append(
@@ -9351,7 +9363,15 @@ def _generate_text_reports(
             g for g in all_lineage if g not in found_names and g not in skipped_detected
         ]
 
-        if bulk_purity_reference:
+        if fine_lineage_fallback:
+            lines.append(
+                f"**Parent-panel ratio** per row = expression relative to the "
+                f"broad {reference_cancer_code} bulk cohort after its median "
+                "cohort impurity is accounted for. These are conditional model "
+                f"ratios, not independent {cancer_code} malignant-cell purity estimates.\n"
+            )
+            value_heading = "Parent-panel ratio"
+        elif bulk_purity_reference:
             lines.append(
                 "**Purity est.** per row = an independent purity estimate from "
                 "that gene alone: sample expression divided by the bulk reference "
@@ -9372,13 +9392,18 @@ def _generate_text_reports(
         lines.append("|------|------------|----------------|")
         _interp_by_gene = {}
         for g in retained:
-            _interp_by_gene[g["gene"]] = "retained — reliable"
+            _interp_by_gene[g["gene"]] = (
+                "retained in parent panel" if fine_lineage_fallback else "retained — reliable"
+            )
         for g in expressed_below_scale:
             _interp_by_gene[g["gene"]] = "expressed — below reference scale"
         for g in possibly_lost:
             _interp_by_gene[g["gene"]] = "likely de-differentiated / low"
         for g in sorted_genes:
-            interp = _interp_by_gene.get(g["gene"], "retained — reliable")
+            interp = _interp_by_gene.get(
+                g["gene"],
+                "retained in parent panel" if fine_lineage_fallback else "retained — reliable",
+            )
             lines.append(f"| {g['gene']} | {g['purity']:.1%} | {interp} |")
         for gene_name, entry in skipped_detected.items():
             s_tpm = entry["sample_tpm"]
@@ -9426,7 +9451,7 @@ def _generate_text_reports(
                 lineage.get(key) is not None for key in ("purity", "lower", "upper")
             ):
                 lines.append(
-                    f"**Reliable cluster** ({lineage['purity']:.0%}, "
+                    f"**{'Parent-panel cluster' if fine_lineage_fallback else 'Reliable cluster'}** ({lineage['purity']:.0%}, "
                     f"IQR {lineage['lower']:.0%}\u2013{lineage['upper']:.0%}): "
                     f"{retained_names}. "
                     "These genes are expressed at levels consistent with their "
@@ -9435,7 +9460,7 @@ def _generate_text_reports(
                 )
             elif bulk_purity_reference:
                 lines.append(
-                    f"**Reliable cluster**: {retained_names}. "
+                    f"**{'Parent-panel cluster' if fine_lineage_fallback else 'Reliable cluster'}**: {retained_names}. "
                     "These genes are expressed at levels consistent with their "
                     "bulk cohort reference, indicating retained lineage identity "
                     "(does not distinguish tumor cells from normal cells of the same lineage)."

@@ -63,7 +63,7 @@ from .decomposition import CancerTypeDecision
 from .rna_qc import rna_quant_qc_summary_line
 from trufflepig.expression_qc import expression_qc_rescue_summary_line
 from .report_view import Purity, ReportView
-from .report_language import render_report_paragraph
+from .report_language import purity_source_label, render_report_paragraph
 from .sample_context import (
     heuristic_support_label,
     library_prep_clause,
@@ -2347,11 +2347,6 @@ def purity_estimator_scenario_text(scenarios) -> str:
     own interval, rather than presenting their union as uncertainty around one
     point estimate.
     """
-    labels = {
-        "background_residual": "background-residual decomposition",
-        "lineage_panel": "healthy-tissue lineage reference model",
-        "signature": "upstream expression model",
-    }
     rendered = []
     for source, estimate, lower, upper in scenarios or ():
         source = str(source or "unspecified")
@@ -2360,7 +2355,7 @@ def purity_estimator_scenario_text(scenarios) -> str:
         value = f"{float(estimate):.0%}"
         if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
             value += f" [{float(lower):.0%}–{float(upper):.0%}]"
-        rendered.append(f"{labels.get(source, source.replace('_', ' '))}: {value}")
+        rendered.append(f"{purity_source_label(source)}: {value}")
     return "; ".join(rendered)
 
 
