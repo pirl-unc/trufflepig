@@ -1097,6 +1097,10 @@ def _priority_target_rows(
         return max(0.25, base)
 
     def _source_component(source, row):
+        if row.get("same_lineage_scenario_status") == "stable_material":
+            # Stable within the explicit reallocation stress test is useful
+            # support, but weaker than an independently identified tumor source.
+            return 1.0
         if source["source_uncertain"]:
             # A large residual at low purity is not independent evidence
             # of tumor origin. Do not reward its uncalibrated precision.
@@ -1327,6 +1331,7 @@ def _priority_target_rows(
                 "mid": float(source["attr_tumor_tpm"]),
                 "high": float(source["attr_tumor_tpm_high"]),
                 "source": source,
+                "same_lineage_scenario_status": row.get("same_lineage_scenario_status") or "",
                 "normal": normal,
                 "matched_panel": matched_panel,
                 "status_key": status_key,
@@ -1470,7 +1475,18 @@ def plot_priority_targets(
         ax.text(row["total_score"] + 0.14, y_pos[i], f"{row['total_score']:.1f}",
                 va="center", fontsize=10, color="#444444")
 
-    labels = [row["symbol"] for row in rows]
+    scenario_labels = {
+        "stable_material": "stable",
+        "scenario_dependent": "scenario dependent",
+        "not_material": "low across scenarios",
+    }
+    labels = [
+        row["symbol"] + (
+            f" ({scenario_labels[row['same_lineage_scenario_status']]})"
+            if row.get("same_lineage_scenario_status") else ""
+        )
+        for row in rows
+    ]
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontsize=10)
     _draw_priority_group_headers(ax, group_headers)
@@ -1483,7 +1499,10 @@ def plot_priority_targets(
     ax.set_axisbelow(True)
     ax.set_xlabel("Integrated priority score")
     ax.set_title(
-        f"Target Priority Ranking — {cancer_code}",
+        f"Target Priority Ranking — {cancer_code}"
+        + ("\nSame-lineage source stress test" if any(
+            row.get("same_lineage_scenario_status") for row in rows
+        ) else ""),
         fontsize=13,
         fontweight="bold",
     )

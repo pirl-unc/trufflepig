@@ -157,6 +157,28 @@ def test_unresolved_attribution_guidance_takes_precedence_over_low_purity():
     assert "Prefer" not in guidance
 
 
+def test_same_lineage_stress_range_reaches_headline_and_figure_captions(tmp_path):
+    case = analysis({
+        "overall_estimate": 0.12, "overall_lower": 0.06, "overall_upper": 0.34,
+        "purity_source": "background_residual",
+        "quantitative_status": "discordant_estimators",
+        "quantitative_unresolved_reason": "same_lineage_not_identifiable",
+        "same_lineage_limit": {"scenario_lower": 0.06, "scenario_upper": 1.0},
+    })
+    view = build_report_view(case)
+    assert view.public_dict()["purity_same_lineage_scenario_range"] == (0.06, 1.0)
+    summary = render_report_paragraph("purity_summary", purity=view.purity)
+    takeaways = sample_takeaways(case, pd.DataFrame(), view)
+    headline = next(row["text"] for row in takeaways if "Estimated tumor fraction" in row["text"])
+    captions = {row["suffix"]: row["caption"] for row in build_figure_manifest(
+        tmp_path, "synthetic", purity=view.purity,
+    )}
+    for text in (summary, headline, captions["decomposition-composition.png"]):
+        assert "6%–100%" in text
+    assert "same-lineage reallocation stress test" in captions["priority-targets.png"]
+    assert "not a confidence interval" in summary
+
+
 def test_cross_estimator_disagreement_is_adjacent_to_headline_and_composition(tmp_path):
     case = analysis({
         "overall_estimate": 0.10, "overall_lower": 0.05, "overall_upper": 0.15,
