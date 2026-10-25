@@ -9678,7 +9678,8 @@ def _generate_text_reports(
                     if score_cell in ("—", "", "0.000", "0.0"):
                         score_cell = "n/a"
                 lines.append(
-                    f"| {comp} | {row['fraction']:.3f} | {score_cell} | {top_markers_cell} |"
+                    f"| {component_display_label(comp, include_model_role=True)} | "
+                    f"{row['fraction']:.3f} | {score_cell} | {top_markers_cell} |"
                 )
             if len(hidden):
                 lines.append(

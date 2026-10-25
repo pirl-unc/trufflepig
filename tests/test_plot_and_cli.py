@@ -575,7 +575,22 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     }
     prefix = str(tmp_path / "sample")
 
-    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    decomp = SimpleNamespace(
+        cancer_type="COAD",
+        template="solid_primary",
+        score=0.24,
+        purity=0.37,
+        warnings=[],
+        template_site_factor=1.0,
+        template_tissue_score=0.8,
+        matched_normal_fraction=0.04,
+        fractions={"tumor": 0.37, "matched_normal_colon": 0.04},
+        component_trace=pd.DataFrame([
+            {"component": "matched_normal_colon", "fraction": 0.04,
+             "marker_score": 0.0, "top_markers": ""},
+        ]),
+    )
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[decomp])
 
     # The old free-form summary.md that carried family-call phrasing
     # (CRC-family, retained-labels, subtype-candidates clause) was
@@ -591,6 +606,8 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     assert "Cancer-Type Differential" in detailed
     assert "Decomposition model comparison" in detailed
     assert "Residual Tissue-like Programs" in detailed
+    assert "matched_normal_colon" not in detailed
+    assert "colon lineage reference (external panel; RNA model; not patient-matched)" in detailed
 
 
 def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
