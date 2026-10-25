@@ -477,6 +477,7 @@ def test_plot_priority_target_context_saves_png(tmp_path):
     assert ax_range.get_title(loc="left") == "RNA amount"
     assert len(fig.axes) == 3
     assert fig.axes[1].get_title(loc="left") == "RNA source"
+    assert fig.axes[1].get_xlabel() == "Estimated tumor share of target RNA (RNA model)"
     assert fig.axes[2].get_title(loc="left") == "Healthy-tissue expression (external panel)"
     # The estimable target retains its modeled share. The stromal target gets
     # a source caveat rather than a precise share next to contradictory text.

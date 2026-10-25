@@ -16,6 +16,8 @@ to a release remains grouped under its merging PR.
 - Expression tables, figure captions, and plot legends now identify the
   origin of their values. The lineage-normal component is explicitly an
   external reference fitted by the RNA model, not a patient-matched specimen.
+- Per-gene tumor-attributed RNA shares are named separately from the
+  sample-wide estimated tumor fraction.
 
 ## 1.30.3 — 2026-10-24 — osteosarcoma same-lineage source stress test
 

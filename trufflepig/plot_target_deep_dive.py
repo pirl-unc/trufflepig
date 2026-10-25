@@ -1591,7 +1591,7 @@ def plot_priority_target_context(
     fraction_ax.set_xlim(0, 1.55)
     if has_fraction_bar:
         fraction_ax.set_xticks([0, 0.5, 1], ["0%", "50%", "100%"])
-        fraction_ax.set_xlabel("Estimated tumor fraction (RNA model)", fontsize=10)
+        fraction_ax.set_xlabel("Estimated tumor share of target RNA (RNA model)", fontsize=10)
     else:
         fraction_ax.set_xticks([])
         fraction_ax.spines["bottom"].set_visible(False)
