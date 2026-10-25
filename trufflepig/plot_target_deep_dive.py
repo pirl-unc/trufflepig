@@ -554,7 +554,7 @@ def plot_actionable_targets(
             label=(
                 "Patient tumor-attributed TPM (estimated by RNA model)"
                 if any(r["central_model"] for r in rows)
-                else f"Fallback tumor-cell estimate (purity={purity_estimate:.0%})"
+                else f"Fallback tumor-cell estimate (estimated tumor fraction={purity_estimate:.0%})"
             ),
         )
 
@@ -567,7 +567,10 @@ def plot_actionable_targets(
     ax.use_sticky_edges = False
     ax.margins(x=0.08)
     ax.invert_yaxis()
-    ax.legend(loc="lower right", fontsize=8)
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.16),
+        fontsize=8, framealpha=0.9,
+    )
     ax.set_title(title or f"Actionable target expression screen — {cancer_code}")
 
     # Sample-wide 90th-percentile anchor (faint dashed).
@@ -684,7 +687,7 @@ def plot_tumor_attribution(
             ax.text(
                 r["observed"] + 0.5,
                 i,
-                f"{pct:.0%} estimated tumor",
+                f"{pct:.0%} estimated tumor share of gene RNA",
                 va="center",
                 fontsize=7,
                 color="#555555",
@@ -694,11 +697,14 @@ def plot_tumor_attribution(
     ax.set_yticklabels(symbols, fontsize=9)
     ax.set_xlabel("TPM (estimated attribution of measured sample bulk RNA)")
     ax.invert_yaxis()
-    ax.legend(loc="lower right", fontsize=8)
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.16),
+        fontsize=8, framealpha=0.9,
+    )
     cat_label = "CTAs" if category == "CTA" else "Actionable Targets"
     ax.set_title(
         f"Estimated Sample RNA Attribution — {cat_label} — "
-        f"{cancer_code} (purity={purity:.0%})"
+        f"{cancer_code} (estimated tumor fraction={purity:.0%})"
     )
 
     try:
@@ -1706,7 +1712,7 @@ def plot_cta_deep_dive(
             s=60,
             marker="D",
             zorder=5,
-            label=f"Patient tumor estimate (RNA model; fraction={purity_estimate:.0%})",
+            label=f"Patient tumor estimate (RNA model; estimated tumor fraction={purity_estimate:.0%})",
         )
 
     ax.set_yticks(y_pos)
@@ -1714,7 +1720,10 @@ def plot_cta_deep_dive(
     ax.set_xlabel("TPM (log scale)")
     ax.set_xscale("symlog", linthresh=1.0)
     ax.invert_yaxis()
-    ax.legend(loc="lower right", fontsize=8)
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.16),
+        fontsize=8, framealpha=0.9,
+    )
     ax.set_title(f"Cancer-Testis Antigens — {cancer_code}")
 
     try:

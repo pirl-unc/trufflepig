@@ -1022,6 +1022,15 @@ def test_matched_normal_attribution_uses_decomposition_residual():
     assert "Patient tumor-attributed TPM (estimated by RNA model)" in legend
     assert "Expected lineage-normal contribution (external reference panel; estimated by RNA model; not patient-matched)" in legend
     assert "matched_normal_" not in legend
+    fig.canvas.draw()
+    assert ax.get_legend().get_window_extent().y1 < ax.bbox.y0
+    therapy_fig = plot_mod.plot_matched_normal_attribution(
+        ranges_df.assign(category="therapy_target"),
+        cancer_type="PRAD",
+        category="therapy_target",
+    )
+    assert "PRAD therapy targets" in therapy_fig.axes[0].get_title()
+    assert "therapy_target" not in therapy_fig.axes[0].get_title()
 
 
 def test_select_actionable_plot_genes_prefers_therapy_linked_surface_hits():

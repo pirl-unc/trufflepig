@@ -68,6 +68,9 @@ def test_plot_actionable_targets_saves_png(tmp_path):
     )
     assert fig is not None
     assert out.exists()
+    fig.canvas.draw()
+    ax = fig.axes[0]
+    assert ax.get_legend().get_window_extent().y1 < ax.bbox.y0
 
 
 def test_plot_actionable_targets_without_purity(tmp_path):
@@ -143,6 +146,8 @@ def test_plot_tumor_attribution_surface(tmp_path):
     )
     assert fig is not None
     assert out.exists()
+    fig.canvas.draw()
+    assert fig.axes[0].get_legend().get_window_extent().y1 < fig.axes[0].bbox.y0
 
 
 def test_plot_tumor_attribution_cta(tmp_path):
@@ -167,6 +172,8 @@ def test_plot_cta_deep_dive_saves_png(tmp_path):
     )
     assert fig is not None
     assert out.exists()
+    fig.canvas.draw()
+    assert fig.axes[0].get_legend().get_window_extent().y1 < fig.axes[0].bbox.y0
 
 
 def test_plot_curated_target_evidence_saves_png(tmp_path):
