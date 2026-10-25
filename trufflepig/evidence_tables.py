@@ -90,11 +90,11 @@ def _per_subtype_evidence_table(
     lines.append(f"#### {title}\n")
     if has_competitor:
         lines.append(
-            f"| Gene | Sample TPM | {label} median | {competitor_code} median | Δlog2 | Sample supports? |"
+            f"| Gene | Patient bulk TPM (measured) | {label} median (external reference panel) | {competitor_code} median (external reference panel) | Δlog2 | Sample supports? |"
         )
         lines.append("|---|---:|---:|---:|---:|:---:|")
     elif has_reference:
-        lines.append(f"| Gene | Sample TPM | {label} median |")
+        lines.append(f"| Gene | Patient bulk TPM (measured) | {label} median (external reference panel) |")
         lines.append("|---|---:|---:|")
     else:
         lines.append(
@@ -102,7 +102,7 @@ def _per_subtype_evidence_table(
             "the table therefore shows the sample panel without fabricating "
             "zero-valued cohort medians.\n"
         )
-        lines.append("| Gene | Sample TPM |")
+        lines.append("| Gene | Patient bulk TPM (measured) |")
         lines.append("|---|---:|")
 
     for gene in genes:

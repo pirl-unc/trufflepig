@@ -1999,7 +1999,7 @@ def test_brief_explains_bulk_present_targets_that_fail_source_gate():
         disease_state="",
     )
     assert "Where target RNA signal appears to come from" in md
-    assert "Estimated tumor TPM (RNA model)" in md
+    assert "Patient tumor-attributed TPM (estimated by RNA model)" in md
     assert "Top estimated background contribution" in md
     assert "STEAP2" in md
     assert "PSCA" in md

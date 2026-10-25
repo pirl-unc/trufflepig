@@ -25,6 +25,7 @@ def test_rna_msi_lead_has_drug_and_citation_without_shortlisting(monkeypatch):
     assessment = next(a for a in content.therapy_assessments if a["agent"] == "pembrolizumab")
     assert not assessment["selected"]
     summary = render_report_summary(content)
+    assert summary.count("**Expression provenance key:**") == 1
     assert "MSI-like RNA prioritizes testing; clinical MSI-H/dMMR is unconfirmed" in summary
     assert "pembrolizumab" in summary and "https://pubmed.ncbi.nlm.nih.gov/33264544/" in summary
     assert "Vulnerabilities worth investigating" in summary

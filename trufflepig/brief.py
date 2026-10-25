@@ -961,7 +961,7 @@ def _shortlist_omission_note(targets_df, ranges_df, top_rows) -> str:
         "is a caveat, not an automatic exclusion; supplied patient evidence, "
         "clinical outcomes, eligibility, and maturity set priority before RNA.*",
         "",
-        "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
+        "| Gene | Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Estimated tumor fraction | Top estimated background contribution | Estimated component TPM | Main reason |",
         "|---|---:|---:|---:|---|---:|---|",
     ]
     for row in rows:
@@ -3036,7 +3036,7 @@ def build_actionable(
             def _render_therapy_records(records):
                 lines.append(
                     "| Target | Agent | Class | Phase | Indication | "
-                    "Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Interpretation |"
+                    "Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Patient context TPM (RNA model estimate) | Interpretation |"
                 )
                 lines.append(
                     "|--------|-------|-------|-------|------------|"

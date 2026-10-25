@@ -36,7 +36,10 @@ def _render_composition_bar(
         frac_items.append(("other_minor", minor_total))
     left = 0.0
     for idx, (name, value) in enumerate(frac_items):
-        label_name = component_display_label(name)
+        label_name = (
+            "Estimated tumor fraction (RNA model)"
+            if name == "tumor" else component_display_label(name)
+        )
         ax.barh(
             [0],
             [value * 100],

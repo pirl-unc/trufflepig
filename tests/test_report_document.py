@@ -300,7 +300,20 @@ def test_selected_therapies_render_a_cited_table_in_markdown_and_pdf(tmp_path):
     selected = [a for a in content.therapy_assessments if a["selected"]]
     assert selected and all(a["source_url"] for a in selected)
     summary = render_report_summary(content)
-    assert "| Target | Recommendation | Estimated tumor TPM (RNA model) | Evidence source |" in summary
+    assert "| Target | Recommendation | Patient tumor-attributed TPM (estimated by RNA model) | Evidence source |" in summary
+    assert summary.index("**Expression provenance key:**") < summary.index("| Target | Recommendation |")
+    for term in ("Tumor-src", "tumor-source TPM", "cohort %ile", "Normal tissue (nTPM)", "matched_normal_"):
+        assert term.casefold() not in summary.casefold()
+    for label in (
+        "Patient bulk TPM (measured)",
+        "Patient tumor-attributed TPM (estimated by RNA model)",
+        "Patient context TPM (RNA model estimate)",
+        "Estimated tumor fraction",
+        "Cancer-cohort percentile (external reference panel)",
+        "Healthy-tissue expression (external reference panel)",
+        "Expected lineage-normal contribution (external reference panel; estimated by RNA model; not patient-matched)",
+    ):
+        assert label in summary
     for assessment in selected:
         assert f"({markdown_url(assessment['source_url'])})" in summary
     assert not hasattr(content, "therapy")
@@ -310,3 +323,6 @@ def test_selected_therapies_render_a_cited_table_in_markdown_and_pdf(tmp_path):
     pdf_text = " ".join(" ".join(page.extract_text() for page in pdf.pages).split())
     assert "Evidence source" in pdf_text
     assert all(a["agent"] in pdf_text for a in selected)
+    assert "Expression provenance key:" in pdf_text
+    for term in ("Tumor-src", "tumor-source TPM", "cohort %ile", "Normal tissue (nTPM)", "matched_normal_"):
+        assert term.casefold() not in pdf_text.casefold()

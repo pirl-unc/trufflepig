@@ -1001,6 +1001,10 @@ def test_matched_normal_attribution_uses_decomposition_residual():
     labels = "\n".join(label.get_text() for label in ax.get_yticklabels())
     assert "could come from healthy tissue" in labels
     assert "\u26a0" not in labels
+    legend = "\n".join(label.get_text() for label in ax.get_legend().get_texts())
+    assert "Patient tumor-attributed TPM (estimated by RNA model)" in legend
+    assert "Expected lineage-normal contribution (external reference panel; estimated by RNA model; not patient-matched)" in legend
+    assert "matched_normal_" not in legend
 
 
 def test_select_actionable_plot_genes_prefers_therapy_linked_surface_hits():
@@ -1071,7 +1075,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     pure_text = (tmp_path / "pure-targets.md").read_text()
     assert "Population-expression range" in pure_text
-    assert "Estimated tumor context TPM (RNA model)" in pure_text
+    assert "Patient context TPM (RNA model estimate)" in pure_text
 
     heme_prefix = str(tmp_path / "heme-targets")
     _write_target_report(
@@ -1086,7 +1090,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     heme_text = (tmp_path / "heme-targets-targets.md").read_text()
     assert "Malignant-lineage expression range" in heme_text
-    assert "Estimated tumor context TPM (RNA model)" in heme_text
+    assert "Patient context TPM (RNA model estimate)" in heme_text
 
 
 def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_path):
@@ -2116,7 +2120,7 @@ def test_embedding_plot_can_label_nearest_cancers_and_normals_only(monkeypatch):
     assert "prostate" in all_text
     assert "COAD" not in all_text
     assert "liver" not in all_text
-    assert "Nearest normal tissues" in all_text
+    assert "Nearest healthy-tissue references (external panel)" in all_text
     assert "Nearest by plotted 2D distance" in all_text
 
 

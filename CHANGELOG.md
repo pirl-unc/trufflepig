@@ -8,6 +8,15 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.30.4 — 2026-10-24 — report expression provenance
+
+- The interpretive Markdown and PDF now define measured patient bulk RNA,
+  model-estimated tumor attribution and context, and external cancer and
+  healthy-tissue references before the first expression table.
+- Expression tables, figure captions, and plot legends now identify the
+  origin of their values. The lineage-normal component is explicitly an
+  external reference fitted by the RNA model, not a patient-matched specimen.
+
 ## 1.30.3 — 2026-10-24 — osteosarcoma same-lineage source stress test
 
 - Osteosarcoma reports with broad sarcoma purity calibration and a large

@@ -502,7 +502,7 @@ def plot_actionable_targets(
         height=0.35,
         color="#4A90D9",
         alpha=0.3,
-        label=f"TCGA {cancer_code} median",
+        label=f"{cancer_code} cancer-cohort median (external reference panel)",
     )
     ax.barh(
         y_pos + 0.35,
@@ -510,7 +510,7 @@ def plot_actionable_targets(
         height=0.25,
         color="#999999",
         alpha=0.3,
-        label="Max vital tissue (safety)",
+        label="Highest vital-tissue expression (external reference panel)",
     )
 
     # Sample dots
@@ -523,7 +523,7 @@ def plot_actionable_targets(
         color="black",
         s=60,
         zorder=5,
-        label="Sample observed TPM",
+        label="Patient bulk TPM (measured)",
     )
 
     if any(r["tumor_adjusted"] is not None for r in rows):
@@ -552,7 +552,7 @@ def plot_actionable_targets(
             marker="D",
             zorder=5,
             label=(
-                "Estimated tumor TPM (RNA model)"
+                "Patient tumor-attributed TPM (estimated by RNA model)"
                 if any(r["central_model"] for r in rows)
                 else f"Fallback tumor-cell estimate (purity={purity_estimate:.0%})"
             ),
@@ -919,7 +919,7 @@ def plot_curated_target_evidence(
     ax_expr.invert_yaxis()
     ax_expr.set_xscale("symlog", linthresh=1.0)
     ax_expr.set_xlabel(
-        "Estimated tumor TPM range (RNA model); black tick = sample bulk TPM (measured)"
+        "Patient tumor-attributed TPM (estimated by RNA model); black tick = Patient bulk TPM (measured)"
     )
     ax_expr.set_title("Expression Evidence", fontsize=12, fontweight="bold")
     ax_expr.grid(axis="x", color="#dddddd", linewidth=0.6, alpha=0.7)
@@ -932,7 +932,7 @@ def plot_curated_target_evidence(
     ax_ctx.axis("off")
     for xpos, label in [
         (0.02, "Estimated source"),
-        (0.82, "Healthy ref."),
+        (0.82, "Healthy panel"),
         (1.62, "Stage"),
     ]:
         ax_ctx.text(
@@ -952,7 +952,7 @@ def plot_curated_target_evidence(
             [0],
             color="#555555",
             lw=5,
-            label="estimated tumor range (RNA model)",
+            label="Patient tumor-attributed TPM (estimated by RNA model)",
         ),
         Line2D(
             [0],
@@ -962,7 +962,7 @@ def plot_curated_target_evidence(
             linestyle="none",
             markersize=12,
             markeredgewidth=1.5,
-            label="sample bulk TPM (measured)",
+            label="Patient bulk TPM (measured)",
         ),
     ]
     fig.legend(
@@ -1554,11 +1554,11 @@ def plot_priority_target_context(
         if source["quantifiable"]:
             ax.hlines(i + 0.12, row["low"], row["high"], color=teal, linewidth=3)
             ax.scatter(row["mid"], i + 0.12, marker="D", color=teal, s=42,
-                       label="Tumor contribution (estimated)" if not has_tumor_estimate else None,
+                       label="Patient tumor-attributed TPM (estimated by RNA model)" if not has_tumor_estimate else None,
                        zorder=3)
             has_tumor_estimate = True
         ax.scatter(row["observed"], i - 0.13, color="#172b3a", s=32,
-                   label="Bulk sample (measured)" if i == 0 else None, zorder=3)
+                   label="Patient bulk TPM (measured)" if i == 0 else None, zorder=3)
         fraction = max(0, min(1, float(source.get("attr_tumor_fraction", 0))))
         if source["tier"] == "background_dominant" or fraction == 0:
             fraction_ax.text(0.02, i, "Non-tumor source\nplausible", va="center",
@@ -1591,13 +1591,13 @@ def plot_priority_target_context(
     fraction_ax.set_xlim(0, 1.55)
     if has_fraction_bar:
         fraction_ax.set_xticks([0, 0.5, 1], ["0%", "50%", "100%"])
-        fraction_ax.set_xlabel("Tumor share, if estimable", fontsize=10)
+        fraction_ax.set_xlabel("Estimated tumor fraction (RNA model)", fontsize=10)
     else:
         fraction_ax.set_xticks([])
         fraction_ax.spines["bottom"].set_visible(False)
     fraction_ax.set_title("RNA source", loc="left", fontsize=12, fontweight="bold", pad=15)
     normal_ax.set_xlim(0, 1)
-    normal_ax.set_title("Healthy-tissue overlap", loc="left", fontsize=12, fontweight="bold", pad=15)
+    normal_ax.set_title("Healthy-tissue expression (external panel)", loc="left", fontsize=12, fontweight="bold", pad=15)
     normal_ax.set_xticks([])
     for axis in (ax, fraction_ax, normal_ax):
         axis.set_ylim(len(rows) - 0.5, -0.6)
@@ -1678,7 +1678,7 @@ def plot_cta_deep_dive(
         height=0.35,
         color="#27AE60",
         alpha=0.3,
-        label=f"TCGA {cancer_code} median",
+        label=f"{cancer_code} cancer-cohort median (external reference panel)",
     )
     ax.barh(
         y_pos + 0.35,
@@ -1686,7 +1686,7 @@ def plot_cta_deep_dive(
         height=0.25,
         color="#999999",
         alpha=0.3,
-        label="Max vital tissue (safety)",
+        label="Highest vital-tissue expression (external reference panel)",
     )
 
     ax.scatter(
@@ -1695,7 +1695,7 @@ def plot_cta_deep_dive(
         color="black",
         s=60,
         zorder=5,
-        label="Sample observed TPM",
+        label="Patient bulk TPM (measured)",
     )
     if purity_estimate:
         tumor_vals = [r["tumor_adjusted"] for r in rows]
@@ -1706,7 +1706,7 @@ def plot_cta_deep_dive(
             s=60,
             marker="D",
             zorder=5,
-            label=f"Tumor-adjusted (purity={purity_estimate:.0%})",
+            label=f"Patient tumor estimate (RNA model; fraction={purity_estimate:.0%})",
         )
 
     ax.set_yticks(y_pos)
