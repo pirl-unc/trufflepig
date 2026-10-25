@@ -8,7 +8,7 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
-## 1.30.4 — 2026-10-24 — report expression provenance
+## 1.30.4 — 2026-10-25 — report expression provenance
 
 - The interpretive Markdown and PDF now define measured patient bulk RNA,
   model-estimated tumor attribution and context, and external cancer and
