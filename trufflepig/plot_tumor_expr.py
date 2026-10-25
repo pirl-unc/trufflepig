@@ -1876,7 +1876,7 @@ def plot_matched_normal_attribution(
         y,
         tumor_attr,
         color="#e74c3c",
-        label="Estimated tumor TPM (RNA model)",
+        label="Patient tumor-attributed TPM (estimated by RNA model)",
     )
     ax.barh(
         y,
@@ -1884,8 +1884,8 @@ def plot_matched_normal_attribution(
         left=tumor_attr,
         color="#3498db",
         label=(
-            "Expected lineage-normal component (external reference panel; "
-            "estimated by RNA model; not specimen-matched)"
+            "Expected lineage-normal contribution (external reference panel; "
+            "estimated by RNA model; not patient-matched)"
         ),
     )
     ax.barh(
@@ -1905,15 +1905,15 @@ def plot_matched_normal_attribution(
         if row.get("tme_explainable"):
             flags.append("could come from healthy tissue")
         if row.get("matched_normal_over_predicted"):
-            flags.append("external normal ref > measured bulk")
+            flags.append("external ref > bulk")
         elif str(row.get("estimation_path", "")) == "clamped":
             # Older ranges_df rows (before #131) won't have the
             # matched_normal_over_predicted column — fall back to
             # the estimation_path signal but with a human-readable
             # marker instead of the raw "clamp" jargon.
-            flags.append("external normal ref > measured bulk")
+            flags.append("external ref > bulk")
         if flags:
-            sym = f"{sym}  {' '.join(flags)}"
+            sym = f"{sym}\n  {'; '.join(flags)}"
         labels.append(sym)
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=9)
@@ -1934,12 +1934,15 @@ def plot_matched_normal_attribution(
                 )
 
     ax.set_xlabel(
-        "Estimated attribution of sample bulk TPM (stacked)",
+        "Patient bulk TPM (measured), partitioned by RNA model",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)
     ax.grid(axis="x", alpha=0.2)
-    ax.legend(loc="lower right", fontsize=9, framealpha=0.9)
+    ax.legend(
+        loc="upper center", bbox_to_anchor=(0.5, -0.16),
+        fontsize=8, framealpha=0.9,
+    )
 
     # Sample-wide 90th-percentile reference line — faint dashed anchor
     # so readers see where each gene sits relative to the rest of the
@@ -1959,19 +1962,21 @@ def plot_matched_normal_attribution(
         nonempty = [v for v in nonempty.unique() if v]
         if nonempty:
             mn_tissue = nonempty[0]
-    title = (
-        f"Expected lineage-normal reference attribution \u2014 "
-        f"{cancer_code} {category}"
-    )
+    category_label = {
+        "therapy_target": "therapy targets",
+        "CTA": "cancer-testis antigens",
+        "surface": "surface targets",
+    }.get(category, category.replace("_", " "))
+    title = f"Expected lineage-normal contribution \u2014 {cancer_code} {category_label}"
     if mn_tissue:
         tissue_label = component_display_label(f"matched_normal_{mn_tissue}")
         title += (
-            f"\n({tissue_label}; not a specimen-matched normal; "
+            f"\n({tissue_label}; not patient-matched; "
             "black tick = selected cancer reference prior)"
         )
     ax.set_title(title, fontsize=11, fontweight="bold")
 
-    plt.tight_layout()
+    fig.tight_layout()
     if save_to_filename:
         fig.savefig(save_to_filename, dpi=save_dpi, bbox_inches="tight")
         print(f"Saved {save_to_filename}")
@@ -2085,7 +2090,7 @@ def plot_target_attribution(
     fig, ax = plt.subplots(figsize=figsize)
 
     tumor_attr = sub["attr_tumor_tpm"].astype(float).values
-    ax.barh(y, tumor_attr, color="#e74c3c", label="tumor")
+    ax.barh(y, tumor_attr, color="#e74c3c", label="Patient tumor-attributed TPM (estimated by RNA model)")
     left = tumor_attr.copy()
     for comp in compartments:
         vals = np.array(
@@ -2097,7 +2102,8 @@ def plot_target_attribution(
         if not np.any(vals > 0):
             continue
         ax.barh(
-            y, vals, left=left, color=comp_colors[comp], label=comp.replace("_", " ")
+            y, vals, left=left, color=comp_colors[comp],
+            label=component_display_label(comp, include_model_role=True),
         )
         left = left + vals
 
@@ -2115,7 +2121,7 @@ def plot_target_attribution(
     ax.set_yticklabels(labels, fontsize=9)
 
     ax.set_xlabel(
-        "TPM (stacked: tumor + background compartments = observed)",
+        "Patient bulk TPM (measured), partitioned by RNA model",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)
@@ -2233,7 +2239,7 @@ def plot_subtype_attribution(
     ax.set_yticklabels(labels, fontsize=9)
     ax.invert_yaxis()
     ax.set_xlabel(
-        "TPM (stacked: tumor + background = observed)",
+        "Patient bulk TPM (measured), partitioned by RNA model",
         fontsize=10,
     )
     ax.set_xscale("symlog", linthresh=1.0)
@@ -2242,7 +2248,7 @@ def plot_subtype_attribution(
     import matplotlib.patches as mpatches
 
     handles = [
-        mpatches.Patch(color=tumor_color, label="tumor"),
+        mpatches.Patch(color=tumor_color, label="Patient tumor-attributed TPM (estimated by RNA model)"),
         mpatches.Patch(color=tme_color_before, label="background — generic reference"),
         mpatches.Patch(color=tme_color_after, label="background — refined reference"),
     ]
@@ -2587,7 +2593,7 @@ def plot_purity_adjusted_targets(
     ax1.barh(y, selected["tumor_adjusted"], color=colors, alpha=0.8, height=0.7)
     # Overlay observed as dots
     ax1.scatter(
-        selected["observed_tpm"], y, color="black", s=20, zorder=5, label="observed TPM"
+        selected["observed_tpm"], y, color="black", s=20, zorder=5, label="Patient bulk TPM (measured)"
     )
     ax1.set_yticks(y)
     labels = []
@@ -2599,10 +2605,11 @@ def plot_purity_adjusted_targets(
             suffix += f" ({row['therapies']})"
         labels.append(f"{row['symbol']}{suffix}")
     ax1.set_yticklabels(labels, fontsize=8)
-    ax1.set_xlabel("Expression (TPM)")
+    ax1.set_xlabel("RNA abundance (TPM; model estimate and patient bulk)")
     ax1.set_xscale("symlog", linthresh=1)
     ax1.set_title(
-        f"Purity-adjusted tumor expression \u2014 {cancer_code} (purity={purity:.0%})"
+        f"RNA-model tumor expression estimate \u2014 {cancer_code} "
+        f"(estimated tumor fraction={purity:.0%})"
     )
     ax1.invert_yaxis()
     ax1.legend(fontsize=8, loc="lower right")
@@ -2624,7 +2631,7 @@ def plot_purity_adjusted_targets(
     ax2.set_xlim(0, 1)
     ax2.axvline(0.5, color="gray", linestyle="--", alpha=0.5)
     ax2.set_yticks([])
-    ax2.set_xlabel("TCGA percentile")
+    ax2.set_xlabel("Cancer-cohort percentile (external reference panel)")
     ax2.set_title("vs TCGA cancer types")
     ax2.invert_yaxis()
 

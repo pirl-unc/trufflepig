@@ -150,7 +150,10 @@ def _signature_reference_table_issues(text: str) -> list[tuple[str, str]]:
             (
                 row_index
                 for row_index in range(index + 1, min(index + 8, len(lines)))
-                if lines[row_index].startswith("| Gene | Sample TPM |")
+                if lines[row_index].startswith((
+                    "| Gene | Patient bulk TPM (measured) |",
+                    "| Gene | Sample TPM |",  # Reports produced before the provenance audit.
+                ))
             ),
             None,
         )

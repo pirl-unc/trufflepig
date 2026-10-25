@@ -2160,7 +2160,7 @@ def _plot_embedding_with_labels(
                 nearest_text += "\n\nSubtype references\n" + "\n".join(
                     subtype_text.splitlines()[:n_cancers]
                 )
-            nearest_text += "\n\nNearest normal tissues\n" + "\n".join(
+            nearest_text += "\n\nNearest healthy-tissue references (external panel)\n" + "\n".join(
                 normal_text.splitlines()[:n_normals]
             )
             nearest_title = ""
@@ -2241,7 +2241,7 @@ def _plot_embedding_with_labels(
                 markerfacecolor="#8da08d",
                 markeredgecolor="white",
                 markersize=6,
-                label="normal tissue",
+                label="healthy tissue (external reference panel)",
             ),
             Line2D(
                 [0],
@@ -2251,7 +2251,7 @@ def _plot_embedding_with_labels(
                 markeredgecolor="black",
                 markersize=10,
                 linestyle="none",
-                label="sample",
+                label="patient sample (measured bulk RNA)",
             ),
         ]
         ax.legend(handles=handles, loc="upper left", fontsize=8, framealpha=0.9)
@@ -2491,11 +2491,11 @@ def plot_cancer_type_genes(
     ax.set_yticks(y_ticks)
     ax.set_yticklabels(y_labels, fontsize=9)
     ax.set_xscale("log")
-    ax.set_xlabel("Sample TPM", fontsize=11)
+    ax.set_xlabel("Patient bulk TPM (measured)", fontsize=11)
     ax.set_ylabel("")
     ax.set_title(
         "Cancer-type signature genes: sample expression\n"
-        "(top 5 closest and bottom 5 most distant cancer types; gray bar = mean sample TPM)",
+        "(top 5 closest and bottom 5 most distant cancer types; gray bar = mean patient bulk TPM)",
         fontsize=11,
     )
     ax.invert_yaxis()
@@ -3058,11 +3058,11 @@ def plot_cancer_type_pca(
     mlabel = _METHOD_LABELS.get(method)
     title = "Sample among TCGA parent cancer cohorts — PCA"
     if include_subtypes and include_normals:
-        title = "Sample among TCGA parent cohorts, subtype references, and normal tissues — PCA"
+        title = "Patient bulk RNA among cancer cohorts, subtype references, and external healthy-tissue panels — PCA"
     elif include_subtypes:
         title = "Sample among TCGA parent cohorts and subtype references — PCA"
     elif include_normals:
-        title = "Sample among TCGA parent cancer cohorts and normal tissues — PCA"
+        title = "Patient bulk RNA among cancer cohorts and external healthy-tissue panels — PCA"
     if mlabel:
         title += f" ({mlabel})"
     return _plot_embedding_with_labels(
@@ -3128,11 +3128,11 @@ def plot_cancer_type_mds(
     mlabel = _METHOD_LABELS.get(method)
     title = "Sample among TCGA parent cancer cohorts — MDS"
     if include_subtypes and include_normals:
-        title = "Sample among TCGA parent cohorts, subtype references, and normal tissues — MDS"
+        title = "Patient bulk RNA among cancer cohorts, subtype references, and external healthy-tissue panels — MDS"
     elif include_subtypes:
         title = "Sample among TCGA parent cohorts and subtype references — MDS"
     elif include_normals:
-        title = "Sample among TCGA parent cancer cohorts and normal tissues — MDS"
+        title = "Patient bulk RNA among cancer cohorts and external healthy-tissue panels — MDS"
     if focused:
         title = title.replace("Sample among", "Sample neighborhood among")
     if mlabel:
@@ -3233,7 +3233,7 @@ def plot_cancer_type_neighborhood(
     kind_labels = {
         "cancer": "TCGA parent cancers",
         "subtype": "Subtype references",
-        "normal": "Normal tissues",
+        "normal": "Healthy-tissue references (external panel)",
     }
     kind_colors = {
         "cancer": "#4a90d9",
@@ -3279,11 +3279,11 @@ def plot_cancer_type_neighborhood(
     mlabel = _METHOD_LABELS.get(method, method)
     title = "Nearest reference distances"
     if include_subtypes and include_normals:
-        title += " — TCGA parents, subtype refs, and normal tissues"
+        title += " — cancer cohorts, subtype refs, and external healthy-tissue panels"
     elif include_subtypes:
         title += " — TCGA parents and subtype refs"
     elif include_normals:
-        title += " — TCGA parents and normal tissues"
+        title += " — cancer cohorts and external healthy-tissue panels"
     if mlabel:
         title += f" ({mlabel})"
     ax.set_title(title, fontsize=12, fontweight="bold")

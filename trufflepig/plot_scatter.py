@@ -168,7 +168,7 @@ def _prepare_sample_vs_cancer_data(
     palette = sns.color_palette("tab10", len(named_cats))
     cat_to_color = dict(zip(named_cats, palette))
 
-    sample_label = "Sample TPM"
+    sample_label = "Patient bulk TPM (measured)"
 
     return plot_df, named_cats, cat_to_color, sample_label, cohort_axis_label
 

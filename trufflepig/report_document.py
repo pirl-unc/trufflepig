@@ -44,23 +44,25 @@ FIGURE_REGISTRY = [
         "priority-targets.png",
         "Targets to prioritize for follow-up",
         "Curated treatment pathways and exploratory RNA targets are shown separately. "
-        "Ranking combines evidence, estimated RNA source and normal-tissue context; "
+        "Ranking combines evidence, estimated RNA source and healthy-tissue context from external reference panels; "
         "it is not a drug-response score. Mutation-specific therapies still require the exact molecular result.",
     ),
     (
         "priority-target-context.png",
         "Target RNA source and healthy-tissue context",
-        "Left: measured bulk RNA (black dot); tumor contribution is shown only when sufficiently resolved "
+        "Left: Patient bulk TPM (measured; black dot); Patient tumor-attributed TPM "
+        "(estimated by RNA model) is shown only when sufficiently resolved "
         "(teal diamond; line = estimated range). Middle: evidence for the RNA's source. "
         "'Tumor source uncertain' means the expressing cells cannot be reliably identified. "
         "'Non-tumor source plausible' means other cells could explain the signal; tumor expression is not excluded. "
-        "Right: healthy-tissue overlap. TPM values use a compressed scale above 1. "
+        "Right: Healthy-tissue expression (external reference panel). TPM values use a compressed scale above 1. "
         "These estimates do not establish tumor-cell protein expression or clinical safety.",
     ),
     (
         "actionable-targets.png",
         "Expression of candidate targets",
-        "Observed bulk RNA, modeled tumor-cell-equivalent TPM and healthy-tissue references. "
+        "Patient bulk TPM (measured), modeled tumor-cell-equivalent TPM and "
+        "Healthy-tissue expression (external reference panel). "
         "Tumor-cell-equivalent values adjust for tumor RNA fraction; source-attribution values "
         "elsewhere describe contributions to bulk RNA. "
         "Expression supports a follow-up hypothesis; it does not establish a target mutation, "
@@ -84,10 +86,11 @@ FIGURE_REGISTRY = [
     (
         "decomposition-composition.png",
         "Estimated RNA composition",
-        "Conditional RNA-mixture model weights for the estimated tumor "
-        "contribution and fitted external normal, immune, and stromal references. "
+        "Conditional bulk-RNA decomposition weights for Estimated tumor fraction "
+        "and fitted external healthy-tissue, immune, and stromal references. "
         "These are not cell counts or per-gene subtraction percentages. "
-        "Normal references are external panels, not a matched specimen from this patient.",
+        "The expected lineage-normal contribution is estimated by the RNA model "
+        "from an external reference panel, not a patient-matched normal specimen.",
     ),
     (
         "decomposition-components.png",

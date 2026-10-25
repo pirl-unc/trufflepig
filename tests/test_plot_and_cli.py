@@ -575,7 +575,22 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     }
     prefix = str(tmp_path / "sample")
 
-    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[])
+    decomp = SimpleNamespace(
+        cancer_type="COAD",
+        template="solid_primary",
+        score=0.24,
+        purity=0.37,
+        warnings=[],
+        template_site_factor=1.0,
+        template_tissue_score=0.8,
+        matched_normal_fraction=0.04,
+        fractions={"tumor": 0.37, "matched_normal_colon": 0.04},
+        component_trace=pd.DataFrame([
+            {"component": "matched_normal_colon", "fraction": 0.04,
+             "marker_score": 0.0, "top_markers": ""},
+        ]),
+    )
+    _generate_text_reports(analysis, embedding_meta, prefix, decomp_results=[decomp])
 
     # The old free-form summary.md that carried family-call phrasing
     # (CRC-family, retained-labels, subtype-candidates clause) was
@@ -591,6 +606,8 @@ def test_generate_text_reports_uses_family_and_background_language(tmp_path):
     assert "Cancer-Type Differential" in detailed
     assert "Decomposition model comparison" in detailed
     assert "Residual Tissue-like Programs" in detailed
+    assert "matched_normal_colon" not in detailed
+    assert "colon lineage reference (external panel; RNA model; not patient-matched)" in detailed
 
 
 def test_generate_text_reports_is_mode_aware_for_heme(tmp_path):
@@ -1001,6 +1018,19 @@ def test_matched_normal_attribution_uses_decomposition_residual():
     labels = "\n".join(label.get_text() for label in ax.get_yticklabels())
     assert "could come from healthy tissue" in labels
     assert "\u26a0" not in labels
+    legend = "\n".join(label.get_text() for label in ax.get_legend().get_texts())
+    assert "Patient tumor-attributed TPM (estimated by RNA model)" in legend
+    assert "Expected lineage-normal contribution (external reference panel; estimated by RNA model; not patient-matched)" in legend
+    assert "matched_normal_" not in legend
+    fig.canvas.draw()
+    assert ax.get_legend().get_window_extent().y1 < ax.bbox.y0
+    therapy_fig = plot_mod.plot_matched_normal_attribution(
+        ranges_df.assign(category="therapy_target"),
+        cancer_type="PRAD",
+        category="therapy_target",
+    )
+    assert "PRAD therapy targets" in therapy_fig.axes[0].get_title()
+    assert "therapy_target" not in therapy_fig.axes[0].get_title()
 
 
 def test_select_actionable_plot_genes_prefers_therapy_linked_surface_hits():
@@ -1071,7 +1101,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     pure_text = (tmp_path / "pure-targets.md").read_text()
     assert "Population-expression range" in pure_text
-    assert "Estimated tumor context TPM (RNA model)" in pure_text
+    assert "Patient context TPM (RNA model estimate)" in pure_text
 
     heme_prefix = str(tmp_path / "heme-targets")
     _write_target_report(
@@ -1086,7 +1116,7 @@ def test_generate_target_report_is_mode_aware(tmp_path):
     )
     heme_text = (tmp_path / "heme-targets-targets.md").read_text()
     assert "Malignant-lineage expression range" in heme_text
-    assert "Estimated tumor context TPM (RNA model)" in heme_text
+    assert "Patient context TPM (RNA model estimate)" in heme_text
 
 
 def test_generate_target_report_adds_tumor_context_and_landscape_summary(tmp_path):
@@ -1302,7 +1332,10 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
     )
     legend = fig.axes[1].get_legend()
     assert legend._ncols == 1
-    assert all("RNA model" not in label.get_text() for label in legend.get_texts())
+    legend_labels = [label.get_text() for label in legend.get_texts()]
+    assert any(label.startswith("Estimated tumor fraction (RNA model)")
+               for label in legend_labels)
+    assert all("matched_normal_" not in label for label in legend_labels)
     component_fig = plot_decomposition_component_breakdown(
         best,
         title="TME cell-type breakdown — SARC (Sarcoma)",
@@ -2116,7 +2149,7 @@ def test_embedding_plot_can_label_nearest_cancers_and_normals_only(monkeypatch):
     assert "prostate" in all_text
     assert "COAD" not in all_text
     assert "liver" not in all_text
-    assert "Nearest normal tissues" in all_text
+    assert "Nearest healthy-tissue references (external panel)" in all_text
     assert "Nearest by plotted 2D distance" in all_text
 
 

@@ -4620,7 +4620,7 @@ def _target_report_mode_intro(sample_mode, cancer_code, p_lo, p_mid, p_hi):
 
 
 def _target_value_label(sample_mode):
-    return "Estimated tumor context TPM (RNA model)"
+    return "Patient context TPM (RNA model estimate)"
 
 
 def _mhc1_status_text(mhc1):
@@ -9678,7 +9678,8 @@ def _generate_text_reports(
                     if score_cell in ("—", "", "0.000", "0.0"):
                         score_cell = "n/a"
                 lines.append(
-                    f"| {comp} | {row['fraction']:.3f} | {score_cell} | {top_markers_cell} |"
+                    f"| {component_display_label(comp, include_model_role=True)} | "
+                    f"{row['fraction']:.3f} | {score_cell} | {top_markers_cell} |"
                 )
             if len(hidden):
                 lines.append(
@@ -10106,7 +10107,7 @@ def _build_target_report(
             "a low-purity scenario even when the median post-cap value is unchanged. "
             "The full audit is in `*-tumor-expression-ranges.tsv`.\n",
             f"*Shown for therapy-panel genes; {capped_n} of {len(sub)} shown rows have cap activity in at least one purity scenario.*\n",
-            "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM before cap (RNA model) | Estimated tumor TPM after cap (RNA model) | Cap ceiling range | Status |",
+            "| Gene | Patient bulk TPM (measured) | Patient tumor-attributed TPM before cap (estimated by RNA model) | Patient tumor-attributed TPM after cap (estimated by RNA model) | Cap ceiling range | Status |",
             "|------|---------:|-------------------------------:|--------------------------------:|------------------:|--------|",
         ]
         for _, row in sub.iterrows():
@@ -10174,7 +10175,7 @@ def _build_target_report(
             "STEAP1 tumor expression estimate should not be collapsed into the "
             "STEAP2 result, and a capped STEAP2 estimate should be read as an "
             "upper-bound expression anchor rather than a precise fitted value.\n",
-            "| Target | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Cap status | Curated option |",
+            "| Target | Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Patient context TPM (RNA model estimate) | Estimated source | Cap status | Curated option |",
             "|--------|---------:|----------------------:|------------:|--------------|------------|----------------|",
         ]
         for sym in ("STEAP1", "STEAP2"):
@@ -10300,7 +10301,7 @@ def _build_target_report(
             biomarker_syms = biomarker_syms_for_lookup
             if biomarker_syms:
                 lines.append(
-                    "| Gene | Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source |"
+                    "| Gene | Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Patient context TPM (RNA model estimate) | Estimated source |"
                 )
                 lines.append(
                     "|------|---------------------|-------------------------------|---------------------|-------------|"
@@ -10334,7 +10335,6 @@ def _build_target_report(
                 "target is absent from the sample are still shown to make "
                 "that explicit.\n"
             )
-            lines.append(tpm_semantics_note() + "\n")
             lines.append(
                 "Interpretation separates the RNA model's source estimate "
                 "(`mostly tumor`, `mixed tumor and background`, `mostly background`) "
@@ -10557,7 +10557,7 @@ def _build_target_report(
                 def _render_target_records(records):
                     lines.append(
                         "| Target | Agent | Class | Phase | Indication | "
-                        "Sample bulk TPM (measured) | Estimated tumor TPM (RNA model) | Estimated tumor context TPM (RNA model) | Estimated source | Interpretation |"
+                        "Patient bulk TPM (measured) | Patient tumor-attributed TPM (estimated by RNA model) | Patient context TPM (RNA model estimate) | Estimated source | Interpretation |"
                     )
                     lines.append(
                         "|--------|-------|-------|-------|------------|"
@@ -10980,7 +10980,7 @@ def _build_target_report(
                 reverse=True,
             )[:8]
             lines.append(
-                "| Gene | Direction | Sample TPM | Cohort median | Fold | Mechanism |"
+                "| Gene | Direction | Patient bulk TPM (measured) | Cancer-cohort median (external reference panel) | Fold | Mechanism |"
             )
             lines.append(
                 "|------|-----------|------------|---------------|------|-----------|"
@@ -11029,7 +11029,7 @@ def _build_target_report(
     )
     if len(ctas):
         lines.append(
-            f"| Gene | {value_label} | Model interval | Sample bulk TPM (measured) | Estimated tumor RNA | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Surface | Therapies |"
+            f"| Gene | {value_label} | Model interval | Patient bulk TPM (measured) | Patient tumor-attributed RNA (estimated by RNA model) | vs selected cancer reference | Cancer-cohort percentile (external reference panel) | Estimated background | Surface | Therapies |"
         )
         lines.append(
             "|------|-----------|----------------|---------------------|-----------------------------|---------|-----------|-----|---------|-----------|"
@@ -11080,7 +11080,7 @@ def _build_target_report(
     )
     if len(surface_targets):
         lines.append(
-            f"| Gene | {value_label} | Model interval | Sample bulk TPM (measured) | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Estimated attribution | Therapies |"
+            f"| Gene | {value_label} | Model interval | Patient bulk TPM (measured) | vs selected cancer reference | Cancer-cohort percentile (external reference panel) | Estimated background | Estimated attribution | Therapies |"
         )
         lines.append(
             "|------|-----------|----------------|---------------------|---------|-----------|-----|-------------|-----------|"
@@ -11164,7 +11164,7 @@ def _build_target_report(
     )
     if len(intracellular):
         lines.append(
-            f"| Gene | {value_label} | Model interval | vs selected cancer reference | Pan-cancer reference %ile | Estimated background | Estimated attribution | CTA | Therapies |"
+            f"| Gene | {value_label} | Model interval | vs selected cancer reference | Cancer-cohort percentile (external reference panel) | Estimated background | Estimated attribution | CTA | Therapies |"
         )
         lines.append(
             "|------|-----------|----------------|---------|-----------|-----|-------------|-----|-----------|"

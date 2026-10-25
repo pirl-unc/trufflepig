@@ -95,7 +95,7 @@ def test_per_subtype_table_does_not_invent_missing_reference_medians():
     )
 
     assert "No exact expression reference is available" in body
-    assert "| Gene | Sample TPM |" in body
+    assert "| Gene | Patient bulk TPM (measured) |" in body
     assert "median |" not in body
     assert "| KRT8 | 42.0 |" in body
 

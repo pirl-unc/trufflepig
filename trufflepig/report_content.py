@@ -23,6 +23,7 @@ from .reporting import (
     expression_independent_indication,
     expression_independent_rna_context,
     normal_expression_context,
+    tpm_semantics_note,
     therapy_state_caution,
     tumor_attribution_context,
     tumor_band_available,
@@ -509,6 +510,7 @@ def build_report_content(
                 f"{cancer_code} is not yet in the curated key-genes panel; no disease-specific therapy shortlist is available."
             )
         ]
+    therapies.append(paragraph(tpm_semantics_note()))
 
     if spindle_guidance:
         therapies.append(paragraph(spindle_guidance["therapy"]))
@@ -529,7 +531,7 @@ def build_report_content(
             "headers": [
                 "Target",
                 "Recommendation",
-                "Estimated tumor TPM (RNA model)",
+                "Patient tumor-attributed TPM (estimated by RNA model)",
                 "Evidence source",
             ],
             "rows": [

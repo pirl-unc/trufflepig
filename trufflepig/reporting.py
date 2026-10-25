@@ -102,7 +102,7 @@ def component_display_label(value, *, include_model_role: bool = False) -> str:
     if lowered.startswith("matched normal "):
         tissue = text[len("matched normal ") :].strip()
         suffix = (
-            " reference (external panel; RNA model; not specimen matched)"
+            " reference (external panel; RNA model; not patient-matched)"
             if include_model_role
             else " reference (external panel)"
         )
@@ -1188,20 +1188,19 @@ def context_expression_band_cell(row):
 
 
 def tpm_semantics_note() -> str:
-    """One reader-facing explanation of bulk vs modeled TPM columns."""
+    """Shared reader-facing key for measurements, model outputs, and references."""
     return (
-        "**Expression provenance:** Sample bulk TPM is measured RNA abundance in "
-        "the mixed specimen. Estimated tumor TPM is the RNA model's estimate of the "
-        "tumor share of that measured bulk signal; it is not a purified tumor assay. "
-        "Healthy-tissue, stromal, and immune components are fitted from external "
-        "reference panels; no separate matched normal sample was analyzed. "
-        "Estimated tumor context TPM is a broader RNA model estimate used only for "
-        "pathway and relative-expression comparisons. Reference percentiles and "
-        "medians come from external cancer/healthy-tissue panels. Do not treat "
-        "context TPM as evidence of tumor origin when the RNA model assigns most of "
-        "the signal to background. For immune/stromal markers, agent-only rows, and "
-        "assay-gated therapies, RNA remains contextual and eligibility must come "
-        "from the indicated clinical assay."
+        "**Expression provenance key:** Patient bulk TPM (measured) is RNA abundance "
+        "in the mixed specimen. Patient tumor-attributed TPM (estimated by RNA model), "
+        "Patient context TPM (RNA model estimate), and Estimated tumor fraction "
+        "are estimates from bulk-RNA decomposition, not measurements of purified "
+        "tumor cells. Cancer-cohort percentile (external reference panel) and "
+        "Healthy-tissue expression (external reference panel) compare the sample "
+        "with other specimens. Expected lineage-normal contribution (external "
+        "reference panel; estimated by RNA model; not patient-matched) is a modeled "
+        "component, not a separately measured normal sample from this patient. "
+        "Context TPM supports pathway comparisons but does not establish tumor "
+        "origin; RNA alone does not establish clinical assay eligibility."
     )
 
 

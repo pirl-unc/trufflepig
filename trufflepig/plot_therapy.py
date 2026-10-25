@@ -590,9 +590,9 @@ def plot_therapy_target_tissues(
 
         ax.set_yticks(y)
         ax.set_yticklabels(t_labels, fontsize=7)
-        ax.set_xlabel("Expression (nTPM / TPM)", fontsize=10)
+        ax.set_xlabel("RNA abundance (TPM; patient bulk or external healthy-tissue panel)", fontsize=10)
         subtitle = (
-            f"Sample TPM: {s_tpm:.1f} | therapy categories: {record['therapy_label']}"
+            f"Patient bulk TPM (measured): {s_tpm:.1f} | therapy categories: {record['therapy_label']}"
         )
         if record["has_approved"]:
             subtitle += f" | approved: {record['approved_label']}"
@@ -623,13 +623,13 @@ def plot_therapy_target_tissues(
             fontsize=11,
         )
         legend_handles = [
-            Patch(facecolor="#aec7e8", edgecolor="none", label="Normal tissue (nTPM)"),
+            Patch(facecolor="#aec7e8", edgecolor="none", label="Healthy-tissue expression (external reference panel; nTPM)"),
             Line2D(
                 [],
                 [],
                 color=combo_color,
                 linewidth=2,
-                label=f"Sample TPM = {s_tpm:.1f}",
+                label=f"Patient bulk TPM (measured) = {s_tpm:.1f}",
             ),
         ]
         if record["has_approved"]:
@@ -787,7 +787,7 @@ def plot_therapy_target_safety(
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Sample TPM", fontsize=11)
+    ax.set_xlabel("Patient bulk TPM (measured)", fontsize=11)
     ax.set_ylabel(
         "Max expression in selected essential tissues (nTPM)",
         fontsize=10,
@@ -1115,7 +1115,7 @@ def plot_geneset_vs_vital_tissues(
             markeredgecolor="black",
             markersize=10,
             linestyle="",
-            label="sample",
+            label="Patient bulk TPM (measured)",
         ),
     ]
     for tissue in vital_tissues:
@@ -1440,7 +1440,7 @@ def plot_ctas_vs_cancer_type_detail(
     ax.set_yticks(y)
     ax.set_yticklabels([r["symbol"] for r in rows], fontsize=9)
     ax.invert_yaxis()
-    ax.set_xlabel("TPM (log scale)")
+    ax.set_xlabel("TPM (log scale; patient bulk and external reference panels)")
     origin_display = (
         origin_tissue.replace("_", " ") if origin_tissue else "origin tissue"
     )
@@ -1467,7 +1467,7 @@ def plot_ctas_vs_cancer_type_detail(
             markeredgecolor="black",
             markersize=10,
             linestyle="",
-            label="sample",
+            label="Patient bulk TPM (measured)",
         ),
         Line2D(
             [],
@@ -1477,7 +1477,7 @@ def plot_ctas_vs_cancer_type_detail(
             markeredgecolor="#704000",
             markersize=8,
             linestyle="",
-            label=f"{cancer_code} cohort",
+            label=f"{cancer_code} cancer cohort (external reference panel)",
         ),
     ]
     if origin_tissue:
@@ -1490,7 +1490,7 @@ def plot_ctas_vs_cancer_type_detail(
                 markeredgecolor="#175417",
                 markersize=8,
                 linestyle="",
-                label=f"normal {origin_display}",
+                label=f"{origin_display} healthy tissue (external reference panel)",
             )
         )
     legend.extend(
