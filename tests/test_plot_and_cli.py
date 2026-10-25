@@ -1332,7 +1332,10 @@ def test_decomposition_plots_accept_reader_facing_titles_and_labels():
     )
     legend = fig.axes[1].get_legend()
     assert legend._ncols == 1
-    assert all("RNA model" not in label.get_text() for label in legend.get_texts())
+    legend_labels = [label.get_text() for label in legend.get_texts()]
+    assert any(label.startswith("Estimated tumor fraction (RNA model)")
+               for label in legend_labels)
+    assert all("matched_normal_" not in label for label in legend_labels)
     component_fig = plot_decomposition_component_breakdown(
         best,
         title="TME cell-type breakdown — SARC (Sarcoma)",
