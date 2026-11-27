@@ -56,6 +56,8 @@ def test_run_dispatches_to_native_analyze(tmp_path, monkeypatch):
     assert meta["args"]["cancer_type"] == "BLCA"
     assert meta["trufflepig_version"]
     assert meta["pirlygenes_version"]
+    assert meta["cta_policy"]["policy_id"]
+    assert meta["cta_policy"]["source_surface"] == "oncoref.target_selection"
 
 
 def test_run_forwards_optional_pirlygenes_flags(tmp_path, monkeypatch):

@@ -612,10 +612,17 @@ def test_effective_references_never_borrow_a_sibling_cohort():
             != "sibling"
         ), (code, record.reference_code)
 
+    # THYMCA gained its own direct cohort reference in OncoRef >=1.52.
     thymic_carcinoma = effective_expression_reference("THYMCA")
     assert thymic_carcinoma is not None
-    assert thymic_carcinoma.reference_code == "THYM_EPITHELIAL"
-    assert thymic_carcinoma.fallback_reason == "registry parent"
+    assert thymic_carcinoma.reference_code == "THYMCA"
+    assert thymic_carcinoma.direct is True
+
+    # Leaf codes without a direct cohort still fall back strictly to an ancestor.
+    dfsp = effective_expression_reference("SARC_DFSP")
+    assert dfsp is not None
+    assert dfsp.reference_code == "SARC"
+    assert dfsp.fallback_reason == "registry parent"
 
 
 def test_expression_reference_contract_is_clean_tpm_with_known_gene_keys():

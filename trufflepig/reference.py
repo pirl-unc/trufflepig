@@ -269,8 +269,52 @@ def _heme_tumor_up_vs_matched_normal_cached() -> pd.DataFrame:
 
 
 @lru_cache(maxsize=1)
+def _hpa_single_cell_v23_wide_cached() -> pd.DataFrame:
+    """Pivot OncoRef's pinned HPA v23 single-cell nTPM table into wide form.
+
+    OncoRef >=1.52 switched ``hpa_single_cell``'s default release to HPA v25.1
+    (which reports ``nCPM`` and renamed/lowercased cell types) while
+    ``oncoref.hpa_cell_type_expression()`` still pivots on ``values="nTPM"``
+    and raises ``KeyError('nTPM')``. Fall back to the pinned HPA v23 ``nTPM``
+    table expected by trufflepig's cell-type signatures.
+    """
+    import oncoref
+
+    df = oncoref.hpa_single_cell(version="v23")
+    if df.empty:
+        return pd.DataFrame(columns=["Ensembl_Gene_ID", "Symbol"])
+    wide = df.pivot_table(
+        index=["Gene", "Gene name"],
+        columns="Cell type",
+        values="nTPM",
+        aggfunc="sum",
+        fill_value=0.0,
+    )
+    wide = wide.reset_index().rename(
+        columns={"Gene": "Ensembl_Gene_ID", "Gene name": "Symbol"}
+    )
+    wide.columns.name = None
+    return wide
+
+
+def raw_hpa_cell_type_expression() -> pd.DataFrame:
+    """Raw (un-normalized) wide HPA single-cell-type nTPM matrix.
+
+    Delegates to ``pirlygenes.hpa_cell_type_expression()`` first, falling back
+    to OncoRef's pinned HPA v23 ``nTPM`` table when ``oncoref`` raises
+    ``KeyError('nTPM')`` on HPA v25.1.
+    """
+    try:
+        return _pirlygenes.hpa_cell_type_expression().copy()
+    except KeyError as exc:
+        if exc.args != ("nTPM",):
+            raise
+        return _hpa_single_cell_v23_wide_cached().copy()
+
+
+@lru_cache(maxsize=1)
 def _hpa_cell_type_expression_cached() -> pd.DataFrame:
-    df = _pirlygenes.hpa_cell_type_expression().copy()
+    df = raw_hpa_cell_type_expression()
     value_cols = [
         col
         for col in df.columns

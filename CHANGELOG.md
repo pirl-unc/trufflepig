@@ -8,6 +8,19 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.31.0 — 2026-11-26 — pirlygenes 6.4.0 & OncoRef 1.52+ CTA policy adoption
+
+- The runtime reference stack now requires `pirlygenes>=6.4.0,<7` and
+  `oncoref>=1.52.0,<2`, adopting OncoRef's active `target_selection` CTA
+  catalog, 4-way CTA sex partition (`CTA-M`, `CTA-F`, `CTA-MF`, `CTA-P`),
+  and active manifest provenance.
+- CLI workspace manifests (`meta.json`) now record active CTA policy
+  provenance (`cta_policy`) alongside `pirlygenes_version`.
+- `trufflepig.reference.raw_hpa_cell_type_expression()` and
+  `hpa_cell_type_expression()` fall back cleanly to OncoRef's pinned HPA v23
+  `nTPM` single-cell table when `oncoref.hpa_cell_type_expression()` raises
+  `KeyError('nTPM')` against HPA v25.1 `nCPM`.
+
 ## 1.30.4 — 2026-10-25 — report expression provenance
 
 - The interpretive Markdown and PDF now define measured patient bulk RNA,

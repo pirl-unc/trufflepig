@@ -231,6 +231,41 @@ def test_dependency_owned_reference_mirrors_are_not_local_csv_sources(monkeypatc
     ) in calls
 
 
+def test_raw_hpa_cell_type_expression_falls_back_to_v23_on_ntpm_keyerror(monkeypatch):
+    import oncoref
+    import pandas as pd
+
+    gsc._hpa_single_cell_v23_wide_cached.cache_clear()
+    seen_versions = []
+
+    def raise_ntpm_keyerror():
+        raise KeyError("nTPM")
+
+    def fake_hpa_single_cell(*, version=None):
+        seen_versions.append(version)
+        return pd.DataFrame(
+            {
+                "Gene": ["ENSG000001", "ENSG000001"],
+                "Gene name": ["CD3D", "CD3D"],
+                "Cell type": ["T-cells", "B-cells"],
+                "nTPM": [120.0, 1.5],
+            }
+        )
+
+    monkeypatch.setattr(gsc._pirlygenes, "hpa_cell_type_expression", raise_ntpm_keyerror)
+    monkeypatch.setattr(oncoref, "hpa_single_cell", fake_hpa_single_cell)
+    try:
+        wide = gsc.raw_hpa_cell_type_expression()
+    finally:
+        gsc._hpa_single_cell_v23_wide_cached.cache_clear()
+
+    assert seen_versions == ["v23"]
+    assert list(wide["Ensembl_Gene_ID"]) == ["ENSG000001"]
+    assert list(wide["Symbol"]) == ["CD3D"]
+    assert float(wide.loc[0, "T-cells"]) == 120.0
+    assert float(wide.loc[0, "B-cells"]) == 1.5
+
+
 def test_pan_cancer_expression_rejects_legacy_unit_prefix_columns():
     import pandas as pd
 

@@ -14,20 +14,23 @@ classifiers = [
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
-    # >=6.0.2: typed NUT-family therapy eligibility, the public cohort-expression
-    # matrix contract, direct VSCC and MENINGIOMA references, fail-closed source
-    # rollups, and owner-delegated driver evidence; pins oncoref 1.8.193.
-    "pirlygenes>=6.0.2,<7",
+    # >=6.4.0: adopts OncoRef 1.52+ active CTA target_selection policy, 4-way
+    # CTA sex partition (CTA-M/CTA-F/CTA-MF/CTA-P), and manifest provenance,
+    # building on typed NUT-family therapy eligibility, the public
+    # cohort-expression matrix contract, direct VSCC/MENINGIOMA/THYMCA
+    # references, fail-closed source rollups, and owner-delegated driver
+    # evidence.
+    "pirlygenes>=6.4.0,<7",
     # oncoref is the canonical cancer-type ontology + normalization source (imported
     # unconditionally by cancer_ontology / clean_tpm / expression_normalize /
     # expression_classifier). Without it declared, a clean install raises
     # ModuleNotFoundError before the pirlygenes ontology fallback can run.
-    # >=1.8.193: compact all-source availability, direct VSCC and MENINGIOMA
-    # references, acquisition provenance, complete-union classification policy,
-    # tumor-reference accessors, and audited ICI/aPD1/TMB evidence resolution are
-    # aligned with pirlygenes 6 without materializing the 5M-row union.
-    # Pirlygenes pins the exact compatible oncoref wheel within this range.
-    "oncoref>=1.8.193,<2",
+    # >=1.52.0: active target_selection CTA policy, 4-way CTA-P sex partition,
+    # direct THYMCA reference, compact all-source availability, acquisition
+    # provenance, complete-union classification policy, tumor-reference
+    # accessors, and audited ICI/aPD1/TMB evidence resolution aligned with
+    # pirlygenes 6.4+.
+    "oncoref>=1.52.0,<2",
     "numpy>=2.0.0",
     "pandas>=3,<4",
     "matplotlib>=3.5.0",

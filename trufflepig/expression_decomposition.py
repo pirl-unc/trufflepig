@@ -224,9 +224,10 @@ _FAMILY_COMPARTMENT = {"solid": "Epithelial", "epithelial": "Epithelial", "carci
 @lru_cache(maxsize=1)
 def _refs():
     """Symbol-keyed templates + signature symbol sets (cached)."""
-    from pirlygenes.expression.accessors import hpa_cell_type_expression, estimate_signatures
+    from pirlygenes.expression.accessors import estimate_signatures
+    from .reference import raw_hpa_cell_type_expression
 
-    hpa = hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
+    hpa = raw_hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
 
     def template(cols):
         present = [c for c in cols if c in hpa.columns]
