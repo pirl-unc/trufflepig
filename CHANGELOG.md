@@ -8,6 +8,17 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/).
 Shipped entries are grouped under their release version; work not yet assigned
 to a release remains grouped under its merging PR.
 
+## 1.31.1 — 2026-11-27 — repository docs, notes, and scripts cleanup
+
+- Removed the unreferenced `uv.lock` file.
+- Moved internal planning/redesign notes and the calibration baseline snapshot
+  from `docs/` into `notes/` (`notes/rnaseq-cancer-call-redesign.md`,
+  `notes/report-belief-consistency-and-friendliness-plan.md`,
+  `notes/calibration-baseline.json`) and updated documentation/test references.
+- Organized 30 standalone experiment/diagnostic/AB scripts under
+  `scripts/experiments/`, keeping operational report, calibration, and data
+  utilities in `scripts/`.
+
 ## 1.31.0 — 2026-11-26 — pirlygenes 6.4.0 & OncoRef 1.52+ CTA policy adoption
 
 - The runtime reference stack now requires `pirlygenes>=6.4.0,<7` and

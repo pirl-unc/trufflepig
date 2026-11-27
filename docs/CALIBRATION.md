@@ -58,7 +58,7 @@ PYTHONPATH=$HOME/code/pirlygenes:$PYTHONPATH \
     python scripts/calibrate_decomposition.py \
         --samples-per-cohort 5 \
         --include-local-no-override \
-        --baseline-json docs/calibration-baseline.json \
+        --baseline-json notes/calibration-baseline.json \
         --out-json calibration-report.json
 
 # Optional: full TCGA matrix (~10k samples). Size workers from available RAM.

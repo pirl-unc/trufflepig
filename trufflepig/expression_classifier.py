@@ -1008,7 +1008,7 @@ def classify_expression_hierarchy(
     if vec is None:
         return []
     # Seed-0 3-train/2-test harness values from
-    # scripts/eval_learned_classifier_holdout.py. They document calibration
+    # scripts/experiments/eval_learned_classifier_holdout.py. They document calibration
     # context for evidence review; selectors do not consume them.
     stage_holdout_top1 = {
         "compartment": 219 / 223,
