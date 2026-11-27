@@ -71,7 +71,7 @@ tumor-attributed expression, or therapy relevance:
 pip install -e .
 ```
 
-Pulls `pirlygenes>=6.0.2` for the curated gene sets and reference data.
+Pulls `pirlygenes>=6.4.0` and `oncoref>=1.52.0` for the curated gene sets and reference data.
 
 ## Usage
 

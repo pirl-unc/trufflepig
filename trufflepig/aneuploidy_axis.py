@@ -68,9 +68,9 @@ def _diploid_reference() -> pd.Series:
     CTA/germline-restricted genes aren't inflated in the reference (consistent with how the
     restricted-gene set is defined in expression_decomposition).
     """
-    from pirlygenes.expression.accessors import hpa_cell_type_expression
+    from .reference import raw_hpa_cell_type_expression
 
-    hpa = hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
+    hpa = raw_hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
     cell_cols = [c for c in hpa.columns if c not in ("Ensembl_Gene_ID",) and c not in _GERMLINE_CELL_TYPES]
     return hpa[cell_cols].mean(axis=1).clip(lower=0)
 

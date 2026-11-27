@@ -128,8 +128,7 @@ _MESENCHYMAL_SARC_TCGA_COHORTS = frozenset(
 # placenta (+ in some cases ovary). Detection above threshold in a
 # non-reproductive sample = positive tumor evidence that can override
 # a correlation-based "healthy-dominant" call.
-# The filtered-and-expressed CTA list (~257 genes) is shipped with
-# pirlygenes; we load it once and cache.
+# The active OncoRef CTA list is loaded via pirlygenes once and cached.
 _CTA_SYMBOLS_CACHE: frozenset[str] | None = None
 
 # HPA tissues where CTA expression is physiological, not pathological.

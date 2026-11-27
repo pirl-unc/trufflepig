@@ -169,8 +169,8 @@ def test_compartment_aware_tumor_signature():
 
 def test_residual_fraction_declines_with_contaminant_dilution():
     base = pd.Series(_sample("COAD"))
-    from pirlygenes.expression.accessors import hpa_cell_type_expression
-    hpa = hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
+    from trufflepig.reference import raw_hpa_cell_type_expression
+    hpa = raw_hpa_cell_type_expression().drop_duplicates("Symbol").set_index("Symbol")
     immune = hpa[["T-cells", "B-cells", "Macrophages"]].mean(1)
     immune = (immune / immune.sum() * 1e6).reindex(base.index).fillna(0)
     pure = decompose_expression(base.to_dict(), cancer="COAD")["purity"]["residual_fraction"]

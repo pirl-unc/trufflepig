@@ -36,6 +36,22 @@ def _pirlygenes_version() -> str:
         return f"unknown ({exc!r})"
 
 
+def _cta_policy_provenance() -> dict:
+    try:
+        from pirlygenes.cta_policy import CTA_policy_manifest
+
+        manifest = CTA_policy_manifest()
+        return {
+            "policy_id": manifest.get("policy_id", ""),
+            "oncoref_version": manifest.get("oncoref_version", ""),
+            "reference_id": manifest.get("reference_id", ""),
+            "source_snapshot_id": manifest.get("source_snapshot_id", ""),
+            "source_surface": manifest.get("source_surface", ""),
+        }
+    except Exception:
+        return {}
+
+
 def _add_run_parser(sub):
     p = sub.add_parser(
         "run",
@@ -192,6 +208,7 @@ def cmd_run(args) -> int:
         "tool": "trufflepig",
         "trufflepig_version": __version__,
         "pirlygenes_version": _pirlygenes_version(),
+        "cta_policy": _cta_policy_provenance(),
         "pipeline_mode": NATIVE_MODE,
         "command": "run",
         "args": {"sample": sample_path, "workspace": str(ws.root), **flags},
@@ -230,6 +247,7 @@ def cmd_compare(args) -> int:
         "tool": "trufflepig",
         "trufflepig_version": __version__,
         "pirlygenes_version": _pirlygenes_version(),
+        "cta_policy": _cta_policy_provenance(),
         "pipeline_mode": COMPARE_MODE,
         "command": "compare",
         "args": {

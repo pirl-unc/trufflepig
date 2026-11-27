@@ -107,48 +107,59 @@ def test_all_gene_set_wrappers(monkeypatch):
 
 
 def test_cta_filtered_and_evidence():
-    # CTA_gene_names() = filtered + expressed (excludes never_expressed)
+    # Under pirlygenes>=6.4.0 / OncoRef>=1.52.0 active target_selection policy,
+    # active CTA admission already requires qualifying tumor + reproductive
+    # expression (no never-expressed CTA tier).
     expressed_names = gsc.CTA_gene_names()
     expressed_ids = gsc.CTA_gene_ids()
-    # CTA_filtered includes never_expressed
     filtered_names = gsc.CTA_filtered_gene_names()
     filtered_ids = gsc.CTA_filtered_gene_ids()
-    # never_expressed = filtered - expressed
     never_expr_names = gsc.CTA_never_expressed_gene_names()
     never_expr_ids = gsc.CTA_never_expressed_gene_ids()
-    # unfiltered = full superset
     all_names = gsc.CTA_unfiltered_gene_names()
     all_ids = gsc.CTA_unfiltered_gene_ids()
-    # excluded = fail filter
     excluded_names = gsc.CTA_excluded_gene_names()
+    excluded_ids = gsc.CTA_excluded_gene_ids()
 
     assert expressed_names
-    assert filtered_names
+    assert filtered_names == expressed_names
+    assert filtered_ids == expressed_ids
+    assert never_expr_names == set()
+    assert never_expr_ids == set()
     assert all_names
-    assert expressed_names < filtered_names  # expressed is strict subset of filtered
     assert filtered_names < all_names  # filtered is strict subset of unfiltered
-    assert expressed_ids < filtered_ids
     assert filtered_ids < all_ids
+    assert excluded_ids < all_ids
     assert expressed_names & never_expr_names == set()  # no overlap
     assert expressed_names | never_expr_names == filtered_names  # partition
     assert expressed_ids & never_expr_ids == set()
     assert expressed_ids | never_expr_ids == filtered_ids
-    assert filtered_names | excluded_names == all_names  # partition
     assert filtered_names & excluded_names == set()  # no overlap
+    assert filtered_ids & excluded_ids == set()
+
+    # Active CTA manifest provenance and 4-way sex partition
+    manifest = gsc.CTA_policy_manifest()
+    assert manifest["policy_id"] == gsc.CTA_policy_id()
+    assert manifest["source_surface"] == "oncoref.target_selection"
+    sex_sets = gsc.CTA_sex_partition_gene_names()
+    assert set(sex_sets) == {"CTA-M", "CTA-F", "CTA-MF", "CTA-P"}
+    assert set().union(*sex_sets.values()) == expressed_names
+    for a in sex_sets:
+        for b in sex_sets:
+            if a < b:
+                assert sex_sets[a].isdisjoint(sex_sets[b])
 
     evidence_df = gsc.CTA_evidence()
-    # pirlygenes guarantees COVERAGE (every unfiltered CTA gene has an evidence
-    # row), NOT exact row-count equality. oncoref owns CTA membership while the
-    # evidence frame stays on tsarina, which may retain a few extra candidates
-    # oncoref filters upstream (e.g. the testis histone H1-6) when the
-    # separately-versioned oncoref/tsarina floors disagree by a gene. The old
-    # `len(evidence_df) == len(all_names)` only held on bundles where the two
-    # counts happened to coincide (published 5.23.21) and broke under others
-    # (5.23.23 → 391 vs 390). Assert the invariant pirlygenes itself pins
-    # (test_cta_set_and_evidence_rows_line_up): coverage of the owned set.
     evidence_ids = set(evidence_df["Ensembl_Gene_ID"].astype(str).str.strip())
-    assert set(all_ids) <= evidence_ids
+    assert set(all_ids) == evidence_ids
+    assert evidence_df.attrs.get("policy_id") == gsc.CTA_policy_id()
     expected_cols = [
+        "is_current_cta",
+        "selection_policy_id",
+        "selection_category",
+        "selection_cta_tier",
+        "selection_sex_restriction_class",
+        "selection_sex_restriction_code",
         "protein_reproductive",
         "protein_thymus",
         "protein_reliability",
@@ -176,7 +187,7 @@ def test_cta_filtered_and_evidence():
 
 def test_cta_gene_id_to_name_preserves_row_pairing():
     mapping = gsc.CTA_gene_id_to_name()
-    assert mapping["ENSG00000181323"] == "SPEM1"
+    assert mapping["ENSG00000126890"] == "CTAG2"
     assert mapping["ENSG00000230594"] == "CT47A4"
     assert mapping["ENSG00000236126"] == "CT47A3"
 
