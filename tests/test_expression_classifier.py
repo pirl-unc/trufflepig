@@ -3,7 +3,7 @@
 The model trains lazily on the representative cohorts (~1-2 min on first call, then cached), so this
 is a small, high-value suite: it confirms the co-signal recovers confident types, spreads sensibly
 within a family, and degrades safely on empty/sparse input — not an exhaustive accuracy sweep (that
-lives in scripts/zscore_classifier_ab.py).
+lives in scripts/experiments/zscore_classifier_ab.py).
 """
 import pandas as pd
 import pytest

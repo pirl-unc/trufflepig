@@ -16,12 +16,6 @@ notes only when you need their implementation detail.
    sibling-panel leakage.
 4. [Variant inputs and coordinate provenance](./variant-inputs.md) — the typed
    exact/symbolic variant contract, source identity, and build checks.
-5. [RNA-seq cancer-call redesign](./rnaseq-cancer-call-redesign.md) — why the
-   current decision logic is being consolidated and the target staged
-   architecture.
-6. [Report belief consistency and friendliness](./report-belief-consistency-and-friendliness-plan.md)
-   — how finalized conclusions and uncertainty should flow into every report
-   artifact without contradiction.
 
 ## Classifier evidence and design records
 
@@ -36,6 +30,18 @@ notes only when you need their implementation detail.
 These documents contain dated experiment snapshots. Treat their measurements as
 historical evidence unless a section explicitly identifies the current release
 and evaluation corpus.
+
+## Internal planning notes
+
+Working redesign plans and calibration snapshots live under `notes/`:
+
+- [RNA-seq cancer-call redesign](../notes/rnaseq-cancer-call-redesign.md) — why
+  the decision logic was consolidated and the staged architecture.
+- [Report belief consistency and friendliness](../notes/report-belief-consistency-and-friendliness-plan.md)
+  — how finalized conclusions and uncertainty flow into every report artifact
+  without contradiction.
+- [Calibration baseline JSON](../notes/calibration-baseline.json) — recorded
+  baseline snapshot for `scripts/calibrate_decomposition.py`.
 
 ## Operations
 

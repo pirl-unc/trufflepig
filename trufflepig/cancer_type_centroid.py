@@ -54,7 +54,7 @@ _zscore_cache: dict = {}
 # the sample's *contrast pattern* (which genes are high/low FOR THIS SAMPLE vs the pan-cancer
 # reference) the matched quantity; that pattern survives a *generic* (diffuse) contaminant
 # where a raw-magnitude Spearman correlation collapses. Measured type-argmax accuracy under a
-# pan-cancer-mean contaminant (scripts/centroid_zscore_ab.py):
+# pan-cancer-mean contaminant (scripts/experiments/centroid_zscore_ab.py):
 #       p (contam):     0.0     0.3     0.5     0.7
 #       Spearman      0.921   0.857   0.816   0.635   (collapses under generic admixture)
 #       z-score(all)  0.906   0.902   0.906   0.898   (robust to generic admixture)
@@ -340,7 +340,7 @@ def centroid_correlations(sample_tpm_by_symbol, restrict_to=None):
 
     On the whole-transcriptome Spearman basis, NOT the per-gene z-score basis. A z-score
     ensemble was evaluated for purity robustness (see ``zscore_centroid_correlations`` and
-    scripts/centroid_zscore_ab.py) and deliberately NOT adopted here: it regresses the
+    scripts/experiments/centroid_zscore_ab.py) and deliberately NOT adopted here: it regresses the
     clean compartment call (565 real representative samples: 0.943 → 0.931) and its
     confidence margins (which gate leaf restriction), and it does not fix the dilution
     failure it was meant to — a *structured* tissue contaminant (e.g. 70% liver) matches

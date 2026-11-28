@@ -302,14 +302,19 @@ def raw_hpa_cell_type_expression() -> pd.DataFrame:
 
     Delegates to ``pirlygenes.hpa_cell_type_expression()`` first, falling back
     to OncoRef's pinned HPA v23 ``nTPM`` table when ``oncoref`` raises
-    ``KeyError('nTPM')`` on HPA v25.1.
+    ``KeyError('nTPM')`` or returns HPA v25.1 lowercase cell-type columns
+    (e.g. ``t-cells`` instead of ``T-cells``) that differ from Trufflepig's
+    calibrated HPA v23 cell-type taxonomy.
     """
     try:
-        return _pirlygenes.hpa_cell_type_expression().copy()
+        df = _pirlygenes.hpa_cell_type_expression()
     except KeyError as exc:
         if exc.args != ("nTPM",):
             raise
         return _hpa_single_cell_v23_wide_cached().copy()
+    if "T-cells" not in df.columns and "t-cells" in df.columns:
+        return _hpa_single_cell_v23_wide_cached().copy()
+    return df.copy()
 
 
 @lru_cache(maxsize=1)

@@ -1107,8 +1107,8 @@ def _mixture_subtype_pick_scores(paneled_subtypes, sample_tpm):
     Mesenchymal subtypes (LMS / liposarcoma / synovial …) overlap the stromal
     program, so subtracting that program can remove the markers that distinguish
     them. Measured on the SARC subtypes
-    (scripts/decomposition_concordance_ab.py +
-    decomposition_production_check.py), abundance concordance picks the right
+    (scripts/experiments/decomposition_concordance_ab.py +
+    scripts/experiments/decomposition_production_check.py), abundance concordance picks the right
     subtype only 6/15, while a cross-cohort **percentile** cosine of the sample
     versus each subtype's tumor-only profile over the union panel reaches
     approximately 14/15.

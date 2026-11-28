@@ -39,7 +39,7 @@ It exists because:
 
 The high-level flow below remains canonical. The 2026-07 staged-identity
 refactor, described in
-[the redesign note](./rnaseq-cancer-call-redesign.md), adds these safeguards:
+[the redesign note](../notes/rnaseq-cancer-call-redesign.md), adds these safeguards:
 
 - candidate rows carry staged identity evidence;
 - dominant normal tissue can demote an unsupported same-origin cancer

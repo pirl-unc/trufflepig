@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
         "docs/cancer-type-hierarchical-classifier.md",
         "docs/cancer-type-ontology.md",
         "docs/cancer-type-residual-matching-findings.md",
-        "docs/report-belief-consistency-and-friendliness-plan.md",
-        "docs/rnaseq-cancer-call-redesign.md",
+        "notes/report-belief-consistency-and-friendliness-plan.md",
+        "notes/rnaseq-cancer-call-redesign.md",
     ],
 )
 def test_long_form_documentation_puts_summary_before_details(relative_path):

@@ -890,7 +890,7 @@ def test_gate_blocks_cross_code_same_family_when_broad_confident(monkeypatch):
     guarantees that calibration drift cannot skip the safety assertion again.
 
     The calibrated broad call is confident STAD (with READ and COAD next; see
-    ``docs/calibration-baseline.json``).  Even with PAAD retained in the broad
+    ``notes/calibration-baseline.json``).  Even with PAAD retained in the broad
     beam and a decisive PAAD panel, a confident cross-code call must be noted as
     evidence rather than promoted to the report label.
     """

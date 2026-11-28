@@ -12,7 +12,7 @@ This document is a design and rollout record. Some phases have landed and some
 remain proposals; use tests and the current decision-flow document to determine
 production behavior.
 
-Companion to `docs/rnaseq-cancer-call-redesign.md`. That doc redesigns *how the
+Companion to `notes/rnaseq-cancer-call-redesign.md`. That doc redesigns *how the
 cancer type is decided*; this one redesigns *how every per-sample conclusion is
 represented, finalized, and rendered* so figures, markdown, and the PDF can
 never disagree — and then makes the rendered report legible and actionable for a
